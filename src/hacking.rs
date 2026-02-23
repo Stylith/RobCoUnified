@@ -1,0 +1,339 @@
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::Style,
+    widgets::Paragraph,
+};
+use rand::Rng;
+use std::collections::HashSet;
+use std::time::Duration;
+
+use crate::config::current_theme_color;
+use crate::status::render_status_bar;
+use crate::ui::{Term, sel_style, dim_style};
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const WORD_LEN:   usize = 5;
+const COLS:       usize = 2;
+const ROWS:       usize = 16;
+const COL_WIDTH:  usize = 12;
+const NUM_WORDS:  usize = 10;
+const MAX_TRIES:  usize = 4;
+
+const JUNK: &[char] = &[
+    '!','@','#','$','%','^','&','*','-','+','=','[',']','{','}','|',';',':',
+    '\'',',','.','<','>','?','/','\\',' ','~','`',
+];
+
+const WORD_BANK: &[&str] = &[
+    "CRANE","FLAME","BLADE","SHORE","GRIME","BRUTE","STALE","PRIME",
+    "GRIND","PLANK","FLASK","CRAMP","BLAZE","SCORN","TROVE","PHASE",
+    "CLAMP","SNARE","GROAN","FLINT","BRICK","CRAVE","DRONE","SCALP",
+    "BLUNT","CRISP","PROWL","SLICK","KNAVE","FRAIL","STOVE","GRASP",
+    "CLEFT","BRAND","SMIRK","TRAMP","GLARE","SPOUT","DWARF","BRAID",
+    "TANKS","THIRD","TRIES","TIRES","TERMS","TEXAS","TRITE","TRIBE",
+    "VAULT","POWER","STEEL","LASER","NERVE","FORCE","GUARD","WATCH",
+    "DEATH","BLOOD","GHOST","STORM","NIGHT","FLESH","SKULL","WASTE",
+];
+
+const OPENERS: &[char] = &['(', '[', '<', '{'];
+const CLOSERS: &[char] = &[')', ']', '>', '}'];
+
+// ── Grid state ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct WordPos { start: usize, word: String }
+
+#[derive(Debug, Clone)]
+struct BracketPair { open: usize, close: usize }
+
+struct Grid {
+    chars:          Vec<char>,
+    word_positions: Vec<WordPos>,
+    bracket_pairs:  Vec<BracketPair>,
+}
+
+fn junk_char(rng: &mut impl Rng) -> char { JUNK[rng.gen_range(0..JUNK.len())] }
+
+fn likeness(guess: &str, answer: &str) -> usize {
+    guess.chars().zip(answer.chars()).filter(|(a, b)| a == b).count()
+}
+
+fn build_grid(answer: &str) -> Grid {
+    let mut rng = rand::thread_rng();
+    let total   = COLS * ROWS * COL_WIDTH;
+    let mut chars: Vec<char> = (0..total).map(|_| junk_char(&mut rng)).collect();
+
+    // Pick words
+    let mut pool: Vec<&str> = WORD_BANK.iter().copied().filter(|&w| w != answer).collect();
+    shuffle_vec(&mut pool, &mut rng);
+    let mut words: Vec<String> = pool[..NUM_WORDS.saturating_sub(1)]
+        .iter().map(|s| s.to_string()).collect();
+    words.push(answer.to_string());
+    shuffle_vec(&mut words, &mut rng);
+
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut word_positions: Vec<WordPos> = Vec::new();
+
+    for word in &words {
+        let mut placed = false;
+        for _ in 0..200 {
+            let row    = rng.gen_range(0..ROWS * COLS);
+            let col_s  = rng.gen_range(0..COL_WIDTH - WORD_LEN + 1);
+            let start  = row * COL_WIDTH + col_s;
+            let idxs: Vec<usize> = (start..start + WORD_LEN).collect();
+            if !idxs.iter().any(|i| used.contains(i)) {
+                for (i, ch) in idxs.iter().zip(word.chars()) { chars[*i] = ch; }
+                used.extend(idxs);
+                word_positions.push(WordPos { start, word: word.clone() });
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            let start = rng.gen_range(0..total - WORD_LEN);
+            for (i, ch) in word.chars().enumerate() { chars[start + i] = ch; }
+            word_positions.push(WordPos { start, word: word.clone() });
+        }
+    }
+
+    // Bracket pairs
+    let mut bracket_pairs: Vec<BracketPair> = Vec::new();
+    for row in 0..ROWS * COLS {
+        if rng.gen_bool(0.3) {
+            let row_start = row * COL_WIDTH;
+            let max_span  = COL_WIDTH - 2;
+            let span = rng.gen_range(1..=max_span.max(1));
+            let op   = rng.gen_range(row_start..row_start + COL_WIDTH - span - 1);
+            let cl   = op + span + 1;
+            if !used.contains(&op) && !used.contains(&cl) {
+                let kind = rng.gen_range(0..4);
+                chars[op] = OPENERS[kind];
+                chars[cl] = CLOSERS[kind];
+                bracket_pairs.push(BracketPair { open: op, close: cl });
+            }
+        }
+    }
+
+    Grid { chars, word_positions, bracket_pairs }
+}
+
+// Shuffle a Vec using rand's SliceRandom
+fn shuffle_vec<T>(v: &mut Vec<T>, rng: &mut impl Rng) {
+    use rand::seq::SliceRandom;
+    v.shuffle(rng);
+}
+
+// ── Index ↔ screen position ────────────────────────────────────────────────────
+
+/// Convert flat idx to (screen_row_offset, screen_col_offset).
+/// col0 chars start at terminal col 7, col1 at 7 + COL_WIDTH + 14
+fn idx_to_cell(idx: usize) -> (usize, usize) {
+    let col_block   = idx / (ROWS * COL_WIDTH);
+    let within      = idx % (ROWS * COL_WIDTH);
+    let row_in_col  = within / COL_WIDTH;
+    let char_in_row = within % COL_WIDTH;
+    let scr_col = 7 + col_block * (COL_WIDTH + 14) + char_in_row;
+    (row_in_col, scr_col)
+}
+
+fn find_word_at(idx: usize, positions: &[WordPos]) -> Option<&WordPos> {
+    positions.iter().find(|wp| idx >= wp.start && idx < wp.start + WORD_LEN)
+}
+
+fn find_bracket_at(idx: usize, pairs: &[BracketPair]) -> Option<&BracketPair> {
+    pairs.iter().find(|bp| idx == bp.open || idx == bp.close)
+}
+
+// ── Minigame entry point ───────────────────────────────────────────────────────
+
+pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
+    let mut rng    = rand::thread_rng();
+    let answer_idx = rng.gen_range(0..WORD_BANK.len());
+    let answer     = WORD_BANK[answer_idx].to_string();
+
+    let mut grid         = build_grid(&answer);
+    let total            = COLS * ROWS * COL_WIDTH;
+    let mut cursor       = 0usize;
+    let mut attempts     = MAX_TRIES;
+    let mut log: Vec<String> = Vec::new();
+    let mut removed_duds: HashSet<String> = HashSet::new();
+    let mut duds_left: Vec<String> = grid.word_positions.iter()
+        .filter(|wp| wp.word != answer)
+        .map(|wp| wp.word.clone())
+        .collect();
+
+    let base_addr: u16 = 0xF964;
+
+    loop {
+        // ── Draw ────────────────────────────────────────────────────────────
+        terminal.draw(|f| {
+            let size = f.area();
+            let fg   = current_theme_color();
+            let ns   = Style::default().fg(fg);
+            let ss   = sel_style();
+            let ds   = dim_style();
+
+            // Header
+            let hdr = Paragraph::new("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL")
+                .alignment(Alignment::Center)
+                .style(sel_style());
+            f.render_widget(hdr, Rect { x:0, y:0, width:size.width, height:1 });
+
+            // Attempts
+            let boxes: String = "■ ".repeat(attempts) + &"□ ".repeat(MAX_TRIES - attempts);
+            let warn = if attempts <= 1 {
+                format!("!!! WARNING: LOCKOUT IMMINENT !!!  {}", boxes.trim())
+            } else {
+                format!("{} ATTEMPT(S) LEFT:  {}", attempts, boxes.trim())
+            };
+            let ap = Paragraph::new(warn).style(ns);
+            f.render_widget(ap, Rect { x:1, y:2, width:size.width.saturating_sub(2), height:1 });
+
+            // Hint
+            let hint = Paragraph::new("TAB=Next Column  q=cancel").style(ds);
+            f.render_widget(hint, Rect { x:2, y:size.height.saturating_sub(2), width:size.width.saturating_sub(4), height:1 });
+
+            // Hover detection
+            let hover_word   = find_word_at(cursor, &grid.word_positions);
+            let hover_bracket = find_bracket_at(cursor, &grid.bracket_pairs);
+
+            // Grid
+            let base_row: u16 = 5;
+            for col_block in 0..COLS {
+                for row in 0..ROWS {
+                    let addr = base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
+                    let sx = 1 + (col_block * (COL_WIDTH + 14)) as u16;
+                    let sy = base_row + row as u16;
+                    if sy >= size.height.saturating_sub(2) { continue; }
+                    let addr_str = format!("0x{addr:04X}");
+                    f.render_widget(
+                        Paragraph::new(addr_str).style(ds),
+                        Rect { x:sx, y:sy, width:6, height:1 },
+                    );
+                }
+            }
+
+            for (i, &ch) in grid.chars.iter().enumerate() {
+                let (row_off, col_off) = idx_to_cell(i);
+                let sy = base_row + row_off as u16;
+                let sx = col_off as u16;
+                if sy >= size.height.saturating_sub(2) || sx >= size.width { continue; }
+
+                // Is this char part of a removed dud?
+                let is_removed = grid.word_positions.iter().any(|wp| {
+                    removed_duds.contains(&wp.word) && i >= wp.start && i < wp.start + WORD_LEN
+                });
+
+                let (style, display) = if is_removed {
+                    (ds, '.')
+                } else if hover_word.map_or(false, |hw| i >= hw.start && i < hw.start + WORD_LEN) {
+                    (ss, ch)
+                } else if hover_bracket.map_or(false, |hb| i >= hb.open && i <= hb.close) {
+                    (ss, ch)
+                } else if i == cursor {
+                    (ss, ch)
+                } else {
+                    (ns, ch)
+                };
+
+                f.render_widget(
+                    Paragraph::new(display.to_string()).style(style),
+                    Rect { x:sx, y:sy, width:1, height:1 },
+                );
+            }
+
+            // Right panel log
+            let panel_col = (7 + (COL_WIDTH + 14) + COL_WIDTH + 4) as u16;
+            for (li, entry) in log.iter().rev().take(ROWS).enumerate() {
+                let sy = base_row + (ROWS - 1 - li) as u16;
+                if panel_col < size.width && sy < size.height.saturating_sub(1) {
+                    f.render_widget(
+                        Paragraph::new(entry.as_str()).style(ns),
+                        Rect { x:panel_col, y:sy, width:size.width.saturating_sub(panel_col), height:1 },
+                    );
+                }
+            }
+
+            render_status_bar(f, Rect { x:0, y:size.height.saturating_sub(1), width:size.width, height:1 });
+        })?;
+
+        // ── Input ────────────────────────────────────────────────────────────
+        if !event::poll(Duration::from_millis(100))? { continue; }
+        let ev = event::read()?;
+        let Event::Key(key) = ev else { continue };
+        if key.kind != KeyEventKind::Press { continue; }
+
+        match key.code {
+            KeyCode::Right | KeyCode::Char('d') => { cursor = (cursor + 1) % total; }
+            KeyCode::Left  | KeyCode::Char('a') => { cursor = cursor.checked_sub(1).unwrap_or(total - 1); }
+            KeyCode::Down  | KeyCode::Char('s') => {
+                let (cb, within) = (cursor / (ROWS * COL_WIDTH), cursor % (ROWS * COL_WIDTH));
+                let row = (within / COL_WIDTH + 1) % ROWS;
+                let chr = within % COL_WIDTH;
+                cursor = cb * ROWS * COL_WIDTH + row * COL_WIDTH + chr;
+            }
+            KeyCode::Up    | KeyCode::Char('w') => {
+                let (cb, within) = (cursor / (ROWS * COL_WIDTH), cursor % (ROWS * COL_WIDTH));
+                let row = (within / COL_WIDTH + ROWS - 1) % ROWS;
+                let chr = within % COL_WIDTH;
+                cursor = cb * ROWS * COL_WIDTH + row * COL_WIDTH + chr;
+            }
+            KeyCode::Tab => {
+                let cb    = cursor / (ROWS * COL_WIDTH);
+                let within = cursor % (ROWS * COL_WIDTH);
+                let new_cb = (cb + 1) % COLS;
+                cursor = new_cb * ROWS * COL_WIDTH + within % (ROWS * COL_WIDTH);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let sel_word    = find_word_at(cursor, &grid.word_positions).cloned();
+                let sel_bracket = find_bracket_at(cursor, &grid.bracket_pairs).cloned();
+
+                if let Some(wp) = sel_word {
+                    if !removed_duds.contains(&wp.word) {
+                        log.push(format!(">{}", wp.word));
+                        if wp.word == answer {
+                            log.push(">Exact match!".to_string());
+                            log.push(">Please wait".to_string());
+                            // Brief pause draw
+                            terminal.draw(|_f| {})?;
+                            std::thread::sleep(Duration::from_millis(1200));
+                            return Ok(true);
+                        } else {
+                            let lk = likeness(&wp.word, &answer);
+                            log.push(">Entry denied.".to_string());
+                            log.push(format!(">{lk}/{WORD_LEN} correct."));
+                            attempts = attempts.saturating_sub(1);
+                            if attempts == 0 {
+                                log.push(">LOCKED OUT.".to_string());
+                                terminal.draw(|_f| {})?;
+                                std::thread::sleep(Duration::from_millis(1500));
+                                return Ok(false);
+                            }
+                        }
+                    }
+                } else if let Some(bp) = sel_bracket {
+                    grid.bracket_pairs.retain(|b| b.open != bp.open);
+                    let mut rng = rand::thread_rng();
+                    if !duds_left.is_empty() && rng.gen_bool(0.5) {
+                        let idx = rng.gen_range(0..duds_left.len());
+                        let dud = duds_left.remove(idx);
+                        removed_duds.insert(dud);
+                        log.push(">Dud removed.".to_string());
+                    } else if attempts < MAX_TRIES {
+                        attempts = (attempts + 1).min(MAX_TRIES);
+                        log.push(">Tries reset.".to_string());
+                    } else {
+                        log.push(">No effect.".to_string());
+                    }
+                }
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                return Ok(false);
+            }
+            _ => {}
+        }
+    }
+}
