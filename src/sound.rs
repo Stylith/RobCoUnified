@@ -1,145 +1,126 @@
 /// RobcOS Sound System
 ///
-/// Plays audio by writing embedded bytes to a temp file and handing it to
-/// the OS native player — exactly like Python's playsound. No resampling,
-/// no pitch issues. The OS handles everything.
-///
-/// macOS  → afplay
-/// Linux  → aplay (WAV) or ffplay (MP3/OGG) or paplay
-/// Windows → powershell Media.SoundPlayer
-///
-/// To add a sound: drop your file into src/sounds/, then swap `None` with
-/// `Some(include_bytes!("sounds/yourfile.wav"))` for the matching slot.
+/// Mirrors Python's playsound(path, False) exactly:
+/// spawn the OS player and return immediately — no waiting, no blocking.
+/// A concurrent-sound counter caps simultaneous afplay processes to avoid
+/// unlimited spawning from held-down keys.
 
-use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use crate::config::get_settings;
 
-// ── Sound catalogue ───────────────────────────────────────────────────────────
+static STOPPED: AtomicBool  = AtomicBool::new(false);
+static ACTIVE:  AtomicUsize = AtomicUsize::new(0);
+const  MAX_CONCURRENT: usize = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sound {
-    Startup,
-    Login,
-    Logout,
-    Error,
-    Navigate,
-    Keypress,
+pub fn stop_audio() {
+    STOPPED.store(true, Ordering::SeqCst);
 }
 
-fn bytes_for(sound: Sound) -> Option<&'static [u8]> {
-    match sound {
-        Sound::Startup  => None, // Some(include_bytes!("sounds/startup.wav")),
-        Sound::Login    => Some(include_bytes!("sounds/ui_hacking_passgood.wav")),
-        Sound::Logout   => Some(include_bytes!("sounds/ui_hacking_passbad.wav")),
-        Sound::Error    => Some(include_bytes!("sounds/ui_hacking_passbad.wav")),
-        Sound::Navigate => Some(include_bytes!("sounds/ui_hacking_charenter_01.wav")),
-        Sound::Keypress => None, // Some(include_bytes!("sounds/keypress.wav")),
-    }
+// ── Temp paths (written once) ─────────────────────────────────────────────────
+
+struct SoundPaths {
+    login:     PathBuf,
+    logout:    PathBuf,
+    error:     PathBuf,
+    navigate:  PathBuf,
+    boot_keys: Vec<PathBuf>,
 }
 
-// ── Extension helper ──────────────────────────────────────────────────────────
+static PATHS: OnceLock<SoundPaths> = OnceLock::new();
 
-fn ext_for(sound: Sound) -> &'static str {
-    // Match the extension to whatever file you embed above.
-    // Change these if you use mp3/ogg instead of wav.
-    match sound {
-        Sound::Startup  => "wav",
-        Sound::Login    => "wav",
-        Sound::Logout   => "wav",
-        Sound::Error    => "wav",
-        Sound::Navigate => "wav",
-        Sound::Keypress => "wav",
-    }
+fn write_temp(name: &str, bytes: &[u8]) -> PathBuf {
+    let p = std::env::temp_dir().join(format!("robcos_{name}.wav"));
+    let _ = std::fs::write(&p, bytes);
+    p
 }
 
-// ── Playback ──────────────────────────────────────────────────────────────────
-
-pub fn play(sound: Sound) {
-    if !get_settings().sound { return; }
-    if let Some(bytes) = bytes_for(sound) {
-        let ext = ext_for(sound);
-        std::thread::spawn(move || { let _ = play_bytes(bytes, ext); });
-    }
+fn get_paths() -> &'static SoundPaths {
+    PATHS.get_or_init(|| SoundPaths {
+        login:    write_temp("login",    include_bytes!("sounds/ui_hacking_passgood.wav")),
+        logout:   write_temp("logout",   include_bytes!("sounds/ui_hacking_passbad.wav")),
+        error:    write_temp("error",    include_bytes!("sounds/ui_hacking_passbad.wav")),
+        navigate: write_temp("navigate", include_bytes!("sounds/ui_hacking_charenter_01.wav")),
+        boot_keys: vec![
+            write_temp("boot0", include_bytes!("sounds/ui_hacking_charsingle_01.wav")),
+            write_temp("boot1", include_bytes!("sounds/ui_hacking_charsingle_02.wav")),
+            write_temp("boot2", include_bytes!("sounds/ui_hacking_charsingle_03.wav")),
+            write_temp("boot3", include_bytes!("sounds/ui_hacking_charsingle_04.wav")),
+            write_temp("boot4", include_bytes!("sounds/ui_hacking_charsingle_05.wav")),
+        ],
+    })
 }
 
-fn play_bytes(bytes: &'static [u8], ext: &str) -> anyhow::Result<()> {
-    // Write to a named temp file so the OS player can open it by path.
-    let tmp = tempfile_path(ext);
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-    }
+// ── Fire-and-forget spawn (mirrors playsound non-blocking) ────────────────────
 
-    play_file(&tmp);
+fn play_nonblocking(path: PathBuf) {
+    if STOPPED.load(Ordering::SeqCst) { return; }
+    if ACTIVE.load(Ordering::Relaxed) >= MAX_CONCURRENT { return; }
 
-    // Clean up after playback (best-effort).
-    let _ = std::fs::remove_file(&tmp);
-    Ok(())
-}
+    ACTIVE.fetch_add(1, Ordering::Relaxed);
+    std::thread::spawn(move || {
+        #[cfg(target_os = "macos")]
+        { let _ = Command::new("afplay").arg(&path).output(); }
 
-fn tempfile_path(ext: &str) -> std::path::PathBuf {
-    let id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!("robcos_sfx_{id}.{ext}"))
-}
-
-fn play_file(path: &std::path::Path) {
-    let path_str = path.to_string_lossy();
-
-    #[cfg(target_os = "macos")]
-    {
-        // afplay is the same backend playsound uses on macOS.
-        let _ = Command::new("afplay")
-            .arg(path_str.as_ref())
-            .output();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Try aplay first (ALSA, WAV only), then paplay (PulseAudio), then ffplay.
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext == "wav" {
-            if Command::new("aplay")
-                .arg("-q")
-                .arg(path_str.as_ref())
-                .output()
-                .is_err()
-            {
-                let _ = Command::new("paplay").arg(path_str.as_ref()).output();
+        #[cfg(target_os = "linux")]
+        {
+            if Command::new("aplay").arg("-q").arg(&path).output().is_err() {
+                let _ = Command::new("paplay").arg(&path).output();
             }
-        } else {
-            // MP3/OGG — use ffplay (silent, no window)
-            let _ = Command::new("ffplay")
-                .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
-                .arg(path_str.as_ref())
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let script = format!(
+                "(New-Object Media.SoundPlayer '{}').PlaySync()",
+                path.to_string_lossy().replace('\'', "''")
+            );
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &script])
                 .output();
         }
-    }
 
-    #[cfg(target_os = "windows")]
-    {
-        // PowerShell SoundPlayer — same as playsound on Windows for WAV.
-        let script = format!(
-            "(New-Object Media.SoundPlayer '{}').PlaySync()",
-            path_str.replace('\'', "''")
-        );
-        let _ = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &script])
-            .output();
-    }
+        ACTIVE.fetch_sub(1, Ordering::Relaxed);
+    });
 }
 
-// ── Convenience wrappers ──────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
-pub fn play_startup()  { play(Sound::Startup);  }
-pub fn play_login()    { play(Sound::Login);     }
-pub fn play_logout()   { play(Sound::Logout);    }
-pub fn play_error()    { play(Sound::Error);     }
-pub fn play_navigate() { play(Sound::Navigate);  }
+pub fn play_boot_key() {
+    if !get_settings().sound { return; }
+    let paths = &get_paths().boot_keys;
+    if paths.is_empty() { return; }
+    let idx = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0) % paths.len();
+    play_nonblocking(paths[idx].clone());
+}
 
+pub fn play_navigate() {
+    if !get_settings().sound { return; }
+    play_nonblocking(get_paths().navigate.clone());
+}
+
+pub fn play_login() {
+    if !get_settings().sound { return; }
+    play_nonblocking(get_paths().login.clone());
+}
+
+pub fn play_logout() {
+    if !get_settings().sound { return; }
+    play_nonblocking(get_paths().logout.clone());
+}
+
+pub fn play_error() {
+    if !get_settings().sound { return; }
+    play_nonblocking(get_paths().error.clone());
+}
+
+pub fn play_startup()     {}
+pub fn play_boot_header() {}
 #[allow(dead_code)]
-pub fn play_keypress() { play(Sound::Keypress);  }
+pub fn play_keypress() { play_navigate(); }

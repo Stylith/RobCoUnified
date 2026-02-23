@@ -1,32 +1,61 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
-    layout::Alignment,
-    text::{Line, Span},
+    layout::{Alignment, Rect},
+    style::Modifier,
+    text::Span,
     widgets::Paragraph,
     Frame,
 };
 use std::time::Duration;
 
-use crate::config::current_theme_color;
+use crate::config::{current_theme_color, HEADER_LINES};
 use crate::ui::Term;
+
+const H_PAD: u16 = 3;
 
 fn themed_style() -> ratatui::style::Style {
     ratatui::style::Style::default().fg(current_theme_color())
 }
 
+fn title_style() -> ratatui::style::Style {
+    ratatui::style::Style::default()
+        .fg(current_theme_color())
+        .add_modifier(Modifier::BOLD)
+}
+
+fn dim_style() -> ratatui::style::Style {
+    ratatui::style::Style::default()
+        .fg(ratatui::style::Color::DarkGray)
+}
+
+// The last entry is the ROBCO header — rendered centered like the main UI header.
+// All others are plain terminal-style left-aligned output.
 const SEQUENCES: &[(&str, u64, u64)] = &[
-    ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",                                            20, 1500),
-    ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT",                              40, 1500),
-    ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 20, 1500),
-    ("LOGON ADMIN",                                                                                                 80, 2000),
-    ("ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM\nCOPYRIGHT 2075-2077 ROBCO INDUSTRIES\n-SERVER 1-",                40, 1000),
+    ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",                                            80, 1500),
+    ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT",                              100, 1500),
+    ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 80, 1500),
+    ("LOGON ADMIN",                                                                                                 120, 2000),
+    // Sentinel — rendered as centered header, not plain text
+    ("__HEADER__",                                                                                                  40, 1000),
 ];
 
 pub fn bootup(terminal: &mut Term) -> Result<()> {
     let mut displayed_lines: Vec<String> = Vec::new();
 
     'outer: for (text, char_delay_ms, pause_ms) in SEQUENCES {
+        if *text == "__HEADER__" {
+            // Render the ROBCO header centered, like the main UI
+            crate::sound::play_boot_header();
+            let pause_steps = pause_ms / 50;
+            for _ in 0..pause_steps {
+                terminal.draw(|f| draw_header(f))?;
+                if check_skip()? { break 'outer; }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            break 'outer;
+        }
+
         displayed_lines.clear();
         let all_lines: Vec<&str> = text.lines().collect();
 
@@ -34,11 +63,11 @@ pub fn bootup(terminal: &mut Term) -> Result<()> {
             let mut built = String::new();
             for ch in line.chars() {
                 built.push(ch);
-                let snapshot = built.clone();
                 let mut render_lines = displayed_lines.clone();
-                render_lines.push(snapshot);
+                render_lines.push(built.clone());
 
-                terminal.draw(|f| draw_boot(f, &render_lines))?;
+                crate::sound::play_boot_key();
+                terminal.draw(|f| draw_terminal(f, &render_lines))?;
 
                 if check_skip()? { break 'outer; }
                 std::thread::sleep(Duration::from_millis(*char_delay_ms));
@@ -46,53 +75,87 @@ pub fn bootup(terminal: &mut Term) -> Result<()> {
             displayed_lines.push(built);
         }
 
-        // Pause between sequences
         let pause_steps = pause_ms / 50;
         for _ in 0..pause_steps {
-            terminal.draw(|f| draw_boot(f, &displayed_lines))?;
+            terminal.draw(|f| draw_terminal(f, &displayed_lines))?;
             if check_skip()? { break 'outer; }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
 
-    // Final flash
+    // Brief blank flash before handing off to login
     terminal.draw(|f| {
-        let size = f.area();
-        f.render_widget(Paragraph::new(""), size);
+        f.render_widget(Paragraph::new(""), f.area());
     })?;
     std::thread::sleep(Duration::from_millis(300));
 
     Ok(())
 }
 
-fn draw_boot(f: &mut Frame, lines: &[String]) {
+/// Plain terminal output — left-aligned, starting at top-left with H_PAD margin.
+fn draw_terminal(f: &mut Frame, lines: &[String]) {
     let size = f.area();
     let style = themed_style();
-    let text_lines: Vec<Line> = lines
-        .iter()
-        .map(|l| Line::from(Span::styled(l.as_str(), style)))
-        .collect();
-    let p = Paragraph::new(text_lines).alignment(Alignment::Center);
-    // Center vertically
-    let top = size.height.saturating_sub(lines.len() as u16) / 2;
-    let pad = 3u16;
-    let area = ratatui::layout::Rect {
-        x: pad, y: top,
-        width: size.width.saturating_sub(pad * 2),
-        height: size.height.saturating_sub(top),
-    };
-    f.render_widget(p, area);
 
-    let hint = Paragraph::new(Span::styled(
-        "SPACE to skip", ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray)
-    )).alignment(Alignment::Center);
-    let hint_area = ratatui::layout::Rect {
-        x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1
-    };
-    f.render_widget(hint, hint_area);
+    // Clear
+    f.render_widget(Paragraph::new(""), size);
+
+    for (i, line) in lines.iter().enumerate() {
+        let y = i as u16;
+        if y >= size.height.saturating_sub(1) { break; }
+        f.render_widget(
+            Paragraph::new(Span::styled(line.as_str(), style)),
+            Rect { x: H_PAD, y, width: size.width.saturating_sub(H_PAD * 2), height: 1 },
+        );
+    }
+
+    // Skip hint at bottom
+    f.render_widget(
+        Paragraph::new(Span::styled("SPACE to skip", dim_style())).alignment(Alignment::Center),
+        Rect { x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1 },
+    );
 }
 
-/// Returns true if the user pressed Space (skip).
+/// Render HEADER_LINES centered exactly like the main UI header + separators.
+fn draw_header(f: &mut Frame) {
+    let size = f.area();
+
+    f.render_widget(Paragraph::new(""), size);
+
+    // Separator line
+    let sep = "=".repeat(size.width.saturating_sub(H_PAD * 2) as usize);
+
+    let mid = size.height / 2;
+    let total_rows = HEADER_LINES.len() as u16 + 2; // 2 separator rows
+    let start_y = mid.saturating_sub(total_rows / 2);
+
+    // Top separator
+    f.render_widget(
+        Paragraph::new(Span::styled(sep.as_str(), themed_style())).alignment(Alignment::Center),
+        Rect { x: H_PAD, y: start_y, width: size.width.saturating_sub(H_PAD * 2), height: 1 },
+    );
+
+    // Header lines
+    for (i, &line) in HEADER_LINES.iter().enumerate() {
+        f.render_widget(
+            Paragraph::new(Span::styled(line, title_style())).alignment(Alignment::Center),
+            Rect { x: H_PAD, y: start_y + 1 + i as u16, width: size.width.saturating_sub(H_PAD * 2), height: 1 },
+        );
+    }
+
+    // Bottom separator
+    f.render_widget(
+        Paragraph::new(Span::styled(sep.as_str(), themed_style())).alignment(Alignment::Center),
+        Rect { x: H_PAD, y: start_y + 1 + HEADER_LINES.len() as u16, width: size.width.saturating_sub(H_PAD * 2), height: 1 },
+    );
+
+    // Skip hint
+    f.render_widget(
+        Paragraph::new(Span::styled("SPACE to skip", dim_style())).alignment(Alignment::Center),
+        Rect { x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1 },
+    );
+}
+
 fn check_skip() -> Result<bool> {
     if event::poll(Duration::from_millis(0))? {
         if let Event::Key(k) = event::read()? {

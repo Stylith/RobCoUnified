@@ -142,6 +142,9 @@ fn main() -> Result<()> {
         run(&mut terminal, true)
     }));
 
+    // Stop audio threads before restoring terminal
+    sound::stop_audio();
+    std::thread::sleep(std::time::Duration::from_millis(50));
     // Always restore terminal
     restore_terminal(&mut terminal).ok();
     print!("{}", crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
