@@ -144,96 +144,49 @@ fn find_bracket_at(idx: usize, pairs: &[BracketPair]) -> Option<&BracketPair> {
     pairs.iter().find(|bp| idx == bp.open || idx == bp.close)
 }
 
-// ── Centered overlay screens ──────────────────────────────────────────────────
+// ── Overlay screens ───────────────────────────────────────────────────────────
 
-/// Show "SECURITY OVERRIDE" centered on screen, wait briefly, no keypress needed.
 fn draw_security_override(terminal: &mut Term) -> Result<()> {
     terminal.draw(|f| {
         let size = f.area();
         let fg = current_theme_color();
         let ns = Style::default().fg(fg);
-        let ss = sel_style();
-
-        // Black out
-        f.render_widget(
-            Paragraph::new("").style(ns),
-            size,
-        );
-
+        f.render_widget(Paragraph::new("").style(ns), size);
         let mid = size.height / 2;
-
-        let line1 = Paragraph::new("SECURITY OVERRIDE")
+        let line = Paragraph::new("SECURITY OVERRIDE")
             .alignment(Alignment::Center)
-            .style(ss);
-        f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(1), width: size.width.saturating_sub(H_PAD*2), height: 1 });
+            .style(ns);
+        f.render_widget(line, Rect { x: H_PAD, y: mid.saturating_sub(1), width: size.width.saturating_sub(H_PAD*2), height: 1 });
     })?;
     std::thread::sleep(Duration::from_millis(1200));
     Ok(())
 }
 
-/// Show success sequence: "Exact match" then "Please wait..." with delays.
-fn draw_hack_success(terminal: &mut Term) -> Result<()> {
-    // Step 1: "Exact match"
-    terminal.draw(|f| {
-        let size = f.area();
-        let ss = sel_style();
-        let mid = size.height / 2;
-        let line = Paragraph::new(">Exact match!")
-            .alignment(Alignment::Center)
-            .style(ss);
-        f.render_widget(line, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
-    })?;
-    std::thread::sleep(Duration::from_millis(900));
-
-    // Step 2: "Please wait..."
-    terminal.draw(|f| {
-        let size = f.area();
-        let ss = sel_style();
-        let fg = current_theme_color();
-        let ns = Style::default().fg(fg);
-        let mid = size.height / 2;
-
-        let line1 = Paragraph::new(">Exact match!")
-            .alignment(Alignment::Center)
-            .style(ns);
-        f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(1), width: size.width.saturating_sub(H_PAD*2), height: 1 });
-
-        let line2 = Paragraph::new(">Please wait...")
-            .alignment(Alignment::Center)
-            .style(ss);
-        f.render_widget(line2, Rect { x: H_PAD, y: mid + 1, width: size.width.saturating_sub(H_PAD*2), height: 1 });
-    })?;
-    std::thread::sleep(Duration::from_millis(1400));
-    Ok(())
-}
-
-/// Show "TERMINAL LOCKED / PLEASE CONTACT AN ADMINISTRATOR" centered,
-/// wait for the user to press Enter before returning.
-fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
+/// "TERMINAL LOCKED" screen — plain themed text, no highlight.
+/// Waits for Enter, then returns (user goes back to user select).
+pub fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
     loop {
         terminal.draw(|f| {
             let size = f.area();
             let fg = current_theme_color();
             let ns = Style::default().fg(fg);
-            let ss = sel_style();
             let ds = dim_style();
 
-            // Clear screen
             f.render_widget(Paragraph::new("").style(ns), size);
 
             let mid = size.height / 2;
 
             let line1 = Paragraph::new("TERMINAL LOCKED")
                 .alignment(Alignment::Center)
-                .style(ss);
+                .style(ns);
             f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(2), width: size.width.saturating_sub(H_PAD*2), height: 1 });
 
             let line2 = Paragraph::new("PLEASE CONTACT AN ADMINISTRATOR")
                 .alignment(Alignment::Center)
-                .style(ss);
+                .style(ns);
             f.render_widget(line2, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
 
-            let line3 = Paragraph::new("[ Press ENTER to try again ]")
+            let line3 = Paragraph::new("[ Press ENTER to Exit ]")
                 .alignment(Alignment::Center)
                 .style(ds);
             f.render_widget(line3, Rect { x: H_PAD, y: mid + 2, width: size.width.saturating_sub(H_PAD*2), height: 1 });
@@ -254,10 +207,112 @@ fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+// ── Draw the hacking grid (shared between loop and success delay) ─────────────
+
+fn draw_grid_frame(
+    terminal: &mut Term,
+    grid: &Grid,
+    log: &[String],
+    cursor: usize,
+    attempts: usize,
+    removed_duds: &HashSet<String>,
+    base_addr: u16,
+) -> Result<()> {
+    terminal.draw(|f| {
+        let size = f.area();
+        let fg   = current_theme_color();
+        let ns   = Style::default().fg(fg);
+        let ss   = sel_style();
+        let ds   = dim_style();
+
+        // Header
+        let hdr = Paragraph::new("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL")
+            .alignment(Alignment::Center)
+            .style(ns);
+        f.render_widget(hdr, Rect { x:H_PAD, y:0, width:size.width.saturating_sub(H_PAD*2), height:1 });
+
+        // Attempts
+        let boxes: String = "■ ".repeat(attempts) + &"□ ".repeat(MAX_TRIES - attempts);
+        let warn = if attempts <= 1 {
+            format!("!!! WARNING: LOCKOUT IMMINENT !!!  {}", boxes.trim())
+        } else {
+            format!("{} ATTEMPT(S) LEFT:  {}", attempts, boxes.trim())
+        };
+        f.render_widget(Paragraph::new(warn).style(ns), Rect { x:H_PAD, y:2, width:size.width.saturating_sub(H_PAD*2), height:1 });
+
+        // Hint
+        f.render_widget(
+            Paragraph::new("TAB=Next Column  q=cancel").style(ds),
+            Rect { x:H_PAD, y:size.height.saturating_sub(2), width:size.width.saturating_sub(H_PAD*2), height:1 },
+        );
+
+        let hover_word    = find_word_at(cursor, &grid.word_positions);
+        let hover_bracket = find_bracket_at(cursor, &grid.bracket_pairs);
+
+        let base_row: u16 = 5;
+        // Address labels
+        for col_block in 0..COLS {
+            for row in 0..ROWS {
+                let addr = base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
+                let sx = H_PAD + (col_block * (COL_WIDTH + 14)) as u16;
+                let sy = base_row + row as u16;
+                if sy >= size.height.saturating_sub(2) { continue; }
+                f.render_widget(
+                    Paragraph::new(format!("0x{addr:04X}")).style(ds),
+                    Rect { x:sx, y:sy, width:6, height:1 },
+                );
+            }
+        }
+
+        // Grid characters
+        for (i, &ch) in grid.chars.iter().enumerate() {
+            let (row_off, col_off) = idx_to_cell(i);
+            let sy = base_row + row_off as u16;
+            let sx = H_PAD + col_off as u16;
+            if sy >= size.height.saturating_sub(2) || sx >= size.width { continue; }
+
+            let is_removed = grid.word_positions.iter().any(|wp| {
+                removed_duds.contains(&wp.word) && i >= wp.start && i < wp.start + WORD_LEN
+            });
+
+            let (style, display) = if is_removed {
+                (ds, '.')
+            } else if hover_word.map_or(false, |hw| i >= hw.start && i < hw.start + WORD_LEN) {
+                (ss, ch)
+            } else if hover_bracket.map_or(false, |hb| i >= hb.open && i <= hb.close) {
+                (ss, ch)
+            } else if i == cursor {
+                (ss, ch)
+            } else {
+                (ns, ch)
+            };
+
+            f.render_widget(
+                Paragraph::new(display.to_string()).style(style),
+                Rect { x:sx, y:sy, width:1, height:1 },
+            );
+        }
+
+        // Right panel log
+        let panel_col = H_PAD + (7 + (COL_WIDTH + 14) + COL_WIDTH + 4) as u16;
+        for (li, entry) in log.iter().rev().take(ROWS).enumerate() {
+            let sy = base_row + (ROWS - 1 - li) as u16;
+            if panel_col < size.width && sy < size.height.saturating_sub(1) {
+                f.render_widget(
+                    Paragraph::new(entry.as_str()).style(ns),
+                    Rect { x:panel_col, y:sy, width:size.width.saturating_sub(panel_col), height:1 },
+                );
+            }
+        }
+
+        render_status_bar(f, Rect { x:0, y:size.height.saturating_sub(1), width:size.width, height:1 });
+    })?;
+    Ok(())
+}
+
 // ── Minigame entry point ──────────────────────────────────────────────────────
 
 pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
-    // Show "SECURITY OVERRIDE" centered before the minigame starts
     draw_security_override(terminal)?;
 
     let mut rng    = rand::thread_rng();
@@ -278,98 +333,8 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
     let base_addr: u16 = 0xF964;
 
     loop {
-        // ── Draw ─────────────────────────────────────────────────────────────
-        terminal.draw(|f| {
-            let size = f.area();
-            let fg   = current_theme_color();
-            let ns   = Style::default().fg(fg);
-            let ss   = sel_style();
-            let ds   = dim_style();
+        draw_grid_frame(terminal, &grid, &log, cursor, attempts, &removed_duds, base_addr)?;
 
-            // Header
-            let hdr = Paragraph::new("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL")
-                .alignment(Alignment::Center)
-                .style(sel_style());
-            f.render_widget(hdr, Rect { x:H_PAD, y:0, width:size.width.saturating_sub(H_PAD*2), height:1 });
-
-            // Attempts
-            let boxes: String = "■ ".repeat(attempts) + &"□ ".repeat(MAX_TRIES - attempts);
-            let warn = if attempts <= 1 {
-                format!("!!! WARNING: LOCKOUT IMMINENT !!!  {}", boxes.trim())
-            } else {
-                format!("{} ATTEMPT(S) LEFT:  {}", attempts, boxes.trim())
-            };
-            let ap = Paragraph::new(warn).style(ns);
-            f.render_widget(ap, Rect { x:H_PAD, y:2, width:size.width.saturating_sub(H_PAD*2), height:1 });
-
-            // Hint
-            let hint = Paragraph::new("TAB=Next Column  q=cancel").style(ds);
-            f.render_widget(hint, Rect { x:H_PAD, y:size.height.saturating_sub(2), width:size.width.saturating_sub(H_PAD*2), height:1 });
-
-            // Hover detection
-            let hover_word    = find_word_at(cursor, &grid.word_positions);
-            let hover_bracket = find_bracket_at(cursor, &grid.bracket_pairs);
-
-            // Grid
-            let base_row: u16 = 5;
-            for col_block in 0..COLS {
-                for row in 0..ROWS {
-                    let addr = base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
-                    let sx = H_PAD + (col_block * (COL_WIDTH + 14)) as u16;
-                    let sy = base_row + row as u16;
-                    if sy >= size.height.saturating_sub(2) { continue; }
-                    let addr_str = format!("0x{addr:04X}");
-                    f.render_widget(
-                        Paragraph::new(addr_str).style(ds),
-                        Rect { x:sx, y:sy, width:6, height:1 },
-                    );
-                }
-            }
-
-            for (i, &ch) in grid.chars.iter().enumerate() {
-                let (row_off, col_off) = idx_to_cell(i);
-                let sy = base_row + row_off as u16;
-                let sx = H_PAD + col_off as u16;
-                if sy >= size.height.saturating_sub(2) || sx >= size.width { continue; }
-
-                let is_removed = grid.word_positions.iter().any(|wp| {
-                    removed_duds.contains(&wp.word) && i >= wp.start && i < wp.start + WORD_LEN
-                });
-
-                let (style, display) = if is_removed {
-                    (ds, '.')
-                } else if hover_word.map_or(false, |hw| i >= hw.start && i < hw.start + WORD_LEN) {
-                    (ss, ch)
-                } else if hover_bracket.map_or(false, |hb| i >= hb.open && i <= hb.close) {
-                    (ss, ch)
-                } else if i == cursor {
-                    (ss, ch)
-                } else {
-                    (ns, ch)
-                };
-
-                f.render_widget(
-                    Paragraph::new(display.to_string()).style(style),
-                    Rect { x:sx, y:sy, width:1, height:1 },
-                );
-            }
-
-            // Right panel log
-            let panel_col = H_PAD + (7 + (COL_WIDTH + 14) + COL_WIDTH + 4) as u16;
-            for (li, entry) in log.iter().rev().take(ROWS).enumerate() {
-                let sy = base_row + (ROWS - 1 - li) as u16;
-                if panel_col < size.width && sy < size.height.saturating_sub(1) {
-                    f.render_widget(
-                        Paragraph::new(entry.as_str()).style(ns),
-                        Rect { x:panel_col, y:sy, width:size.width.saturating_sub(panel_col), height:1 },
-                    );
-                }
-            }
-
-            render_status_bar(f, Rect { x:0, y:size.height.saturating_sub(1), width:size.width, height:1 });
-        })?;
-
-        // ── Input ─────────────────────────────────────────────────────────────
         if !event::poll(Duration::from_millis(100))? { continue; }
         let ev = event::read()?;
         let Event::Key(key) = ev else { continue };
@@ -414,8 +379,15 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                     if !removed_duds.contains(&wp.word) {
                         log.push(format!(">{}", wp.word));
                         if wp.word == answer {
+                            // Show ">Exact match!" in the log panel and redraw
+                            log.push(">Exact match!".to_string());
                             crate::sound::play_login();
-                            draw_hack_success(terminal)?;
+                            draw_grid_frame(terminal, &grid, &log, cursor, attempts, &removed_duds, base_addr)?;
+                            std::thread::sleep(Duration::from_millis(900));
+                            // Then add ">Please wait..." and redraw again
+                            log.push(">Please wait...".to_string());
+                            draw_grid_frame(terminal, &grid, &log, cursor, attempts, &removed_duds, base_addr)?;
+                            std::thread::sleep(Duration::from_millis(1400));
                             return Ok(true);
                         } else {
                             let lk = likeness(&wp.word, &answer);

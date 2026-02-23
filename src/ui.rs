@@ -98,7 +98,10 @@ pub fn run_menu(
 
             if let Some(sub) = subtitle {
                 let sub_area = pad_horizontal(chunks[4]);
-                let sp = Paragraph::new(Span::styled(sub, dim_style()))
+                let sub_style = Style::default()
+                    .fg(current_theme_color())
+                    .add_modifier(Modifier::UNDERLINED);
+                let sp = Paragraph::new(Span::styled(sub, sub_style))
                     .alignment(Alignment::Left);
                 f.render_widget(sp, sub_area);
             }
@@ -197,6 +200,68 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
                     KeyCode::Enter => {
                         crate::sound::play_navigate();
                         return Ok(Some(buf.trim().to_string()));
+                    }
+                    KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(None);
+                    }
+                    KeyCode::Backspace => {
+                        if !buf.is_empty() {
+                            buf.pop();
+                            crate::sound::play_keypress();
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        if (c as u32) >= 32 {
+                            buf.push(c);
+                            crate::sound::play_keypress();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+
+// ── Password input (masked) ───────────────────────────────────────────────────
+
+/// Like `input_prompt` but displays `*` for each character typed.
+pub fn password_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>> {
+    let mut buf = String::new();
+
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(size);
+
+            render_header(f, chunks[0]);
+            render_separator(f, chunks[1]);
+
+            let content_area = pad_horizontal(chunks[2]);
+            let masked = "*".repeat(buf.len());
+            let display = format!("{prompt}\n\n  > {masked}█");
+            let p = Paragraph::new(display).style(normal_style());
+            f.render_widget(p, content_area);
+            render_status_bar(f, chunks[3]);
+        })?;
+
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press { continue; }
+                match key.code {
+                    KeyCode::Enter => {
+                        crate::sound::play_navigate();
+                        return Ok(Some(buf));
                     }
                     KeyCode::Esc => {
                         crate::sound::play_navigate();

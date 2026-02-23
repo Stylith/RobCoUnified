@@ -1,21 +1,12 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::{
-    layout::{Alignment, Rect},
-    style::Style,
-    widgets::Paragraph,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
-use crate::config::{base_dir, users_dir, load_json, save_json, current_theme_color};
-use crate::status::render_status_bar;
-use crate::ui::{Term, run_menu, input_prompt, flash_message, confirm, sel_style, dim_style, MenuResult};
+use crate::config::{base_dir, users_dir, load_json, save_json};
+use crate::ui::{Term, run_menu, input_prompt, password_prompt, flash_message, confirm, MenuResult};
 
-const H_PAD: u16 = 3;
 
 // ── Auth method ───────────────────────────────────────────────────────────────
 
@@ -98,52 +89,6 @@ pub fn ensure_default_admin() {
 }
 
 
-// ── Terminal locked screen ────────────────────────────────────────────────────
-
-/// Show "TERMINAL LOCKED" centered, wait for Enter before returning.
-fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
-    loop {
-        terminal.draw(|f| {
-            let size = f.area();
-            let fg = current_theme_color();
-            let ns = Style::default().fg(fg);
-            let ss = sel_style();
-            let ds = dim_style();
-
-            f.render_widget(Paragraph::new("").style(ns), size);
-
-            let mid = size.height / 2;
-
-            let line1 = Paragraph::new("TERMINAL LOCKED")
-                .alignment(Alignment::Center)
-                .style(ss);
-            f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(2), width: size.width.saturating_sub(H_PAD*2), height: 1 });
-
-            let line2 = Paragraph::new("PLEASE CONTACT AN ADMINISTRATOR")
-                .alignment(Alignment::Center)
-                .style(ss);
-            f.render_widget(line2, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
-
-            let line3 = Paragraph::new("[ Press ENTER to try again ]")
-                .alignment(Alignment::Center)
-                .style(ds);
-            f.render_widget(line3, Rect { x: H_PAD, y: mid + 2, width: size.width.saturating_sub(H_PAD*2), height: 1 });
-
-            render_status_bar(f, Rect { x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1 });
-        })?;
-
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
-                if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-                    crate::sound::play_navigate();
-                    break;
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 // ── Login screen ─────────────────────────────────────────────────────────────
 
@@ -175,24 +120,32 @@ pub fn login_screen(terminal: &mut Term) -> Result<Option<String>> {
                     AuthMethod::NoPassword => true,
 
                     AuthMethod::Password => {
-                        let pw = match input_prompt(terminal, "Enter password:")? {
-                            Some(p) => p,
-                            None => continue,
-                        };
-                        if record.password_hash == hash_password(&pw) {
-                            true
-                        } else {
+                        let mut pw_auth = false;
+                        let mut pw_attempts = 3u8;
+                        loop {
+                            let pw = match password_prompt(terminal, &format!("Enter password ({pw_attempts} attempt(s) left):"))? {
+                                Some(p) => p,
+                                None => break,
+                            };
+                            if record.password_hash == hash_password(&pw) {
+                                pw_auth = true;
+                                break;
+                            }
+                            pw_attempts = pw_attempts.saturating_sub(1);
                             crate::sound::play_error();
-                            draw_terminal_locked(terminal)?;
-                            false
+                            if pw_attempts == 0 {
+                                crate::hacking::draw_terminal_locked(terminal)?;
+                                break;
+                            }
                         }
+                        pw_auth
                     }
 
                     AuthMethod::HackingMinigame => {
                         let success = crate::hacking::run_hacking(terminal)?;
                         if !success {
                             crate::sound::play_error();
-                            draw_terminal_locked(terminal)?;
+                            crate::hacking::draw_terminal_locked(terminal)?;
                         }
                         success
                     }
@@ -250,9 +203,19 @@ fn create_user_dialog(terminal: &mut Term) -> Result<()> {
 
     let password_hash = match auth_method {
         AuthMethod::Password => {
-            match input_prompt(terminal, "Password:")? {
-                Some(p) if !p.is_empty() => hash_password(&p),
-                _ => return Ok(()),
+            loop {
+                let pw = match password_prompt(terminal, "Password:")? {
+                    Some(p) if !p.is_empty() => p,
+                    _ => return Ok(()),
+                };
+                let pw2 = match password_prompt(terminal, "Re-enter password to confirm:")? {
+                    Some(p) => p,
+                    _ => return Ok(()),
+                };
+                if pw == pw2 {
+                    break hash_password(&pw);
+                }
+                flash_message(terminal, "Passwords do not match. Try again.", 1000)?;
             }
         }
         _ => String::new(),
@@ -298,7 +261,15 @@ fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
     let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     if let MenuResult::Selected(u) = run_menu(terminal, "Reset Password", &opts, None)? {
         if u != "Back" {
-            if let Some(pw) = input_prompt(terminal, &format!("New password for '{u}':"))? {
+            let pw = match password_prompt(terminal, &format!("New password for '{u}':"))? {
+                Some(p) if !p.is_empty() => p,
+                _ => return Ok(()),
+            };
+            let pw2 = match password_prompt(terminal, "Re-enter password to confirm:")? {
+                Some(p) => p,
+                None => return Ok(()),
+            };
+            if pw == pw2 {
                 let mut db = load_users();
                 if let Some(r) = db.get_mut(&u) {
                     r.password_hash = hash_password(&pw);
@@ -306,6 +277,8 @@ fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
                     save_users(&db);
                     flash_message(terminal, "Password updated.", 800)?;
                 }
+            } else {
+                flash_message(terminal, "Passwords do not match.", 1000)?;
             }
         }
     }
@@ -328,9 +301,19 @@ fn change_auth_method_dialog(terminal: &mut Term) -> Result<()> {
 
     let new_hash = match new_method {
         AuthMethod::Password => {
-            match input_prompt(terminal, &format!("New password for '{username}':"))? {
-                Some(p) if !p.is_empty() => hash_password(&p),
-                _ => return Ok(()),
+            loop {
+                let pw = match password_prompt(terminal, &format!("New password for '{username}':"))? {
+                    Some(p) if !p.is_empty() => p,
+                    _ => return Ok(()),
+                };
+                let pw2 = match password_prompt(terminal, "Re-enter password to confirm:")? {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+                if pw == pw2 {
+                    break hash_password(&pw);
+                }
+                flash_message(terminal, "Passwords do not match. Try again.", 1000)?;
             }
         }
         _ => String::new(),
