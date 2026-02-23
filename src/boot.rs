@@ -75,9 +75,10 @@ fn draw_boot(f: &mut Frame, lines: &[String]) {
     let p = Paragraph::new(text_lines).alignment(Alignment::Center);
     // Center vertically
     let top = size.height.saturating_sub(lines.len() as u16) / 2;
+    let pad = 3u16;
     let area = ratatui::layout::Rect {
-        x: 0, y: top,
-        width: size.width,
+        x: pad, y: top,
+        width: size.width.saturating_sub(pad * 2),
         height: size.height.saturating_sub(top),
     };
     f.render_widget(p, area);

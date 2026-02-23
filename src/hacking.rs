@@ -13,6 +13,8 @@ use crate::config::current_theme_color;
 use crate::status::render_status_bar;
 use crate::ui::{Term, sel_style, dim_style};
 
+const H_PAD: u16 = 3;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const WORD_LEN:   usize = 5;
@@ -24,7 +26,7 @@ const MAX_TRIES:  usize = 4;
 
 const JUNK: &[char] = &[
     '!','@','#','$','%','^','&','*','-','+','=','[',']','{','}','|',';',':',
-    '\'',',','.','<','>','?','/','\\',' ','~','`',
+    '\'',',','.','<','>','?','/','\\','~','`',
 ];
 
 const WORD_BANK: &[&str] = &[
@@ -66,7 +68,6 @@ fn build_grid(answer: &str) -> Grid {
     let total   = COLS * ROWS * COL_WIDTH;
     let mut chars: Vec<char> = (0..total).map(|_| junk_char(&mut rng)).collect();
 
-    // Pick words
     let mut pool: Vec<&str> = WORD_BANK.iter().copied().filter(|&w| w != answer).collect();
     shuffle_vec(&mut pool, &mut rng);
     let mut words: Vec<String> = pool[..NUM_WORDS.saturating_sub(1)]
@@ -99,7 +100,6 @@ fn build_grid(answer: &str) -> Grid {
         }
     }
 
-    // Bracket pairs
     let mut bracket_pairs: Vec<BracketPair> = Vec::new();
     for row in 0..ROWS * COLS {
         if rng.gen_bool(0.3) {
@@ -120,16 +120,13 @@ fn build_grid(answer: &str) -> Grid {
     Grid { chars, word_positions, bracket_pairs }
 }
 
-// Shuffle a Vec using rand's SliceRandom
 fn shuffle_vec<T>(v: &mut Vec<T>, rng: &mut impl Rng) {
     use rand::seq::SliceRandom;
     v.shuffle(rng);
 }
 
-// ── Index ↔ screen position ────────────────────────────────────────────────────
+// ── Index ↔ screen position ───────────────────────────────────────────────────
 
-/// Convert flat idx to (screen_row_offset, screen_col_offset).
-/// col0 chars start at terminal col 7, col1 at 7 + COL_WIDTH + 14
 fn idx_to_cell(idx: usize) -> (usize, usize) {
     let col_block   = idx / (ROWS * COL_WIDTH);
     let within      = idx % (ROWS * COL_WIDTH);
@@ -147,9 +144,122 @@ fn find_bracket_at(idx: usize, pairs: &[BracketPair]) -> Option<&BracketPair> {
     pairs.iter().find(|bp| idx == bp.open || idx == bp.close)
 }
 
-// ── Minigame entry point ───────────────────────────────────────────────────────
+// ── Centered overlay screens ──────────────────────────────────────────────────
+
+/// Show "SECURITY OVERRIDE" centered on screen, wait briefly, no keypress needed.
+fn draw_security_override(terminal: &mut Term) -> Result<()> {
+    terminal.draw(|f| {
+        let size = f.area();
+        let fg = current_theme_color();
+        let ns = Style::default().fg(fg);
+        let ss = sel_style();
+
+        // Black out
+        f.render_widget(
+            Paragraph::new("").style(ns),
+            size,
+        );
+
+        let mid = size.height / 2;
+
+        let line1 = Paragraph::new("SECURITY OVERRIDE")
+            .alignment(Alignment::Center)
+            .style(ss);
+        f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(1), width: size.width.saturating_sub(H_PAD*2), height: 1 });
+    })?;
+    std::thread::sleep(Duration::from_millis(1200));
+    Ok(())
+}
+
+/// Show success sequence: "Exact match" then "Please wait..." with delays.
+fn draw_hack_success(terminal: &mut Term) -> Result<()> {
+    // Step 1: "Exact match"
+    terminal.draw(|f| {
+        let size = f.area();
+        let ss = sel_style();
+        let mid = size.height / 2;
+        let line = Paragraph::new(">Exact match!")
+            .alignment(Alignment::Center)
+            .style(ss);
+        f.render_widget(line, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+    })?;
+    std::thread::sleep(Duration::from_millis(900));
+
+    // Step 2: "Please wait..."
+    terminal.draw(|f| {
+        let size = f.area();
+        let ss = sel_style();
+        let fg = current_theme_color();
+        let ns = Style::default().fg(fg);
+        let mid = size.height / 2;
+
+        let line1 = Paragraph::new(">Exact match!")
+            .alignment(Alignment::Center)
+            .style(ns);
+        f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(1), width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+        let line2 = Paragraph::new(">Please wait...")
+            .alignment(Alignment::Center)
+            .style(ss);
+        f.render_widget(line2, Rect { x: H_PAD, y: mid + 1, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+    })?;
+    std::thread::sleep(Duration::from_millis(1400));
+    Ok(())
+}
+
+/// Show "TERMINAL LOCKED / PLEASE CONTACT AN ADMINISTRATOR" centered,
+/// wait for the user to press Enter before returning.
+fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            let fg = current_theme_color();
+            let ns = Style::default().fg(fg);
+            let ss = sel_style();
+            let ds = dim_style();
+
+            // Clear screen
+            f.render_widget(Paragraph::new("").style(ns), size);
+
+            let mid = size.height / 2;
+
+            let line1 = Paragraph::new("TERMINAL LOCKED")
+                .alignment(Alignment::Center)
+                .style(ss);
+            f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(2), width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            let line2 = Paragraph::new("PLEASE CONTACT AN ADMINISTRATOR")
+                .alignment(Alignment::Center)
+                .style(ss);
+            f.render_widget(line2, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            let line3 = Paragraph::new("[ Press ENTER to try again ]")
+                .alignment(Alignment::Center)
+                .style(ds);
+            f.render_widget(line3, Rect { x: H_PAD, y: mid + 2, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            render_status_bar(f, Rect { x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1 });
+        })?;
+
+        if event::poll(Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press { continue; }
+                if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+                    crate::sound::play_navigate();
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Minigame entry point ──────────────────────────────────────────────────────
 
 pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
+    // Show "SECURITY OVERRIDE" centered before the minigame starts
+    draw_security_override(terminal)?;
+
     let mut rng    = rand::thread_rng();
     let answer_idx = rng.gen_range(0..WORD_BANK.len());
     let answer     = WORD_BANK[answer_idx].to_string();
@@ -168,7 +278,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
     let base_addr: u16 = 0xF964;
 
     loop {
-        // ── Draw ────────────────────────────────────────────────────────────
+        // ── Draw ─────────────────────────────────────────────────────────────
         terminal.draw(|f| {
             let size = f.area();
             let fg   = current_theme_color();
@@ -180,7 +290,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
             let hdr = Paragraph::new("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL")
                 .alignment(Alignment::Center)
                 .style(sel_style());
-            f.render_widget(hdr, Rect { x:0, y:0, width:size.width, height:1 });
+            f.render_widget(hdr, Rect { x:H_PAD, y:0, width:size.width.saturating_sub(H_PAD*2), height:1 });
 
             // Attempts
             let boxes: String = "■ ".repeat(attempts) + &"□ ".repeat(MAX_TRIES - attempts);
@@ -190,14 +300,14 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                 format!("{} ATTEMPT(S) LEFT:  {}", attempts, boxes.trim())
             };
             let ap = Paragraph::new(warn).style(ns);
-            f.render_widget(ap, Rect { x:1, y:2, width:size.width.saturating_sub(2), height:1 });
+            f.render_widget(ap, Rect { x:H_PAD, y:2, width:size.width.saturating_sub(H_PAD*2), height:1 });
 
             // Hint
             let hint = Paragraph::new("TAB=Next Column  q=cancel").style(ds);
-            f.render_widget(hint, Rect { x:2, y:size.height.saturating_sub(2), width:size.width.saturating_sub(4), height:1 });
+            f.render_widget(hint, Rect { x:H_PAD, y:size.height.saturating_sub(2), width:size.width.saturating_sub(H_PAD*2), height:1 });
 
             // Hover detection
-            let hover_word   = find_word_at(cursor, &grid.word_positions);
+            let hover_word    = find_word_at(cursor, &grid.word_positions);
             let hover_bracket = find_bracket_at(cursor, &grid.bracket_pairs);
 
             // Grid
@@ -205,7 +315,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
             for col_block in 0..COLS {
                 for row in 0..ROWS {
                     let addr = base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
-                    let sx = 1 + (col_block * (COL_WIDTH + 14)) as u16;
+                    let sx = H_PAD + (col_block * (COL_WIDTH + 14)) as u16;
                     let sy = base_row + row as u16;
                     if sy >= size.height.saturating_sub(2) { continue; }
                     let addr_str = format!("0x{addr:04X}");
@@ -219,10 +329,9 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
             for (i, &ch) in grid.chars.iter().enumerate() {
                 let (row_off, col_off) = idx_to_cell(i);
                 let sy = base_row + row_off as u16;
-                let sx = col_off as u16;
+                let sx = H_PAD + col_off as u16;
                 if sy >= size.height.saturating_sub(2) || sx >= size.width { continue; }
 
-                // Is this char part of a removed dud?
                 let is_removed = grid.word_positions.iter().any(|wp| {
                     removed_duds.contains(&wp.word) && i >= wp.start && i < wp.start + WORD_LEN
                 });
@@ -246,7 +355,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
             }
 
             // Right panel log
-            let panel_col = (7 + (COL_WIDTH + 14) + COL_WIDTH + 4) as u16;
+            let panel_col = H_PAD + (7 + (COL_WIDTH + 14) + COL_WIDTH + 4) as u16;
             for (li, entry) in log.iter().rev().take(ROWS).enumerate() {
                 let sy = base_row + (ROWS - 1 - li) as u16;
                 if panel_col < size.width && sy < size.height.saturating_sub(1) {
@@ -260,34 +369,44 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
             render_status_bar(f, Rect { x:0, y:size.height.saturating_sub(1), width:size.width, height:1 });
         })?;
 
-        // ── Input ────────────────────────────────────────────────────────────
+        // ── Input ─────────────────────────────────────────────────────────────
         if !event::poll(Duration::from_millis(100))? { continue; }
         let ev = event::read()?;
         let Event::Key(key) = ev else { continue };
         if key.kind != KeyEventKind::Press { continue; }
 
         match key.code {
-            KeyCode::Right | KeyCode::Char('d') => { cursor = (cursor + 1) % total; }
-            KeyCode::Left  | KeyCode::Char('a') => { cursor = cursor.checked_sub(1).unwrap_or(total - 1); }
-            KeyCode::Down  | KeyCode::Char('s') => {
+            KeyCode::Right | KeyCode::Char('d') => {
+                cursor = (cursor + 1) % total;
+                crate::sound::play_navigate();
+            }
+            KeyCode::Left | KeyCode::Char('a') => {
+                cursor = cursor.checked_sub(1).unwrap_or(total - 1);
+                crate::sound::play_navigate();
+            }
+            KeyCode::Down | KeyCode::Char('s') => {
                 let (cb, within) = (cursor / (ROWS * COL_WIDTH), cursor % (ROWS * COL_WIDTH));
                 let row = (within / COL_WIDTH + 1) % ROWS;
                 let chr = within % COL_WIDTH;
                 cursor = cb * ROWS * COL_WIDTH + row * COL_WIDTH + chr;
+                crate::sound::play_navigate();
             }
-            KeyCode::Up    | KeyCode::Char('w') => {
+            KeyCode::Up | KeyCode::Char('w') => {
                 let (cb, within) = (cursor / (ROWS * COL_WIDTH), cursor % (ROWS * COL_WIDTH));
                 let row = (within / COL_WIDTH + ROWS - 1) % ROWS;
                 let chr = within % COL_WIDTH;
                 cursor = cb * ROWS * COL_WIDTH + row * COL_WIDTH + chr;
+                crate::sound::play_navigate();
             }
             KeyCode::Tab => {
-                let cb    = cursor / (ROWS * COL_WIDTH);
+                let cb     = cursor / (ROWS * COL_WIDTH);
                 let within = cursor % (ROWS * COL_WIDTH);
                 let new_cb = (cb + 1) % COLS;
                 cursor = new_cb * ROWS * COL_WIDTH + within % (ROWS * COL_WIDTH);
+                crate::sound::play_navigate();
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
+                crate::sound::play_navigate();
                 let sel_word    = find_word_at(cursor, &grid.word_positions).cloned();
                 let sel_bracket = find_bracket_at(cursor, &grid.bracket_pairs).cloned();
 
@@ -295,11 +414,8 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                     if !removed_duds.contains(&wp.word) {
                         log.push(format!(">{}", wp.word));
                         if wp.word == answer {
-                            log.push(">Exact match!".to_string());
-                            log.push(">Please wait".to_string());
-                            // Brief pause draw
-                            terminal.draw(|_f| {})?;
-                            std::thread::sleep(Duration::from_millis(1200));
+                            crate::sound::play_login();
+                            draw_hack_success(terminal)?;
                             return Ok(true);
                         } else {
                             let lk = likeness(&wp.word, &answer);
@@ -308,8 +424,8 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                             attempts = attempts.saturating_sub(1);
                             if attempts == 0 {
                                 log.push(">LOCKED OUT.".to_string());
-                                terminal.draw(|_f| {})?;
-                                std::thread::sleep(Duration::from_millis(1500));
+                                crate::sound::play_error();
+                                draw_terminal_locked(terminal)?;
                                 return Ok(false);
                             }
                         }
@@ -331,6 +447,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                 }
             }
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                crate::sound::play_navigate();
                 return Ok(false);
             }
             _ => {}

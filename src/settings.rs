@@ -16,7 +16,7 @@ use crate::config::{
 use crate::status::render_status_bar;
 use crate::ui::{
     Term, run_menu, normal_style, dim_style,
-    render_header, render_separator, MenuResult,
+    render_header, render_separator, pad_horizontal, MenuResult,
 };
 
 // ── System info ────────────────────────────────────────────────────────────────
@@ -114,15 +114,15 @@ pub fn about_screen(terminal: &mut Term) -> Result<()> {
             let art: Vec<Line> = ascii.iter()
                 .map(|l| Line::from(Span::styled(l.as_str(), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(art).alignment(Alignment::Center), chunks[2]);
+            f.render_widget(Paragraph::new(art).alignment(Alignment::Center), pad_horizontal(chunks[2]));
 
             let info_lines: Vec<Line> = info.iter()
                 .map(|(k, v)| Line::from(Span::styled(format!("{k}: {v}"), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(info_lines).alignment(Alignment::Center), chunks[3]);
+            f.render_widget(Paragraph::new(info_lines).alignment(Alignment::Center), pad_horizontal(chunks[3]));
 
             let hint = Paragraph::new("q/Esc = back").style(dim_style());
-            f.render_widget(hint, chunks[4]);
+            f.render_widget(hint, pad_horizontal(chunks[4]));
             render_status_bar(f, chunks[5]);
         })?;
 

@@ -1,11 +1,36 @@
 use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::Style,
+    widgets::Paragraph,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use crate::config::{base_dir, users_dir, load_json, save_json};
-use crate::ui::{Term, run_menu, input_prompt, flash_message, confirm, MenuResult};
+use crate::config::{base_dir, users_dir, load_json, save_json, current_theme_color};
+use crate::status::render_status_bar;
+use crate::ui::{Term, run_menu, input_prompt, flash_message, confirm, sel_style, dim_style, MenuResult};
+
+const H_PAD: u16 = 3;
+
+// ── Auth method ───────────────────────────────────────────────────────────────
+
+/// How a user authenticates at the login screen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMethod {
+    /// Standard SHA-256 hashed password (default).
+    #[default]
+    Password,
+    /// No authentication required — user logs in immediately.
+    NoPassword,
+    /// User must complete the hacking minigame to log in.
+    HackingMinigame,
+}
 
 // ── User record ───────────────────────────────────────────────────────────────
 
@@ -13,6 +38,8 @@ use crate::ui::{Term, run_menu, input_prompt, flash_message, confirm, MenuResult
 pub struct UserRecord {
     pub password_hash: String,
     pub is_admin: bool,
+    #[serde(default)]
+    pub auth_method: AuthMethod,
 }
 
 fn users_db_path() -> PathBuf { users_dir().join("users.json") }
@@ -64,45 +91,121 @@ pub fn ensure_default_admin() {
         db.insert("admin".to_string(), UserRecord {
             password_hash: hash_password("admin"),
             is_admin: true,
+            auth_method: AuthMethod::Password,
         });
         save_users(&db);
     }
 }
 
+
+// ── Terminal locked screen ────────────────────────────────────────────────────
+
+/// Show "TERMINAL LOCKED" centered, wait for Enter before returning.
+fn draw_terminal_locked(terminal: &mut Term) -> Result<()> {
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            let fg = current_theme_color();
+            let ns = Style::default().fg(fg);
+            let ss = sel_style();
+            let ds = dim_style();
+
+            f.render_widget(Paragraph::new("").style(ns), size);
+
+            let mid = size.height / 2;
+
+            let line1 = Paragraph::new("TERMINAL LOCKED")
+                .alignment(Alignment::Center)
+                .style(ss);
+            f.render_widget(line1, Rect { x: H_PAD, y: mid.saturating_sub(2), width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            let line2 = Paragraph::new("PLEASE CONTACT AN ADMINISTRATOR")
+                .alignment(Alignment::Center)
+                .style(ss);
+            f.render_widget(line2, Rect { x: H_PAD, y: mid, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            let line3 = Paragraph::new("[ Press ENTER to try again ]")
+                .alignment(Alignment::Center)
+                .style(ds);
+            f.render_widget(line3, Rect { x: H_PAD, y: mid + 2, width: size.width.saturating_sub(H_PAD*2), height: 1 });
+
+            render_status_bar(f, Rect { x: 0, y: size.height.saturating_sub(1), width: size.width, height: 1 });
+        })?;
+
+        if event::poll(Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press { continue; }
+                if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+                    crate::sound::play_navigate();
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Login screen ─────────────────────────────────────────────────────────────
 
-/// Returns the logged-in username, or `None` if the user chose Exit.
 pub fn login_screen(terminal: &mut Term) -> Result<Option<String>> {
     loop {
+        let db = load_users();
+        let mut usernames: Vec<String> = db.keys().cloned().collect();
+        usernames.sort();
+
+        let mut opts: Vec<String> = usernames.clone();
+        opts.push("---".to_string());
+        opts.push("Exit".to_string());
+        let opts_str: Vec<&str> = opts.iter().map(String::as_str).collect();
+
         let result = run_menu(
             terminal,
-            "ROBCO TERMLINK — Login",
-            &["Login", "---", "Exit"],
-            Some("Welcome. Please authenticate."),
+            "ROBCO TERMLINK — Select User",
+            &opts_str,
+            Some("Welcome. Please select a user."),
         )?;
 
         match result {
             MenuResult::Selected(s) if s == "Exit" => return Ok(None),
-            MenuResult::Selected(s) if s == "Login" => {
-                let username = match input_prompt(terminal, "Enter username:")? {
-                    Some(u) if !u.is_empty() => u,
-                    _ => { flash_message(terminal, "Username cannot be empty.", 800)?; continue; }
-                };
-                let password = match input_prompt(terminal, "Enter password:")? {
-                    Some(p) => p,
-                    _ => continue,
+            MenuResult::Back => return Ok(None),
+
+            MenuResult::Selected(username) if db.contains_key(&username) => {
+                let record = db[&username].clone();
+                let authenticated = match record.auth_method {
+                    AuthMethod::NoPassword => true,
+
+                    AuthMethod::Password => {
+                        let pw = match input_prompt(terminal, "Enter password:")? {
+                            Some(p) => p,
+                            None => continue,
+                        };
+                        if record.password_hash == hash_password(&pw) {
+                            true
+                        } else {
+                            crate::sound::play_error();
+                            draw_terminal_locked(terminal)?;
+                            false
+                        }
+                    }
+
+                    AuthMethod::HackingMinigame => {
+                        let success = crate::hacking::run_hacking(terminal)?;
+                        if !success {
+                            crate::sound::play_error();
+                            draw_terminal_locked(terminal)?;
+                        }
+                        success
+                    }
                 };
 
-                let db = load_users();
-                if let Some(record) = db.get(&username) {
-                    if record.password_hash == hash_password(&password) {
-                        write_session(&username);
-                        return Ok(Some(username));
-                    }
+                if authenticated {
+                    crate::sound::play_login();
+                    write_session(&username);
+                    return Ok(Some(username));
                 }
-                flash_message(terminal, "Access denied. Invalid credentials.", 1200)?;
             }
-            MenuResult::Back | MenuResult::Selected(_) => continue,
+
+            _ => {}
         }
     }
 }
@@ -114,16 +217,17 @@ pub fn user_management_menu(terminal: &mut Term, current_user: &str) -> Result<(
         let result = run_menu(
             terminal,
             "User Management",
-            &["Create User", "Delete User", "Reset Password", "Toggle Admin", "---", "Back"],
+            &["Create User", "Delete User", "Reset Password", "Change Auth Method", "Toggle Admin", "---", "Back"],
             None,
         )?;
         match result {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Create User" => create_user_dialog(terminal)?,
-                "Delete User"  => delete_user_dialog(terminal, current_user)?,
-                "Reset Password" => reset_password_dialog(terminal)?,
-                "Toggle Admin" => toggle_admin_dialog(terminal, current_user)?,
+                "Create User"        => create_user_dialog(terminal)?,
+                "Delete User"        => delete_user_dialog(terminal, current_user)?,
+                "Reset Password"     => reset_password_dialog(terminal)?,
+                "Change Auth Method" => change_auth_method_dialog(terminal)?,
+                "Toggle Admin"       => toggle_admin_dialog(terminal, current_user)?,
                 _ => {}
             }
         }
@@ -141,34 +245,46 @@ fn create_user_dialog(terminal: &mut Term) -> Result<()> {
         flash_message(terminal, "User already exists.", 800)?;
         return Ok(());
     }
-    let pw = match input_prompt(terminal, "Password:")? {
-        Some(p) if !p.is_empty() => p,
-        _ => return Ok(()),
+
+    let auth_method = choose_auth_method(terminal)?;
+
+    let password_hash = match auth_method {
+        AuthMethod::Password => {
+            match input_prompt(terminal, "Password:")? {
+                Some(p) if !p.is_empty() => hash_password(&p),
+                _ => return Ok(()),
+            }
+        }
+        _ => String::new(),
     };
+
     db.insert(username.clone(), UserRecord {
-        password_hash: hash_password(&pw),
+        password_hash,
         is_admin: false,
+        auth_method,
     });
     save_users(&db);
-    // Create user directory
     let _ = std::fs::create_dir_all(users_dir().join(&username));
     flash_message(terminal, &format!("User '{username}' created."), 800)
 }
 
 fn delete_user_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
     let db = load_users();
-    let users: Vec<&str> = db.keys().map(String::as_str).collect();
-    let mut opts: Vec<&str> = users.clone();
-    opts.push("Back");
+    let mut opts_str: Vec<String> = db.keys().cloned().collect();
+    opts_str.sort();
+    opts_str.push("Back".to_string());
+    let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     let result = run_menu(terminal, "Delete User", &opts, None)?;
     if let MenuResult::Selected(u) = result {
         if u == current_user {
             flash_message(terminal, "Cannot delete yourself.", 800)?;
-        } else if confirm(terminal, &format!("Delete user '{u}'?"))? {
-            let mut db = load_users();
-            db.remove(&u);
-            save_users(&db);
-            flash_message(terminal, &format!("User '{u}' deleted."), 800)?;
+        } else if u != "Back" {
+            if confirm(terminal, &format!("Delete user '{u}'?"))? {
+                let mut db = load_users();
+                db.remove(&u);
+                save_users(&db);
+                flash_message(terminal, &format!("User '{u}' deleted."), 800)?;
+            }
         }
     }
     Ok(())
@@ -176,8 +292,9 @@ fn delete_user_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
 
 fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
     let db = load_users();
-    let users: Vec<String> = db.keys().cloned().collect();
-    let opts_str: Vec<String> = users.iter().cloned().chain(["Back".to_string()]).collect();
+    let mut opts_str: Vec<String> = db.keys().cloned().collect();
+    opts_str.sort();
+    opts_str.push("Back".to_string());
     let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     if let MenuResult::Selected(u) = run_menu(terminal, "Reset Password", &opts, None)? {
         if u != "Back" {
@@ -185,6 +302,7 @@ fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
                 let mut db = load_users();
                 if let Some(r) = db.get_mut(&u) {
                     r.password_hash = hash_password(&pw);
+                    r.auth_method = AuthMethod::Password;
                     save_users(&db);
                     flash_message(terminal, "Password updated.", 800)?;
                 }
@@ -194,10 +312,70 @@ fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+fn change_auth_method_dialog(terminal: &mut Term) -> Result<()> {
+    let db = load_users();
+    let mut user_opts: Vec<String> = db.keys().cloned().collect();
+    user_opts.sort();
+    user_opts.push("Back".to_string());
+    let user_refs: Vec<&str> = user_opts.iter().map(String::as_str).collect();
+
+    let username = match run_menu(terminal, "Change Auth Method — Select User", &user_refs, None)? {
+        MenuResult::Selected(u) if u != "Back" => u,
+        _ => return Ok(()),
+    };
+
+    let new_method = choose_auth_method(terminal)?;
+
+    let new_hash = match new_method {
+        AuthMethod::Password => {
+            match input_prompt(terminal, &format!("New password for '{username}':"))? {
+                Some(p) if !p.is_empty() => hash_password(&p),
+                _ => return Ok(()),
+            }
+        }
+        _ => String::new(),
+    };
+
+    let mut db = load_users();
+    if let Some(r) = db.get_mut(&username) {
+        r.auth_method = new_method;
+        r.password_hash = new_hash;
+        save_users(&db);
+        flash_message(terminal, &format!("Auth method updated for '{username}'."), 800)?;
+    }
+    Ok(())
+}
+
+fn choose_auth_method(terminal: &mut Term) -> Result<AuthMethod> {
+    let result = run_menu(
+        terminal,
+        "Choose Authentication Method",
+        &[
+            "Password             — classic password login",
+            "No Password          — log in without a password",
+            "Hacking Minigame     — must hack in to log in",
+            "---",
+            "Back",
+        ],
+        Some("Select how this user will authenticate at login."),
+    )?;
+
+    Ok(match result {
+        MenuResult::Selected(s) if s.starts_with("Password") => AuthMethod::Password,
+        MenuResult::Selected(s) if s.starts_with("No Password") => AuthMethod::NoPassword,
+        MenuResult::Selected(s) if s.starts_with("Hacking") => AuthMethod::HackingMinigame,
+        _ => AuthMethod::Password,
+    })
+}
+
 fn toggle_admin_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
     let db = load_users();
-    let opts_str: Vec<String> = db.keys().filter(|u| *u != current_user)
-        .cloned().chain(["Back".to_string()]).collect();
+    let mut opts_str: Vec<String> = db.keys()
+        .filter(|u| *u != current_user)
+        .cloned()
+        .collect();
+    opts_str.sort();
+    opts_str.push("Back".to_string());
     let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     if let MenuResult::Selected(u) = run_menu(terminal, "Toggle Admin", &opts, None)? {
         if u != "Back" {

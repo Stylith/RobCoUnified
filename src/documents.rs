@@ -15,7 +15,7 @@ use crate::status::render_status_bar;
 use crate::ui::{
     Term, title_style, normal_style, dim_style,
     run_menu, confirm, flash_message, pager,
-    render_header, render_separator,
+    render_header, render_separator, pad_horizontal,
     MenuResult,
 };
 
@@ -138,14 +138,14 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
             render_separator(f, chunks[1]);
 
             let tp = Paragraph::new(title).alignment(Alignment::Center).style(title_style());
-            f.render_widget(tp, chunks[2]);
+            f.render_widget(tp, pad_horizontal(chunks[2]));
             crate::ui::render_separator(f, chunks[3]);
 
             let lines: Vec<Line> = ed.lines.iter().map(|l| Line::from(Span::styled(l.as_str(), normal_style()))).collect();
-            f.render_widget(Paragraph::new(lines), chunks[4]);
+            f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[4]));
 
             let hint = Paragraph::new("Ctrl+W = save   Ctrl+X / Esc = cancel").style(dim_style());
-            f.render_widget(hint, chunks[5]);
+            f.render_widget(hint, pad_horizontal(chunks[5]));
             render_status_bar(f, chunks[6]);
         })?;
 

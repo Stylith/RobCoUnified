@@ -19,6 +19,7 @@ mod launcher;
 mod settings;
 mod status;
 mod shell_terminal;
+mod sound;
 mod ui;
 
 use auth::{ensure_default_admin, login_screen, clear_session};
@@ -50,6 +51,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 
     // Boot animation
     if get_settings().bootup && show_bootup {
+        sound::play_startup();
         boot::bootup(terminal)?;
     }
 
@@ -58,7 +60,10 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
         // Login screen; None means user chose Exit
         let username = match login_screen(terminal)? {
             Some(u) => u,
-            None    => break 'login_loop,
+            None    => {
+                sound::play_logout();
+                break 'login_loop;
+            }
         };
         set_current_user(Some(&username));
 
@@ -69,7 +74,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                 "Main Menu",
                 &[
                     "Applications", "Documents", "Network", "Games",
-                    "Program Installer", "Hacking Terminal", "Terminal",
+                    "Program Installer", "Terminal",
                     "---",
                     "Settings", "Logout",
                 ],
@@ -86,10 +91,10 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                     "Network"           => apps::network_menu(terminal)?,
                     "Games"             => apps::games_menu(terminal)?,
                     "Program Installer" => installer::appstore_menu(terminal)?,
-                    "Hacking Terminal"  => { hacking::run_hacking(terminal)?; }
                     "Terminal"          => shell_terminal::embedded_terminal(terminal)?,
                     "Settings"          => settings::settings_menu(terminal, &username)?,
                     "Logout"            => {
+                        sound::play_logout();
                         set_current_user(None);
                         clear_session();
                         flash_message(terminal, "Logging out...", 800)?;

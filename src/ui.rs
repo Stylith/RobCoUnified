@@ -14,6 +14,21 @@ use crate::status::render_status_bar;
 
 pub type Term = Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
 
+// ── Padding ───────────────────────────────────────────────────────────────────
+// Horizontal padding applied to every screen so text never touches the edges.
+const H_PAD: u16 = 3;
+
+/// Shrink a rect by H_PAD columns on each side.
+pub fn pad_horizontal(area: Rect) -> Rect {
+    let pad = H_PAD.min(area.width / 2);
+    Rect {
+        x: area.x + pad,
+        y: area.y,
+        width: area.width.saturating_sub(pad * 2),
+        height: area.height,
+    }
+}
+
 // ── Color helpers ─────────────────────────────────────────────────────────────
 
 pub fn normal_style()   -> Style { Style::default().fg(current_theme_color()) }
@@ -24,22 +39,21 @@ pub fn dim_style()      -> Style { Style::default().fg(current_theme_color()).ad
 // ── Header ────────────────────────────────────────────────────────────────────
 
 pub fn render_header(f: &mut Frame, area: Rect) {
+    let inner = pad_horizontal(area);
     let lines: Vec<Line> = HEADER_LINES
         .iter()
         .map(|l| Line::from(Span::styled(*l, title_style())))
         .collect();
     let p = Paragraph::new(lines).alignment(Alignment::Center);
-    f.render_widget(p, area);
+    f.render_widget(p, inner);
 }
 
 pub fn render_separator(f: &mut Frame, area: Rect) {
-    let sep = "=".repeat(area.width.saturating_sub(4) as usize);
+    let inner = pad_horizontal(area);
+    let sep = "=".repeat(inner.width.saturating_sub(0) as usize);
     let p = Paragraph::new(sep).alignment(Alignment::Center).style(dim_style());
-    f.render_widget(p, area);
+    f.render_widget(p, inner);
 }
-
-// ── Standard page layout ──────────────────────────────────────────────────────
-/// Returns [header(3), sep(1), title(1), sep(1), content_area, status(1)]
 
 // ── Menu ──────────────────────────────────────────────────────────────────────
 
@@ -77,17 +91,19 @@ pub fn run_menu(
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
 
+            let title_area = pad_horizontal(chunks[2]);
             let title_p = Paragraph::new(title).alignment(Alignment::Center).style(title_style());
-            f.render_widget(title_p, chunks[2]);
+            f.render_widget(title_p, title_area);
             render_separator(f, chunks[3]);
 
             if let Some(sub) = subtitle {
+                let sub_area = pad_horizontal(chunks[4]);
                 let sp = Paragraph::new(Span::styled(sub, dim_style()))
                     .alignment(Alignment::Left);
-                f.render_widget(sp, chunks[4]);
+                f.render_widget(sp, sub_area);
             }
 
-            let content_area = chunks[5];
+            let content_area = pad_horizontal(chunks[5]);
             let mut lines: Vec<Line> = Vec::new();
             for &choice in choices {
                 if choice == "---" {
@@ -119,22 +135,24 @@ pub fn run_menu(
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if !selectable.is_empty() {
-                            idx = idx.saturating_sub(1).max(0);
-                            // Wrap
-                            if idx == 0 && selectable.len() > 1 { /* already at top */ }
+                            idx = idx.saturating_sub(1);
                         }
+                        crate::sound::play_navigate();
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if !selectable.is_empty() {
                             idx = (idx + 1).min(selectable.len() - 1);
                         }
+                        crate::sound::play_navigate();
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
+                        crate::sound::play_navigate();
                         if let Some(&sel) = selectable.get(idx) {
                             return Ok(MenuResult::Selected(sel.to_string()));
                         }
                     }
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Tab => {
+                        crate::sound::play_navigate();
                         return Ok(MenuResult::Back);
                     }
                     _ => {}
@@ -165,9 +183,10 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
 
+            let content_area = pad_horizontal(chunks[2]);
             let display = format!("{prompt}\n\n  > {buf}█");
             let p = Paragraph::new(display).style(normal_style());
-            f.render_widget(p, chunks[2]);
+            f.render_widget(p, content_area);
             render_status_bar(f, chunks[3]);
         })?;
 
@@ -175,13 +194,25 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press { continue; }
                 match key.code {
-                    KeyCode::Enter => return Ok(Some(buf.trim().to_string())),
-                    KeyCode::Esc   => return Ok(None),
+                    KeyCode::Enter => {
+                        crate::sound::play_navigate();
+                        return Ok(Some(buf.trim().to_string()));
+                    }
+                    KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(None);
+                    }
                     KeyCode::Backspace => {
-                        if !buf.is_empty() { buf.pop(); }
+                        if !buf.is_empty() {
+                            buf.pop();
+                            crate::sound::play_keypress();
+                        }
                     }
                     KeyCode::Char(c) => {
-                        if (c as u32) >= 32 { buf.push(c); }
+                        if (c as u32) >= 32 {
+                            buf.push(c);
+                            crate::sound::play_keypress();
+                        }
                     }
                     _ => {}
                 }
@@ -202,9 +233,10 @@ pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
                 .split(size);
             render_header(f, chunks[0]);
 
+            let content_area = pad_horizontal(chunks[1]);
             let msg = format!("{message}\n\n  [y] Yes    [n] No");
             let p = Paragraph::new(msg).style(normal_style());
-            f.render_widget(p, chunks[1]);
+            f.render_widget(p, content_area);
             render_status_bar(f, chunks[2]);
         })?;
 
@@ -212,8 +244,14 @@ pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press { continue; }
                 match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(true),
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => return Ok(false),
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        crate::sound::play_navigate();
+                        return Ok(true);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(false);
+                    }
                     _ => {}
                 }
             }
@@ -231,8 +269,9 @@ pub fn flash_message(terminal: &mut Term, message: &str, ms: u64) -> Result<()> 
             .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(1)])
             .split(size);
         render_header(f, chunks[0]);
+        let content_area = pad_horizontal(chunks[1]);
         let p = Paragraph::new(format!("\n  {message}")).style(normal_style());
-        f.render_widget(p, chunks[1]);
+        f.render_widget(p, content_area);
         render_status_bar(f, chunks[2]);
     })?;
     std::thread::sleep(Duration::from_millis(ms));
@@ -263,19 +302,22 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
 
+            let title_area = pad_horizontal(chunks[2]);
             let tp = Paragraph::new(title).alignment(Alignment::Center).style(title_style());
-            f.render_widget(tp, chunks[2]);
+            f.render_widget(tp, title_area);
 
-            let visible_h = chunks[3].height as usize;
+            let content_area = pad_horizontal(chunks[3]);
+            let visible_h = content_area.height as usize;
             let page: Vec<Line> = lines[offset..]
                 .iter()
                 .take(visible_h)
                 .map(|l| Line::from(Span::styled(*l, normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(page), chunks[3]);
+            f.render_widget(Paragraph::new(page), content_area);
 
+            let hint_area = pad_horizontal(chunks[4]);
             let hint = Paragraph::new("↑↓ scroll   q/Enter = back").style(dim_style());
-            f.render_widget(hint, chunks[4]);
+            f.render_widget(hint, hint_area);
             render_status_bar(f, chunks[5]);
         })?;
 
@@ -283,12 +325,19 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press { continue; }
                 match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => { if offset > 0 { offset -= 1; } }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if offset > 0 { offset -= 1; }
+                        crate::sound::play_navigate();
+                    }
                     KeyCode::Down | KeyCode::Char('j') => {
                         let max = lines.len().saturating_sub(1);
                         if offset < max { offset += 1; }
+                        crate::sound::play_navigate();
                     }
-                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => break,
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => {
+                        crate::sound::play_navigate();
+                        break;
+                    }
                     _ => {}
                 }
             }
