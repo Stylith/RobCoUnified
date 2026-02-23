@@ -1,13 +1,18 @@
 /// RobcOS Sound System
 ///
-/// Drop your audio files into `src/sounds/`, then swap `None` with
-/// `Some(include_bytes!("sounds/yourfile.wav"))` for each slot.
-/// Files are compiled directly into the binary.
-/// Supported: WAV, MP3, OGG/Vorbis.
+/// Plays audio by writing embedded bytes to a temp file and handing it to
+/// the OS native player — exactly like Python's playsound. No resampling,
+/// no pitch issues. The OS handles everything.
+///
+/// macOS  → afplay
+/// Linux  → aplay (WAV) or ffplay (MP3/OGG) or paplay
+/// Windows → powershell Media.SoundPlayer
+///
+/// To add a sound: drop your file into src/sounds/, then swap `None` with
+/// `Some(include_bytes!("sounds/yourfile.wav"))` for the matching slot.
 
-use cpal::traits::{DeviceTrait, HostTrait};
-use rodio::{Decoder, OutputStream, Sink, Source};
-use std::io::Cursor;
+use std::io::Write;
+use std::process::Command;
 
 use crate::config::get_settings;
 
@@ -34,21 +39,19 @@ fn bytes_for(sound: Sound) -> Option<&'static [u8]> {
     }
 }
 
-// ── Device sample rate detection ──────────────────────────────────────────────
+// ── Extension helper ──────────────────────────────────────────────────────────
 
-/// Query the default output device's preferred sample rate.
-/// Falls back to 44100 if unavailable.
-fn device_sample_rate() -> u32 {
-    let host   = cpal::default_host();
-    let device = match host.default_output_device() {
-        Some(d) => d,
-        None    => return 44100,
-    };
-    let config = match device.default_output_config() {
-        Ok(c) => c,
-        Err(_) => return 44100,
-    };
-    config.sample_rate().0
+fn ext_for(sound: Sound) -> &'static str {
+    // Match the extension to whatever file you embed above.
+    // Change these if you use mp3/ogg instead of wav.
+    match sound {
+        Sound::Startup  => "wav",
+        Sound::Login    => "wav",
+        Sound::Logout   => "wav",
+        Sound::Error    => "wav",
+        Sound::Navigate => "wav",
+        Sound::Keypress => "wav",
+    }
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────────
@@ -56,32 +59,78 @@ fn device_sample_rate() -> u32 {
 pub fn play(sound: Sound) {
     if !get_settings().sound { return; }
     if let Some(bytes) = bytes_for(sound) {
-        std::thread::spawn(move || { let _ = play_bytes(bytes); });
+        let ext = ext_for(sound);
+        std::thread::spawn(move || { let _ = play_bytes(bytes, ext); });
     }
 }
 
-fn play_bytes(bytes: &'static [u8]) -> anyhow::Result<()> {
-    let (_stream, stream_handle) = OutputStream::try_default()?;
-    let sink = Sink::try_new(&stream_handle)?;
-
-    let decoder     = Decoder::new(Cursor::new(bytes))?;
-    let file_rate   = decoder.sample_rate();
-    let device_rate = device_sample_rate();
-
-    if file_rate != device_rate {
-        // Explicitly correct the playback speed so the audio isn't pitched up/down.
-        // speed() factor: < 1.0 slows down, > 1.0 speeds up.
-        // We want to play file_rate samples at device_rate, so:
-        //   factor = file_rate / device_rate
-        // e.g. file=22050, device=44100 → factor=0.5 → plays at correct pitch.
-        let factor = file_rate as f32 / device_rate as f32;
-        sink.append(decoder.speed(factor));
-    } else {
-        sink.append(decoder);
+fn play_bytes(bytes: &'static [u8], ext: &str) -> anyhow::Result<()> {
+    // Write to a named temp file so the OS player can open it by path.
+    let tmp = tempfile_path(ext);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
     }
 
-    sink.sleep_until_end();
+    play_file(&tmp);
+
+    // Clean up after playback (best-effort).
+    let _ = std::fs::remove_file(&tmp);
     Ok(())
+}
+
+fn tempfile_path(ext: &str) -> std::path::PathBuf {
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("robcos_sfx_{id}.{ext}"))
+}
+
+fn play_file(path: &std::path::Path) {
+    let path_str = path.to_string_lossy();
+
+    #[cfg(target_os = "macos")]
+    {
+        // afplay is the same backend playsound uses on macOS.
+        let _ = Command::new("afplay")
+            .arg(path_str.as_ref())
+            .output();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try aplay first (ALSA, WAV only), then paplay (PulseAudio), then ffplay.
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext == "wav" {
+            if Command::new("aplay")
+                .arg("-q")
+                .arg(path_str.as_ref())
+                .output()
+                .is_err()
+            {
+                let _ = Command::new("paplay").arg(path_str.as_ref()).output();
+            }
+        } else {
+            // MP3/OGG — use ffplay (silent, no window)
+            let _ = Command::new("ffplay")
+                .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
+                .arg(path_str.as_ref())
+                .output();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // PowerShell SoundPlayer — same as playsound on Windows for WAV.
+        let script = format!(
+            "(New-Object Media.SoundPlayer '{}').PlaySync()",
+            path_str.replace('\'', "''")
+        );
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output();
+    }
 }
 
 // ── Convenience wrappers ──────────────────────────────────────────────────────
