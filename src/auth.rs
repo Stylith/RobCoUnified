@@ -241,13 +241,11 @@ fn delete_user_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
     if let MenuResult::Selected(u) = result {
         if u == current_user {
             flash_message(terminal, "Cannot delete yourself.", 800)?;
-        } else if u != "Back" {
-            if confirm(terminal, &format!("Delete user '{u}'?"))? {
-                let mut db = load_users();
-                db.remove(&u);
-                save_users(&db);
-                flash_message(terminal, &format!("User '{u}' deleted."), 800)?;
-            }
+        } else if u != "Back" && confirm(terminal, &format!("Delete user '{u}'?"))? {
+            let mut db = load_users();
+            db.remove(&u);
+            save_users(&db);
+            flash_message(terminal, &format!("User '{u}' deleted."), 800)?;
         }
     }
     Ok(())

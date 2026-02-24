@@ -53,7 +53,7 @@ fn sort_key(f: &Path) -> String {
         .to_string_lossy()
         .replace('_', " ")
         .to_lowercase();
-    if name.starts_with("the ") { name[4..].to_string() } else { name }
+    if let Some(rest) = name.strip_prefix("the ") { rest.to_string() } else { name }
 }
 
 // ── Inline text editor (journal) ──────────────────────────────────────────────

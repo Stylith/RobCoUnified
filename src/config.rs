@@ -163,7 +163,7 @@ pub fn reload_settings() {
 }
 
 pub fn update_settings<F: FnOnce(&mut Settings)>(f: F) {
-    if let Ok(mut guard) = settings_lock().write() { f(&mut *guard); }
+    if let Ok(mut guard) = settings_lock().write() { f(&mut guard); }
 }
 
 pub fn persist_settings() {

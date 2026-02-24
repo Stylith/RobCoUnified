@@ -68,9 +68,9 @@ fn delete_category(terminal: &mut Term) -> Result<()> {
 
 /// Simple ~ expansion (no full shell expansion for safety).
 fn shellexpand_tilde(s: &str) -> String {
-    if s.starts_with('~') {
+    if let Some(rest) = s.strip_prefix('~') {
         if let Some(home) = dirs::home_dir() {
-            return format!("{}{}", home.display(), &s[1..]);
+            return format!("{}{}", home.display(), rest);
         }
     }
     s.to_string()

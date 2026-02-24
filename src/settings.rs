@@ -181,7 +181,7 @@ pub fn cli_menu(terminal: &mut Term) -> Result<()> {
                 CliColorMode::Monochrome => "Monochrome",
             }
         );
-        let choices = vec![
+        let choices = [
             styled_label.to_string(),
             color_label.clone(),
             "---".to_string(),

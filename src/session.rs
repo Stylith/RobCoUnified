@@ -1,10 +1,10 @@
-/// Session manager — tracks all logged-in sessions and switch requests.
-///
-/// Switch protocol:
-///   1. Any event loop detects Ctrl+N → calls request_switch(n-1)
-///   2. That event loop returns its escape value (Back / None / false)
-///   3. Call stack unwinds naturally back to run() in main.rs
-///   4. run() calls take_switch_request() and acts on it
+//! Session manager — tracks all logged-in sessions and switch requests.
+//!
+//! Switch protocol:
+//!   1. Any event loop detects Ctrl+N → calls request_switch(n-1)
+//!   2. That event loop returns its escape value (Back / None / false)
+//!   3. Call stack unwinds naturally back to run() in main.rs
+//!   4. run() calls take_switch_request() and acts on it
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};

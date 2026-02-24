@@ -1,13 +1,13 @@
-/// PTY session — runs a child process in a pseudo-terminal and renders its
-/// output inside the ratatui TUI using vt100 for terminal emulation.
-///
-/// The child process thinks it has a real terminal: correct size, SIGWINCH on
-/// resize, readline/colors/cursor movement all work. Output is captured into a
-/// vt100::Parser on a background reader thread and rendered each frame.
-///
-/// Usage:
-///   run_pty_session(terminal, "/bin/bash", &[])
-///   launch_in_pty(terminal, &["vim", "file.txt"])
+//! PTY session — runs a child process in a pseudo-terminal and renders its
+//! output inside the ratatui TUI using vt100 for terminal emulation.
+//!
+//! The child process thinks it has a real terminal: correct size, SIGWINCH on
+//! resize, readline/colors/cursor movement all work. Output is captured into a
+//! vt100::Parser on a background reader thread and rendered each frame.
+//!
+//! Usage:
+//!   run_pty_session(terminal, "/bin/bash", &[])
+//!   launch_in_pty(terminal, &["vim", "file.txt"])
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -72,14 +72,11 @@ fn open_key_debug_file() -> Option<std::fs::File> {
         .open(&primary)
     {
         Ok(f) => Some(f),
-        Err(_) => match std::fs::OpenOptions::new()
+        Err(_) => std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open("robcos_keys.log")
-        {
-            Ok(f) => Some(f),
-            Err(_) => None,
-        },
+            .ok(),
     }
 }
 
@@ -246,19 +243,14 @@ impl AcsGlyphMode {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 enum EscPending {
+    #[default]
     None,
     Esc,
     EscParen,
     EscParenRight,
     EscCsi,
-}
-
-impl Default for EscPending {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug)]
@@ -494,13 +486,12 @@ impl DecSpecialGraphics {
                     self.use_g1 = false;
                 }
                 _ => {
-                    if self.active_is_special() {
-                        if b.is_ascii() {
-                            let ch = b as char;
-                            if let Some(mapped) = self.map_special(ch) {
-                                self.emit_char(&mut out, mapped);
-                                continue;
-                            }
+                    if self.active_is_special()
+                        && b.is_ascii() {
+                        let ch = b as char;
+                        if let Some(mapped) = self.map_special(ch) {
+                            self.emit_char(&mut out, mapped);
+                            continue;
                         }
                     }
                     self.emit_byte(&mut out, b);
@@ -906,6 +897,14 @@ pub fn run_pty_session(terminal: &mut Term, program: &str, args: &[&str]) -> Res
     Ok(())
 }
 
+/// Convenience wrapper: launch an arbitrary command in a PTY session.
+pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
+    if cmd.is_empty() { return Ok(()); }
+    let program = &cmd[0];
+    let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
+    run_pty_session(terminal, program, &args)
+}
+
 pub fn resume_suspended_for_active(terminal: &mut Term) -> Result<bool> {
     let Some(mut session) = take_active_session_pty() else {
         return Ok(false);
@@ -1045,12 +1044,4 @@ mod tests {
             "translated line was: {line:?}"
         );
     }
-}
-
-/// Convenience wrapper: launch an arbitrary command in a PTY session.
-pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
-    if cmd.is_empty() { return Ok(()); }
-    let program = &cmd[0];
-    let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
-    run_pty_session(terminal, program, &args)
 }

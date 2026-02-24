@@ -17,7 +17,7 @@ static BATT: Mutex<Option<BattCache>> = Mutex::new(None);
 
 fn battery_display() -> Option<String> {
     let mut guard = BATT.lock().ok()?;
-    if guard.as_ref().map_or(true, |c| c.ts.elapsed() > Duration::from_secs(30)) {
+    if guard.as_ref().is_none_or(|c| c.ts.elapsed() > Duration::from_secs(30)) {
         let display = read_battery();
         *guard = Some(BattCache { display: display.clone(), ts: Instant::now() });
         return display;

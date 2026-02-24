@@ -120,7 +120,7 @@ fn build_grid(answer: &str) -> Grid {
     Grid { chars, word_positions, bracket_pairs }
 }
 
-fn shuffle_vec<T>(v: &mut Vec<T>, rng: &mut impl Rng) {
+fn shuffle_vec<T>(v: &mut [T], rng: &mut impl Rng) {
     use rand::seq::SliceRandom;
     v.shuffle(rng);
 }
@@ -275,13 +275,14 @@ fn draw_grid_frame(
                 removed_duds.contains(&wp.word) && i >= wp.start && i < wp.start + WORD_LEN
             });
 
+            let highlighted =
+                hover_word.is_some_and(|hw| i >= hw.start && i < hw.start + WORD_LEN)
+                || hover_bracket.is_some_and(|hb| i >= hb.open && i <= hb.close)
+                || i == cursor;
+
             let (style, display) = if is_removed {
                 (ds, '.')
-            } else if hover_word.map_or(false, |hw| i >= hw.start && i < hw.start + WORD_LEN) {
-                (ss, ch)
-            } else if hover_bracket.map_or(false, |hb| i >= hb.open && i <= hb.close) {
-                (ss, ch)
-            } else if i == cursor {
+            } else if highlighted {
                 (ss, ch)
             } else {
                 (ns, ch)

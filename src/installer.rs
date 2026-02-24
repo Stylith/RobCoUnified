@@ -222,7 +222,7 @@ fn search_menu(terminal: &mut Term, pm: Option<PackageManager>) -> Result<()> {
     loop {
         let start = page * page_size;
         let end   = (start + page_size).min(results.len());
-        let total_pages = (results.len() + page_size - 1) / page_size;
+        let total_pages = results.len().div_ceil(page_size);
 
         let mut choices: Vec<String> = results[start..end].iter().map(|r| {
             let cmd = r.split_whitespace().next().unwrap_or("");

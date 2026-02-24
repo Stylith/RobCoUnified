@@ -1,8 +1,8 @@
-/// RobcOS Sound System
-///
-/// Fire-and-forget playback using OS audio players.
-/// Boot key clips are preprocessed to remove leading dead-space and keep
-/// a short click window, which reduces random perceived gaps.
+//! RobcOS Sound System
+//!
+//! Fire-and-forget playback using OS audio players.
+//! Boot key clips are preprocessed to remove leading dead-space and keep
+//! a short click window, which reduces random perceived gaps.
 
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -290,7 +290,7 @@ for line in sys.stdin:
     *guard = Some(PythonHelper { child, stdin });
 }
 
-fn play_via_python(path: &PathBuf) -> bool {
+fn play_via_python(path: &std::path::Path) -> bool {
     ensure_python_helper();
     if !PY_HELPER_READY.load(Ordering::Acquire) || !PY_HELPER_USABLE.load(Ordering::Acquire) {
         return false;

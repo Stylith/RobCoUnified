@@ -574,9 +574,7 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         let prev = offset;
-                        if offset > 0 {
-                            offset -= 1;
-                        }
+                        offset = offset.saturating_sub(1);
                         if offset != prev {
                             crate::sound::play_navigate_repeat();
                         }
