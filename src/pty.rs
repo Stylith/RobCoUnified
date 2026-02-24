@@ -13,7 +13,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use ratatui::{
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -26,6 +26,12 @@ use std::time::{Duration, Instant};
 use crate::status::render_status_bar;
 use crate::ui::Term;
 
+#[derive(Debug, Clone, Default)]
+pub struct PtyLaunchOptions {
+    pub env: Vec<(String, String)>,
+    pub top_bar: Option<String>,
+}
+
 static SUSPENDED_PTY: OnceLock<Mutex<HashMap<usize, PtySession>>> = OnceLock::new();
 
 fn suspended_pty_map() -> &'static Mutex<HashMap<usize, PtySession>> {
@@ -35,7 +41,9 @@ fn suspended_pty_map() -> &'static Mutex<HashMap<usize, PtySession>> {
 fn park_active_session_pty(session: PtySession) {
     let idx = crate::session::active_idx();
     if let Ok(mut map) = suspended_pty_map().lock() {
-        map.insert(idx, session);
+        if let Some(mut old) = map.insert(idx, session) {
+            old.terminate();
+        }
     }
 }
 
@@ -54,7 +62,9 @@ pub fn has_suspended_for_active() -> bool {
 
 pub fn clear_all_suspended() {
     if let Ok(mut map) = suspended_pty_map().lock() {
-        map.clear();
+        for (_, mut session) in map.drain() {
+            session.terminate();
+        }
     }
 }
 
@@ -525,12 +535,20 @@ pub struct PtySession {
     color_mode: PtyColorMode,
     /// Selected border glyph mode for this command.
     acs_mode: AcsGlyphMode,
+    /// Optional top banner shown above PTY content.
+    top_bar: Option<String>,
     /// Master — kept alive so the PTY stays open; also used for resize
     master:  Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl PtySession {
-    pub fn spawn(program: &str, args: &[&str], cols: u16, rows: u16) -> Result<Self> {
+    pub fn spawn(
+        program: &str,
+        args: &[&str],
+        cols: u16,
+        rows: u16,
+        options: &PtyLaunchOptions,
+    ) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -541,6 +559,9 @@ impl PtySession {
 
         let mut cmd = CommandBuilder::new(program);
         for arg in args { cmd.arg(arg); }
+        for (key, value) in &options.env {
+            cmd.env(key, value);
+        }
         // Calcurse renders more reliably in Fixedsys/embedded PTY with ASCII ACS.
         if needs_ncurses_ascii_acs(program) && cmd.get_env("NCURSES_NO_UTF8_ACS").is_none() {
             cmd.env("NCURSES_NO_UTF8_ACS", "1");
@@ -595,6 +616,7 @@ impl PtySession {
             render_mode,
             color_mode,
             acs_mode,
+            top_bar: options.top_bar.clone(),
             master: pair.master,
         })
     }
@@ -619,6 +641,14 @@ impl PtySession {
     /// Is the child process still running?
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Force-stop the PTY child process and release its resources.
+    pub fn terminate(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.try_wait();
+        }
     }
 
     /// Render the current vt100 screen into `area` of the ratatui frame.
@@ -1032,15 +1062,38 @@ pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers, application_cursor: bool)
 
 // ── Interactive run loop ──────────────────────────────────────────────────────
 
+fn pty_content_rows(total_height: u16, has_top_bar: bool) -> u16 {
+    let reserved = 1 + u16::from(has_top_bar); // bottom status + optional top bar
+    total_height.saturating_sub(reserved).max(1)
+}
+
+fn render_top_bar(f: &mut ratatui::Frame, area: Rect, label: &str) {
+    let text = format!(" {label} ");
+    let style = Style::default()
+        .fg(Color::Black)
+        .bg(crate::config::current_theme_color())
+        .add_modifier(Modifier::BOLD);
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center).style(style), area);
+}
+
 /// Run a program in a PTY inside the ratatui TUI.
 /// Exits when the child process exits, shell exits, or a global session switch is requested.
 pub fn run_pty_session(terminal: &mut Term, program: &str, args: &[&str]) -> Result<()> {
+    run_pty_session_with_options(terminal, program, args, PtyLaunchOptions::default())
+}
+
+/// Run a PTY session with custom environment and optional top banner.
+pub fn run_pty_session_with_options(
+    terminal: &mut Term,
+    program: &str,
+    args: &[&str],
+    options: PtyLaunchOptions,
+) -> Result<()> {
     let size = terminal.size()?;
-    // Leave one row for a status hint at the bottom
-    let pty_rows = size.height.saturating_sub(1);
+    let pty_rows = pty_content_rows(size.height, options.top_bar.is_some());
     let pty_cols = size.width;
 
-    let mut session = PtySession::spawn(program, args, pty_cols, pty_rows)?;
+    let mut session = PtySession::spawn(program, args, pty_cols, pty_rows, &options)?;
     init_key_debug_log();
     let outcome = run_pty_loop(terminal, &mut session)?;
     if matches!(outcome, PtyLoopOutcome::SuspendedForSwitch) {
@@ -1080,16 +1133,40 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
 
         // Resize if terminal changed
         let sz = terminal.size()?;
-        let pr = sz.height.saturating_sub(1);
+        let pr = pty_content_rows(sz.height, session.top_bar.is_some());
         let pc = sz.width;
         session.resize(pc, pr);
 
         // Render
         terminal.draw(|f| {
-            let area    = f.area();
-            let pty_area = Rect { x: 0, y: 0, width: area.width, height: area.height.saturating_sub(1) };
-            let status_area = Rect { x: 0, y: area.height.saturating_sub(1), width: area.width, height: 1 };
+            let area = f.area();
+            let show_top_bar = session.top_bar.is_some() && area.height > 1;
+            let top_h = if show_top_bar { 1 } else { 0 };
+            let pty_area = Rect {
+                x: 0,
+                y: top_h,
+                width: area.width,
+                height: pty_content_rows(area.height, show_top_bar),
+            };
+            let status_area = Rect {
+                x: 0,
+                y: area.height.saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
 
+            if let Some(label) = session.top_bar.as_deref() {
+                render_top_bar(
+                    f,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        width: area.width,
+                        height: 1,
+                    },
+                    label,
+                );
+            }
             session.render(f, pty_area);
             render_status_bar(f, status_area);
         })?;
