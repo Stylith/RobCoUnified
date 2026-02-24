@@ -1,6 +1,6 @@
-# RobCoOS (Rust)
+# RobCoOS
 
-Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
+Fallout-style terminal menu built with Rust, `ratatui`, and `crossterm`.
 
 ## Version
 
@@ -152,3 +152,6 @@ Nuclear launch code data in the built-in Nuke Codes app is fetched from communit
 - [NukaTrader](https://nukatrader.com/)
 
 This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.
+
+## Disclaimer
+This program was written with the help of generative AI.
