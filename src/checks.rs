@@ -26,11 +26,31 @@ pub fn run_preflight() -> PreflightReport {
         }
     }
 
+    if which("python3") {
+        if !has_python_module("playsound") {
+            warnings.push(
+                "'playsound' Python module not found (optional, used for legacy sound backend)"
+                    .to_string(),
+            );
+        }
+    } else {
+        warnings.push("'python3' not found (optional, used for playsound backend)".to_string());
+    }
+
     PreflightReport { ok: errors.is_empty(), errors, warnings }
 }
 
 fn which(bin: &str) -> bool {
     Command::new("which").arg(bin).output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn has_python_module(module: &str) -> bool {
+    let code = format!("import {module}");
+    Command::new("python3")
+        .args(["-c", code.as_str()])
+        .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }

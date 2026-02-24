@@ -110,6 +110,67 @@ fn has_internet() -> bool {
         .status().map(|s| s.success()).unwrap_or(false)
 }
 
+fn has_python_module(module: &str) -> bool {
+    if !which("python3") {
+        return false;
+    }
+    let code = format!("import {module}");
+    Command::new("python3")
+        .args(["-c", code.as_str()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn install_playsound_runtime(terminal: &mut Term) -> Result<()> {
+    if !which("python3") {
+        return flash_message(terminal, "python3 not found. Install Python first.", 1200);
+    }
+    if has_python_module("playsound") {
+        return flash_message(terminal, "playsound is already installed.", 1000);
+    }
+    if !has_internet() {
+        return flash_message(terminal, "Error: No internet connection.", 1000);
+    }
+    if !confirm(terminal, "Install Python package: playsound?")? {
+        return Ok(());
+    }
+
+    let pip_args = ["-m", "pip", "install", "--user", "--upgrade", "playsound"];
+    let mut install_ok = false;
+    let run_result = with_suspended(terminal, || {
+        let first = Command::new("python3").args(pip_args).status()?;
+        if first.success() {
+            install_ok = true;
+            return Ok(());
+        }
+
+        let _ = Command::new("python3")
+            .args(["-m", "ensurepip", "--upgrade"])
+            .status();
+        let retry = Command::new("python3").args(pip_args).status()?;
+        install_ok = retry.success();
+        Ok(())
+    });
+
+    if run_result.is_err() {
+        return flash_message(terminal, "Failed to run pip install.", 1400);
+    }
+
+    if install_ok && has_python_module("playsound") {
+        box_message(terminal, "playsound installed.", 1000)?;
+    } else {
+        flash_message(
+            terminal,
+            "Install completed with errors. Run: python3 -m pip install --user playsound",
+            2200,
+        )?;
+    }
+    Ok(())
+}
+
 // ── Appstore menu ─────────────────────────────────────────────────────────────
 
 pub fn appstore_menu(terminal: &mut Term) -> Result<()> {
@@ -125,13 +186,14 @@ pub fn appstore_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(
             terminal,
             "Program Installer",
-            &["Search", "Installed Apps", "---", "Back"],
+            &["Search", "Installed Apps", "Install Audio Runtime (playsound)", "---", "Back"],
             Some(&format!("Package Manager: {pm_label}")),
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
                 "Search" => search_menu(terminal, pm)?,
                 "Installed Apps" => installed_menu(terminal, pm)?,
+                "Install Audio Runtime (playsound)" => install_playsound_runtime(terminal)?,
                 _ => break,
             }
         }

@@ -353,12 +353,22 @@ pub fn run_menu(
                 }
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if !selectable.is_empty() { idx = idx.saturating_sub(1); }
-                        crate::sound::play_navigate();
+                        if !selectable.is_empty() {
+                            let prev = idx;
+                            idx = idx.saturating_sub(1);
+                            if idx != prev {
+                                crate::sound::play_navigate_repeat();
+                            }
+                        }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if !selectable.is_empty() { idx = (idx + 1).min(selectable.len() - 1); }
-                        crate::sound::play_navigate();
+                        if !selectable.is_empty() {
+                            let prev = idx;
+                            idx = (idx + 1).min(selectable.len() - 1);
+                            if idx != prev {
+                                crate::sound::play_navigate_repeat();
+                            }
+                        }
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         crate::sound::play_navigate();
@@ -563,12 +573,22 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
                 }
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if offset > 0 { offset -= 1; }
-                        crate::sound::play_navigate();
+                        let prev = offset;
+                        if offset > 0 {
+                            offset -= 1;
+                        }
+                        if offset != prev {
+                            crate::sound::play_navigate_repeat();
+                        }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if offset < lines.len().saturating_sub(1) { offset += 1; }
-                        crate::sound::play_navigate();
+                        let prev = offset;
+                        if offset < lines.len().saturating_sub(1) {
+                            offset += 1;
+                        }
+                        if offset != prev {
+                            crate::sound::play_navigate_repeat();
+                        }
                     }
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => {
                         crate::sound::play_navigate(); break;
