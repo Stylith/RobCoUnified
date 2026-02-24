@@ -13,7 +13,7 @@ use crate::ui::Term;
 
 const H_PAD: u16 = 3;
 const PAUSE_TICK_MS: u64 = 50;
-const AUDIO_WARMUP_DELAY_MS: u64 = 180;
+const AUDIO_READY_TIMEOUT_MS: u64 = 1400;
 
 fn sleep_on_pace(next_tick: &mut Instant, step_ms: u64) {
     *next_tick += Duration::from_millis(step_ms);
@@ -39,7 +39,7 @@ fn dim_style() -> ratatui::style::Style {
 const SEQUENCES: &[(&str, u64, u64, bool)] = &[
     (
         "WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",
-        20,
+        40,
         2000,
         false,
     ),
@@ -66,8 +66,8 @@ const SEQUENCES: &[(&str, u64, u64, bool)] = &[
 
 pub fn bootup(terminal: &mut Term) -> Result<()> {
     if crate::config::get_settings().sound {
-        // Let the audio backend settle before the first typed boot character.
-        std::thread::sleep(Duration::from_millis(AUDIO_WARMUP_DELAY_MS));
+        // Do not draw first boot text until audio helper has initialized.
+        crate::sound::wait_boot_audio_ready(AUDIO_READY_TIMEOUT_MS);
     }
 
     'outer: for (text, char_delay_ms, pause_ms, centered) in SEQUENCES {

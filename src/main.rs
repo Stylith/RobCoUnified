@@ -130,6 +130,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         continue 'main;
                     }
                     sound::play_logout();
+                    std::thread::sleep(std::time::Duration::from_millis(450));
                     break 'main;
                 }
             }

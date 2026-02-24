@@ -9,7 +9,8 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::time::{Duration, Instant};
 
 use rand::seq::SliceRandom;
 
@@ -36,6 +37,8 @@ struct PythonHelper {
 }
 
 static PY_HELPER: OnceLock<Mutex<Option<PythonHelper>>> = OnceLock::new();
+static PY_HELPER_READY: AtomicBool = AtomicBool::new(false);
+static PY_HELPER_USABLE: AtomicBool = AtomicBool::new(false);
 
 pub fn stop_audio() {
     STOPPED.store(true, Ordering::SeqCst);
@@ -228,12 +231,20 @@ fn ensure_python_helper() {
     let script = r#"import sys
 try:
     from playsound import playsound
+    backend_ok = True
 except Exception:
     playsound = None
+    backend_ok = False
+
+if backend_ok:
+    sys.stdout.write("__ROBCOS_READY__\n")
+else:
+    sys.stdout.write("__ROBCOS_NOBACKEND__\n")
+sys.stdout.flush()
 
 for line in sys.stdin:
     path = line.rstrip("\r\n")
-    if not path or playsound is None:
+    if not path or not backend_ok:
         continue
     try:
         playsound(path, False)
@@ -241,10 +252,13 @@ for line in sys.stdin:
         pass
 "#;
 
+    PY_HELPER_READY.store(false, Ordering::Release);
+    PY_HELPER_USABLE.store(false, Ordering::Release);
+
     let spawn = Command::new("python3")
         .args(["-u", "-c", script])
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
 
@@ -257,11 +271,30 @@ for line in sys.stdin:
         return;
     };
 
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_ok() {
+                let msg = line.trim();
+                if msg == "__ROBCOS_READY__" {
+                    PY_HELPER_USABLE.store(true, Ordering::Release);
+                }
+                if msg == "__ROBCOS_READY__" || msg == "__ROBCOS_NOBACKEND__" {
+                    PY_HELPER_READY.store(true, Ordering::Release);
+                }
+            }
+        });
+    }
+
     *guard = Some(PythonHelper { child, stdin });
 }
 
 fn play_via_python(path: &PathBuf) -> bool {
     ensure_python_helper();
+    if !PY_HELPER_READY.load(Ordering::Acquire) || !PY_HELPER_USABLE.load(Ordering::Acquire) {
+        return false;
+    }
     let Ok(mut guard) = helper_lock().lock() else {
         return false;
     };
@@ -280,6 +313,36 @@ fn play_via_python(path: &PathBuf) -> bool {
         let _ = dead.child.wait();
     }
     false
+}
+
+fn has_helper_process() -> bool {
+    helper_lock()
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+}
+
+pub fn wait_boot_audio_ready(timeout_ms: u64) {
+    if !get_settings().sound {
+        return;
+    }
+
+    let _ = get_paths();
+    ensure_python_helper();
+
+    if !has_helper_process() {
+        // Fallback to previous behavior when python helper is unavailable.
+        std::thread::sleep(Duration::from_millis(180));
+        return;
+    }
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(timeout_ms) {
+        if PY_HELPER_READY.load(Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn play_nonblocking(path: PathBuf) {
