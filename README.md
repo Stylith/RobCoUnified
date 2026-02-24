@@ -1,6 +1,6 @@
 # RobCoOS (Rust)
 
-Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
+Fallout-style terminal Menu built with Rust, `ratatui`, and `crossterm`.
 
 ## Version
 
@@ -13,10 +13,6 @@ Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
 - Embedded PTY launcher for CLI applications.
 - Boot sequence and UI audio effects.
 - Theme-aware status bar and CLI rendering options.
-
-## Disclaimer
-
-This program was written with the help of generative AI.
 
 ## Requirements
 
@@ -140,3 +136,13 @@ RobCoOS/
   settings.json   (created at runtime)
   users/          (created at runtime)
 ```
+
+## Disclaimer
+
+This program was written with the help of generative AI.
+
+This project is an unofficial fan-made work inspired by the Fallout series.
+
+Fallout and all related names, logos, characters, audio, and visual assets are the property of their respective copyright and trademark owners (including Bethesda Softworks LLC and affiliated entities).
+
+No copyright or trademark infringement is intended. This project is non-commercial and is not endorsed by, sponsored by, or affiliated with Bethesda Softworks LLC, ZeniMax Media Inc., or Microsoft.
