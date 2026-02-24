@@ -101,6 +101,14 @@ pub enum CliColorMode {
     Monochrome,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CliAcsMode {
+    Ascii,
+    #[default]
+    Unicode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound:  bool,
@@ -110,6 +118,8 @@ pub struct Settings {
     pub cli_styled_render: bool,
     #[serde(default)]
     pub cli_color_mode: CliColorMode,
+    #[serde(default)]
+    pub cli_acs_mode: CliAcsMode,
 }
 
 impl Default for Settings {
@@ -120,6 +130,7 @@ impl Default for Settings {
             theme: "Green (Default)".into(),
             cli_styled_render: false,
             cli_color_mode: CliColorMode::ThemeLock,
+            cli_acs_mode: CliAcsMode::Unicode,
         }
     }
 }

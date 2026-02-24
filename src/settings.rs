@@ -10,7 +10,7 @@ use sysinfo::System;
 
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
-    CliColorMode, THEMES, get_settings, update_settings,
+    CliAcsMode, CliColorMode, THEMES, get_settings, update_settings,
     persist_settings, load_about,
 };
 use crate::status::render_status_bar;
@@ -181,9 +181,17 @@ pub fn cli_menu(terminal: &mut Term) -> Result<()> {
                 CliColorMode::Monochrome => "Monochrome",
             }
         );
+        let border_label = format!(
+            "Border Glyphs: {} [toggle]",
+            match s.cli_acs_mode {
+                CliAcsMode::Ascii => "ASCII",
+                CliAcsMode::Unicode => "Unicode Smooth",
+            }
+        );
         let choices = [
             styled_label.to_string(),
             color_label.clone(),
+            border_label.clone(),
             "---".to_string(),
             "Back".to_string(),
         ];
@@ -209,6 +217,15 @@ pub fn cli_menu(terminal: &mut Term) -> Result<()> {
                             CliColorMode::PaletteMap => CliColorMode::Color,
                             CliColorMode::Color => CliColorMode::Monochrome,
                             CliColorMode::Monochrome => CliColorMode::ThemeLock,
+                        };
+                    });
+                    persist_settings();
+                }
+                l if l == border_label => {
+                    update_settings(|s| {
+                        s.cli_acs_mode = match s.cli_acs_mode {
+                            CliAcsMode::Ascii => CliAcsMode::Unicode,
+                            CliAcsMode::Unicode => CliAcsMode::Ascii,
                         };
                     });
                     persist_settings();
