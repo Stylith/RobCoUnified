@@ -3,6 +3,9 @@ name = "robcos"
 version = "0.1.0"
 edition = "2021"
 description = "RobCoOS — Fallout-style terminal OS in Rust"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Stylith/RustCoOS"
 
 [[bin]]
 name = "robcos"

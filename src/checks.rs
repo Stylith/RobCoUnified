@@ -9,7 +9,6 @@ pub struct PreflightReport {
 
 // CLI tools: (binary, description, optional)
 const CLI_TOOLS: &[(&str, &str, bool)] = &[
-    ("tmux", "multi-window support",  false),
     ("epy",  "ebook reader",          true),
     ("vim",  "text editor (editing)", true),
     ("curl", "internet connectivity", false),
@@ -54,11 +53,6 @@ fn has_python_module(module: &str) -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
-
-#[allow(dead_code)]
-pub fn has_tmux() -> bool { which("tmux") }
-#[allow(dead_code)]
-pub fn in_tmux()  -> bool { std::env::var("TMUX").is_ok() }
 
 pub fn print_preflight(report: &PreflightReport) {
     if !report.errors.is_empty() {
