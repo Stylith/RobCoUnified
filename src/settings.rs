@@ -10,7 +10,7 @@ use sysinfo::System;
 
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
-    THEMES, get_settings, update_settings,
+    CliColorMode, THEMES, get_settings, update_settings,
     persist_settings, load_about,
 };
 use crate::status::render_status_bar;
@@ -162,6 +162,64 @@ pub fn theme_menu(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+// ── CLI menu ─────────────────────────────────────────────────────────────────
+
+pub fn cli_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        let s = get_settings();
+        let styled_label = if s.cli_styled_render {
+            "Styled PTY Rendering: ON  [toggle]"
+        } else {
+            "Styled PTY Rendering: OFF [toggle]"
+        };
+        let color_label = format!(
+            "PTY Color Mode: {} [cycle]",
+            match s.cli_color_mode {
+                CliColorMode::ThemeLock => "Theme Lock",
+                CliColorMode::PaletteMap => "Palette-map (Theme Shades)",
+                CliColorMode::Color => "Color (Default Terminal)",
+                CliColorMode::Monochrome => "Monochrome",
+            }
+        );
+        let choices = vec![
+            styled_label.to_string(),
+            color_label.clone(),
+            "---".to_string(),
+            "Back".to_string(),
+        ];
+        let choice_refs: Vec<&str> = choices.iter().map(String::as_str).collect();
+
+        match run_menu(
+            terminal,
+            "CLI",
+            &choice_refs,
+            Some("Affects embedded terminal apps"),
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) => match sel.as_str() {
+                "Back" => break,
+                l if l == styled_label => {
+                    update_settings(|s| s.cli_styled_render = !s.cli_styled_render);
+                    persist_settings();
+                }
+                l if l == color_label => {
+                    update_settings(|s| {
+                        s.cli_color_mode = match s.cli_color_mode {
+                            CliColorMode::ThemeLock => CliColorMode::PaletteMap,
+                            CliColorMode::PaletteMap => CliColorMode::Color,
+                            CliColorMode::Color => CliColorMode::Monochrome,
+                            CliColorMode::Monochrome => CliColorMode::ThemeLock,
+                        };
+                    });
+                    persist_settings();
+                }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
 // ── Settings menu ─────────────────────────────────────────────────────────────
 
 pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
@@ -174,7 +232,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
         let sound_label  = if s.sound  { "Sound: ON  [toggle]" } else { "Sound: OFF [toggle]" };
         let bootup_label = if s.bootup { "Bootup: ON [toggle]" } else { "Bootup: OFF [toggle]" };
 
-        let mut choices = vec!["About", "Theme", "Edit Menus"];
+        let mut choices = vec!["About", "Theme", "CLI", "Edit Menus"];
         if admin { choices.push("User Management"); }
         choices.extend_from_slice(&[bootup_label, sound_label, "---", "Back"]);
 
@@ -183,6 +241,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
             MenuResult::Selected(s) => match s.as_str() {
                 "About"            => about_screen(terminal)?,
                 "Theme"            => theme_menu(terminal)?,
+                "CLI"              => cli_menu(terminal)?,
                 "Edit Menus"       => edit_menus_menu(terminal)?,
                 "User Management"  => user_management_menu(terminal, current_user)?,
                 l if l == sound_label  => {

@@ -13,6 +13,7 @@ use crate::ui::Term;
 
 const H_PAD: u16 = 3;
 const PAUSE_TICK_MS: u64 = 50;
+const AUDIO_WARMUP_DELAY_MS: u64 = 180;
 
 fn sleep_on_pace(next_tick: &mut Instant, step_ms: u64) {
     *next_tick += Duration::from_millis(step_ms);
@@ -50,7 +51,7 @@ const SEQUENCES: &[(&str, u64, u64, bool)] = &[
     ),
     (
         "ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode",
-        20,
+        30,
         2000,
         false,
     ),
@@ -64,6 +65,11 @@ const SEQUENCES: &[(&str, u64, u64, bool)] = &[
 ];
 
 pub fn bootup(terminal: &mut Term) -> Result<()> {
+    if crate::config::get_settings().sound {
+        // Let the audio backend settle before the first typed boot character.
+        std::thread::sleep(Duration::from_millis(AUDIO_WARMUP_DELAY_MS));
+    }
+
     'outer: for (text, char_delay_ms, pause_ms, centered) in SEQUENCES {
         let mut next_tick = Instant::now();
         if *centered {

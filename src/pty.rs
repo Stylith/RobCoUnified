@@ -180,6 +180,338 @@ enum PtyLoopOutcome {
     SuspendedForSwitch,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PtyRenderMode {
+    Plain,
+    Styled,
+}
+
+fn render_mode_for_program(program: &str) -> PtyRenderMode {
+    match std::env::var("ROBCOS_PTY_RENDER")
+        .ok()
+        .map(|v| v.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("styled") | Some("style") | Some("cell") => PtyRenderMode::Styled,
+        Some("plain") | Some("raw") => PtyRenderMode::Plain,
+        _ if crate::config::get_settings().cli_styled_render => PtyRenderMode::Styled,
+        _ if is_ranger_program(program) => PtyRenderMode::Styled,
+        _ => PtyRenderMode::Plain,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PtyColorMode {
+    ThemeLock,
+    PaletteMap,
+    Monochrome,
+    Ansi,
+}
+
+fn pty_color_mode() -> PtyColorMode {
+    match std::env::var("ROBCOS_PTY_COLOR")
+        .ok()
+        .map(|v| v.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("ansi") | Some("color") | Some("colours") | Some("colors") => PtyColorMode::Ansi,
+        Some("mono") | Some("monochrome") | Some("plain") => PtyColorMode::Monochrome,
+        Some("palette") | Some("palette-map") | Some("palettemap") => PtyColorMode::PaletteMap,
+        Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => PtyColorMode::ThemeLock,
+        _ => match crate::config::get_settings().cli_color_mode {
+            crate::config::CliColorMode::ThemeLock => PtyColorMode::ThemeLock,
+            crate::config::CliColorMode::PaletteMap => PtyColorMode::PaletteMap,
+            crate::config::CliColorMode::Color => PtyColorMode::Ansi,
+            crate::config::CliColorMode::Monochrome => PtyColorMode::Monochrome,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AcsGlyphMode {
+    Ascii,
+    Unicode,
+}
+
+impl AcsGlyphMode {
+    fn from_env() -> Self {
+        match std::env::var("ROBCOS_ACS")
+            .ok()
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("unicode") | Some("utf8") | Some("utf-8") => Self::Unicode,
+            _ => Self::Ascii,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EscPending {
+    None,
+    Esc,
+    EscParen,
+    EscParenRight,
+    EscCsi,
+}
+
+impl Default for EscPending {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug)]
+struct DecSpecialGraphics {
+    g0_special: bool,
+    g1_special: bool,
+    use_g1: bool,
+    pending: EscPending,
+    csi_buf: Vec<u8>,
+    last_glyph: Vec<u8>,
+    glyph_mode: AcsGlyphMode,
+}
+
+impl Default for DecSpecialGraphics {
+    fn default() -> Self {
+        Self {
+            g0_special: false,
+            g1_special: false,
+            use_g1: false,
+            pending: EscPending::None,
+            csi_buf: Vec::new(),
+            last_glyph: Vec::new(),
+            glyph_mode: AcsGlyphMode::from_env(),
+        }
+    }
+}
+
+impl DecSpecialGraphics {
+    fn active_is_special(&self) -> bool {
+        if self.use_g1 {
+            self.g1_special
+        } else {
+            self.g0_special
+        }
+    }
+
+    fn emit_char(&mut self, out: &mut Vec<u8>, c: char) {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+        out.extend_from_slice(bytes);
+        self.last_glyph.clear();
+        self.last_glyph.extend_from_slice(bytes);
+    }
+
+    fn emit_byte(&mut self, out: &mut Vec<u8>, b: u8) {
+        out.push(b);
+        if b >= 0x20 && b != 0x7f {
+            self.last_glyph.clear();
+            self.last_glyph.push(b);
+        }
+    }
+
+    fn repeat_last_glyph(&self, out: &mut Vec<u8>, count: usize) {
+        if self.last_glyph.is_empty() {
+            return;
+        }
+        for _ in 0..count {
+            out.extend_from_slice(&self.last_glyph);
+        }
+    }
+
+    fn parse_rep_count(params: &[u8]) -> usize {
+        if params.is_empty() {
+            return 1;
+        }
+        let first = params.split(|&b| b == b';').next().unwrap_or(params);
+        if first.is_empty() {
+            return 1;
+        }
+        std::str::from_utf8(first)
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(1)
+    }
+
+    fn map_special(&self, c: char) -> Option<char> {
+        Some(match (self.glyph_mode, c) {
+            (AcsGlyphMode::Unicode, '`') => '◆',
+            (AcsGlyphMode::Unicode, 'a') => '▒',
+            (AcsGlyphMode::Unicode, 'f') => '°',
+            (AcsGlyphMode::Unicode, 'g') => '±',
+            (AcsGlyphMode::Unicode, 'j') => '┘',
+            (AcsGlyphMode::Unicode, 'k') => '┐',
+            (AcsGlyphMode::Unicode, 'l') => '┌',
+            (AcsGlyphMode::Unicode, 'm') => '└',
+            (AcsGlyphMode::Unicode, 'n') => '┼',
+            (AcsGlyphMode::Unicode, 'q') => '─',
+            (AcsGlyphMode::Unicode, 't') => '├',
+            (AcsGlyphMode::Unicode, 'u') => '┤',
+            (AcsGlyphMode::Unicode, 'v') => '┴',
+            (AcsGlyphMode::Unicode, 'w') => '┬',
+            (AcsGlyphMode::Unicode, 'x') => '│',
+            (AcsGlyphMode::Unicode, 'y') => '≤',
+            (AcsGlyphMode::Unicode, 'z') => '≥',
+            (AcsGlyphMode::Unicode, '{') => 'π',
+            (AcsGlyphMode::Unicode, '|') => '≠',
+            (AcsGlyphMode::Unicode, '}') => '£',
+            (AcsGlyphMode::Unicode, '~') => '·',
+
+            // ASCII fallback for fonts that do not render Unicode box chars.
+            (AcsGlyphMode::Ascii, '`') => '*',
+            (AcsGlyphMode::Ascii, 'a') => ':',
+            (AcsGlyphMode::Ascii, 'f') => '*',
+            (AcsGlyphMode::Ascii, 'g') => '#',
+            (AcsGlyphMode::Ascii, 'j' | 'k' | 'l' | 'm' | 'n' | 't' | 'u' | 'v' | 'w') => '+',
+            (AcsGlyphMode::Ascii, 'q') => '-',
+            (AcsGlyphMode::Ascii, 'x') => '|',
+            (AcsGlyphMode::Ascii, 'y') => '<',
+            (AcsGlyphMode::Ascii, 'z') => '>',
+            (AcsGlyphMode::Ascii, '{') => '*',
+            (AcsGlyphMode::Ascii, '|') => '!',
+            (AcsGlyphMode::Ascii, '}') => '#',
+            (AcsGlyphMode::Ascii, '~') => '.',
+
+            _ => return None,
+        })
+    }
+
+    fn map_cp437(&self, b: u8) -> Option<char> {
+        Some(match (self.glyph_mode, b) {
+            (AcsGlyphMode::Unicode, 0xB3) => '│',
+            (AcsGlyphMode::Unicode, 0xC4) => '─',
+            (AcsGlyphMode::Unicode, 0xDA) => '┌',
+            (AcsGlyphMode::Unicode, 0xBF) => '┐',
+            (AcsGlyphMode::Unicode, 0xC0) => '└',
+            (AcsGlyphMode::Unicode, 0xD9) => '┘',
+            (AcsGlyphMode::Unicode, 0xC3) => '├',
+            (AcsGlyphMode::Unicode, 0xB4) => '┤',
+            (AcsGlyphMode::Unicode, 0xC2) => '┬',
+            (AcsGlyphMode::Unicode, 0xC1) => '┴',
+            (AcsGlyphMode::Unicode, 0xC5) => '┼',
+
+            (AcsGlyphMode::Ascii, 0xB3) => '|',
+            (AcsGlyphMode::Ascii, 0xC4) => '-',
+            (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => '+',
+
+            _ => return None,
+        })
+    }
+
+    fn process(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+
+        for &b in input {
+            if let Some(mapped) = self.map_cp437(b) {
+                self.emit_char(&mut out, mapped);
+                continue;
+            }
+
+            // Complete ESC-designate sequences that may span read chunks.
+            match self.pending {
+                EscPending::Esc => {
+                    match b {
+                        b'(' => {
+                            self.pending = EscPending::EscParen;
+                            continue;
+                        }
+                        b')' => {
+                            self.pending = EscPending::EscParenRight;
+                            continue;
+                        }
+                        b'[' => {
+                            self.pending = EscPending::EscCsi;
+                            self.csi_buf.clear();
+                            continue;
+                        }
+                        _ => {
+                            out.push(0x1b);
+                            self.emit_byte(&mut out, b);
+                            self.pending = EscPending::None;
+                            continue;
+                        }
+                    }
+                }
+                EscPending::EscParen => {
+                    match b {
+                        b'0' => self.g0_special = true,
+                        b'B' => self.g0_special = false,
+                        _ => {
+                            out.extend_from_slice(&[0x1b, b'(', b]);
+                        }
+                    }
+                    self.pending = EscPending::None;
+                    continue;
+                }
+                EscPending::EscParenRight => {
+                    match b {
+                        b'0' => self.g1_special = true,
+                        b'B' => self.g1_special = false,
+                        _ => {
+                            out.extend_from_slice(&[0x1b, b')', b]);
+                        }
+                    }
+                    self.pending = EscPending::None;
+                    continue;
+                }
+                EscPending::EscCsi => {
+                    if (0x40..=0x7e).contains(&b) {
+                        if b == b'b' {
+                            let n = Self::parse_rep_count(&self.csi_buf);
+                            self.repeat_last_glyph(&mut out, n);
+                        } else {
+                            out.extend_from_slice(&[0x1b, b'[']);
+                            out.extend_from_slice(&self.csi_buf);
+                            out.push(b);
+                        }
+                        self.csi_buf.clear();
+                        self.pending = EscPending::None;
+                    } else {
+                        self.csi_buf.push(b);
+                        if self.csi_buf.len() > 64 {
+                            out.extend_from_slice(&[0x1b, b'[']);
+                            out.extend_from_slice(&self.csi_buf);
+                            self.csi_buf.clear();
+                            self.pending = EscPending::None;
+                        }
+                    }
+                    continue;
+                }
+                EscPending::None => {}
+            }
+
+            match b {
+                0x1b => {
+                    self.pending = EscPending::Esc;
+                }
+                // SO / SI: switch active charset between G1 and G0.
+                0x0e => {
+                    self.use_g1 = true;
+                }
+                0x0f => {
+                    self.use_g1 = false;
+                }
+                _ => {
+                    if self.active_is_special() {
+                        if b.is_ascii() {
+                            let ch = b as char;
+                            if let Some(mapped) = self.map_special(ch) {
+                                self.emit_char(&mut out, mapped);
+                                continue;
+                            }
+                        }
+                    }
+                    self.emit_byte(&mut out, b);
+                }
+            }
+        }
+
+        out
+    }
+}
+
 // ── PTY Session ───────────────────────────────────────────────────────────────
 
 pub struct PtySession {
@@ -192,6 +524,10 @@ pub struct PtySession {
     /// Current PTY dimensions
     cols:    u16,
     rows:    u16,
+    /// Selected render mode for this command.
+    render_mode: PtyRenderMode,
+    /// Selected color mode for this command.
+    color_mode: PtyColorMode,
     /// Master — kept alive so the PTY stays open; also used for resize
     master:  Box<dyn portable_pty::MasterPty + Send>,
 }
@@ -208,6 +544,15 @@ impl PtySession {
 
         let mut cmd = CommandBuilder::new(program);
         for arg in args { cmd.arg(arg); }
+        // Calcurse renders more reliably in Fixedsys/embedded PTY with ASCII ACS.
+        if needs_ncurses_ascii_acs(program) && cmd.get_env("NCURSES_NO_UTF8_ACS").is_none() {
+            cmd.env("NCURSES_NO_UTF8_ACS", "1");
+        }
+        if cmd.get_env("TERM").is_none() {
+            cmd.env("TERM", "xterm-256color");
+        }
+        let render_mode = render_mode_for_program(program);
+        let color_mode = pty_color_mode();
 
         let child  = pair.slave.spawn_command(cmd)?;
         let writer = pair.master.take_writer()?;
@@ -223,12 +568,17 @@ impl PtySession {
             .spawn(move || {
                 let mut reader = reader;
                 let mut buf = [0u8; 4096];
+                let mut dec_special = DecSpecialGraphics::default();
                 loop {
                     match std::io::Read::read(&mut reader, &mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
+                            let bytes = dec_special.process(&buf[..n]);
+                            if bytes.is_empty() {
+                                continue;
+                            }
                             if let Ok(mut p) = parser_clone.lock() {
-                                p.process(&buf[..n]);
+                                p.process(&bytes);
                             }
                         }
                     }
@@ -241,6 +591,8 @@ impl PtySession {
             child,
             cols,
             rows,
+            render_mode,
+            color_mode,
             master: pair.master,
         })
     }
@@ -275,6 +627,27 @@ impl PtySession {
         let rows = area.height as usize;
         let cols = area.width  as usize;
 
+        if matches!(self.render_mode, PtyRenderMode::Plain) {
+            let mut lines: Vec<Line> = screen
+                .rows(0, area.width)
+                .take(rows)
+                .map(Line::from)
+                .collect();
+            while lines.len() < rows {
+                lines.push(Line::from(""));
+            }
+            let para = match self.color_mode {
+                PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Paragraph::new(lines).style(
+                    Style::default()
+                        .fg(crate::config::current_theme_color())
+                        .bg(Color::Black),
+                ),
+                _ => Paragraph::new(lines),
+            };
+            f.render_widget(para, area);
+            return;
+        }
+
         let lines: Vec<Line> = (0..rows).map(|row| {
             let spans: Vec<Span> = (0..cols).map(|col| {
                 let cell = screen.cell(row as u16, col as u16);
@@ -282,7 +655,9 @@ impl PtySession {
                                .filter(|s| !s.is_empty())
                                .unwrap_or_else(|| " ".to_string());
 
-                let style = cell.map(|c| vt100_style(c)).unwrap_or_default();
+                let style = cell
+                    .map(|c| vt100_style(c, self.color_mode))
+                    .unwrap_or_else(|| vt100_default_style(self.color_mode));
                 Span::styled(ch, style)
             }).collect();
             Line::from(spans)
@@ -292,18 +667,68 @@ impl PtySession {
     }
 }
 
+fn needs_ncurses_ascii_acs(program: &str) -> bool {
+    let Some(name) = command_basename(program) else { return false };
+
+    name.starts_with("calcurse")
+}
+
+fn command_basename(program: &str) -> Option<String> {
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase())
+}
+
+fn is_ranger_program(program: &str) -> bool {
+    command_basename(program)
+        .map(|name| name.starts_with("ranger"))
+        .unwrap_or(false)
+}
+
 // ── vt100 cell → ratatui Style ────────────────────────────────────────────────
 
-fn vt100_style(cell: &vt100::Cell) -> Style {
-    let mut style = Style::default();
+fn vt100_default_style(mode: PtyColorMode) -> Style {
+    match mode {
+        PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Style::default()
+            .fg(crate::config::current_theme_color())
+            .bg(Color::Black),
+        _ => Style::default(),
+    }
+}
 
-    style = style.fg(vt100_color(cell.fgcolor(), Color::Reset));
-    style = style.bg(vt100_color(cell.bgcolor(), Color::Reset));
+fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
+    let mut style = vt100_default_style(mode);
+
+    match mode {
+        PtyColorMode::Ansi => {
+            style = style.fg(vt100_color(cell.fgcolor(), Color::Reset));
+            style = style.bg(vt100_color(cell.bgcolor(), Color::Reset));
+        }
+        PtyColorMode::PaletteMap => {
+            if !matches!(cell.fgcolor(), vt100::Color::Default) {
+                style = style.fg(palette_map_vt100_color(cell.fgcolor(), false));
+            }
+            if !matches!(cell.bgcolor(), vt100::Color::Default) {
+                style = style.bg(palette_map_vt100_color(cell.bgcolor(), true));
+            }
+        }
+        PtyColorMode::ThemeLock | PtyColorMode::Monochrome => {}
+    }
 
     if cell.bold()       { style = style.add_modifier(Modifier::BOLD);          }
     if cell.italic()     { style = style.add_modifier(Modifier::ITALIC);         }
     if cell.underline()  { style = style.add_modifier(Modifier::UNDERLINED);     }
-    if cell.inverse()    { style = style.add_modifier(Modifier::REVERSED);       }
+    if cell.inverse() {
+        match mode {
+            PtyColorMode::ThemeLock => {
+                style = style.fg(Color::Black).bg(crate::config::current_theme_color());
+            }
+            PtyColorMode::PaletteMap | PtyColorMode::Monochrome | PtyColorMode::Ansi => {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+        }
+    }
 
     style
 }
@@ -338,13 +763,101 @@ fn ansi_idx(i: u8) -> Color {
     }
 }
 
+fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
+    let Some((r, g, b)) = vt100_color_rgb(c) else {
+        return if is_background { Color::Black } else { crate::config::current_theme_color() };
+    };
+
+    let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
+    let scale = if is_background {
+        if luma < 0.33 {
+            0.16
+        } else if luma < 0.66 {
+            0.22
+        } else {
+            0.30
+        }
+    } else if luma < 0.20 {
+        0.40
+    } else if luma < 0.40 {
+        0.58
+    } else if luma < 0.60 {
+        0.74
+    } else if luma < 0.80 {
+        0.88
+    } else {
+        1.00
+    };
+
+    let (tr, tg, tb) = theme_base_rgb();
+    Color::Rgb(
+        ((tr as f32 * scale).round() as u8).max(1),
+        ((tg as f32 * scale).round() as u8).max(1),
+        ((tb as f32 * scale).round() as u8).max(1),
+    )
+}
+
+fn vt100_color_rgb(c: vt100::Color) -> Option<(u8, u8, u8)> {
+    match c {
+        vt100::Color::Default => None,
+        vt100::Color::Rgb(r, g, b) => Some((r, g, b)),
+        vt100::Color::Idx(i) => color_to_rgb(ansi_idx(i)),
+    }
+}
+
+fn theme_base_rgb() -> (u8, u8, u8) {
+    color_to_rgb(crate::config::current_theme_color()).unwrap_or((0, 255, 0))
+}
+
+fn color_to_rgb(c: Color) -> Option<(u8, u8, u8)> {
+    Some(match c {
+        Color::Reset => return None,
+        Color::Black => (0, 0, 0),
+        Color::Red => (205, 0, 0),
+        Color::Green => (0, 205, 0),
+        Color::Yellow => (205, 205, 0),
+        Color::Blue => (0, 0, 238),
+        Color::Magenta => (205, 0, 205),
+        Color::Cyan => (0, 205, 205),
+        Color::Gray => (180, 180, 180),
+        Color::DarkGray => (120, 120, 120),
+        Color::LightRed => (255, 85, 85),
+        Color::LightGreen => (85, 255, 85),
+        Color::LightYellow => (255, 255, 85),
+        Color::LightBlue => (85, 85, 255),
+        Color::LightMagenta => (255, 85, 255),
+        Color::LightCyan => (85, 255, 255),
+        Color::White => (245, 245, 245),
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Indexed(i) => indexed_ansi_rgb(i),
+    })
+}
+
+fn indexed_ansi_rgb(i: u8) -> (u8, u8, u8) {
+    if i < 16 {
+        return color_to_rgb(ansi_idx(i)).unwrap_or((255, 255, 255));
+    }
+    if (16..=231).contains(&i) {
+        let n = i - 16;
+        let r = n / 36;
+        let g = (n % 36) / 6;
+        let b = n % 6;
+        let step = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+        return (step(r), step(g), step(b));
+    }
+    // 232..=255 grayscale ramp
+    let g = 8 + (i.saturating_sub(232) * 10);
+    (g, g, g)
+}
+
 // ── Key → bytes ───────────────────────────────────────────────────────────────
 
-pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers) -> Option<Vec<u8>> {
+pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers, application_cursor: bool) -> Option<Vec<u8>> {
     // Ctrl+<letter>
     if mods.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(c) = code {
-            let byte = (c as u8).wrapping_sub(b'a').wrapping_add(1);
+            let lc = c.to_ascii_lowercase();
+            let byte = (lc as u8).wrapping_sub(b'a').wrapping_add(1);
             if byte < 32 { return Some(vec![byte]); }
         }
     }
@@ -355,12 +868,12 @@ pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers) -> Option<Vec<u8>> {
         KeyCode::Backspace => b"\x7f".to_vec(),
         KeyCode::Tab       => b"\t".to_vec(),
         KeyCode::Esc       => b"\x1b".to_vec(),
-        KeyCode::Up        => b"\x1b[A".to_vec(),
-        KeyCode::Down      => b"\x1b[B".to_vec(),
-        KeyCode::Right     => b"\x1b[C".to_vec(),
-        KeyCode::Left      => b"\x1b[D".to_vec(),
-        KeyCode::Home      => b"\x1b[H".to_vec(),
-        KeyCode::End       => b"\x1b[F".to_vec(),
+        KeyCode::Up        => if application_cursor { b"\x1bOA".to_vec() } else { b"\x1b[A".to_vec() },
+        KeyCode::Down      => if application_cursor { b"\x1bOB".to_vec() } else { b"\x1b[B".to_vec() },
+        KeyCode::Right     => if application_cursor { b"\x1bOC".to_vec() } else { b"\x1b[C".to_vec() },
+        KeyCode::Left      => if application_cursor { b"\x1bOD".to_vec() } else { b"\x1b[D".to_vec() },
+        KeyCode::Home      => if application_cursor { b"\x1bOH".to_vec() } else { b"\x1b[H".to_vec() },
+        KeyCode::End       => if application_cursor { b"\x1bOF".to_vec() } else { b"\x1b[F".to_vec() },
         KeyCode::PageUp    => b"\x1b[5~".to_vec(),
         KeyCode::PageDown  => b"\x1b[6~".to_vec(),
         KeyCode::Delete    => b"\x1b[3~".to_vec(),
@@ -458,11 +971,79 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
                     }
                     continue;
                 }
-                if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
+                let application_cursor = session
+                    .parser
+                    .lock()
+                    .map(|p| p.screen().application_cursor())
+                    .unwrap_or(false);
+                if let Some(bytes) = key_to_bytes(key.code, key.modifiers, application_cursor) {
                     session.write(&bytes);
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DecSpecialGraphics, key_to_bytes, needs_ncurses_ascii_acs,
+    };
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn app_cursor_arrows_use_ss3_sequences() {
+        assert_eq!(
+            key_to_bytes(KeyCode::Up, KeyModifiers::NONE, true).unwrap(),
+            b"\x1bOA".to_vec()
+        );
+        assert_eq!(
+            key_to_bytes(KeyCode::Down, KeyModifiers::NONE, true).unwrap(),
+            b"\x1bOB".to_vec()
+        );
+        assert_eq!(
+            key_to_bytes(KeyCode::Right, KeyModifiers::NONE, true).unwrap(),
+            b"\x1bOC".to_vec()
+        );
+        assert_eq!(
+            key_to_bytes(KeyCode::Left, KeyModifiers::NONE, true).unwrap(),
+            b"\x1bOD".to_vec()
+        );
+    }
+
+    #[test]
+    fn dec_special_graphics_translates_box_chars() {
+        let mut d = DecSpecialGraphics::default();
+        let out = d.process(b"\x1b(0lqqqk\x1b(B");
+        assert_eq!(String::from_utf8(out).unwrap(), "+---+");
+    }
+
+    #[test]
+    fn cp437_box_chars_map_in_ascii_mode() {
+        let mut d = DecSpecialGraphics::default();
+        let out = d.process(&[0xDA, 0xC4, 0xC4, 0xBF, 0x0d, 0x0a, 0xB3, b' ', 0xB3]);
+        assert_eq!(String::from_utf8(out).unwrap(), "+--+\r\n| |");
+    }
+
+    #[test]
+    fn ascii_acs_env_only_for_calcurse() {
+        assert!(needs_ncurses_ascii_acs("calcurse"));
+        assert!(needs_ncurses_ascii_acs("/opt/homebrew/bin/calcurse"));
+        assert!(!needs_ncurses_ascii_acs("ranger"));
+        assert!(!needs_ncurses_ascii_acs("/usr/bin/vim"));
+    }
+
+    #[test]
+    fn vt100_rows_keep_acs_after_translation() {
+        let mut d = DecSpecialGraphics::default();
+        let bytes = d.process(b"\x1b(0lq\x1b[5bk\x1b(B");
+        let mut p = vt100::Parser::new(4, 40, 0);
+        p.process(&bytes);
+        let line = p.screen().rows(0, 20).next().unwrap_or_default().to_string();
+        assert!(
+            line.contains("+------+"),
+            "translated line was: {line:?}"
+        );
     }
 }
 

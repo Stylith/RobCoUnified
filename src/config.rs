@@ -91,16 +91,36 @@ pub fn save_settings(d: &Settings) {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CliColorMode {
+    #[default]
+    ThemeLock,
+    PaletteMap,
+    Color,
+    Monochrome,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound:  bool,
     pub bootup: bool,
     pub theme:  String,
+    #[serde(default)]
+    pub cli_styled_render: bool,
+    #[serde(default)]
+    pub cli_color_mode: CliColorMode,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { sound: true, bootup: true, theme: "Green (Default)".into() }
+        Self {
+            sound: true,
+            bootup: true,
+            theme: "Green (Default)".into(),
+            cli_styled_render: false,
+            cli_color_mode: CliColorMode::ThemeLock,
+        }
     }
 }
 
