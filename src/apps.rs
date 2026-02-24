@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::config::{load_apps, save_apps, load_games, save_games, load_networks, save_networks};
-use crate::launcher::{launch_command, json_to_cmd};
+use crate::launcher::{json_to_cmd, launch_in_pty};
 use crate::ui::{Term, run_menu, input_prompt, confirm, flash_message, MenuResult};
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
@@ -73,6 +73,9 @@ where
 
 pub fn apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
+        if crate::session::has_switch_request() {
+            break;
+        }
         let apps = load_apps();
         let mut choices: Vec<String> = apps.keys().cloned().collect();
         choices.push("---".to_string());
@@ -84,7 +87,10 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) => {
                 if let Some(v) = apps.get(&s) {
-                    launch_command(terminal, &json_to_cmd(v))?;
+                    launch_in_pty(terminal, &json_to_cmd(v))?;
+                    if crate::session::has_switch_request() {
+                        break;
+                    }
                 }
             }
         }
@@ -94,6 +100,9 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn games_menu(terminal: &mut Term) -> Result<()> {
     loop {
+        if crate::session::has_switch_request() {
+            break;
+        }
         let games = load_games();
         let mut choices: Vec<String> = games.keys().cloned().collect();
         choices.push("---".to_string());
@@ -105,7 +114,10 @@ pub fn games_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) => {
                 if let Some(v) = games.get(&s) {
-                    launch_command(terminal, &json_to_cmd(v))?;
+                    launch_in_pty(terminal, &json_to_cmd(v))?;
+                    if crate::session::has_switch_request() {
+                        break;
+                    }
                 }
             }
         }
@@ -115,6 +127,9 @@ pub fn games_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn network_menu(terminal: &mut Term) -> Result<()> {
     loop {
+        if crate::session::has_switch_request() {
+            break;
+        }
         let nets = load_networks();
         let mut choices: Vec<String> = nets.keys().cloned().collect();
         choices.push("---".to_string());
@@ -126,7 +141,10 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) => {
                 if let Some(v) = nets.get(&s) {
-                    launch_command(terminal, &json_to_cmd(v))?;
+                    launch_in_pty(terminal, &json_to_cmd(v))?;
+                    if crate::session::has_switch_request() {
+                        break;
+                    }
                 }
             }
         }

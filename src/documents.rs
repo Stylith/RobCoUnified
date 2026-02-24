@@ -153,6 +153,13 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press { continue; }
                 // Map Ctrl+W and Ctrl+X
+                // Session switch cancels the edit
+                if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
+                    if crate::session::has_switch_request() {
+                        return Ok(None);
+                    }
+                    continue;
+                }
                 let code = match key.code {
                     KeyCode::Char('w') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         KeyCode::Char('\x17') // Ctrl+W

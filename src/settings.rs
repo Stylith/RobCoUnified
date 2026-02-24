@@ -126,9 +126,15 @@ pub fn about_screen(terminal: &mut Term) -> Result<()> {
             render_status_bar(f, chunks[5]);
         })?;
 
-        if event::poll(Duration::from_millis(200))? {
+        if event::poll(Duration::from_millis(30))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press { continue; }
+                if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
+                    if crate::session::has_switch_request() {
+                        break;
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Tab => break,
                     _ => {}

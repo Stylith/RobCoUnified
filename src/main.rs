@@ -1,5 +1,6 @@
 use anyhow::Result;
 use crossterm::{
+    event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -16,10 +17,12 @@ mod documents;
 mod hacking;
 mod installer;
 mod launcher;
+mod pty;
+mod session;
 mod settings;
-mod status;
 mod shell_terminal;
 mod sound;
+mod status;
 mod ui;
 
 use auth::{ensure_default_admin, login_screen, clear_session};
@@ -27,18 +30,70 @@ use checks::{run_preflight, print_preflight};
 use config::{set_current_user, get_settings};
 use ui::{Term, run_menu, flash_message, MenuResult};
 
+fn apply_pending_switch() {
+    if let Some(target) = session::take_switch_request() {
+        let count = session::session_count();
+        if target < count {
+            session::set_active(target);
+        } else if target == count && count < session::MAX_SESSIONS {
+            // Open a new session for the current user only.
+            if let Some(current_user) = session::active_username() {
+                let idx = session::push_session(&current_user);
+                session::set_active(idx);
+            }
+        }
+        // Out-of-range target: ignore, current session resumes.
+    }
+}
+
+fn write_key_debug_startup_marker() {
+    let path = std::env::var_os("ROBCOS_KEY_DEBUG_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/robcos_keys.log"));
+
+    let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(_) => match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("robcos_keys.log")
+        {
+            Ok(f) => f,
+            Err(_) => return,
+        },
+    };
+
+    use std::io::Write;
+    let _ = writeln!(
+        f,
+        "--- app startup pid={} cwd={} debug_path={} ---",
+        std::process::id(),
+        std::env::current_dir().ok().and_then(|p| p.into_os_string().into_string().ok()).unwrap_or_else(|| "<unknown>".into()),
+        path.display()
+    );
+}
+
 // ── Terminal setup / teardown ─────────────────────────────────────────────────
 
 fn init_terminal() -> Result<Term> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    // Best effort: this helps terminals disambiguate Ctrl+number combinations.
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        )
+    );
     let backend = CrosstermBackend::new(stdout);
     Ok(ratatui::Terminal::new(backend)?)
 }
 
 fn restore_terminal(terminal: &mut Term) -> Result<()> {
     disable_raw_mode()?;
+    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
@@ -49,26 +104,60 @@ fn restore_terminal(terminal: &mut Term) -> Result<()> {
 fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
     config::reload_settings();
 
-    // Boot animation
     if get_settings().bootup && show_bootup {
         sound::play_startup();
         boot::bootup(terminal)?;
     }
 
-    // Outer loop: login → main menu → logout → login again
-    'login_loop: loop {
-        // Login screen; None means user chose Exit
-        let username = match login_screen(terminal)? {
-            Some(u) => u,
-            None    => {
-                sound::play_logout();
-                break 'login_loop;
+    'main: loop {
+
+        // ── Ensure at least one active session ───────────────────────────────
+        if session::session_count() == 0 {
+            // Clear any stale switch request before showing login
+            session::take_switch_request();
+
+            match login_screen(terminal)? {
+                Some(u) => {
+                    let idx = session::push_session(&u);
+                    session::set_active(idx);
+                    set_current_user(Some(&u));
+                }
+                None => {
+                    // None could mean: user chose Exit, or a switch key was
+                    // pressed while on the login screen. If a switch request
+                    // was registered, ignore the exit and loop back.
+                    if session::take_switch_request().is_some() {
+                        continue 'main;
+                    }
+                    sound::play_logout();
+                    break 'main;
+                }
             }
+        }
+
+        // ── Activate the correct user ─────────────────────────────────────────
+        let username = match session::active_username() {
+            Some(u) => u,
+            None    => { session::set_active(0); continue 'main; }
         };
         set_current_user(Some(&username));
 
-        // Inner loop: main menu
-        loop {
+        // If this session has a suspended PTY command (e.g. vim), resume it
+        // immediately so switching behaves like tmux-style windows.
+        if pty::has_suspended_for_active() {
+            pty::resume_suspended_for_active(terminal)?;
+            if session::has_switch_request() {
+                apply_pending_switch();
+                continue 'main;
+            }
+        }
+
+        // ── Session main menu loop ────────────────────────────────────────────
+        let mut logged_out = false;
+
+        'menu: loop {
+            if session::has_switch_request() { break 'menu; }
+
             let result = run_menu(
                 terminal,
                 "Main Menu",
@@ -83,10 +172,10 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 
             match result {
                 MenuResult::Back => {
-                    // treat Back on main menu as nothing
+                    if session::has_switch_request() { break 'menu; }
                 }
                 MenuResult::Selected(s) => match s.as_str() {
-                    "Applications"       => apps::apps_menu(terminal)?,
+                    "Applications"      => apps::apps_menu(terminal)?,
                     "Documents"         => documents::documents_menu(terminal)?,
                     "Network"           => apps::network_menu(terminal)?,
                     "Games"             => apps::games_menu(terminal)?,
@@ -98,12 +187,24 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         set_current_user(None);
                         clear_session();
                         flash_message(terminal, "Logging out...", 800)?;
-                        continue 'login_loop;
+                        logged_out = true;
+                        break 'menu;
                     }
                     _ => {}
                 }
             }
         }
+
+        // ── Handle logout ─────────────────────────────────────────────────────
+        if logged_out {
+            pty::clear_all_suspended();
+            session::clear_sessions();
+            session::take_switch_request();
+            continue 'main; // always return to login
+        }
+
+        // ── Handle session switch ─────────────────────────────────────────────
+        apply_pending_switch();
     }
 
     Ok(())
@@ -114,8 +215,8 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let no_preflight = args.contains(&"--no-preflight".to_string());
+    write_key_debug_startup_marker();
 
-    // Preflight dependency check
     if !no_preflight {
         let report = run_preflight();
         if !report.ok {
@@ -133,7 +234,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Bootstrap default admin user if no users exist
     ensure_default_admin();
 
     let mut terminal = init_terminal()?;
@@ -142,17 +242,15 @@ fn main() -> Result<()> {
         run(&mut terminal, true)
     }));
 
-    // Stop audio threads before restoring terminal
     sound::stop_audio();
     std::thread::sleep(std::time::Duration::from_millis(50));
-    // Always restore terminal
     restore_terminal(&mut terminal).ok();
     print!("{}", crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
 
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e),
-        Err(_)     => {
+        Err(_) => {
             eprintln!("RobcOS crashed. Check /tmp/robcos_error.log");
             Ok(())
         }

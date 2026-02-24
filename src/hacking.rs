@@ -340,6 +340,13 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
         let Event::Key(key) = ev else { continue };
         if key.kind != KeyEventKind::Press { continue; }
 
+        if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
+            if crate::session::has_switch_request() {
+                return Ok(false);
+            }
+            continue;
+        }
+
         match key.code {
             KeyCode::Right | KeyCode::Char('d') => {
                 cursor = (cursor + 1) % total;

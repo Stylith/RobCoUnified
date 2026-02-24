@@ -13,6 +13,7 @@ use crate::config::{current_theme_color, HEADER_LINES};
 use crate::ui::Term;
 
 const H_PAD: u16 = 3;
+const PAUSE_TICK_MS: u64 = 16;
 
 fn themed_style() -> ratatui::style::Style {
     ratatui::style::Style::default().fg(current_theme_color())
@@ -32,13 +33,23 @@ fn dim_style() -> ratatui::style::Style {
 // The last entry is the ROBCO header — rendered centered like the main UI header.
 // All others are plain terminal-style left-aligned output.
 const SEQUENCES: &[(&str, u64, u64)] = &[
-    ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",                                            80, 1500),
-    ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT",                              100, 1500),
-    ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 80, 1500),
-    ("LOGON ADMIN",                                                                                                 120, 2000),
+    ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",                                            64, 220),
+    ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT",                              66, 230),
+    ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 64, 260),
+    ("LOGON ADMIN",                                                                                                  68, 280),
     // Sentinel — rendered as centered header, not plain text
-    ("__HEADER__",                                                                                                  40, 1000),
+    ("__HEADER__",                                                                                                   28, 420),
 ];
+
+fn typing_delay_ms(base_ms: u64, ch: char) -> u64 {
+    base_ms
+        + match ch {
+            ' ' => 0,
+            '.' | ',' | ':' | ';' | '/' => 6,
+            '>' | '-' | '=' | '(' | ')' => 2,
+            _ => 0,
+        }
+}
 
 pub fn bootup(terminal: &mut Term) -> Result<()> {
     let mut displayed_lines: Vec<String> = Vec::new();
@@ -47,11 +58,11 @@ pub fn bootup(terminal: &mut Term) -> Result<()> {
         if *text == "__HEADER__" {
             // Render the ROBCO header centered, like the main UI
             crate::sound::play_boot_header();
-            let pause_steps = pause_ms / 50;
+            let pause_steps = pause_ms / PAUSE_TICK_MS;
             for _ in 0..pause_steps {
                 terminal.draw(|f| draw_header(f))?;
                 if check_skip()? { break 'outer; }
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(PAUSE_TICK_MS));
             }
             break 'outer;
         }
@@ -70,16 +81,16 @@ pub fn bootup(terminal: &mut Term) -> Result<()> {
                 terminal.draw(|f| draw_terminal(f, &render_lines))?;
 
                 if check_skip()? { break 'outer; }
-                std::thread::sleep(Duration::from_millis(*char_delay_ms));
+                std::thread::sleep(Duration::from_millis(typing_delay_ms(*char_delay_ms, ch)));
             }
             displayed_lines.push(built);
         }
 
-        let pause_steps = pause_ms / 50;
+        let pause_steps = pause_ms / PAUSE_TICK_MS;
         for _ in 0..pause_steps {
             terminal.draw(|f| draw_terminal(f, &displayed_lines))?;
             if check_skip()? { break 'outer; }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(PAUSE_TICK_MS));
         }
     }
 
@@ -87,7 +98,7 @@ pub fn bootup(terminal: &mut Term) -> Result<()> {
     terminal.draw(|f| {
         f.render_widget(Paragraph::new(""), f.area());
     })?;
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(120));
 
     Ok(())
 }

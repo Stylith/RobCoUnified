@@ -25,12 +25,10 @@ pub fn with_suspended<F: FnOnce() -> Result<()>>(terminal: &mut Term, f: F) -> R
     result
 }
 
-pub fn launch_command(terminal: &mut Term, cmd: &[String]) -> Result<()> {
-    if cmd.is_empty() { return Ok(()); }
-    with_suspended(terminal, || {
-        Command::new(&cmd[0]).args(&cmd[1..]).status()?;
-        Ok(())
-    })
+/// Launch a command in a PTY session inside the TUI (future use).
+#[allow(dead_code)]
+pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
+    crate::pty::launch_in_pty(terminal, cmd)
 }
 
 pub fn launch_epy(terminal: &mut Term, path: &Path) -> Result<()> {
