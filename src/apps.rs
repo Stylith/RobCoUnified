@@ -5,6 +5,8 @@ use crate::config::{load_apps, save_apps, load_games, save_games, load_networks,
 use crate::launcher::{json_to_cmd, launch_in_pty};
 use crate::ui::{Term, run_menu, input_prompt, confirm, flash_message, MenuResult};
 
+const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
+
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
 fn add_entry<L, S>(
@@ -77,7 +79,12 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             break;
         }
         let apps = load_apps();
-        let mut choices: Vec<String> = apps.keys().cloned().collect();
+        let mut choices: Vec<String> = vec![BUILTIN_NUKE_CODES_APP.to_string()];
+        choices.extend(
+            apps.keys()
+                .filter(|name| name.as_str() != BUILTIN_NUKE_CODES_APP)
+                .cloned(),
+        );
         choices.push("---".to_string());
         choices.push("Back".to_string());
         let opts: Vec<&str> = choices.iter().map(String::as_str).collect();
@@ -85,6 +92,12 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Applications", &opts, Some("Select App"))? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
+            MenuResult::Selected(s) if s == BUILTIN_NUKE_CODES_APP => {
+                crate::nuke_codes::nuke_codes_screen(terminal)?;
+                if crate::session::has_switch_request() {
+                    break;
+                }
+            }
             MenuResult::Selected(s) => {
                 if let Some(v) = apps.get(&s) {
                     launch_in_pty(terminal, &json_to_cmd(v))?;

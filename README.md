@@ -1,6 +1,6 @@
 # RobCoOS (Rust)
 
-Fallout-style terminal Menu built with Rust, `ratatui`, and `crossterm`.
+Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
 
 ## Version
 
@@ -137,12 +137,18 @@ RobCoOS/
   users/          (created at runtime)
 ```
 
-## Disclaimer
+## Credits and Attribution
 
-This program was written with the help of generative AI.
+- UI framework: [ratatui](https://github.com/ratatui/ratatui)
+- Terminal/input backend: [crossterm](https://github.com/crossterm-rs/crossterm)
+- PTY support: [portable-pty](https://github.com/wez/wezterm/tree/main/pty)
+- Terminal emulation parser: [vt100](https://crates.io/crates/vt100)
+- System/time utilities: [sysinfo](https://github.com/GuillaumeGomez/sysinfo), [chrono](https://github.com/chronotope/chrono)
 
-This project is an unofficial fan-made work inspired by the Fallout series.
+Nuclear launch code data in the built-in Nuke Codes app is fetched from community-maintained sources:
 
-Fallout and all related names, logos, characters, audio, and visual assets are the property of their respective copyright and trademark owners (including Bethesda Softworks LLC and affiliated entities).
+- [NukaCrypt](https://nukacrypt.com/)
+- [NukaPD](https://www.nukapd.com/)
+- [NukaTrader](https://nukatrader.com/)
 
-No copyright or trademark infringement is intended. This project is non-commercial and is not endorsed by, sponsored by, or affiliated with Bethesda Softworks LLC, ZeniMax Media Inc., or Microsoft.
+This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.

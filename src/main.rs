@@ -17,6 +17,7 @@ mod documents;
 mod hacking;
 mod installer;
 mod launcher;
+mod nuke_codes;
 mod pty;
 mod session;
 mod settings;
