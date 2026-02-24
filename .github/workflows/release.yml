@@ -21,11 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             bin_name: robcos
             asset_name: macos-x86_64
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             bin_name: robcos
             asset_name: macos-aarch64
