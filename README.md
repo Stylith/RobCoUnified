@@ -14,6 +14,10 @@ Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
 - Boot sequence and UI audio effects.
 - Theme-aware status bar and CLI rendering options.
 
+## Disclaimer
+
+This program was written with the help of generative AI.
+
 ## Requirements
 
 - Rust stable toolchain (`cargo`, `rustc`)
