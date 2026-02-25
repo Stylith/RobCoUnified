@@ -32,6 +32,53 @@ use checks::{print_preflight, run_preflight};
 use config::{get_settings, set_current_user, OpenMode};
 use ui::{flash_message, run_menu, MenuResult, Term};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopToolMode {
+    ProgramInstaller,
+    Settings,
+    NukeCodes,
+}
+
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    for (idx, arg) in args.iter().enumerate() {
+        if let Some(v) = arg.strip_prefix(&prefix) {
+            return Some(v.to_string());
+        }
+        if arg == name {
+            if let Some(next) = args.get(idx + 1) {
+                return Some(next.clone());
+            }
+        }
+    }
+    None
+}
+
+fn parse_desktop_tool_mode(args: &[String]) -> Option<DesktopToolMode> {
+    let tool = arg_value(args, "--desktop-tool")?;
+    match tool.to_ascii_lowercase().as_str() {
+        "program-installer" | "installer" | "appstore" => Some(DesktopToolMode::ProgramInstaller),
+        "settings" => Some(DesktopToolMode::Settings),
+        "nuke-codes" | "nukecodes" | "nuke" => Some(DesktopToolMode::NukeCodes),
+        _ => None,
+    }
+}
+
+fn run_desktop_tool_mode(terminal: &mut Term, args: &[String]) -> Result<bool> {
+    let Some(mode) = parse_desktop_tool_mode(args) else {
+        return Ok(false);
+    };
+    let desktop_user = arg_value(args, "--desktop-user").unwrap_or_else(|| "admin".to_string());
+    set_current_user(Some(&desktop_user));
+
+    match mode {
+        DesktopToolMode::ProgramInstaller => installer::appstore_menu(terminal)?,
+        DesktopToolMode::Settings => settings::settings_menu(terminal, &desktop_user)?,
+        DesktopToolMode::NukeCodes => nuke_codes::nuke_codes_screen(terminal)?,
+    }
+    Ok(true)
+}
+
 fn apply_pending_switch() {
     if let Some(target) = session::take_switch_request() {
         let count = session::session_count();
@@ -294,8 +341,12 @@ fn main() -> Result<()> {
 
     let mut terminal = init_terminal()?;
 
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut terminal, true)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if run_desktop_tool_mode(&mut terminal, &args)? {
+            return Ok(());
+        }
+        run(&mut terminal, true)
+    }));
 
     sound::stop_audio();
     std::thread::sleep(std::time::Duration::from_millis(50));

@@ -692,14 +692,7 @@ impl PtySession {
             while lines.len() < rows {
                 lines.push(Line::from(""));
             }
-            let para = match self.color_mode {
-                PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Paragraph::new(lines).style(
-                    Style::default()
-                        .fg(crate::config::current_theme_color())
-                        .bg(Color::Black),
-                ),
-                _ => Paragraph::new(lines),
-            };
+            let para = Paragraph::new(lines).style(vt100_default_style(self.color_mode));
             f.render_widget(para, area);
             return;
         }
@@ -892,12 +885,13 @@ fn is_ranger_program(program: &str) -> bool {
 // ── vt100 cell → ratatui Style ────────────────────────────────────────────────
 
 fn vt100_default_style(mode: PtyColorMode) -> Style {
-    match mode {
-        PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Style::default()
-            .fg(crate::config::current_theme_color())
-            .bg(Color::Black),
-        _ => Style::default(),
-    }
+    let fg = match mode {
+        PtyColorMode::Ansi
+        | PtyColorMode::ThemeLock
+        | PtyColorMode::PaletteMap
+        | PtyColorMode::Monochrome => crate::config::current_theme_color(),
+    };
+    Style::default().fg(fg).bg(Color::Black)
 }
 
 fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
@@ -905,8 +899,8 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
 
     match mode {
         PtyColorMode::Ansi => {
-            style = style.fg(vt100_color(cell.fgcolor(), Color::Reset));
-            style = style.bg(vt100_color(cell.bgcolor(), Color::Reset));
+            style = style.fg(vt100_color(cell.fgcolor(), crate::config::current_theme_color()));
+            style = style.bg(vt100_color(cell.bgcolor(), Color::Black));
         }
         PtyColorMode::PaletteMap => {
             if !matches!(cell.fgcolor(), vt100::Color::Default) {
@@ -985,30 +979,32 @@ fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
 
     let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
     let scale = if is_background {
-        if luma < 0.33 {
-            0.16
-        } else if luma < 0.66 {
-            0.22
+        if luma < 0.25 {
+            0.12
+        } else if luma < 0.50 {
+            0.18
+        } else if luma < 0.75 {
+            0.24
         } else {
-            0.30
+            0.32
         }
     } else if luma < 0.20 {
-        0.40
+        0.90
     } else if luma < 0.40 {
-        0.58
+        0.95
     } else if luma < 0.60 {
-        0.74
-    } else if luma < 0.80 {
-        0.88
-    } else {
         1.00
+    } else if luma < 0.80 {
+        1.05
+    } else {
+        1.10
     };
 
     let (tr, tg, tb) = theme_base_rgb();
     Color::Rgb(
-        ((tr as f32 * scale).round() as u8).max(1),
-        ((tg as f32 * scale).round() as u8).max(1),
-        ((tb as f32 * scale).round() as u8).max(1),
+        (tr as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tg as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tb as f32 * scale).round().clamp(1.0, 255.0) as u8,
     )
 }
 

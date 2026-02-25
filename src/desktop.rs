@@ -8,7 +8,7 @@ use crossterm::execute;
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -17,10 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{load_apps, load_categories, load_games, load_networks};
 use crate::documents;
-use crate::installer;
 use crate::launcher::json_to_cmd;
-use crate::settings;
-use crate::shell_terminal;
 use crate::ui::{
     dim_style, flash_message, normal_style, sel_style, session_switch_scope, title_style, Term,
 };
@@ -915,11 +912,29 @@ fn run_start_action(
         StartAction::Logout => Ok(Some(DesktopExit::Logout)),
         StartAction::Shutdown => Ok(Some(DesktopExit::Shutdown)),
         StartAction::Launch(which) => {
-            run_with_mouse_capture_paused(terminal, |terminal| match which {
-                StartLaunch::ProgramInstaller => installer::appstore_menu(terminal),
-                StartLaunch::Terminal => shell_terminal::embedded_terminal(terminal),
-                StartLaunch::Settings => settings::settings_menu(terminal, current_user),
-            })?;
+            let launch_result = match which {
+                StartLaunch::Terminal => open_pty_window_named(
+                    terminal,
+                    state,
+                    &default_shell_command(),
+                    Some("Terminal"),
+                ),
+                StartLaunch::ProgramInstaller => open_pty_window_named(
+                    terminal,
+                    state,
+                    &build_desktop_tool_command(current_user, "program-installer")?,
+                    Some("Program Installer"),
+                ),
+                StartLaunch::Settings => open_pty_window_named(
+                    terminal,
+                    state,
+                    &build_desktop_tool_command(current_user, "settings")?,
+                    Some("Settings"),
+                ),
+            };
+            if let Err(err) = launch_result {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
             Ok(None)
         }
         StartAction::LaunchCommand(cmd) => {
@@ -929,7 +944,14 @@ fn run_start_action(
             Ok(None)
         }
         StartAction::LaunchNukeCodes => {
-            run_with_mouse_capture_paused(terminal, crate::nuke_codes::nuke_codes_screen)?;
+            if let Err(err) = open_pty_window_named(
+                terminal,
+                state,
+                &build_desktop_tool_command(current_user, "nuke-codes")?,
+                Some("Nuke Codes"),
+            ) {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
             Ok(None)
         }
         StartAction::OpenDocumentLogs => {
@@ -958,6 +980,15 @@ where
 }
 
 fn open_pty_window(terminal: &mut Term, state: &mut DesktopState, cmd: &[String]) -> Result<()> {
+    open_pty_window_named(terminal, state, cmd, None)
+}
+
+fn open_pty_window_named(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    cmd: &[String],
+    title_override: Option<&str>,
+) -> Result<()> {
     if cmd.is_empty() {
         return Ok(());
     }
@@ -992,7 +1023,9 @@ fn open_pty_window(terminal: &mut Term, state: &mut DesktopState, cmd: &[String]
         &crate::pty::PtyLaunchOptions::default(),
     )?;
 
-    let title = command_title(program);
+    let title = title_override
+        .map(str::to_string)
+        .unwrap_or_else(|| command_title(program));
     let id = state.next_id;
     state.next_id += 1;
     state.windows.push(DesktopWindow {
@@ -1013,11 +1046,33 @@ fn command_title(program: &str) -> String {
         .unwrap_or_else(|| program.to_string())
 }
 
+fn default_shell_command() -> Vec<String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/zsh".to_string());
+    vec![shell]
+}
+
+fn build_desktop_tool_command(current_user: &str, tool: &str) -> Result<Vec<String>> {
+    let exe = std::env::current_exe()?;
+    let exe = exe.to_string_lossy().to_string();
+    Ok(vec![
+        exe,
+        "--desktop-tool".to_string(),
+        tool.to_string(),
+        "--desktop-user".to_string(),
+        current_user.to_string(),
+        "--no-preflight".to_string(),
+    ])
+}
+
 fn close_window_by_id(state: &mut DesktopState, window_id: u64) {
     if let Some(pos) = state.windows.iter().position(|w| w.id == window_id) {
         let mut removed = state.windows.remove(pos);
         if let WindowKind::PtyApp(app) = &mut removed.kind {
             app.session.terminate();
+            crate::config::reload_settings();
         }
     }
 }
@@ -1035,7 +1090,11 @@ fn reap_closed_pty_windows(state: &mut DesktopState) {
         if is_alive {
             idx += 1;
         } else {
-            state.windows.remove(idx);
+            let mut removed = state.windows.remove(idx);
+            if let WindowKind::PtyApp(app) = &mut removed.kind {
+                app.session.terminate();
+                crate::config::reload_settings();
+            }
         }
     }
 }
@@ -1071,7 +1130,8 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
         let desktop = desktop_area(size);
         let task = taskbar_area(size);
 
-        f.render_widget(Paragraph::new("").style(normal_style()), size);
+        // Fully clear each frame so overlapped windows cannot leak old cells.
+        f.render_widget(Clear, size);
 
         draw_top_status(f, top);
         draw_desktop_background(f, desktop);
@@ -1183,6 +1243,9 @@ fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool) {
         return;
     }
 
+    // Ensure this window is fully opaque over anything behind it.
+    f.render_widget(Clear, area);
+
     let border_style = if focused { title_style() } else { dim_style() };
     f.render_widget(
         Block::default().borders(Borders::ALL).style(border_style),
@@ -1291,6 +1354,7 @@ fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState) {
 fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
     let task = taskbar_area(size);
     let root = start_root_rect(task);
+    f.render_widget(Clear, root);
     f.render_widget(
         Block::default().borders(Borders::ALL).style(title_style()),
         root,
@@ -1333,6 +1397,7 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
 
     if let Some(submenu) = state.start.open_submenu {
         let sub = start_submenu_rect(root, size, submenu);
+        f.render_widget(Clear, sub);
         f.render_widget(
             Block::default().borders(Borders::ALL).style(title_style()),
             sub,
@@ -1385,6 +1450,7 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
         if submenu == StartSubmenu::Programs {
             if let Some(leaf) = state.start.open_leaf {
                 let leaf_rect = start_leaf_rect(sub, size, &state.start, leaf);
+                f.render_widget(Clear, leaf_rect);
                 f.render_widget(
                     Block::default().borders(Borders::ALL).style(title_style()),
                     leaf_rect,
