@@ -230,6 +230,8 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         break 'menu;
                     }
                     desktop::DesktopExit::Shutdown => {
+                        sound::play_logout();
+                        std::thread::sleep(std::time::Duration::from_millis(450));
                         return Ok(());
                     }
                 }
@@ -281,6 +283,8 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                             break 'menu;
                         }
                         desktop::DesktopExit::Shutdown => {
+                            sound::play_logout();
+                            std::thread::sleep(std::time::Duration::from_millis(450));
                             return Ok(());
                         }
                     },

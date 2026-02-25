@@ -10,7 +10,9 @@
 //!   launch_in_pty(terminal, &["vim", "file.txt"])
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use ratatui::{
     layout::{Alignment, Rect},
@@ -642,6 +644,19 @@ impl PtySession {
         }
     }
 
+    /// Send a translated mouse event to the PTY child using xterm SGR mouse encoding.
+    pub fn send_mouse_event(
+        &mut self,
+        kind: MouseEventKind,
+        mods: KeyModifiers,
+        col: u16,
+        row: u16,
+    ) {
+        if let Some(bytes) = mouse_to_bytes(kind, mods, col, row) {
+            self.write(&bytes);
+        }
+    }
+
     /// Resize the PTY and notify the child via SIGWINCH
     pub fn resize(&mut self, cols: u16, rows: u16) {
         if cols == self.cols && rows == self.rows {
@@ -899,7 +914,10 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
 
     match mode {
         PtyColorMode::Ansi => {
-            style = style.fg(vt100_color(cell.fgcolor(), crate::config::current_theme_color()));
+            style = style.fg(vt100_color(
+                cell.fgcolor(),
+                crate::config::current_theme_color(),
+            ));
             style = style.bg(vt100_color(cell.bgcolor(), Color::Black));
         }
         PtyColorMode::PaletteMap => {
@@ -1062,6 +1080,67 @@ fn indexed_ansi_rgb(i: u8) -> (u8, u8, u8) {
 }
 
 // ── Key → bytes ───────────────────────────────────────────────────────────────
+
+fn mouse_mod_bits(mods: KeyModifiers) -> u16 {
+    let mut bits = 0u16;
+    if mods.contains(KeyModifiers::SHIFT) {
+        bits |= 4;
+    }
+    if mods.contains(KeyModifiers::ALT) || mods.contains(KeyModifiers::META) {
+        bits |= 8;
+    }
+    if mods.contains(KeyModifiers::CONTROL) {
+        bits |= 16;
+    }
+    bits
+}
+
+fn mouse_button_code(btn: MouseButton) -> u16 {
+    match btn {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+fn mouse_to_bytes(kind: MouseEventKind, mods: KeyModifiers, col: u16, row: u16) -> Option<Vec<u8>> {
+    let mut cb = mouse_mod_bits(mods);
+    let suffix = match kind {
+        MouseEventKind::Down(btn) => {
+            cb |= mouse_button_code(btn);
+            'M'
+        }
+        MouseEventKind::Up(btn) => {
+            cb |= mouse_button_code(btn);
+            'm'
+        }
+        MouseEventKind::Drag(btn) => {
+            cb |= mouse_button_code(btn) | 32;
+            'M'
+        }
+        MouseEventKind::ScrollUp => {
+            cb |= 64;
+            'M'
+        }
+        MouseEventKind::ScrollDown => {
+            cb |= 65;
+            'M'
+        }
+        MouseEventKind::ScrollLeft => {
+            cb |= 66;
+            'M'
+        }
+        MouseEventKind::ScrollRight => {
+            cb |= 67;
+            'M'
+        }
+        MouseEventKind::Moved => return None,
+    };
+
+    let x = col.max(1);
+    let y = row.max(1);
+    Some(format!("\x1b[<{cb};{x};{y}{suffix}").into_bytes())
+}
 
 pub fn key_to_bytes(
     code: KeyCode,

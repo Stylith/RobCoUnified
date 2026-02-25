@@ -809,12 +809,35 @@ fn handle_mouse(
                 win.rect.y = i32::from(mouse.row) - drag.dy;
                 clamp_window(&mut win.rect, desk);
             }
+            return Ok(None);
+        }
+        if send_mouse_to_focused_pty(state, mouse) {
+            return Ok(None);
         }
         return Ok(None);
     }
 
     if let MouseEventKind::Up(MouseButton::Left) = mouse.kind {
-        state.dragging = None;
+        let was_dragging = state.dragging.take().is_some();
+        if was_dragging {
+            return Ok(None);
+        }
+        if send_mouse_to_focused_pty(state, mouse) {
+            return Ok(None);
+        }
+        return Ok(None);
+    }
+
+    if matches!(
+        mouse.kind,
+        MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+    ) {
+        if send_mouse_to_focused_pty(state, mouse) {
+            return Ok(None);
+        }
         return Ok(None);
     }
 
@@ -878,7 +901,7 @@ fn handle_mouse(
                     }
                 }
                 WindowHit::Content => {
-                    handle_window_content_click(state, mouse.column, mouse.row);
+                    handle_window_content_mouse(state, mouse);
                 }
             }
             return Ok(None);
@@ -1616,41 +1639,54 @@ fn hit_window(state: &DesktopState, x: u16, y: u16) -> Option<(u64, WindowHit)> 
     None
 }
 
-fn handle_window_content_click(state: &mut DesktopState, x: u16, y: u16) {
+fn handle_window_content_mouse(state: &mut DesktopState, mouse: crossterm::event::MouseEvent) {
     let Some(idx_last) = state.windows.len().checked_sub(1) else {
         return;
     };
     let clicked_target = {
         let win = &mut state.windows[idx_last];
-        let WindowKind::FileManager(fm) = &mut win.kind else {
-            return;
-        };
-        let area = win.rect.to_rect();
-        let content = Rect {
-            x: area.x + 1,
-            y: area.y + 1,
-            width: area.width.saturating_sub(2),
-            height: area.height.saturating_sub(2),
-        };
-        if !point_in_rect(x, y, content) || content.height < 3 {
-            return;
-        }
-        if y <= content.y + 1 {
-            return;
-        }
-        let row = (y - content.y - 2) as usize;
-        let visible_rows = content.height.saturating_sub(2) as usize;
-        if row >= visible_rows {
-            return;
-        }
-        let idx = fm.scroll + row;
-        if idx >= fm.entries.len() {
-            return;
-        }
-        fm.selected = idx;
-        ClickTarget::FileEntry {
-            window_id: win.id,
-            row: idx,
+        let rect = win.rect;
+        match &mut win.kind {
+            WindowKind::PtyApp(app) => {
+                if let Some((col, row)) = pty_local_coords_from_rect(rect, mouse.column, mouse.row)
+                {
+                    app.session
+                        .send_mouse_event(mouse.kind, mouse.modifiers, col, row);
+                }
+                return;
+            }
+            WindowKind::FileManager(fm) => {
+                let area = win.rect.to_rect();
+                let content = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    return;
+                }
+                if !point_in_rect(mouse.column, mouse.row, content) || content.height < 3 {
+                    return;
+                }
+                if mouse.row <= content.y + 1 {
+                    return;
+                }
+                let row = (mouse.row - content.y - 2) as usize;
+                let visible_rows = content.height.saturating_sub(2) as usize;
+                if row >= visible_rows {
+                    return;
+                }
+                let idx = fm.scroll + row;
+                if idx >= fm.entries.len() {
+                    return;
+                }
+                fm.selected = idx;
+                ClickTarget::FileEntry {
+                    window_id: win.id,
+                    row: idx,
+                }
+            }
         }
     };
 
@@ -1661,6 +1697,39 @@ fn handle_window_content_click(state: &mut DesktopState, x: u16, y: u16) {
             }
         }
     }
+}
+
+fn pty_local_coords_from_rect(rect: WinRect, x: u16, y: u16) -> Option<(u16, u16)> {
+    let area = rect.to_rect();
+    let content = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if content.width == 0 || content.height == 0 || !point_in_rect(x, y, content) {
+        return None;
+    }
+    Some((x - content.x + 1, y - content.y + 1))
+}
+
+fn send_mouse_to_focused_pty(
+    state: &mut DesktopState,
+    mouse: crossterm::event::MouseEvent,
+) -> bool {
+    let Some(win) = state.windows.last_mut() else {
+        return false;
+    };
+    let rect = win.rect;
+    let Some((col, row)) = pty_local_coords_from_rect(rect, mouse.column, mouse.row) else {
+        return false;
+    };
+    let WindowKind::PtyApp(app) = &mut win.kind else {
+        return false;
+    };
+    app.session
+        .send_mouse_event(mouse.kind, mouse.modifiers, col, row);
+    true
 }
 
 fn open_file_manager_window(state: &mut DesktopState) {
