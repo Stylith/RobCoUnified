@@ -4,13 +4,13 @@
 //! Boot key clips are preprocessed to remove leading dead-space and keep
 //! a short click window, which reduces random perceived gaps.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
 
@@ -162,14 +162,35 @@ fn get_paths() -> &'static SoundPaths {
         login: write_temp("login", include_bytes!("sounds/ui_hacking_passgood.wav")),
         logout: write_temp("logout", include_bytes!("sounds/ui_hacking_passbad.wav")),
         error: write_temp("error", include_bytes!("sounds/ui_hacking_passbad.wav")),
-        navigate: write_temp("navigate", include_bytes!("sounds/ui_hacking_charenter_01.wav")),
-        keypress: write_temp("keypress", include_bytes!("sounds/ui_hacking_charscroll.wav")),
+        navigate: write_temp(
+            "navigate",
+            include_bytes!("sounds/ui_hacking_charenter_01.wav"),
+        ),
+        keypress: write_temp(
+            "keypress",
+            include_bytes!("sounds/ui_hacking_charscroll.wav"),
+        ),
         boot_keys: vec![
-            write_temp_boot_key("boot0", include_bytes!("sounds/ui_hacking_charsingle_01.wav")),
-            write_temp_boot_key("boot1", include_bytes!("sounds/ui_hacking_charsingle_02.wav")),
-            write_temp_boot_key("boot2", include_bytes!("sounds/ui_hacking_charsingle_03.wav")),
-            write_temp_boot_key("boot3", include_bytes!("sounds/ui_hacking_charsingle_04.wav")),
-            write_temp_boot_key("boot4", include_bytes!("sounds/ui_hacking_charsingle_05.wav")),
+            write_temp_boot_key(
+                "boot0",
+                include_bytes!("sounds/ui_hacking_charsingle_01.wav"),
+            ),
+            write_temp_boot_key(
+                "boot1",
+                include_bytes!("sounds/ui_hacking_charsingle_02.wav"),
+            ),
+            write_temp_boot_key(
+                "boot2",
+                include_bytes!("sounds/ui_hacking_charsingle_03.wav"),
+            ),
+            write_temp_boot_key(
+                "boot3",
+                include_bytes!("sounds/ui_hacking_charsingle_04.wav"),
+            ),
+            write_temp_boot_key(
+                "boot4",
+                include_bytes!("sounds/ui_hacking_charsingle_05.wav"),
+            ),
         ],
     })
 }
@@ -316,10 +337,7 @@ fn play_via_python(path: &std::path::Path) -> bool {
 }
 
 fn has_helper_process() -> bool {
-    helper_lock()
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    helper_lock().lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
 pub fn wait_boot_audio_ready(timeout_ms: u64) {

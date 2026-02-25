@@ -1,34 +1,36 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::{load_apps, save_apps, load_games, save_games, load_networks, save_networks};
+use crate::config::{load_apps, load_games, load_networks, save_apps, save_games, save_networks};
 use crate::launcher::{json_to_cmd, launch_in_pty};
-use crate::ui::{Term, run_menu, input_prompt, confirm, flash_message, MenuResult};
+use crate::ui::{confirm, flash_message, input_prompt, run_menu, MenuResult, Term};
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
-fn add_entry<L, S>(
-    terminal: &mut Term,
-    kind: &str,
-    mut load: L,
-    mut save: S,
-) -> Result<()>
+fn add_entry<L, S>(terminal: &mut Term, kind: &str, mut load: L, mut save: S) -> Result<()>
 where
     L: FnMut() -> Map<String, Value>,
     S: FnMut(&Map<String, Value>),
 {
     let name = match input_prompt(terminal, &format!("Enter {kind} display name:"))? {
         Some(n) if !n.is_empty() => n,
-        _ => { flash_message(terminal, "Error: Invalid input.", 800)?; return Ok(()); }
+        _ => {
+            flash_message(terminal, "Error: Invalid input.", 800)?;
+            return Ok(());
+        }
     };
     let cmd_str = match input_prompt(terminal, &format!("Enter launch command for '{name}':"))? {
         Some(c) if !c.is_empty() => c,
-        _ => { flash_message(terminal, "Error: Invalid input.", 800)?; return Ok(()); }
+        _ => {
+            flash_message(terminal, "Error: Invalid input.", 800)?;
+            return Ok(());
+        }
     };
     // Split command into array
-    let parts: Vec<Value> = cmd_str.split_whitespace()
+    let parts: Vec<Value> = cmd_str
+        .split_whitespace()
         .map(|s| Value::String(s.to_string()))
         .collect();
     let mut data = load();
@@ -37,12 +39,7 @@ where
     flash_message(terminal, &format!("{name} added."), 800)
 }
 
-fn delete_entry<L, S>(
-    terminal: &mut Term,
-    kind: &str,
-    mut load: L,
-    mut save: S,
-) -> Result<()>
+fn delete_entry<L, S>(terminal: &mut Term, kind: &str, mut load: L, mut save: S) -> Result<()>
 where
     L: FnMut() -> Map<String, Value>,
     S: FnMut(&Map<String, Value>),
@@ -56,7 +53,9 @@ where
     opts.push("Back".to_string());
     let opts_ref: Vec<&str> = opts.iter().map(String::as_str).collect();
 
-    if let MenuResult::Selected(sel) = run_menu(terminal, &format!("Delete {kind}"), &opts_ref, None)? {
+    if let MenuResult::Selected(sel) =
+        run_menu(terminal, &format!("Delete {kind}"), &opts_ref, None)?
+    {
         if sel != "Back" && data.contains_key(&sel) {
             if confirm(terminal, &format!("Delete '{sel}'?"))? {
                 let mut data = load();
@@ -169,13 +168,18 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        match run_menu(terminal, "Edit Applications", &["Add App", "Delete App", "---", "Back"], None)? {
+        match run_menu(
+            terminal,
+            "Edit Applications",
+            &["Add App", "Delete App", "---", "Back"],
+            None,
+        )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Add App"    => add_entry(terminal, "App", load_apps, save_apps)?,
+                "Add App" => add_entry(terminal, "App", load_apps, save_apps)?,
                 "Delete App" => delete_entry(terminal, "App", load_apps, save_apps)?,
-                _            => break,
-            }
+                _ => break,
+            },
         }
     }
     Ok(())
@@ -183,13 +187,18 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_games_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        match run_menu(terminal, "Edit Games", &["Add Game", "Delete Game", "---", "Back"], None)? {
+        match run_menu(
+            terminal,
+            "Edit Games",
+            &["Add Game", "Delete Game", "---", "Back"],
+            None,
+        )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Add Game"    => add_entry(terminal, "Game", load_games, save_games)?,
+                "Add Game" => add_entry(terminal, "Game", load_games, save_games)?,
                 "Delete Game" => delete_entry(terminal, "Game", load_games, save_games)?,
-                _             => break,
-            }
+                _ => break,
+            },
         }
     }
     Ok(())
@@ -197,13 +206,22 @@ pub fn edit_games_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_network_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        match run_menu(terminal, "Edit Network", &["Add Network", "Delete Network", "---", "Back"], None)? {
+        match run_menu(
+            terminal,
+            "Edit Network",
+            &["Add Network", "Delete Network", "---", "Back"],
+            None,
+        )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Add Network"    => add_entry(terminal, "Network Program", load_networks, save_networks)?,
-                "Delete Network" => delete_entry(terminal, "Network Program", load_networks, save_networks)?,
-                _                => break,
-            }
+                "Add Network" => {
+                    add_entry(terminal, "Network Program", load_networks, save_networks)?
+                }
+                "Delete Network" => {
+                    delete_entry(terminal, "Network Program", load_networks, save_networks)?
+                }
+                _ => break,
+            },
         }
     }
     Ok(())
@@ -215,17 +233,24 @@ pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(
             terminal,
             "Edit Menus",
-            &["Edit Applications", "Edit Documents", "Edit Network", "Edit Games", "---", "Back"],
+            &[
+                "Edit Applications",
+                "Edit Documents",
+                "Edit Network",
+                "Edit Games",
+                "---",
+                "Back",
+            ],
             None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
                 "Edit Applications" => edit_apps_menu(terminal)?,
-                "Edit Documents"    => edit_documents_menu(terminal)?,
-                "Edit Network"      => edit_network_menu(terminal)?,
-                "Edit Games"        => edit_games_menu(terminal)?,
-                _                   => break,
-            }
+                "Edit Documents" => edit_documents_menu(terminal)?,
+                "Edit Network" => edit_network_menu(terminal)?,
+                "Edit Games" => edit_games_menu(terminal)?,
+                _ => break,
+            },
         }
     }
     Ok(())

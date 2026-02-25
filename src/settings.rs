@@ -10,13 +10,13 @@ use sysinfo::System;
 
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
-    CliAcsMode, CliColorMode, THEMES, get_settings, update_settings,
-    persist_settings, load_about,
+    get_settings, load_about, persist_settings, update_settings, CliAcsMode, CliColorMode,
+    OpenMode, THEMES,
 };
 use crate::status::render_status_bar;
 use crate::ui::{
-    Term, run_menu, normal_style, dim_style,
-    render_header, render_separator, pad_horizontal, MenuResult,
+    dim_style, normal_style, pad_horizontal, render_header, render_separator, run_menu, MenuResult,
+    Term,
 };
 
 // ── System info ────────────────────────────────────────────────────────────────
@@ -28,23 +28,31 @@ fn get_system_info(fields: &[String]) -> Vec<(String, String)> {
     let mut info = Vec::new();
     for field in fields {
         let val: String = match field.as_str() {
-            "OS"       => format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()),
+            "OS" => format!(
+                "{} {}",
+                System::name().unwrap_or_default(),
+                System::os_version().unwrap_or_default()
+            ),
             "Hostname" => System::host_name().unwrap_or_default(),
-            "CPU"      => sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default(),
-            "RAM"      => {
-                let used  = sys.used_memory() / 1024 / 1024;
+            "CPU" => sys
+                .cpus()
+                .first()
+                .map(|c| c.brand().to_string())
+                .unwrap_or_default(),
+            "RAM" => {
+                let used = sys.used_memory() / 1024 / 1024;
                 let total = sys.total_memory() / 1024 / 1024;
                 format!("{used} MB / {total} MB")
             }
-            "Uptime"   => {
+            "Uptime" => {
                 let secs = System::uptime();
                 format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
             }
-            "Battery"  => battery_str(),
-            "Theme"    => get_settings().theme,
-            "Shell"    => std::env::var("SHELL").unwrap_or_default(),
-            "Rust"     => format!("v{}", env!("CARGO_PKG_VERSION")),
-            _          => continue,
+            "Battery" => battery_str(),
+            "Theme" => get_settings().theme,
+            "Shell" => std::env::var("SHELL").unwrap_or_default(),
+            "Rust" => format!("v{}", env!("CARGO_PKG_VERSION")),
+            _ => continue,
         };
         info.push((field.clone(), val));
     }
@@ -56,7 +64,8 @@ fn battery_str() -> String {
         for entry in rd.flatten() {
             let kind = std::fs::read_to_string(entry.path().join("type")).unwrap_or_default();
             if kind.trim() == "Battery" {
-                let cap = std::fs::read_to_string(entry.path().join("capacity")).unwrap_or_default();
+                let cap =
+                    std::fs::read_to_string(entry.path().join("capacity")).unwrap_or_default();
                 if let Ok(n) = cap.trim().parse::<u8>() {
                     return format!("{n}%");
                 }
@@ -77,7 +86,9 @@ const DEFAULT_ASCII: &[&str] = &[
     "╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝ ",
 ];
 
-const DEFAULT_FIELDS: &[&str] = &["OS","Hostname","CPU","RAM","Uptime","Battery","Theme","Shell"];
+const DEFAULT_FIELDS: &[&str] = &[
+    "OS", "Hostname", "CPU", "RAM", "Uptime", "Battery", "Theme", "Shell",
+];
 
 pub fn about_screen(terminal: &mut Term) -> Result<()> {
     let config = load_about();
@@ -111,15 +122,23 @@ pub fn about_screen(terminal: &mut Term) -> Result<()> {
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
 
-            let art: Vec<Line> = ascii.iter()
+            let art: Vec<Line> = ascii
+                .iter()
                 .map(|l| Line::from(Span::styled(l.as_str(), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(art).alignment(Alignment::Center), pad_horizontal(chunks[2]));
+            f.render_widget(
+                Paragraph::new(art).alignment(Alignment::Center),
+                pad_horizontal(chunks[2]),
+            );
 
-            let info_lines: Vec<Line> = info.iter()
+            let info_lines: Vec<Line> = info
+                .iter()
                 .map(|(k, v)| Line::from(Span::styled(format!("{k}: {v}"), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(info_lines).alignment(Alignment::Center), pad_horizontal(chunks[3]));
+            f.render_widget(
+                Paragraph::new(info_lines).alignment(Alignment::Center),
+                pad_horizontal(chunks[3]),
+            );
 
             let hint = Paragraph::new("q/Esc = back").style(dim_style());
             f.render_widget(hint, pad_horizontal(chunks[4]));
@@ -128,7 +147,9 @@ pub fn about_screen(terminal: &mut Term) -> Result<()> {
 
         if event::poll(Duration::from_millis(30))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         break;
@@ -246,22 +267,45 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
 
     loop {
         let s = get_settings();
-        let sound_label  = if s.sound  { "Sound: ON  [toggle]" } else { "Sound: OFF [toggle]" };
-        let bootup_label = if s.bootup { "Bootup: ON [toggle]" } else { "Bootup: OFF [toggle]" };
+        let sound_label = if s.sound {
+            "Sound: ON  [toggle]"
+        } else {
+            "Sound: OFF [toggle]"
+        };
+        let bootup_label = if s.bootup {
+            "Bootup: ON [toggle]"
+        } else {
+            "Bootup: OFF [toggle]"
+        };
+        let open_mode_label = match s.default_open_mode {
+            OpenMode::Terminal => "Default Open Mode: Terminal [toggle]",
+            OpenMode::Desktop => "Default Open Mode: Desktop [toggle]",
+        };
 
         let mut choices = vec!["About", "Theme", "CLI", "Edit Menus"];
-        if admin { choices.push("User Management"); }
-        choices.extend_from_slice(&[bootup_label, sound_label, "---", "Back"]);
+        if admin {
+            choices.push("User Management");
+        }
+        choices.extend_from_slice(&[open_mode_label, bootup_label, sound_label, "---", "Back"]);
 
         match run_menu(terminal, "Settings", &choices, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "About"            => about_screen(terminal)?,
-                "Theme"            => theme_menu(terminal)?,
-                "CLI"              => cli_menu(terminal)?,
-                "Edit Menus"       => edit_menus_menu(terminal)?,
-                "User Management"  => user_management_menu(terminal, current_user)?,
-                l if l == sound_label  => {
+                "About" => about_screen(terminal)?,
+                "Theme" => theme_menu(terminal)?,
+                "CLI" => cli_menu(terminal)?,
+                "Edit Menus" => edit_menus_menu(terminal)?,
+                "User Management" => user_management_menu(terminal, current_user)?,
+                l if l == open_mode_label => {
+                    update_settings(|s| {
+                        s.default_open_mode = match s.default_open_mode {
+                            OpenMode::Terminal => OpenMode::Desktop,
+                            OpenMode::Desktop => OpenMode::Terminal,
+                        };
+                    });
+                    persist_settings();
+                }
+                l if l == sound_label => {
                     update_settings(|s| s.sound = !s.sound);
                     persist_settings();
                 }
@@ -270,7 +314,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
                     persist_settings();
                 }
                 _ => break,
-            }
+            },
         }
     }
     Ok(())

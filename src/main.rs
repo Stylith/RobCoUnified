@@ -12,6 +12,7 @@ mod auth;
 mod boot;
 mod checks;
 mod config;
+mod desktop;
 mod docedit;
 mod documents;
 mod hacking;
@@ -26,10 +27,10 @@ mod sound;
 mod status;
 mod ui;
 
-use auth::{ensure_default_admin, login_screen, clear_session};
-use checks::{run_preflight, print_preflight};
-use config::{set_current_user, get_settings};
-use ui::{Term, run_menu, flash_message, MenuResult};
+use auth::{clear_session, ensure_default_admin, login_screen};
+use checks::{print_preflight, run_preflight};
+use config::{get_settings, set_current_user, OpenMode};
+use ui::{flash_message, run_menu, MenuResult, Term};
 
 fn apply_pending_switch() {
     if let Some(target) = session::take_switch_request() {
@@ -52,7 +53,11 @@ fn write_key_debug_startup_marker() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp/robcos_keys.log"));
 
-    let mut f = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    let mut f = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         Ok(f) => f,
         Err(_) => match std::fs::OpenOptions::new()
             .create(true)
@@ -69,7 +74,10 @@ fn write_key_debug_startup_marker() {
         f,
         "--- app startup pid={} cwd={} debug_path={} ---",
         std::process::id(),
-        std::env::current_dir().ok().and_then(|p| p.into_os_string().into_string().ok()).unwrap_or_else(|| "<unknown>".into()),
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.into_os_string().into_string().ok())
+            .unwrap_or_else(|| "<unknown>".into()),
         path.display()
     );
 }
@@ -111,7 +119,6 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
     }
 
     'main: loop {
-
         // ── Ensure at least one active session ───────────────────────────────
         if session::session_count() == 0 {
             // Clear any stale switch request before showing login
@@ -140,7 +147,10 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
         // ── Activate the correct user ─────────────────────────────────────────
         let username = match session::active_username() {
             Some(u) => u,
-            None    => { session::set_active(0); continue 'main; }
+            None => {
+                session::set_active(0);
+                continue 'main;
+            }
         };
         set_current_user(Some(&username));
 
@@ -156,35 +166,73 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 
         // ── Session main menu loop ────────────────────────────────────────────
         let mut logged_out = false;
+        let mut launch_default_desktop =
+            matches!(get_settings().default_open_mode, OpenMode::Desktop);
 
         'menu: loop {
-            if session::has_switch_request() { break 'menu; }
+            if launch_default_desktop {
+                launch_default_desktop = false;
+                match desktop::desktop_mode(terminal, &username)? {
+                    desktop::DesktopExit::ReturnToTerminal => {}
+                    desktop::DesktopExit::Logout => {
+                        sound::play_logout();
+                        set_current_user(None);
+                        clear_session();
+                        flash_message(terminal, "Logging out...", 800)?;
+                        logged_out = true;
+                        break 'menu;
+                    }
+                }
+            }
+
+            if session::has_switch_request() {
+                break 'menu;
+            }
 
             let result = run_menu(
                 terminal,
                 "Main Menu",
                 &[
-                    "Applications", "Documents", "Network", "Games",
-                    "Program Installer", "Terminal",
+                    "Applications",
+                    "Documents",
+                    "Network",
+                    "Games",
+                    "Program Installer",
+                    "Terminal",
+                    "Desktop Mode",
                     "---",
-                    "Settings", "Logout",
+                    "Settings",
+                    "Logout",
                 ],
                 Some("RobcOS v0.1.0"),
             )?;
 
             match result {
                 MenuResult::Back => {
-                    if session::has_switch_request() { break 'menu; }
+                    if session::has_switch_request() {
+                        break 'menu;
+                    }
                 }
                 MenuResult::Selected(s) => match s.as_str() {
-                    "Applications"      => apps::apps_menu(terminal)?,
-                    "Documents"         => documents::documents_menu(terminal)?,
-                    "Network"           => apps::network_menu(terminal)?,
-                    "Games"             => apps::games_menu(terminal)?,
+                    "Applications" => apps::apps_menu(terminal)?,
+                    "Documents" => documents::documents_menu(terminal)?,
+                    "Network" => apps::network_menu(terminal)?,
+                    "Games" => apps::games_menu(terminal)?,
                     "Program Installer" => installer::appstore_menu(terminal)?,
-                    "Terminal"          => shell_terminal::embedded_terminal(terminal)?,
-                    "Settings"          => settings::settings_menu(terminal, &username)?,
-                    "Logout"            => {
+                    "Terminal" => shell_terminal::embedded_terminal(terminal)?,
+                    "Desktop Mode" => match desktop::desktop_mode(terminal, &username)? {
+                        desktop::DesktopExit::ReturnToTerminal => {}
+                        desktop::DesktopExit::Logout => {
+                            sound::play_logout();
+                            set_current_user(None);
+                            clear_session();
+                            flash_message(terminal, "Logging out...", 800)?;
+                            logged_out = true;
+                            break 'menu;
+                        }
+                    },
+                    "Settings" => settings::settings_menu(terminal, &username)?,
+                    "Logout" => {
                         sound::play_logout();
                         set_current_user(None);
                         clear_session();
@@ -193,7 +241,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         break 'menu;
                     }
                     _ => {}
-                }
+                },
             }
         }
 
@@ -240,14 +288,16 @@ fn main() -> Result<()> {
 
     let mut terminal = init_terminal()?;
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run(&mut terminal, true)
-    }));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut terminal, true)));
 
     sound::stop_audio();
     std::thread::sleep(std::time::Duration::from_millis(50));
     restore_terminal(&mut terminal).ok();
-    print!("{}", crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
+    print!(
+        "{}",
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+    );
 
     match result {
         Ok(Ok(())) => Ok(()),

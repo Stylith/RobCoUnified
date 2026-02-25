@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use crate::status::render_status_bar;
 use crate::ui::{
-    dim_style, normal_style, pad_horizontal, render_header, render_separator, sel_style, title_style, Term,
+    dim_style, normal_style, pad_horizontal, render_header, render_separator, sel_style,
+    title_style, Term,
 };
 
 #[derive(Debug, Clone)]
@@ -25,7 +26,10 @@ struct NukeCodes {
 
 const PROVIDERS: &[(&str, &str)] = &[
     ("NukaCrypt", "https://nukacrypt.com/"),
-    ("NukaCrypt Legacy", "https://nukacrypt.com/php/home.php?hm=1"),
+    (
+        "NukaCrypt Legacy",
+        "https://nukacrypt.com/php/home.php?hm=1",
+    ),
     ("NukaPD Mirror", "https://www.nukapd.com/silo-codes"),
     ("NukaTrader Mirror", "https://nukatrader.com/launchcodes/"),
 ];
@@ -61,11 +65,23 @@ pub fn nuke_codes_screen(terminal: &mut Term) -> Result<()> {
 
             let body = match &state {
                 Ok(codes) => vec![
-                    Line::from(Span::styled(format!("  ALPHA   : {}", codes.alpha), sel_style())),
-                    Line::from(Span::styled(format!("  BRAVO   : {}", codes.bravo), sel_style())),
-                    Line::from(Span::styled(format!("  CHARLIE : {}", codes.charlie), sel_style())),
+                    Line::from(Span::styled(
+                        format!("  ALPHA   : {}", codes.alpha),
+                        sel_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("  BRAVO   : {}", codes.bravo),
+                        sel_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("  CHARLIE : {}", codes.charlie),
+                        sel_style(),
+                    )),
                     Line::from(""),
-                    Line::from(Span::styled(format!("  SOURCE      : {}", codes.source), normal_style())),
+                    Line::from(Span::styled(
+                        format!("  SOURCE      : {}", codes.source),
+                        normal_style(),
+                    )),
                     Line::from(Span::styled(
                         format!("  FETCHED AT  : {}", codes.fetched_at),
                         normal_style(),
@@ -76,13 +92,19 @@ pub fn nuke_codes_screen(terminal: &mut Term) -> Result<()> {
                     Line::from(""),
                     Line::from(Span::styled(format!("  ERROR: {}", err), normal_style())),
                     Line::from(""),
-                    Line::from(Span::styled("  CHECK INTERNET / SOURCE AVAILABILITY", dim_style())),
+                    Line::from(Span::styled(
+                        "  CHECK INTERNET / SOURCE AVAILABILITY",
+                        dim_style(),
+                    )),
                 ],
             };
             f.render_widget(Paragraph::new(body), pad_horizontal(chunks[4]));
 
             let notes = vec![
-                Line::from(Span::styled("Codes rotate weekly. Press R to refresh now.", dim_style())),
+                Line::from(Span::styled(
+                    "Codes rotate weekly. Press R to refresh now.",
+                    dim_style(),
+                )),
                 Line::from(Span::styled("Q / Esc / Tab = Back", dim_style())),
             ];
             f.render_widget(Paragraph::new(notes), pad_horizontal(chunks[5]));
@@ -117,7 +139,8 @@ pub fn nuke_codes_screen(terminal: &mut Term) -> Result<()> {
 fn fetch_codes() -> Result<NukeCodes> {
     let mut last_error = String::from("no provider attempts");
     for (source, url) in PROVIDERS {
-        match fetch_html(url).and_then(|html| extract_codes(&html).map(|(a, b, c)| (html, a, b, c))) {
+        match fetch_html(url).and_then(|html| extract_codes(&html).map(|(a, b, c)| (html, a, b, c)))
+        {
             Ok((_html, alpha, bravo, charlie)) => {
                 return Ok(NukeCodes {
                     alpha,

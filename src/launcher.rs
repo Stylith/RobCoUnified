@@ -1,11 +1,13 @@
 use anyhow::Result;
 use crossterm::{
+    event::{poll, read},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::stdout;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::ui::Term;
 
@@ -21,8 +23,21 @@ pub fn with_suspended<F: FnOnce() -> Result<()>>(terminal: &mut Term, f: F) -> R
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
     terminal.clear()?;
+    drain_pending_input(Duration::from_millis(80));
 
     result
+}
+
+fn drain_pending_input(max_for: Duration) {
+    let deadline = Instant::now() + max_for;
+    while Instant::now() < deadline {
+        match poll(Duration::from_millis(0)) {
+            Ok(true) => {
+                let _ = read();
+            }
+            _ => break,
+        }
+    }
 }
 
 /// Launch a command in a PTY session inside the TUI (future use).
@@ -41,6 +56,10 @@ pub fn launch_epy(terminal: &mut Term, path: &Path) -> Result<()> {
 /// Parse a JSON array of strings into a Vec<String> command.
 pub fn json_to_cmd(val: &serde_json::Value) -> Vec<String> {
     val.as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }

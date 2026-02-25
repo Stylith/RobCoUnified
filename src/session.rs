@@ -6,8 +6,8 @@
 //!   3. Call stack unwinds naturally back to run() in main.rs
 //!   4. run() calls take_switch_request() and acts on it
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 pub const MAX_SESSIONS: usize = 9;
 
@@ -16,13 +16,13 @@ pub const MAX_SESSIONS: usize = 9;
 #[derive(Clone)]
 pub struct SessionEntry {
     pub username: String,
-    pub label:    String,   // current location e.g. "Main Menu", "Documents"
+    pub label: String, // current location e.g. "Main Menu", "Documents"
 }
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
 static SESSIONS: Mutex<Vec<SessionEntry>> = Mutex::new(Vec::new());
-static ACTIVE:   AtomicUsize              = AtomicUsize::new(0);
+static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 // -1 = no request, 0..8 = switch to that index, MAX_SESSIONS = new session
 static SWITCH_REQUEST: AtomicI32 = AtomicI32::new(-1);
 
@@ -31,7 +31,10 @@ static SWITCH_REQUEST: AtomicI32 = AtomicI32::new(-1);
 pub fn push_session(username: &str) -> usize {
     let mut s = SESSIONS.lock().unwrap();
     let idx = s.len();
-    s.push(SessionEntry { username: username.to_string(), label: "Main Menu".into() });
+    s.push(SessionEntry {
+        username: username.to_string(),
+        label: "Main Menu".into(),
+    });
     idx
 }
 
@@ -83,7 +86,11 @@ pub fn request_switch(target: usize) {
 /// Consume and return the pending switch request, if any.
 pub fn take_switch_request() -> Option<usize> {
     let v = SWITCH_REQUEST.swap(-1, Ordering::SeqCst);
-    if v >= 0 { Some(v as usize) } else { None }
+    if v >= 0 {
+        Some(v as usize)
+    } else {
+        None
+    }
 }
 
 pub fn has_switch_request() -> bool {

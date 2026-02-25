@@ -3,20 +3,22 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::config::{load_categories, save_categories};
-use crate::ui::{Term, run_menu, input_prompt, confirm, flash_message, MenuResult};
+use crate::ui::{confirm, flash_message, input_prompt, run_menu, MenuResult, Term};
 
 pub fn edit_documents_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
-            terminal, "Edit Documents",
-            &["Add Category", "Delete Category", "---", "Back"], None,
+            terminal,
+            "Edit Documents",
+            &["Add Category", "Delete Category", "---", "Back"],
+            None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Add Category"    => add_category(terminal)?,
+                "Add Category" => add_category(terminal)?,
                 "Delete Category" => delete_category(terminal)?,
-                _                 => break,
-            }
+                _ => break,
+            },
         }
     }
     Ok(())
@@ -25,11 +27,15 @@ pub fn edit_documents_menu(terminal: &mut Term) -> Result<()> {
 fn add_category(terminal: &mut Term) -> Result<()> {
     let name = match input_prompt(terminal, "Enter category name:")? {
         Some(n) if !n.is_empty() => n,
-        _ => { return flash_message(terminal, "Error: Invalid input.", 800); }
+        _ => {
+            return flash_message(terminal, "Error: Invalid input.", 800);
+        }
     };
     let path_str = match input_prompt(terminal, "Enter folder path:")? {
         Some(p) if !p.is_empty() => p,
-        _ => { return flash_message(terminal, "Error: Invalid input.", 800); }
+        _ => {
+            return flash_message(terminal, "Error: Invalid input.", 800);
+        }
     };
     let expanded = shellexpand_tilde(&path_str);
     let path = Path::new(&expanded);

@@ -91,7 +91,9 @@ fn open_key_debug_file() -> Option<std::fs::File> {
 }
 
 fn append_marker_line(line: &str) {
-    let Some(mut file) = open_key_debug_file() else { return };
+    let Some(mut file) = open_key_debug_file() else {
+        return;
+    };
     let _ = writeln!(file, "{line}");
 }
 
@@ -99,7 +101,9 @@ fn append_key_debug_line(line: &str) {
     if std::env::var_os("ROBCOS_KEY_DEBUG").is_none() {
         return;
     }
-    let Some(mut file) = open_key_debug_file() else { return };
+    let Some(mut file) = open_key_debug_file() else {
+        return;
+    };
     let _ = writeln!(file, "{line}");
 }
 
@@ -133,11 +137,7 @@ fn flush_tilde_state(state: &mut TildeChordState, session: &mut PtySession) {
     *state = TildeChordState::None;
 }
 
-fn try_tilde_session_chord(
-    code: KeyCode,
-    mods: KeyModifiers,
-    state: &mut TildeChordState,
-) -> bool {
+fn try_tilde_session_chord(code: KeyCode, mods: KeyModifiers, state: &mut TildeChordState) -> bool {
     let plain_or_shift = mods.is_empty() || mods == KeyModifiers::SHIFT;
     let now = Instant::now();
     match code {
@@ -224,7 +224,9 @@ fn pty_color_mode() -> PtyColorMode {
         Some("ansi") | Some("color") | Some("colours") | Some("colors") => PtyColorMode::Ansi,
         Some("mono") | Some("monochrome") | Some("plain") => PtyColorMode::Monochrome,
         Some("palette") | Some("palette-map") | Some("palettemap") => PtyColorMode::PaletteMap,
-        Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => PtyColorMode::ThemeLock,
+        Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => {
+            PtyColorMode::ThemeLock
+        }
         _ => match crate::config::get_settings().cli_color_mode {
             crate::config::CliColorMode::ThemeLock => PtyColorMode::ThemeLock,
             crate::config::CliColorMode::PaletteMap => PtyColorMode::PaletteMap,
@@ -400,7 +402,9 @@ impl DecSpecialGraphics {
 
             (AcsGlyphMode::Ascii, 0xB3) => '|',
             (AcsGlyphMode::Ascii, 0xC4) => '-',
-            (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => '+',
+            (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => {
+                '+'
+            }
 
             _ => return None,
         })
@@ -417,29 +421,27 @@ impl DecSpecialGraphics {
 
             // Complete ESC-designate sequences that may span read chunks.
             match self.pending {
-                EscPending::Esc => {
-                    match b {
-                        b'(' => {
-                            self.pending = EscPending::EscParen;
-                            continue;
-                        }
-                        b')' => {
-                            self.pending = EscPending::EscParenRight;
-                            continue;
-                        }
-                        b'[' => {
-                            self.pending = EscPending::EscCsi;
-                            self.csi_buf.clear();
-                            continue;
-                        }
-                        _ => {
-                            out.push(0x1b);
-                            self.emit_byte(&mut out, b);
-                            self.pending = EscPending::None;
-                            continue;
-                        }
+                EscPending::Esc => match b {
+                    b'(' => {
+                        self.pending = EscPending::EscParen;
+                        continue;
                     }
-                }
+                    b')' => {
+                        self.pending = EscPending::EscParenRight;
+                        continue;
+                    }
+                    b'[' => {
+                        self.pending = EscPending::EscCsi;
+                        self.csi_buf.clear();
+                        continue;
+                    }
+                    _ => {
+                        out.push(0x1b);
+                        self.emit_byte(&mut out, b);
+                        self.pending = EscPending::None;
+                        continue;
+                    }
+                },
                 EscPending::EscParen => {
                     match b {
                         b'0' => self.g0_special = true,
@@ -500,8 +502,7 @@ impl DecSpecialGraphics {
                     self.use_g1 = false;
                 }
                 _ => {
-                    if self.active_is_special()
-                        && b.is_ascii() {
+                    if self.active_is_special() && b.is_ascii() {
                         let ch = b as char;
                         if let Some(mapped) = self.map_special(ch) {
                             self.emit_char(&mut out, mapped);
@@ -521,14 +522,14 @@ impl DecSpecialGraphics {
 
 pub struct PtySession {
     /// Write end — send keyboard input to the child
-    writer:  Box<dyn Write + Send>,
+    writer: Box<dyn Write + Send>,
     /// Shared vt100 parser — updated by reader thread, read by render loop
-    parser:  Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<vt100::Parser>>,
     /// Child handle — check if still alive
-    child:   Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Current PTY dimensions
-    cols:    u16,
-    rows:    u16,
+    cols: u16,
+    rows: u16,
     /// Selected render mode for this command.
     render_mode: PtyRenderMode,
     /// Selected color mode for this command.
@@ -538,7 +539,7 @@ pub struct PtySession {
     /// Optional top banner shown above PTY content.
     top_bar: Option<String>,
     /// Master — kept alive so the PTY stays open; also used for resize
-    master:  Box<dyn portable_pty::MasterPty + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl PtySession {
@@ -553,12 +554,14 @@ impl PtySession {
         let pair = pty_system.openpty(PtySize {
             rows,
             cols,
-            pixel_width:  0,
+            pixel_width: 0,
             pixel_height: 0,
         })?;
 
         let mut cmd = CommandBuilder::new(program);
-        for arg in args { cmd.arg(arg); }
+        for arg in args {
+            cmd.arg(arg);
+        }
         for (key, value) in &options.env {
             cmd.env(key, value);
         }
@@ -573,7 +576,7 @@ impl PtySession {
         let color_mode = pty_color_mode();
         let acs_mode = AcsGlyphMode::from_config();
 
-        let child  = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
         let writer = pair.master.take_writer()?;
         let reader = pair.master.try_clone_reader()?;
 
@@ -629,10 +632,17 @@ impl PtySession {
 
     /// Resize the PTY and notify the child via SIGWINCH
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        if cols == self.cols && rows == self.rows { return; }
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
         self.cols = cols;
         self.rows = rows;
-        let _ = self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
         if let Ok(mut p) = self.parser.lock() {
             p.set_size(rows, cols);
         }
@@ -653,11 +663,13 @@ impl PtySession {
 
     /// Render the current vt100 screen into `area` of the ratatui frame.
     pub fn render(&self, f: &mut ratatui::Frame, area: Rect) {
-        let Ok(parser) = self.parser.lock() else { return };
+        let Ok(parser) = self.parser.lock() else {
+            return;
+        };
         let screen = parser.screen();
 
         let rows = area.height as usize;
-        let cols = area.width  as usize;
+        let cols = area.width as usize;
 
         if matches!(self.render_mode, PtyRenderMode::Plain) {
             let mut lines: Vec<Line> = screen
@@ -680,28 +692,32 @@ impl PtySession {
             return;
         }
 
-        let lines: Vec<Line> = (0..rows).map(|row| {
-            let spans: Vec<Span> = (0..cols).map(|col| {
-                let row_u16 = row as u16;
-                let col_u16 = col as u16;
-                let cell = screen.cell(row_u16, col_u16);
-                let ch = cell
-                    .and_then(|c| c.contents().chars().next())
-                    .unwrap_or(' ');
-                let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
-                    smooth_ascii_border_char(screen, row_u16, col_u16, ch)
-                } else {
-                    ch
-                };
-                let text = ch.to_string();
+        let lines: Vec<Line> = (0..rows)
+            .map(|row| {
+                let spans: Vec<Span> = (0..cols)
+                    .map(|col| {
+                        let row_u16 = row as u16;
+                        let col_u16 = col as u16;
+                        let cell = screen.cell(row_u16, col_u16);
+                        let ch = cell
+                            .and_then(|c| c.contents().chars().next())
+                            .unwrap_or(' ');
+                        let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
+                            smooth_ascii_border_char(screen, row_u16, col_u16, ch)
+                        } else {
+                            ch
+                        };
+                        let text = ch.to_string();
 
-                let style = cell
-                    .map(|c| vt100_style(c, self.color_mode))
-                    .unwrap_or_else(|| vt100_default_style(self.color_mode));
-                Span::styled(text, style)
-            }).collect();
-            Line::from(spans)
-        }).collect();
+                        let style = cell
+                            .map(|c| vt100_style(c, self.color_mode))
+                            .unwrap_or_else(|| vt100_default_style(self.color_mode));
+                        Span::styled(text, style)
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect();
 
         f.render_widget(Paragraph::new(lines), area);
     }
@@ -841,7 +857,9 @@ fn smooth_ascii_border_char(screen: &vt100::Screen, row: u16, col: u16, ch: char
 }
 
 fn needs_ncurses_ascii_acs(program: &str) -> bool {
-    let Some(name) = command_basename(program) else { return false };
+    let Some(name) = command_basename(program) else {
+        return false;
+    };
 
     name.starts_with("calcurse")
 }
@@ -889,13 +907,21 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
         PtyColorMode::ThemeLock | PtyColorMode::Monochrome => {}
     }
 
-    if cell.bold()       { style = style.add_modifier(Modifier::BOLD);          }
-    if cell.italic()     { style = style.add_modifier(Modifier::ITALIC);         }
-    if cell.underline()  { style = style.add_modifier(Modifier::UNDERLINED);     }
+    if cell.bold() {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if cell.italic() {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if cell.underline() {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
     if cell.inverse() {
         match mode {
             PtyColorMode::ThemeLock => {
-                style = style.fg(Color::Black).bg(crate::config::current_theme_color());
+                style = style
+                    .fg(Color::Black)
+                    .bg(crate::config::current_theme_color());
             }
             PtyColorMode::PaletteMap | PtyColorMode::Monochrome | PtyColorMode::Ansi => {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -908,37 +934,41 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
 
 fn vt100_color(c: vt100::Color, default: Color) -> Color {
     match c {
-        vt100::Color::Default         => default,
-        vt100::Color::Idx(i)          => ansi_idx(i),
-        vt100::Color::Rgb(r, g, b)   => Color::Rgb(r, g, b),
+        vt100::Color::Default => default,
+        vt100::Color::Idx(i) => ansi_idx(i),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
 fn ansi_idx(i: u8) -> Color {
     match i {
-        0  => Color::Black,
-        1  => Color::Red,
-        2  => Color::Green,
-        3  => Color::Yellow,
-        4  => Color::Blue,
-        5  => Color::Magenta,
-        6  => Color::Cyan,
-        7  => Color::White,
-        8  => Color::DarkGray,
-        9  => Color::LightRed,
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::White,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
         10 => Color::LightGreen,
         11 => Color::LightYellow,
         12 => Color::LightBlue,
         13 => Color::LightMagenta,
         14 => Color::LightCyan,
         15 => Color::White,
-        n  => Color::Indexed(n),
+        n => Color::Indexed(n),
     }
 }
 
 fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
     let Some((r, g, b)) = vt100_color_rgb(c) else {
-        return if is_background { Color::Black } else { crate::config::current_theme_color() };
+        return if is_background {
+            Color::Black
+        } else {
+            crate::config::current_theme_color()
+        };
     };
 
     let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
@@ -1025,38 +1055,80 @@ fn indexed_ansi_rgb(i: u8) -> (u8, u8, u8) {
 
 // ── Key → bytes ───────────────────────────────────────────────────────────────
 
-pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers, application_cursor: bool) -> Option<Vec<u8>> {
+pub fn key_to_bytes(
+    code: KeyCode,
+    mods: KeyModifiers,
+    application_cursor: bool,
+) -> Option<Vec<u8>> {
     // Ctrl+<letter>
     if mods.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(c) = code {
             let lc = c.to_ascii_lowercase();
             let byte = (lc as u8).wrapping_sub(b'a').wrapping_add(1);
-            if byte < 32 { return Some(vec![byte]); }
+            if byte < 32 {
+                return Some(vec![byte]);
+            }
         }
     }
 
     Some(match code {
-        KeyCode::Char(c)   => c.to_string().into_bytes(),
-        KeyCode::Enter     => b"\r".to_vec(),
+        KeyCode::Char(c) => c.to_string().into_bytes(),
+        KeyCode::Enter => b"\r".to_vec(),
         KeyCode::Backspace => b"\x7f".to_vec(),
-        KeyCode::Tab       => b"\t".to_vec(),
-        KeyCode::Esc       => b"\x1b".to_vec(),
-        KeyCode::Up        => if application_cursor { b"\x1bOA".to_vec() } else { b"\x1b[A".to_vec() },
-        KeyCode::Down      => if application_cursor { b"\x1bOB".to_vec() } else { b"\x1b[B".to_vec() },
-        KeyCode::Right     => if application_cursor { b"\x1bOC".to_vec() } else { b"\x1b[C".to_vec() },
-        KeyCode::Left      => if application_cursor { b"\x1bOD".to_vec() } else { b"\x1b[D".to_vec() },
-        KeyCode::Home      => if application_cursor { b"\x1bOH".to_vec() } else { b"\x1b[H".to_vec() },
-        KeyCode::End       => if application_cursor { b"\x1bOF".to_vec() } else { b"\x1b[F".to_vec() },
-        KeyCode::PageUp    => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown  => b"\x1b[6~".to_vec(),
-        KeyCode::Delete    => b"\x1b[3~".to_vec(),
-        KeyCode::Insert    => b"\x1b[2~".to_vec(),
-        KeyCode::F(1)      => b"\x1bOP".to_vec(),
-        KeyCode::F(2)      => b"\x1bOQ".to_vec(),
-        KeyCode::F(3)      => b"\x1bOR".to_vec(),
-        KeyCode::F(4)      => b"\x1bOS".to_vec(),
-        KeyCode::F(n)      => format!("\x1b[{}~", n + 10).into_bytes(),
-        _                  => return None,
+        KeyCode::Tab => b"\t".to_vec(),
+        KeyCode::Esc => b"\x1b".to_vec(),
+        KeyCode::Up => {
+            if application_cursor {
+                b"\x1bOA".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }
+        }
+        KeyCode::Down => {
+            if application_cursor {
+                b"\x1bOB".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            }
+        }
+        KeyCode::Right => {
+            if application_cursor {
+                b"\x1bOC".to_vec()
+            } else {
+                b"\x1b[C".to_vec()
+            }
+        }
+        KeyCode::Left => {
+            if application_cursor {
+                b"\x1bOD".to_vec()
+            } else {
+                b"\x1b[D".to_vec()
+            }
+        }
+        KeyCode::Home => {
+            if application_cursor {
+                b"\x1bOH".to_vec()
+            } else {
+                b"\x1b[H".to_vec()
+            }
+        }
+        KeyCode::End => {
+            if application_cursor {
+                b"\x1bOF".to_vec()
+            } else {
+                b"\x1b[F".to_vec()
+            }
+        }
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+        KeyCode::F(1) => b"\x1bOP".to_vec(),
+        KeyCode::F(2) => b"\x1bOQ".to_vec(),
+        KeyCode::F(3) => b"\x1bOR".to_vec(),
+        KeyCode::F(4) => b"\x1bOS".to_vec(),
+        KeyCode::F(n) => format!("\x1b[{}~", n + 10).into_bytes(),
+        _ => return None,
     })
 }
 
@@ -1073,7 +1145,12 @@ fn render_top_bar(f: &mut ratatui::Frame, area: Rect, label: &str) {
         .fg(Color::Black)
         .bg(crate::config::current_theme_color())
         .add_modifier(Modifier::BOLD);
-    f.render_widget(Paragraph::new(text).alignment(Alignment::Center).style(style), area);
+    f.render_widget(
+        Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .style(style),
+        area,
+    );
 }
 
 /// Run a program in a PTY inside the ratatui TUI.
@@ -1104,7 +1181,9 @@ pub fn run_pty_session_with_options(
 
 /// Convenience wrapper: launch an arbitrary command in a PTY session.
 pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
-    if cmd.is_empty() { return Ok(()); }
+    if cmd.is_empty() {
+        return Ok(());
+    }
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     run_pty_session(terminal, program, &args)
@@ -1172,13 +1251,17 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
         })?;
 
         // Check if child exited
-        if !session.is_alive() { return Ok(PtyLoopOutcome::ProcessExited); }
+        if !session.is_alive() {
+            return Ok(PtyLoopOutcome::ProcessExited);
+        }
 
         // Input
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 debug_log_key(key.code, key.modifiers, key.kind);
-                if key.kind == KeyEventKind::Release { continue; }
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
 
                 if !matches!(tilde_state, TildeChordState::None)
                     && !matches!(key.code, KeyCode::Char('~') | KeyCode::Char('1'..='9'))
@@ -1215,7 +1298,7 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
 #[cfg(test)]
 mod tests {
     use super::{
-        DecSpecialGraphics, key_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char,
+        key_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char, DecSpecialGraphics,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -1275,7 +1358,12 @@ mod tests {
         let bytes = d.process(b"\x1b(0lq\x1b[5bk\x1b(B");
         let mut p = vt100::Parser::new(4, 40, 0);
         p.process(&bytes);
-        let line = p.screen().rows(0, 20).next().unwrap_or_default().to_string();
+        let line = p
+            .screen()
+            .rows(0, 20)
+            .next()
+            .unwrap_or_default()
+            .to_string();
         assert!(
             line.contains("+------+") || line.contains("┌──────┐"),
             "translated line was: {line:?}"

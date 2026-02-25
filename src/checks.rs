@@ -2,26 +2,30 @@ use std::process::Command;
 
 #[derive(Debug)]
 pub struct PreflightReport {
-    pub ok:       bool,
-    pub errors:   Vec<String>,
+    pub ok: bool,
+    pub errors: Vec<String>,
     pub warnings: Vec<String>,
 }
 
 // CLI tools: (binary, description, optional)
 const CLI_TOOLS: &[(&str, &str, bool)] = &[
-    ("epy",  "ebook reader",          true),
-    ("vim",  "text editor (editing)", true),
+    ("epy", "ebook reader", true),
+    ("vim", "text editor (editing)", true),
     ("curl", "internet connectivity", false),
 ];
 
 pub fn run_preflight() -> PreflightReport {
-    let mut errors   = Vec::new();
+    let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
     for (bin, desc, optional) in CLI_TOOLS {
         if !which(bin) {
             let msg = format!("'{bin}' not found ({desc})");
-            if *optional { warnings.push(msg); } else { errors.push(msg); }
+            if *optional {
+                warnings.push(msg);
+            } else {
+                errors.push(msg);
+            }
         }
     }
 
@@ -36,11 +40,17 @@ pub fn run_preflight() -> PreflightReport {
         warnings.push("'python3' not found (optional, used for playsound backend)".to_string());
     }
 
-    PreflightReport { ok: errors.is_empty(), errors, warnings }
+    PreflightReport {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+    }
 }
 
 fn which(bin: &str) -> bool {
-    Command::new("which").arg(bin).output()
+    Command::new("which")
+        .arg(bin)
+        .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
@@ -59,12 +69,16 @@ pub fn print_preflight(report: &PreflightReport) {
         eprintln!("\n╔══════════════════════════════════════════════════╗");
         eprintln!("║         RobcOS - Dependency Error                ║");
         eprintln!("╚══════════════════════════════════════════════════╝");
-        for e in &report.errors   { eprintln!("  ✗ {e}"); }
+        for e in &report.errors {
+            eprintln!("  ✗ {e}");
+        }
     }
     if !report.warnings.is_empty() {
         eprintln!("\n╔══════════════════════════════════════════════════╗");
         eprintln!("║     RobcOS - Optional Dependencies Missing       ║");
         eprintln!("╚══════════════════════════════════════════════════╝");
-        for w in &report.warnings { eprintln!("  ! {w}"); }
+        for w in &report.warnings {
+            eprintln!("  ! {w}");
+        }
     }
 }

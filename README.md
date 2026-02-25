@@ -1,6 +1,6 @@
-# RobCoOS
+# RobCoOS (Rust)
 
-Fallout-style terminal menu built with Rust, `ratatui`, and `crossterm`.
+Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
 
 ## Version
 
@@ -11,6 +11,13 @@ Fallout-style terminal menu built with Rust, `ratatui`, and `crossterm`.
 - Multi-user login with per-user settings/data.
 - Session switching across menu screens and PTY apps.
 - Embedded PTY launcher for CLI applications.
+- Desktop Mode (Windows 95-style CLI shell) with:
+  - top status bar
+  - bottom taskbar + cascading Start menu
+  - draggable/closable windows
+  - fixed desktop icon (`My Computer`) opening file manager
+- Built-in app: `Nuke Codes`.
+- Custom games can be added from `Settings -> Edit Menus -> Edit Games`.
 - Boot sequence and UI audio effects.
 - Theme-aware status bar and CLI rendering options.
 
@@ -89,6 +96,11 @@ Session switching:
  - `Ctrl + Q`, then `1..9`
  - `Ctrl + Q`, then `N`/`Tab`/`0`/`+` for next/new session
 
+Desktop Mode notes:
+
+- Session switching is disabled while Desktop Mode is active.
+- Start menu contains `Return To Terminal Mode`.
+
 ## Menus
 
 Main Menu entries:
@@ -99,6 +111,7 @@ Main Menu entries:
 - Games
 - Program Installer
 - Terminal
+- Desktop Mode
 - Settings
 - Logout
 
@@ -111,6 +124,7 @@ Settings menu entries:
 - CLI
 - Edit Menus
 - User Management (admin only)
+- Default Open Mode: Terminal/Desktop
 - Bootup: ON/OFF
 - Sound: ON/OFF
 
@@ -152,6 +166,3 @@ Nuclear launch code data in the built-in Nuke Codes app is fetched from communit
 - [NukaTrader](https://nukatrader.com/)
 
 This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.
-
-## Disclaimer
-This program was written with the help of generative AI.

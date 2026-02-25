@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame, Terminal,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -25,7 +26,23 @@ const ALT_ESC_WINDOW: Duration = Duration::from_millis(250);
 static ALT_ESC_PREFIX: Mutex<Option<Instant>> = Mutex::new(None);
 const SESSION_LEADER_WINDOW: Duration = Duration::from_millis(1200);
 static SESSION_LEADER_PREFIX: Mutex<Option<Instant>> = Mutex::new(None);
+static SESSION_SWITCH_ENABLED: AtomicBool = AtomicBool::new(true);
 const OPTION_LIKE_MODS: KeyModifiers = KeyModifiers::ALT.union(KeyModifiers::META);
+
+pub struct SessionSwitchScope {
+    previous: bool,
+}
+
+impl Drop for SessionSwitchScope {
+    fn drop(&mut self) {
+        SESSION_SWITCH_ENABLED.store(self.previous, Ordering::Relaxed);
+    }
+}
+
+pub fn session_switch_scope(enabled: bool) -> SessionSwitchScope {
+    let previous = SESSION_SWITCH_ENABLED.swap(enabled, Ordering::Relaxed);
+    SessionSwitchScope { previous }
+}
 
 fn plain_or_shift(mods: KeyModifiers) -> bool {
     mods.is_empty() || mods == KeyModifiers::SHIFT
@@ -34,15 +51,15 @@ fn plain_or_shift(mods: KeyModifiers) -> bool {
 fn option_digit_idx(c: char) -> Option<usize> {
     Some(match c {
         // Common macOS Option outputs across US/intl layouts.
-        '\u{00A1}' | '\u{00B9}' => 0, // 1
+        '\u{00A1}' | '\u{00B9}' => 0,              // 1
         '\u{2122}' | '\u{20AC}' | '\u{00B2}' => 1, // 2
-        '\u{00A3}' | '\u{00B3}' => 2, // 3
-        '\u{00A2}' | '\u{00A4}' => 3, // 4
-        '\u{221E}' | '\u{00BD}' => 4, // 5
+        '\u{00A3}' | '\u{00B3}' => 2,              // 3
+        '\u{00A2}' | '\u{00A4}' => 3,              // 4
+        '\u{221E}' | '\u{00BD}' => 4,              // 5
         '\u{00A7}' | '\u{00BE}' | '\u{00AC}' => 5, // 6
-        '\u{00B6}' => 6, // 7
-        '\u{2022}' => 7, // 8
-        '\u{00AA}' => 8, // 9
+        '\u{00B6}' => 6,                           // 7
+        '\u{2022}' => 7,                           // 8
+        '\u{00AA}' => 8,                           // 9
         _ => return None,
     })
 }
@@ -69,7 +86,9 @@ fn remember_alt_escape_prefix() {
 }
 
 fn take_recent_alt_escape_prefix() -> bool {
-    let Ok(mut slot) = ALT_ESC_PREFIX.lock() else { return false };
+    let Ok(mut slot) = ALT_ESC_PREFIX.lock() else {
+        return false;
+    };
     let active = slot
         .as_ref()
         .map(|t| t.elapsed() <= ALT_ESC_WINDOW)
@@ -91,7 +110,9 @@ fn remember_session_leader_prefix() {
 }
 
 fn take_recent_session_leader_prefix() -> bool {
-    let Ok(mut slot) = SESSION_LEADER_PREFIX.lock() else { return false };
+    let Ok(mut slot) = SESSION_LEADER_PREFIX.lock() else {
+        return false;
+    };
     let active = slot
         .as_ref()
         .map(|t| t.elapsed() <= SESSION_LEADER_WINDOW)
@@ -129,8 +150,8 @@ fn session_idx_from_leader_chord(code: KeyCode, mods: KeyModifiers) -> Option<us
 
 fn leader_requests_next_session(code: KeyCode, mods: KeyModifiers) -> bool {
     if plain_or_shift(mods) {
-        let wants_next = matches!(code, KeyCode::Tab)
-            || matches!(code, KeyCode::Char('n' | 'N' | '0' | '+'));
+        let wants_next =
+            matches!(code, KeyCode::Tab) || matches!(code, KeyCode::Char('n' | 'N' | '0' | '+'));
         return wants_next && take_recent_session_leader_prefix();
     }
 
@@ -138,7 +159,11 @@ fn leader_requests_next_session(code: KeyCode, mods: KeyModifiers) -> bool {
     false
 }
 
-fn session_idx_from_key(code: KeyCode, mods: KeyModifiers, allow_esc_prefix: bool) -> Option<usize> {
+fn session_idx_from_key(
+    code: KeyCode,
+    mods: KeyModifiers,
+    allow_esc_prefix: bool,
+) -> Option<usize> {
     if let KeyCode::F(n @ 1..=9) = code {
         return Some((n as usize) - 1);
     }
@@ -146,9 +171,9 @@ fn session_idx_from_key(code: KeyCode, mods: KeyModifiers, allow_esc_prefix: boo
     if mods.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char(c @ '1'..='9') => Some((c as usize) - ('1' as usize)),
-            KeyCode::Char(' ') => Some(1),    // Ctrl+2 fallback (NUL / Ctrl+Space)
-            KeyCode::Esc => Some(2),          // Ctrl+3 fallback on enhanced terminals
-            KeyCode::Backspace => Some(7),    // Ctrl+8 fallback on enhanced terminals
+            KeyCode::Char(' ') => Some(1), // Ctrl+2 fallback (NUL / Ctrl+Space)
+            KeyCode::Esc => Some(2),       // Ctrl+3 fallback on enhanced terminals
+            KeyCode::Backspace => Some(7), // Ctrl+8 fallback on enhanced terminals
             _ => None,
         };
     }
@@ -202,6 +227,10 @@ fn check_session_switch_with_mode(
     allow_esc_prefix: bool,
     allow_leader: bool,
 ) -> bool {
+    if !SESSION_SWITCH_ENABLED.load(Ordering::Relaxed) {
+        return false;
+    }
+
     if allow_leader && is_leader_trigger(code, mods) {
         remember_session_leader_prefix();
         return true;
@@ -253,23 +282,42 @@ const H_PAD: u16 = 3;
 
 pub fn pad_horizontal(area: Rect) -> Rect {
     let pad = H_PAD.min(area.width / 2);
-    Rect { x: area.x + pad, y: area.y, width: area.width.saturating_sub(pad * 2), height: area.height }
+    Rect {
+        x: area.x + pad,
+        y: area.y,
+        width: area.width.saturating_sub(pad * 2),
+        height: area.height,
+    }
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
-pub fn normal_style() -> Style { Style::default().fg(current_theme_color()) }
-pub fn sel_style()    -> Style {
-    Style::default().fg(ratatui::style::Color::Black).bg(current_theme_color()).add_modifier(Modifier::BOLD)
+pub fn normal_style() -> Style {
+    Style::default().fg(current_theme_color())
 }
-pub fn title_style()  -> Style { Style::default().fg(current_theme_color()).add_modifier(Modifier::BOLD) }
-pub fn dim_style()    -> Style { Style::default().fg(current_theme_color()).add_modifier(Modifier::DIM) }
+pub fn sel_style() -> Style {
+    Style::default()
+        .fg(ratatui::style::Color::Black)
+        .bg(current_theme_color())
+        .add_modifier(Modifier::BOLD)
+}
+pub fn title_style() -> Style {
+    Style::default()
+        .fg(current_theme_color())
+        .add_modifier(Modifier::BOLD)
+}
+pub fn dim_style() -> Style {
+    Style::default()
+        .fg(current_theme_color())
+        .add_modifier(Modifier::DIM)
+}
 
 // ── Header / separator ────────────────────────────────────────────────────────
 
 pub fn render_header(f: &mut Frame, area: Rect) {
     let inner = pad_horizontal(area);
-    let lines: Vec<Line> = HEADER_LINES.iter()
+    let lines: Vec<Line> = HEADER_LINES
+        .iter()
         .map(|l| Line::from(Span::styled(*l, title_style())))
         .collect();
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
@@ -277,19 +325,27 @@ pub fn render_header(f: &mut Frame, area: Rect) {
 
 pub fn render_separator(f: &mut Frame, area: Rect) {
     let inner = pad_horizontal(area);
-    let sep   = "=".repeat(inner.width as usize);
-    f.render_widget(Paragraph::new(sep).alignment(Alignment::Center).style(dim_style()), inner);
+    let sep = "=".repeat(inner.width as usize);
+    f.render_widget(
+        Paragraph::new(sep)
+            .alignment(Alignment::Center)
+            .style(dim_style()),
+        inner,
+    );
 }
 
 // ── Menu ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MenuResult { Selected(String), Back }
+pub enum MenuResult {
+    Selected(String),
+    Back,
+}
 
 pub fn run_menu(
     terminal: &mut Term,
-    title:    &str,
-    choices:  &[&str],
+    title: &str,
+    choices: &[&str],
     subtitle: Option<&str>,
 ) -> Result<MenuResult> {
     let selectable: Vec<&str> = choices.iter().copied().filter(|c| *c != "---").collect();
@@ -297,7 +353,7 @@ pub fn run_menu(
 
     loop {
         terminal.draw(|f| {
-            let size   = f.area();
+            let size = f.area();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -305,7 +361,11 @@ pub fn run_menu(
                     Constraint::Length(1),
                     Constraint::Length(1),
                     Constraint::Length(1),
-                    if subtitle.is_some() { Constraint::Length(2) } else { Constraint::Length(0) },
+                    if subtitle.is_some() {
+                        Constraint::Length(2)
+                    } else {
+                        Constraint::Length(0)
+                    },
                     Constraint::Min(1),
                     Constraint::Length(1),
                 ])
@@ -314,36 +374,49 @@ pub fn run_menu(
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
             f.render_widget(
-                Paragraph::new(title).alignment(Alignment::Center).style(title_style()),
+                Paragraph::new(title)
+                    .alignment(Alignment::Center)
+                    .style(title_style()),
                 pad_horizontal(chunks[2]),
             );
             render_separator(f, chunks[3]);
 
             if let Some(sub) = subtitle {
                 f.render_widget(
-                    Paragraph::new(Span::styled(sub,
-                        Style::default().fg(current_theme_color()).add_modifier(Modifier::UNDERLINED)
-                    )).alignment(Alignment::Left),
+                    Paragraph::new(Span::styled(
+                        sub,
+                        Style::default()
+                            .fg(current_theme_color())
+                            .add_modifier(Modifier::UNDERLINED),
+                    ))
+                    .alignment(Alignment::Left),
                     pad_horizontal(chunks[4]),
                 );
             }
 
-            let lines: Vec<Line> = choices.iter().map(|&choice| {
-                if choice == "---" { return Line::from(Span::styled("", dim_style())); }
-                let selected = selectable.get(idx).copied() == Some(choice);
-                if selected {
-                    Line::from(Span::styled(format!("  > {choice}"), sel_style()))
-                } else {
-                    Line::from(Span::styled(format!("    {choice}"), normal_style()))
-                }
-            }).collect();
+            let lines: Vec<Line> = choices
+                .iter()
+                .map(|&choice| {
+                    if choice == "---" {
+                        return Line::from(Span::styled("", dim_style()));
+                    }
+                    let selected = selectable.get(idx).copied() == Some(choice);
+                    if selected {
+                        Line::from(Span::styled(format!("  > {choice}"), sel_style()))
+                    } else {
+                        Line::from(Span::styled(format!("    {choice}"), normal_style()))
+                    }
+                })
+                .collect();
             f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
             render_status_bar(f, chunks[6]);
         })?;
 
         if event::poll(Duration::from_millis(25))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if check_session_switch(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         crate::sound::play_navigate();
@@ -393,10 +466,15 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
     let mut buf = String::new();
     loop {
         terminal.draw(|f| {
-            let size   = f.area();
+            let size = f.area();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
                 .split(size);
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
@@ -409,7 +487,9 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if check_session_switch(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         return Ok(None);
@@ -417,10 +497,24 @@ pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>>
                     continue;
                 }
                 match key.code {
-                    KeyCode::Enter     => { crate::sound::play_navigate(); return Ok(Some(buf.trim().to_string())); }
-                    KeyCode::Esc       => { crate::sound::play_navigate(); return Ok(None); }
-                    KeyCode::Backspace => { if !buf.is_empty() { buf.pop(); crate::sound::play_keypress(); } }
-                    KeyCode::Char(c) if (c as u32) >= 32 => { buf.push(c); crate::sound::play_keypress(); }
+                    KeyCode::Enter => {
+                        crate::sound::play_navigate();
+                        return Ok(Some(buf.trim().to_string()));
+                    }
+                    KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(None);
+                    }
+                    KeyCode::Backspace => {
+                        if !buf.is_empty() {
+                            buf.pop();
+                            crate::sound::play_keypress();
+                        }
+                    }
+                    KeyCode::Char(c) if (c as u32) >= 32 => {
+                        buf.push(c);
+                        crate::sound::play_keypress();
+                    }
                     _ => {}
                 }
             }
@@ -434,10 +528,15 @@ pub fn password_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<Strin
     let mut buf = String::new();
     loop {
         terminal.draw(|f| {
-            let size   = f.area();
+            let size = f.area();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
                 .split(size);
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
@@ -451,7 +550,9 @@ pub fn password_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<Strin
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if check_session_switch(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         return Ok(None);
@@ -459,10 +560,24 @@ pub fn password_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<Strin
                     continue;
                 }
                 match key.code {
-                    KeyCode::Enter     => { crate::sound::play_navigate(); return Ok(Some(buf)); }
-                    KeyCode::Esc       => { crate::sound::play_navigate(); return Ok(None); }
-                    KeyCode::Backspace => { if !buf.is_empty() { buf.pop(); crate::sound::play_keypress(); } }
-                    KeyCode::Char(c) if (c as u32) >= 32 => { buf.push(c); crate::sound::play_keypress(); }
+                    KeyCode::Enter => {
+                        crate::sound::play_navigate();
+                        return Ok(Some(buf));
+                    }
+                    KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(None);
+                    }
+                    KeyCode::Backspace => {
+                        if !buf.is_empty() {
+                            buf.pop();
+                            crate::sound::play_keypress();
+                        }
+                    }
+                    KeyCode::Char(c) if (c as u32) >= 32 => {
+                        buf.push(c);
+                        crate::sound::play_keypress();
+                    }
                     _ => {}
                 }
             }
@@ -475,10 +590,14 @@ pub fn password_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<Strin
 pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
     loop {
         terminal.draw(|f| {
-            let size   = f.area();
+            let size = f.area();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
                 .split(size);
             render_header(f, chunks[0]);
             f.render_widget(
@@ -490,7 +609,9 @@ pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
 
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if check_session_switch(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         return Ok(false);
@@ -498,8 +619,14 @@ pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
                     continue;
                 }
                 match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => { crate::sound::play_navigate(); return Ok(true); }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => { crate::sound::play_navigate(); return Ok(false); }
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        crate::sound::play_navigate();
+                        return Ok(true);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        crate::sound::play_navigate();
+                        return Ok(false);
+                    }
                     _ => {}
                 }
             }
@@ -511,10 +638,14 @@ pub fn confirm(terminal: &mut Term, message: &str) -> Result<bool> {
 
 pub fn flash_message(terminal: &mut Term, message: &str, ms: u64) -> Result<()> {
     terminal.draw(|f| {
-        let size   = f.area();
+        let size = f.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(size);
         render_header(f, chunks[0]);
         f.render_widget(
@@ -535,22 +666,30 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
 
     loop {
         terminal.draw(|f| {
-            let size   = f.area();
+            let size = f.area();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3), Constraint::Length(1), Constraint::Length(1),
-                    Constraint::Min(1), Constraint::Length(1), Constraint::Length(1),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
                 ])
                 .split(size);
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
             f.render_widget(
-                Paragraph::new(title).alignment(Alignment::Center).style(title_style()),
+                Paragraph::new(title)
+                    .alignment(Alignment::Center)
+                    .style(title_style()),
                 pad_horizontal(chunks[2]),
             );
             let visible_h = chunks[3].height as usize;
-            let page: Vec<Line> = lines[offset..].iter().take(visible_h)
+            let page: Vec<Line> = lines[offset..]
+                .iter()
+                .take(visible_h)
                 .map(|l| Line::from(Span::styled(*l, normal_style())))
                 .collect();
             f.render_widget(Paragraph::new(page), pad_horizontal(chunks[3]));
@@ -563,7 +702,9 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
 
         if event::poll(Duration::from_millis(30))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 if check_session_switch(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
                         crate::sound::play_navigate();
@@ -589,7 +730,8 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
                         }
                     }
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => {
-                        crate::sound::play_navigate(); break;
+                        crate::sound::play_navigate();
+                        break;
                     }
                     _ => {}
                 }
@@ -603,15 +745,28 @@ pub fn pager(terminal: &mut Term, text: &str, title: &str) -> Result<()> {
 
 pub fn box_message(terminal: &mut Term, message: &str, ms: u64) -> Result<()> {
     terminal.draw(|f| {
-        let size  = f.area();
-        let w     = (message.len() + 6).min(size.width as usize) as u16;
-        let h     = 5u16;
-        let area  = Rect::new(size.width.saturating_sub(w) / 2, size.height.saturating_sub(h) / 2, w, h);
-        let block = Block::default().borders(Borders::ALL).border_style(sel_style()).style(sel_style());
+        let size = f.area();
+        let w = (message.len() + 6).min(size.width as usize) as u16;
+        let h = 5u16;
+        let area = Rect::new(
+            size.width.saturating_sub(w) / 2,
+            size.height.saturating_sub(h) / 2,
+            w,
+            h,
+        );
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(sel_style())
+            .style(sel_style());
         let inner = block.inner(area);
         f.render_widget(Clear, area);
         f.render_widget(block, area);
-        f.render_widget(Paragraph::new(message).alignment(Alignment::Center).style(sel_style()), inner);
+        f.render_widget(
+            Paragraph::new(message)
+                .alignment(Alignment::Center)
+                .style(sel_style()),
+            inner,
+        );
     })?;
     std::thread::sleep(Duration::from_millis(ms));
     Ok(())

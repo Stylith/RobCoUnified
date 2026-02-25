@@ -1,10 +1,10 @@
+use chrono::Local;
 use ratatui::{
     layout::Rect,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
-use chrono::Local;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -12,14 +12,23 @@ use crate::ui::sel_style;
 
 // ── Cached battery ────────────────────────────────────────────────────────────
 
-struct BattCache { display: Option<String>, ts: Instant }
+struct BattCache {
+    display: Option<String>,
+    ts: Instant,
+}
 static BATT: Mutex<Option<BattCache>> = Mutex::new(None);
 
 fn battery_display() -> Option<String> {
     let mut guard = BATT.lock().ok()?;
-    if guard.as_ref().is_none_or(|c| c.ts.elapsed() > Duration::from_secs(30)) {
+    if guard
+        .as_ref()
+        .is_none_or(|c| c.ts.elapsed() > Duration::from_secs(30))
+    {
         let display = read_battery();
-        *guard = Some(BattCache { display: display.clone(), ts: Instant::now() });
+        *guard = Some(BattCache {
+            display: display.clone(),
+            ts: Instant::now(),
+        });
         return display;
     }
     guard.as_ref().and_then(|c| c.display.clone())
@@ -35,7 +44,8 @@ fn read_battery() -> Option<String> {
     for line in text.lines() {
         if let Some(pos) = line.find('%') {
             let before = &line[..pos];
-            let num_start = before.rfind(|c: char| !c.is_ascii_digit())
+            let num_start = before
+                .rfind(|c: char| !c.is_ascii_digit())
                 .map(|i| i + 1)
                 .unwrap_or(0);
             if let Ok(pct) = before[num_start..].trim().parse::<u8>() {
@@ -63,9 +73,9 @@ fn read_battery() -> Option<String> {
             let pct: u8 = cap.trim().parse().ok()?;
             let status_raw = std::fs::read_to_string(path.join("status")).unwrap_or_default();
             let status = match status_raw.trim() {
-                "Charging"    => "↑",
+                "Charging" => "↑",
                 "Discharging" => "↓",
-                _             => "",
+                _ => "",
             };
             return Some(format!("{pct}%{status}"));
         }
@@ -105,22 +115,30 @@ fn write_segment(
 ) {
     for (offset, ch) in text.chars().enumerate() {
         let idx = start + offset;
-        if idx >= row.len() { break; }
-        if skip_occupied && occupied[idx] { continue; }
+        if idx >= row.len() {
+            break;
+        }
+        if skip_occupied && occupied[idx] {
+            continue;
+        }
         row[idx] = ch;
-        if mark_occupied { occupied[idx] = true; }
+        if mark_occupied {
+            occupied[idx] = true;
+        }
     }
 }
 
 pub fn render_status_bar(f: &mut Frame, area: Rect) {
-    if area.height == 0 { return; }
+    if area.height == 0 {
+        return;
+    }
 
-    let ss       = sel_style();
-    let now      = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
-    let batt     = battery_display().unwrap_or_else(|| "--%".to_string());
+    let ss = sel_style();
+    let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+    let batt = battery_display().unwrap_or_else(|| "--%".to_string());
     let sessions = crate::session::get_sessions();
-    let active   = crate::session::active_idx();
-    let width    = area.width as usize;
+    let active = crate::session::active_idx();
+    let width = area.width as usize;
 
     let left = format!(" {} ", now);
     let center = sessions
