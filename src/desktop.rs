@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::Local;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
 };
 use crossterm::execute;
 use ratatui::{
@@ -15,36 +15,61 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::apps;
+use crate::config::{load_apps, load_categories, load_games, load_networks};
 use crate::documents;
 use crate::installer;
+use crate::launcher::json_to_cmd;
 use crate::settings;
 use crate::shell_terminal;
-use crate::ui::{dim_style, normal_style, sel_style, session_switch_scope, title_style, Term};
+use crate::ui::{
+    dim_style, flash_message, normal_style, sel_style, session_switch_scope, title_style, Term,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopExit {
     ReturnToTerminal,
     Logout,
+    Shutdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartLaunch {
-    Applications,
-    Documents,
-    Network,
-    Games,
     ProgramInstaller,
     Terminal,
     Settings,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum StartAction {
     None,
     Launch(StartLaunch),
+    LaunchCommand(Vec<String>),
+    LaunchNukeCodes,
+    OpenDocumentLogs,
+    OpenDocumentCategory { name: String, path: PathBuf },
     ReturnToTerminal,
     Logout,
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartSubmenu {
+    Programs,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartProgramsLeaf {
+    Applications,
+    Documents,
+    Network,
+    Games,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartHoverTarget {
+    Submenu(StartSubmenu),
+    Leaf(StartProgramsLeaf),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -146,12 +171,21 @@ impl FileManagerState {
     }
 }
 
-#[derive(Debug, Clone)]
-enum WindowKind {
-    FileManager(FileManagerState),
+struct PtyWindowState {
+    session: crate::pty::PtySession,
 }
 
-#[derive(Debug, Clone)]
+impl Drop for PtyWindowState {
+    fn drop(&mut self) {
+        self.session.terminate();
+    }
+}
+
+enum WindowKind {
+    FileManager(FileManagerState),
+    PtyApp(PtyWindowState),
+}
+
 struct DesktopWindow {
     id: u64,
     title: String,
@@ -184,12 +218,29 @@ struct TaskButton {
     rect: Rect,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+struct StartLeafItem {
+    label: String,
+    action: StartAction,
+}
+
+#[derive(Debug, Clone)]
 struct StartState {
     open: bool,
     selected_root: usize,
     selected_program: usize,
-    programs_open: bool,
+    selected_system: usize,
+    selected_leaf_apps: usize,
+    selected_leaf_docs: usize,
+    selected_leaf_network: usize,
+    selected_leaf_games: usize,
+    open_submenu: Option<StartSubmenu>,
+    open_leaf: Option<StartProgramsLeaf>,
+    hover_candidate: Option<(StartHoverTarget, Instant)>,
+    app_items: Vec<StartLeafItem>,
+    document_items: Vec<StartLeafItem>,
+    network_items: Vec<StartLeafItem>,
+    game_items: Vec<StartLeafItem>,
 }
 
 impl Default for StartState {
@@ -198,12 +249,23 @@ impl Default for StartState {
             open: false,
             selected_root: 0,
             selected_program: 0,
-            programs_open: true,
+            selected_system: 0,
+            selected_leaf_apps: 0,
+            selected_leaf_docs: 0,
+            selected_leaf_network: 0,
+            selected_leaf_games: 0,
+            open_submenu: Some(StartSubmenu::Programs),
+            open_leaf: None,
+            hover_candidate: None,
+            app_items: Vec::new(),
+            document_items: Vec::new(),
+            network_items: Vec::new(),
+            game_items: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct DesktopState {
     windows: Vec<DesktopWindow>,
     next_id: u64,
@@ -214,25 +276,293 @@ struct DesktopState {
     start: StartState,
 }
 
-const START_ROOT_ITEMS: [&str; 3] = ["Programs >", "Return To Terminal Mode", "Logout"];
-const START_PROGRAMS: [(&str, StartLaunch); 7] = [
-    ("Applications", StartLaunch::Applications),
-    ("Documents", StartLaunch::Documents),
-    ("Network", StartLaunch::Network),
-    ("Games", StartLaunch::Games),
+const START_ROOT_ITEMS: [(&str, Option<StartSubmenu>); 5] = [
+    ("Programs", Some(StartSubmenu::Programs)),
+    ("System", Some(StartSubmenu::System)),
+    ("Return To Terminal Mode", None),
+    ("Logout", None),
+    ("Shutdown", None),
+];
+const START_ROOT_VIS_ROWS: [Option<usize>; 6] = [Some(0), Some(1), None, Some(2), Some(3), Some(4)];
+const START_PROGRAMS: [(&str, StartProgramsLeaf); 4] = [
+    ("Applications", StartProgramsLeaf::Applications),
+    ("Documents", StartProgramsLeaf::Documents),
+    ("Network", StartProgramsLeaf::Network),
+    ("Games", StartProgramsLeaf::Games),
+];
+const START_SYSTEM: [(&str, StartLaunch); 3] = [
     ("Program Installer", StartLaunch::ProgramInstaller),
     ("Terminal", StartLaunch::Terminal),
     ("Settings", StartLaunch::Settings),
 ];
+const START_PROGRAMS_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
+const START_SYSTEM_VIS_ROWS: [Option<usize>; 4] = [Some(0), None, Some(1), Some(2)];
+
+fn submenu_for_root(idx: usize) -> Option<StartSubmenu> {
+    START_ROOT_ITEMS.get(idx).and_then(|(_, sub)| *sub)
+}
+
+fn submenu_items_system() -> &'static [(&'static str, StartLaunch)] {
+    &START_SYSTEM
+}
+
+fn submenu_items_programs() -> &'static [(&'static str, StartProgramsLeaf)] {
+    &START_PROGRAMS
+}
+
+fn submenu_items_len(sub: StartSubmenu) -> usize {
+    match sub {
+        StartSubmenu::Programs => START_PROGRAMS.len(),
+        StartSubmenu::System => START_SYSTEM.len(),
+    }
+}
+
+fn submenu_selected_idx(state: &StartState, sub: StartSubmenu) -> usize {
+    match sub {
+        StartSubmenu::Programs => state.selected_program,
+        StartSubmenu::System => state.selected_system,
+    }
+}
+
+fn submenu_selected_idx_mut(state: &mut StartState, sub: StartSubmenu) -> &mut usize {
+    match sub {
+        StartSubmenu::Programs => &mut state.selected_program,
+        StartSubmenu::System => &mut state.selected_system,
+    }
+}
+
+fn submenu_visual_rows(sub: StartSubmenu) -> &'static [Option<usize>] {
+    match sub {
+        StartSubmenu::Programs => &START_PROGRAMS_VIS_ROWS,
+        StartSubmenu::System => &START_SYSTEM_VIS_ROWS,
+    }
+}
+
+fn leaf_items(state: &StartState, leaf: StartProgramsLeaf) -> &[StartLeafItem] {
+    match leaf {
+        StartProgramsLeaf::Applications => &state.app_items,
+        StartProgramsLeaf::Documents => &state.document_items,
+        StartProgramsLeaf::Network => &state.network_items,
+        StartProgramsLeaf::Games => &state.game_items,
+    }
+}
+
+fn leaf_selected_idx(state: &StartState, leaf: StartProgramsLeaf) -> usize {
+    match leaf {
+        StartProgramsLeaf::Applications => state.selected_leaf_apps,
+        StartProgramsLeaf::Documents => state.selected_leaf_docs,
+        StartProgramsLeaf::Network => state.selected_leaf_network,
+        StartProgramsLeaf::Games => state.selected_leaf_games,
+    }
+}
+
+fn leaf_selected_idx_mut(state: &mut StartState, leaf: StartProgramsLeaf) -> &mut usize {
+    match leaf {
+        StartProgramsLeaf::Applications => &mut state.selected_leaf_apps,
+        StartProgramsLeaf::Documents => &mut state.selected_leaf_docs,
+        StartProgramsLeaf::Network => &mut state.selected_leaf_network,
+        StartProgramsLeaf::Games => &mut state.selected_leaf_games,
+    }
+}
+
+fn leaf_from_program_idx(idx: usize) -> Option<StartProgramsLeaf> {
+    submenu_items_programs().get(idx).map(|(_, leaf)| *leaf)
+}
+
+fn program_idx_for_leaf(leaf: StartProgramsLeaf) -> usize {
+    submenu_items_programs()
+        .iter()
+        .position(|(_, value)| *value == leaf)
+        .unwrap_or(0)
+}
+
+fn clamp_idx(idx: &mut usize, len: usize) {
+    if len == 0 {
+        *idx = 0;
+    } else if *idx >= len {
+        *idx = len - 1;
+    }
+}
+
+fn normalize_start_selection(state: &mut StartState) {
+    clamp_idx(&mut state.selected_root, START_ROOT_ITEMS.len());
+    clamp_idx(&mut state.selected_program, START_PROGRAMS.len());
+    clamp_idx(&mut state.selected_system, START_SYSTEM.len());
+    clamp_idx(&mut state.selected_leaf_apps, state.app_items.len());
+    clamp_idx(&mut state.selected_leaf_docs, state.document_items.len());
+    clamp_idx(&mut state.selected_leaf_network, state.network_items.len());
+    clamp_idx(&mut state.selected_leaf_games, state.game_items.len());
+
+    if state.open_submenu != Some(StartSubmenu::Programs) {
+        state.open_leaf = None;
+    }
+    if let Some(leaf) = state.open_leaf {
+        if leaf_items(state, leaf).is_empty() {
+            state.open_leaf = None;
+        }
+    }
+}
+
+fn sorted_json_keys(map: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut keys: Vec<String> = map.keys().cloned().collect();
+    keys.sort_by_key(|k| k.to_lowercase());
+    keys
+}
+
+fn build_command_leaf_items(
+    map: serde_json::Map<String, serde_json::Value>,
+    empty_label: &str,
+) -> Vec<StartLeafItem> {
+    let mut items = Vec::new();
+    for key in sorted_json_keys(&map) {
+        if let Some(v) = map.get(&key) {
+            let cmd = json_to_cmd(v);
+            if !cmd.is_empty() {
+                items.push(StartLeafItem {
+                    label: key,
+                    action: StartAction::LaunchCommand(cmd),
+                });
+            }
+        }
+    }
+    if items.is_empty() {
+        items.push(StartLeafItem {
+            label: empty_label.to_string(),
+            action: StartAction::None,
+        });
+    }
+    items
+}
+
+fn refresh_start_leaf_items(state: &mut StartState) {
+    let apps = load_apps();
+    let mut app_items = vec![StartLeafItem {
+        label: BUILTIN_NUKE_CODES_APP.to_string(),
+        action: StartAction::LaunchNukeCodes,
+    }];
+    for key in sorted_json_keys(&apps) {
+        if key == BUILTIN_NUKE_CODES_APP {
+            continue;
+        }
+        if let Some(v) = apps.get(&key) {
+            let cmd = json_to_cmd(v);
+            if !cmd.is_empty() {
+                app_items.push(StartLeafItem {
+                    label: key,
+                    action: StartAction::LaunchCommand(cmd),
+                });
+            }
+        }
+    }
+
+    let categories = load_categories();
+    let mut document_items = vec![StartLeafItem {
+        label: "Logs".to_string(),
+        action: StartAction::OpenDocumentLogs,
+    }];
+    for key in sorted_json_keys(&categories) {
+        if let Some(path) = categories.get(&key).and_then(|v| v.as_str()) {
+            document_items.push(StartLeafItem {
+                label: key.clone(),
+                action: StartAction::OpenDocumentCategory {
+                    name: key,
+                    path: PathBuf::from(path),
+                },
+            });
+        }
+    }
+
+    state.app_items = app_items;
+    state.document_items = document_items;
+    state.network_items = build_command_leaf_items(load_networks(), "(No network apps)");
+    state.game_items = build_command_leaf_items(load_games(), "(No games installed)");
+    normalize_start_selection(state);
+}
+
+fn open_start_menu(state: &mut DesktopState) {
+    refresh_start_leaf_items(&mut state.start);
+    state.start.open = true;
+    state.start.selected_root = 0;
+    state.start.selected_program = 0;
+    state.start.open_submenu = Some(StartSubmenu::Programs);
+    state.start.open_leaf = None;
+    state.start.hover_candidate = None;
+    normalize_start_selection(&mut state.start);
+}
+
+fn close_start_menu(state: &mut StartState) {
+    state.open = false;
+    state.open_submenu = None;
+    state.open_leaf = None;
+    state.hover_candidate = None;
+}
+
+fn is_hover_target_open(state: &StartState, target: StartHoverTarget) -> bool {
+    match target {
+        StartHoverTarget::Submenu(sub) => state.open_submenu == Some(sub),
+        StartHoverTarget::Leaf(leaf) => {
+            state.open_submenu == Some(StartSubmenu::Programs) && state.open_leaf == Some(leaf)
+        }
+    }
+}
+
+fn apply_hover_target(state: &mut StartState, target: StartHoverTarget) {
+    match target {
+        StartHoverTarget::Submenu(sub) => {
+            state.open_submenu = Some(sub);
+            if sub != StartSubmenu::Programs {
+                state.open_leaf = None;
+            }
+        }
+        StartHoverTarget::Leaf(leaf) => {
+            state.open_submenu = Some(StartSubmenu::Programs);
+            state.selected_program = program_idx_for_leaf(leaf);
+            state.open_leaf = Some(leaf);
+        }
+    }
+}
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
+const START_HOVER_DELAY: Duration = Duration::from_millis(170);
+const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 static BATTERY_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+fn queue_start_hover(state: &mut StartState, target: StartHoverTarget) {
+    if is_hover_target_open(state, target) {
+        state.hover_candidate = None;
+        return;
+    }
+    match state.hover_candidate {
+        Some((existing, at)) if existing == target => {
+            if at.elapsed() >= START_HOVER_DELAY {
+                apply_hover_target(state, target);
+                state.hover_candidate = None;
+            }
+        }
+        _ => state.hover_candidate = Some((target, Instant::now())),
+    }
+}
+
+fn advance_start_hover(state: &mut DesktopState) {
+    if !state.start.open {
+        state.start.hover_candidate = None;
+        return;
+    }
+    if let Some((target, at)) = state.start.hover_candidate {
+        if at.elapsed() >= START_HOVER_DELAY {
+            apply_hover_target(&mut state.start, target);
+            state.start.hover_candidate = None;
+        }
+    }
+}
 
 pub fn desktop_mode(terminal: &mut Term, current_user: &str) -> Result<DesktopExit> {
     let _switch_scope = session_switch_scope(false);
+    let _ = terminal.hide_cursor();
     execute!(terminal.backend_mut(), EnableMouseCapture)?;
     let result = run_desktop_loop(terminal, current_user);
     let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
+    let _ = terminal.show_cursor();
     result
 }
 
@@ -244,6 +574,8 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
     let mut last_tick = Instant::now();
 
     loop {
+        reap_closed_pty_windows(&mut state);
+        advance_start_hover(&mut state);
         draw_desktop(terminal, &mut state)?;
 
         let timeout = Duration::from_millis(16);
@@ -253,12 +585,16 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
                     if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
                         continue;
                     }
-                    if let Some(exit) = handle_key(terminal, current_user, &mut state, key.code)? {
+                    if let Some(exit) =
+                        handle_key(terminal, current_user, &mut state, key.code, key.modifiers)?
+                    {
+                        terminate_all_pty_windows(&mut state);
                         return Ok(exit);
                     }
                 }
                 Event::Mouse(mouse) => {
                     if let Some(exit) = handle_mouse(terminal, current_user, &mut state, mouse)? {
+                        terminate_all_pty_windows(&mut state);
                         return Ok(exit);
                     }
                 }
@@ -282,80 +618,174 @@ fn handle_key(
     current_user: &str,
     state: &mut DesktopState,
     code: KeyCode,
+    modifiers: KeyModifiers,
 ) -> Result<Option<DesktopExit>> {
     if state.start.open {
         match code {
             KeyCode::Esc => {
-                state.start.open = false;
-                state.start.programs_open = false;
+                close_start_menu(&mut state.start);
             }
             KeyCode::Up => {
-                state.start.selected_root = state.start.selected_root.saturating_sub(1);
+                if let Some(leaf) = state.start.open_leaf {
+                    let sel = leaf_selected_idx_mut(&mut state.start, leaf);
+                    *sel = sel.saturating_sub(1);
+                } else if let Some(sub) = state.start.open_submenu {
+                    let sel = submenu_selected_idx_mut(&mut state.start, sub);
+                    *sel = sel.saturating_sub(1);
+                } else {
+                    state.start.selected_root = state.start.selected_root.saturating_sub(1);
+                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
+                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
+                        state.start.open_leaf = None;
+                    }
+                    state.start.hover_candidate = None;
+                }
             }
             KeyCode::Down => {
-                state.start.selected_root =
-                    (state.start.selected_root + 1).min(START_ROOT_ITEMS.len() - 1);
+                if let Some(leaf) = state.start.open_leaf {
+                    let max = leaf_items(&state.start, leaf).len().saturating_sub(1);
+                    let sel = leaf_selected_idx_mut(&mut state.start, leaf);
+                    *sel = (*sel + 1).min(max);
+                } else if let Some(sub) = state.start.open_submenu {
+                    let max = submenu_items_len(sub).saturating_sub(1);
+                    let sel = submenu_selected_idx_mut(&mut state.start, sub);
+                    *sel = (*sel + 1).min(max);
+                } else {
+                    state.start.selected_root =
+                        (state.start.selected_root + 1).min(START_ROOT_ITEMS.len() - 1);
+                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
+                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
+                        state.start.open_leaf = None;
+                    }
+                    state.start.hover_candidate = None;
+                }
             }
             KeyCode::Right => {
-                if state.start.selected_root == 0 {
-                    state.start.programs_open = true;
+                if state.start.open_submenu == Some(StartSubmenu::Programs) {
+                    if let Some(leaf) = leaf_from_program_idx(state.start.selected_program) {
+                        state.start.open_leaf = Some(leaf);
+                    }
+                } else if let Some(sub) = submenu_for_root(state.start.selected_root) {
+                    state.start.open_submenu = Some(sub);
+                    if sub != StartSubmenu::Programs {
+                        state.start.open_leaf = None;
+                    }
+                    state.start.hover_candidate = None;
                 }
             }
             KeyCode::Left => {
-                state.start.programs_open = false;
+                if state.start.open_leaf.is_some() {
+                    state.start.open_leaf = None;
+                } else {
+                    state.start.open_submenu = None;
+                }
+                state.start.hover_candidate = None;
             }
             KeyCode::Tab => {
-                if state.start.programs_open {
-                    state.start.selected_program =
-                        (state.start.selected_program + 1) % START_PROGRAMS.len();
+                if let Some(leaf) = state.start.open_leaf {
+                    let len = leaf_items(&state.start, leaf).len();
+                    if len > 0 {
+                        let sel = leaf_selected_idx_mut(&mut state.start, leaf);
+                        *sel = (*sel + 1) % len;
+                    }
+                } else if let Some(sub) = state.start.open_submenu {
+                    let len = submenu_items_len(sub);
+                    if len > 0 {
+                        let sel = submenu_selected_idx_mut(&mut state.start, sub);
+                        *sel = (*sel + 1) % len;
+                    }
                 } else {
                     state.start.selected_root =
                         (state.start.selected_root + 1) % START_ROOT_ITEMS.len();
+                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
+                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
+                        state.start.open_leaf = None;
+                    }
+                    state.start.hover_candidate = None;
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let action = if state.start.selected_root == 0 {
-                    state.start.programs_open = true;
-                    StartAction::Launch(START_PROGRAMS[state.start.selected_program].1)
-                } else if state.start.selected_root == 1 {
+                let action = if let Some(leaf) = state.start.open_leaf {
+                    let items = leaf_items(&state.start, leaf);
+                    if items.is_empty() {
+                        StartAction::None
+                    } else {
+                        let idx = leaf_selected_idx(&state.start, leaf)
+                            .min(items.len().saturating_sub(1));
+                        items[idx].action.clone()
+                    }
+                } else if let Some(sub) = submenu_for_root(state.start.selected_root) {
+                    if state.start.open_submenu == Some(sub) {
+                        match sub {
+                            StartSubmenu::Programs => {
+                                if let Some(leaf) =
+                                    leaf_from_program_idx(state.start.selected_program)
+                                {
+                                    state.start.open_leaf = Some(leaf);
+                                }
+                                StartAction::None
+                            }
+                            StartSubmenu::System => {
+                                let items = submenu_items_system();
+                                let idx = submenu_selected_idx(&state.start, sub)
+                                    .min(items.len().saturating_sub(1));
+                                StartAction::Launch(items[idx].1)
+                            }
+                        }
+                    } else {
+                        state.start.open_submenu = Some(sub);
+                        if sub != StartSubmenu::Programs {
+                            state.start.open_leaf = None;
+                        }
+                        state.start.hover_candidate = None;
+                        StartAction::None
+                    }
+                } else if state.start.selected_root == 2 {
                     StartAction::ReturnToTerminal
-                } else {
+                } else if state.start.selected_root == 3 {
                     StartAction::Logout
+                } else {
+                    StartAction::Shutdown
                 };
-                return run_start_action(terminal, current_user, state, action);
+                if !matches!(action, StartAction::None) {
+                    return run_start_action(terminal, current_user, state, action);
+                }
             }
             _ => {}
         }
+        normalize_start_selection(&mut state.start);
         return Ok(None);
     }
 
-    match code {
-        KeyCode::Esc => {
-            if !state.windows.is_empty() {
-                state.windows.pop();
+    if matches!(code, KeyCode::F(10)) {
+        open_start_menu(state);
+        return Ok(None);
+    }
+
+    if let Some(last_idx) = state.windows.len().checked_sub(1) {
+        let focused_id = state.windows[last_idx].id;
+        let mut close_focused = false;
+        match &mut state.windows[last_idx].kind {
+            WindowKind::PtyApp(app) => {
+                app.session.send_key(code, modifiers);
+                return Ok(None);
             }
-        }
-        KeyCode::F(10) => {
-            state.start.open = true;
-            state.start.programs_open = true;
-            state.start.selected_root = 0;
-        }
-        KeyCode::Char('m') | KeyCode::Char('M') => {
-            open_file_manager_window(state);
-        }
-        KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Backspace => {
-            if let Some(win) = state.windows.last_mut() {
-                let WindowKind::FileManager(fm) = &mut win.kind;
-                match code {
-                    KeyCode::Up => fm.up(),
-                    KeyCode::Down => fm.down(),
-                    KeyCode::Enter => fm.open_selected(),
-                    KeyCode::Backspace => fm.parent(),
-                    _ => {}
+            WindowKind::FileManager(fm) => match code {
+                KeyCode::Esc => {
+                    close_focused = true;
                 }
-            }
+                KeyCode::Up => fm.up(),
+                KeyCode::Down => fm.down(),
+                KeyCode::Enter => fm.open_selected(),
+                KeyCode::Backspace => fm.parent(),
+                _ => {}
+            },
         }
-        _ => {}
+        if close_focused {
+            close_window_by_id(state, focused_id);
+        }
+    } else if matches!(code, KeyCode::Char('m') | KeyCode::Char('M')) {
+        open_file_manager_window(state);
     }
 
     Ok(None)
@@ -400,9 +830,11 @@ fn handle_mouse(
 
     if point_in_rect(mouse.column, mouse.row, start_button_rect(task)) {
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            state.start.open = !state.start.open;
-            state.start.programs_open = true;
-            state.start.selected_root = 0;
+            if state.start.open {
+                close_start_menu(&mut state.start);
+            } else {
+                open_start_menu(state);
+            }
         }
         return Ok(None);
     }
@@ -417,16 +849,18 @@ fn handle_mouse(
     }
 
     if state.start.open {
-        if let Some(action) = hit_start_menu(mouse.column, mouse.row, size, state) {
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        let is_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
+        if let Some(action) = hit_start_menu(mouse.column, mouse.row, size, state, is_click) {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                && !matches!(action, StartAction::None)
+            {
                 return run_start_action(terminal, current_user, state, action);
             }
             return Ok(None);
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            state.start.open = false;
-            state.start.programs_open = false;
+            close_start_menu(&mut state.start);
         }
     }
 
@@ -435,7 +869,7 @@ fn handle_mouse(
             focus_window(state, window_id);
             match hit {
                 WindowHit::Close => {
-                    state.windows.retain(|w| w.id != window_id);
+                    close_window_by_id(state, window_id);
                 }
                 WindowHit::Title => {
                     if let Some(win) = state.windows.iter().find(|w| w.id == window_id) {
@@ -471,27 +905,156 @@ fn run_start_action(
     action: StartAction,
 ) -> Result<Option<DesktopExit>> {
     state.start.open = false;
-    state.start.programs_open = false;
+    state.start.open_submenu = None;
+    state.start.open_leaf = None;
+    state.start.hover_candidate = None;
 
     match action {
         StartAction::None => Ok(None),
         StartAction::ReturnToTerminal => Ok(Some(DesktopExit::ReturnToTerminal)),
         StartAction::Logout => Ok(Some(DesktopExit::Logout)),
+        StartAction::Shutdown => Ok(Some(DesktopExit::Shutdown)),
         StartAction::Launch(which) => {
-            execute!(terminal.backend_mut(), DisableMouseCapture)?;
-            let run_result = match which {
-                StartLaunch::Applications => apps::apps_menu(terminal),
-                StartLaunch::Documents => documents::documents_menu(terminal),
-                StartLaunch::Network => apps::network_menu(terminal),
-                StartLaunch::Games => apps::games_menu(terminal),
+            run_with_mouse_capture_paused(terminal, |terminal| match which {
                 StartLaunch::ProgramInstaller => installer::appstore_menu(terminal),
                 StartLaunch::Terminal => shell_terminal::embedded_terminal(terminal),
                 StartLaunch::Settings => settings::settings_menu(terminal, current_user),
-            };
-            let recapture = execute!(terminal.backend_mut(), EnableMouseCapture);
-            run_result?;
-            recapture?;
+            })?;
             Ok(None)
+        }
+        StartAction::LaunchCommand(cmd) => {
+            if let Err(err) = open_pty_window(terminal, state, &cmd) {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
+            Ok(None)
+        }
+        StartAction::LaunchNukeCodes => {
+            run_with_mouse_capture_paused(terminal, crate::nuke_codes::nuke_codes_screen)?;
+            Ok(None)
+        }
+        StartAction::OpenDocumentLogs => {
+            run_with_mouse_capture_paused(terminal, documents::logs_menu)?;
+            Ok(None)
+        }
+        StartAction::OpenDocumentCategory { name, path } => {
+            run_with_mouse_capture_paused(terminal, |terminal| {
+                documents::open_documents_category(terminal, &name, &path)
+            })?;
+            Ok(None)
+        }
+    }
+}
+
+fn run_with_mouse_capture_paused<F>(terminal: &mut Term, run: F) -> Result<()>
+where
+    F: FnOnce(&mut Term) -> Result<()>,
+{
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    let run_result = run(terminal);
+    let recapture = execute!(terminal.backend_mut(), EnableMouseCapture);
+    run_result?;
+    recapture?;
+    Ok(())
+}
+
+fn open_pty_window(terminal: &mut Term, state: &mut DesktopState, cmd: &[String]) -> Result<()> {
+    if cmd.is_empty() {
+        return Ok(());
+    }
+
+    let size = terminal.size()?;
+    let full = full_rect(size.width, size.height);
+    let desk = desktop_area(full);
+    if desk.width < 24 || desk.height < 8 {
+        return Ok(());
+    }
+
+    let offset = ((state.windows.len() % 6) as i32) * 2;
+    let base_w = desk.width.saturating_sub(10).clamp(44, 120);
+    let base_h = desk.height.saturating_sub(5).clamp(12, 36);
+    let mut rect = WinRect {
+        x: desk.x as i32 + 4 + offset,
+        y: desk.y as i32 + 2 + offset,
+        w: base_w,
+        h: base_h,
+    };
+    clamp_window(&mut rect, desk);
+
+    let cols = rect.w.saturating_sub(2).max(1);
+    let rows = rect.h.saturating_sub(2).max(1);
+    let program = &cmd[0];
+    let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
+    let session = crate::pty::PtySession::spawn(
+        program,
+        &args,
+        cols,
+        rows,
+        &crate::pty::PtyLaunchOptions::default(),
+    )?;
+
+    let title = command_title(program);
+    let id = state.next_id;
+    state.next_id += 1;
+    state.windows.push(DesktopWindow {
+        id,
+        title,
+        rect,
+        kind: WindowKind::PtyApp(PtyWindowState { session }),
+    });
+    Ok(())
+}
+
+fn command_title(program: &str) -> String {
+    Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| program.to_string())
+}
+
+fn close_window_by_id(state: &mut DesktopState, window_id: u64) {
+    if let Some(pos) = state.windows.iter().position(|w| w.id == window_id) {
+        let mut removed = state.windows.remove(pos);
+        if let WindowKind::PtyApp(app) = &mut removed.kind {
+            app.session.terminate();
+        }
+    }
+}
+
+fn reap_closed_pty_windows(state: &mut DesktopState) {
+    let mut idx = 0;
+    while idx < state.windows.len() {
+        let is_alive = {
+            let win = &mut state.windows[idx];
+            match &mut win.kind {
+                WindowKind::PtyApp(app) => app.session.is_alive(),
+                WindowKind::FileManager(_) => true,
+            }
+        };
+        if is_alive {
+            idx += 1;
+        } else {
+            state.windows.remove(idx);
+        }
+    }
+}
+
+fn terminate_all_pty_windows(state: &mut DesktopState) {
+    for win in &mut state.windows {
+        if let WindowKind::PtyApp(app) = &mut win.kind {
+            app.session.terminate();
+        }
+    }
+}
+
+fn sync_pty_window_sizes(state: &mut DesktopState) {
+    for win in &mut state.windows {
+        if let WindowKind::PtyApp(app) = &mut win.kind {
+            let area = win.rect.to_rect();
+            let cols = area.width.saturating_sub(2).max(1);
+            let rows = area.height.saturating_sub(2).max(1);
+            app.session.resize(cols, rows);
         }
     }
 }
@@ -500,6 +1063,7 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
     let ts = terminal.size()?;
     let size = full_rect(ts.width, ts.height);
     clamp_all_windows(state, desktop_area(size));
+    sync_pty_window_sizes(state);
 
     terminal.draw(|f| {
         let size = f.area();
@@ -534,7 +1098,6 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect) {
     }
     let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
     let batt = battery_display();
-    let center = "Desktop Mode";
     let width = area.width as usize;
     let mut row = vec![' '; width];
 
@@ -543,8 +1106,6 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect) {
         let start = width.saturating_sub(batt.len() + 2);
         write_text(&mut row, start, &format!(" {} ", batt));
     }
-    let center_start = width.saturating_sub(center.len()) / 2;
-    write_text(&mut row, center_start, center);
 
     let line: String = row.into_iter().collect();
     f.render_widget(
@@ -649,6 +1210,7 @@ fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool) {
 
     match &win.kind {
         WindowKind::FileManager(fm) => draw_file_manager_window(f, area, fm, focused),
+        WindowKind::PtyApp(app) => draw_pty_window(f, area, app),
     }
 }
 
@@ -713,6 +1275,19 @@ fn draw_file_manager_window(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState) {
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    app.session.render(f, inner);
+}
+
 fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
     let task = taskbar_area(size);
     let root = start_root_rect(task);
@@ -721,14 +1296,30 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
         root,
     );
 
+    let inner_root_w = root.width.saturating_sub(2) as usize;
     let mut root_lines = Vec::new();
-    for (i, label) in START_ROOT_ITEMS.iter().enumerate() {
-        let style = if i == state.start.selected_root {
-            sel_style()
-        } else {
-            normal_style()
-        };
-        root_lines.push(Line::from(Span::styled(format!(" {}", label), style)));
+    for row in START_ROOT_VIS_ROWS {
+        match row {
+            Some(i) => {
+                let (label, submenu) = START_ROOT_ITEMS[i];
+                let style = if i == state.start.selected_root {
+                    sel_style()
+                } else {
+                    normal_style()
+                };
+                let arrow = if submenu.is_some() { Some('>') } else { None };
+                root_lines.push(Line::from(Span::styled(
+                    format_menu_row(inner_root_w, label, arrow),
+                    style,
+                )));
+            }
+            None => {
+                root_lines.push(Line::from(Span::styled(
+                    "-".repeat(inner_root_w),
+                    dim_style(),
+                )));
+            }
+        }
     }
     f.render_widget(
         Paragraph::new(root_lines),
@@ -740,20 +1331,46 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
         },
     );
 
-    if state.start.programs_open {
-        let sub = start_programs_rect(root, size);
+    if let Some(submenu) = state.start.open_submenu {
+        let sub = start_submenu_rect(root, size, submenu);
         f.render_widget(
             Block::default().borders(Borders::ALL).style(title_style()),
             sub,
         );
+        let inner_sub_w = sub.width.saturating_sub(2) as usize;
         let mut sub_lines = Vec::new();
-        for (i, (label, _)) in START_PROGRAMS.iter().enumerate() {
-            let style = if i == state.start.selected_program {
-                sel_style()
-            } else {
-                normal_style()
-            };
-            sub_lines.push(Line::from(Span::styled(format!(" {}", label), style)));
+        let rows = submenu_visual_rows(submenu);
+        let selected = submenu_selected_idx(&state.start, submenu);
+        for row in rows {
+            match row {
+                Some(i) => {
+                    let (label, arrow) = match submenu {
+                        StartSubmenu::Programs => {
+                            let (label, _) = submenu_items_programs()[*i];
+                            (label, Some('>'))
+                        }
+                        StartSubmenu::System => {
+                            let (label, _) = submenu_items_system()[*i];
+                            (label, None)
+                        }
+                    };
+                    let style = if *i == selected {
+                        sel_style()
+                    } else {
+                        normal_style()
+                    };
+                    sub_lines.push(Line::from(Span::styled(
+                        format_menu_row(inner_sub_w, label, arrow),
+                        style,
+                    )));
+                }
+                None => {
+                    sub_lines.push(Line::from(Span::styled(
+                        "-".repeat(inner_sub_w),
+                        dim_style(),
+                    )));
+                }
+            }
         }
         f.render_widget(
             Paragraph::new(sub_lines),
@@ -764,6 +1381,40 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
                 height: sub.height.saturating_sub(2),
             },
         );
+
+        if submenu == StartSubmenu::Programs {
+            if let Some(leaf) = state.start.open_leaf {
+                let leaf_rect = start_leaf_rect(sub, size, &state.start, leaf);
+                f.render_widget(
+                    Block::default().borders(Borders::ALL).style(title_style()),
+                    leaf_rect,
+                );
+                let inner_leaf_w = leaf_rect.width.saturating_sub(2) as usize;
+                let mut leaf_lines = Vec::new();
+                let items = leaf_items(&state.start, leaf);
+                let selected_leaf = leaf_selected_idx(&state.start, leaf);
+                for (idx, item) in items.iter().enumerate() {
+                    let style = if idx == selected_leaf {
+                        sel_style()
+                    } else {
+                        normal_style()
+                    };
+                    leaf_lines.push(Line::from(Span::styled(
+                        format_menu_row(inner_leaf_w, &item.label, None),
+                        style,
+                    )));
+                }
+                f.render_widget(
+                    Paragraph::new(leaf_lines),
+                    Rect {
+                        x: leaf_rect.x + 1,
+                        y: leaf_rect.y + 1,
+                        width: leaf_rect.width.saturating_sub(2),
+                        height: leaf_rect.height.saturating_sub(2),
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -782,31 +1433,93 @@ fn draw_cursor(f: &mut ratatui::Frame, x: u16, y: u16, size: Rect) {
     );
 }
 
-fn hit_start_menu(x: u16, y: u16, size: Rect, state: &mut DesktopState) -> Option<StartAction> {
+fn hit_start_menu(
+    x: u16,
+    y: u16,
+    size: Rect,
+    state: &mut DesktopState,
+    is_click: bool,
+) -> Option<StartAction> {
     let root = start_root_rect(taskbar_area(size));
     if point_in_rect(x, y, root) {
         let row = y.saturating_sub(root.y + 1) as usize;
-        if row < START_ROOT_ITEMS.len() {
-            state.start.selected_root = row;
-            state.start.programs_open = row == 0;
-            return Some(match row {
-                0 => StartAction::None,
-                1 => StartAction::ReturnToTerminal,
-                _ => StartAction::Logout,
+        if row < START_ROOT_VIS_ROWS.len() {
+            let Some(root_idx) = START_ROOT_VIS_ROWS[row] else {
+                return Some(StartAction::None);
+            };
+            state.start.selected_root = root_idx;
+            if let Some(sub) = submenu_for_root(root_idx) {
+                if is_click {
+                    apply_hover_target(&mut state.start, StartHoverTarget::Submenu(sub));
+                    state.start.hover_candidate = None;
+                } else {
+                    queue_start_hover(&mut state.start, StartHoverTarget::Submenu(sub));
+                }
+                return Some(StartAction::None);
+            }
+            state.start.open_submenu = None;
+            state.start.open_leaf = None;
+            state.start.hover_candidate = None;
+            return Some(match root_idx {
+                2 => StartAction::ReturnToTerminal,
+                3 => StartAction::Logout,
+                4 => StartAction::Shutdown,
+                _ => StartAction::None,
             });
         }
         return Some(StartAction::None);
     }
 
-    if state.start.programs_open {
-        let sub = start_programs_rect(root, size);
+    if let Some(submenu) = state.start.open_submenu {
+        let sub = start_submenu_rect(root, size, submenu);
         if point_in_rect(x, y, sub) {
             let row = y.saturating_sub(sub.y + 1) as usize;
-            if row < START_PROGRAMS.len() {
-                state.start.selected_program = row;
-                return Some(StartAction::Launch(START_PROGRAMS[row].1));
+            let vis = submenu_visual_rows(submenu);
+            if row < vis.len() {
+                let Some(item_idx) = vis[row] else {
+                    return Some(StartAction::None);
+                };
+                *submenu_selected_idx_mut(&mut state.start, submenu) = item_idx;
+                return Some(match submenu {
+                    StartSubmenu::Programs => {
+                        if let Some(leaf) = leaf_from_program_idx(item_idx) {
+                            if is_click {
+                                apply_hover_target(&mut state.start, StartHoverTarget::Leaf(leaf));
+                                state.start.hover_candidate = None;
+                            } else {
+                                queue_start_hover(&mut state.start, StartHoverTarget::Leaf(leaf));
+                            }
+                        }
+                        StartAction::None
+                    }
+                    StartSubmenu::System => {
+                        if is_click {
+                            let items = submenu_items_system();
+                            StartAction::Launch(items[item_idx].1)
+                        } else {
+                            StartAction::None
+                        }
+                    }
+                });
             }
             return Some(StartAction::None);
+        }
+
+        if submenu == StartSubmenu::Programs {
+            if let Some(leaf) = state.start.open_leaf {
+                let leaf_rect = start_leaf_rect(sub, size, &state.start, leaf);
+                if point_in_rect(x, y, leaf_rect) {
+                    let row = y.saturating_sub(leaf_rect.y + 1) as usize;
+                    let leaf_len = leaf_items(&state.start, leaf).len();
+                    if row < leaf_len {
+                        *leaf_selected_idx_mut(&mut state.start, leaf) = row;
+                        if is_click {
+                            return Some(leaf_items(&state.start, leaf)[row].action.clone());
+                        }
+                    }
+                    return Some(StartAction::None);
+                }
+            }
         }
     }
 
@@ -843,7 +1556,9 @@ fn handle_window_content_click(state: &mut DesktopState, x: u16, y: u16) {
     };
     let clicked_target = {
         let win = &mut state.windows[idx_last];
-        let WindowKind::FileManager(fm) = &mut win.kind;
+        let WindowKind::FileManager(fm) = &mut win.kind else {
+            return;
+        };
         let area = win.rect.to_rect();
         let content = Rect {
             x: area.x + 1,
@@ -875,15 +1590,20 @@ fn handle_window_content_click(state: &mut DesktopState, x: u16, y: u16) {
 
     if is_double_click(state, clicked_target) {
         if let Some(win) = state.windows.last_mut() {
-            let WindowKind::FileManager(fm) = &mut win.kind;
-            fm.open_selected();
+            if let WindowKind::FileManager(fm) = &mut win.kind {
+                fm.open_selected();
+            }
         }
     }
 }
 
 fn open_file_manager_window(state: &mut DesktopState) {
-    if let Some(id) = state.windows.iter().find_map(|w| match w.kind {
-        WindowKind::FileManager(_) => Some(w.id),
+    if let Some(id) = state.windows.iter().find_map(|w| {
+        if matches!(&w.kind, WindowKind::FileManager(_)) {
+            Some(w.id)
+        } else {
+            None
+        }
     }) {
         focus_window(state, id);
         return;
@@ -1041,17 +1761,31 @@ fn start_button_rect(task: Rect) -> Rect {
 }
 
 fn start_root_rect(task: Rect) -> Rect {
-    let h = (START_ROOT_ITEMS.len() as u16) + 2;
+    let h = (START_ROOT_VIS_ROWS.len() as u16) + 2;
+    let width = 34u16.min(task.width.max(12));
     Rect {
         x: task.x,
         y: task.y.saturating_sub(h),
-        width: 28,
+        width,
         height: h,
     }
 }
 
-fn start_programs_rect(root: Rect, size: Rect) -> Rect {
-    let h = (START_PROGRAMS.len() as u16) + 2;
+fn start_submenu_rect(root: Rect, size: Rect, submenu: StartSubmenu) -> Rect {
+    let h = (submenu_visual_rows(submenu).len() as u16) + 2;
+    let longest = match submenu {
+        StartSubmenu::Programs => submenu_items_programs()
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .unwrap_or(8),
+        StartSubmenu::System => submenu_items_system()
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .unwrap_or(8),
+    };
+    let width = ((longest + 5).min(44)) as u16;
     let mut y = root.y;
     if y + h >= size.height {
         y = size.height.saturating_sub(h);
@@ -1059,7 +1793,30 @@ fn start_programs_rect(root: Rect, size: Rect) -> Rect {
     Rect {
         x: root.x + root.width.saturating_sub(1),
         y,
-        width: 30,
+        width,
+        height: h,
+    }
+}
+
+fn start_leaf_rect(sub: Rect, size: Rect, start: &StartState, leaf: StartProgramsLeaf) -> Rect {
+    let items = leaf_items(start, leaf);
+    let h = ((items.len() as u16) + 2).max(3);
+    let longest = items
+        .iter()
+        .map(|item| item.label.chars().count())
+        .max()
+        .unwrap_or(8);
+    let x = sub.x + sub.width.saturating_sub(1);
+    let max_w = size.width.saturating_sub(x).max(12);
+    let width = ((longest + 4).min(52)) as u16;
+    let mut y = sub.y;
+    if y + h >= size.height {
+        y = size.height.saturating_sub(h);
+    }
+    Rect {
+        x,
+        y,
+        width: width.min(max_w),
         height: h,
     }
 }
@@ -1076,6 +1833,20 @@ fn write_text(buf: &mut [char], start: usize, text: &str) {
         }
         buf[idx] = ch;
     }
+}
+
+fn format_menu_row(width: usize, label: &str, right_arrow: Option<char>) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut chars = vec![' '; width];
+    write_text(&mut chars, 0, &format!(" {}", label));
+    if let Some(arrow) = right_arrow {
+        if width >= 2 {
+            chars[width - 2] = arrow;
+        }
+    }
+    chars.into_iter().collect()
 }
 
 fn read_entries(path: &Path) -> Vec<FileEntry> {

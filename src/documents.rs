@@ -424,6 +424,15 @@ fn browse_folder(terminal: &mut Term, folder: &Path, title: &str) -> Result<()> 
     Ok(())
 }
 
+pub fn open_documents_category(terminal: &mut Term, title: &str, path: &Path) -> Result<()> {
+    if !path.exists() || !path.is_dir() {
+        let path_str = path.display().to_string();
+        flash_message(terminal, &format!("Error: '{path_str}' not found."), 1000)?;
+        return Ok(());
+    }
+    browse_folder(terminal, path, title)
+}
+
 // ── Documents menu ─────────────────────────────────────────────────────────────
 
 pub fn documents_menu(terminal: &mut Term) -> Result<()> {
@@ -443,11 +452,7 @@ pub fn documents_menu(terminal: &mut Term) -> Result<()> {
                 if let Some(v) = categories.get(&s) {
                     let path_str = v.as_str().unwrap_or("");
                     let path = PathBuf::from(path_str);
-                    if !path.exists() || !path.is_dir() {
-                        flash_message(terminal, &format!("Error: '{path_str}' not found."), 1000)?;
-                        continue;
-                    }
-                    browse_folder(terminal, &path, &s)?;
+                    open_documents_category(terminal, &s, &path)?;
                 }
             }
         }

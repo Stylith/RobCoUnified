@@ -630,6 +630,18 @@ impl PtySession {
         let _ = self.writer.flush();
     }
 
+    /// Translate a terminal key event and send it to the PTY child.
+    pub fn send_key(&mut self, code: KeyCode, mods: KeyModifiers) {
+        let application_cursor = self
+            .parser
+            .lock()
+            .map(|p| p.screen().application_cursor())
+            .unwrap_or(false);
+        if let Some(bytes) = key_to_bytes(code, mods, application_cursor) {
+            self.write(&bytes);
+        }
+    }
+
     /// Resize the PTY and notify the child via SIGWINCH
     pub fn resize(&mut self, cols: u16, rows: u16) {
         if cols == self.cols && rows == self.rows {
