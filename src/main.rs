@@ -182,6 +182,9 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         logged_out = true;
                         break 'menu;
                     }
+                    desktop::DesktopExit::Shutdown => {
+                        return Ok(());
+                    }
                 }
             }
 
@@ -229,6 +232,9 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                             flash_message(terminal, "Logging out...", 800)?;
                             logged_out = true;
                             break 'menu;
+                        }
+                        desktop::DesktopExit::Shutdown => {
+                            return Ok(());
                         }
                     },
                     "Settings" => settings::settings_menu(terminal, &username)?,
