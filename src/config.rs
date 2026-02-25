@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
@@ -146,6 +147,103 @@ pub enum OpenMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopPtyProfileSettings {
+    pub min_w: u16,
+    pub min_h: u16,
+    #[serde(default)]
+    pub preferred_w: Option<u16>,
+    #[serde(default)]
+    pub preferred_h: Option<u16>,
+    #[serde(default = "default_profile_mouse_passthrough")]
+    pub mouse_passthrough: bool,
+}
+
+const fn default_profile_mouse_passthrough() -> bool {
+    true
+}
+
+impl Default for DesktopPtyProfileSettings {
+    fn default() -> Self {
+        Self {
+            min_w: 34,
+            min_h: 12,
+            preferred_w: None,
+            preferred_h: None,
+            mouse_passthrough: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopCliProfiles {
+    #[serde(default)]
+    pub default: DesktopPtyProfileSettings,
+    #[serde(default = "default_calcurse_profile")]
+    pub calcurse: DesktopPtyProfileSettings,
+    #[serde(default = "default_spotify_profile")]
+    pub spotify_player: DesktopPtyProfileSettings,
+    #[serde(default = "default_ranger_profile")]
+    pub ranger: DesktopPtyProfileSettings,
+    #[serde(default = "default_reddit_profile")]
+    pub reddit: DesktopPtyProfileSettings,
+    #[serde(default)]
+    pub custom: BTreeMap<String, DesktopPtyProfileSettings>,
+}
+
+fn default_calcurse_profile() -> DesktopPtyProfileSettings {
+    DesktopPtyProfileSettings {
+        min_w: 72,
+        min_h: 20,
+        preferred_w: Some(108),
+        preferred_h: Some(34),
+        mouse_passthrough: false,
+    }
+}
+
+fn default_spotify_profile() -> DesktopPtyProfileSettings {
+    DesktopPtyProfileSettings {
+        min_w: 66,
+        min_h: 18,
+        preferred_w: Some(118),
+        preferred_h: Some(34),
+        mouse_passthrough: true,
+    }
+}
+
+fn default_ranger_profile() -> DesktopPtyProfileSettings {
+    DesktopPtyProfileSettings {
+        min_w: 60,
+        min_h: 16,
+        preferred_w: Some(108),
+        preferred_h: Some(32),
+        mouse_passthrough: true,
+    }
+}
+
+fn default_reddit_profile() -> DesktopPtyProfileSettings {
+    DesktopPtyProfileSettings {
+        min_w: 72,
+        min_h: 20,
+        preferred_w: Some(112),
+        preferred_h: Some(34),
+        mouse_passthrough: true,
+    }
+}
+
+impl Default for DesktopCliProfiles {
+    fn default() -> Self {
+        Self {
+            default: DesktopPtyProfileSettings::default(),
+            calcurse: default_calcurse_profile(),
+            spotify_player: default_spotify_profile(),
+            ranger: default_ranger_profile(),
+            reddit: default_reddit_profile(),
+            custom: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound: bool,
     pub bootup: bool,
@@ -158,6 +256,8 @@ pub struct Settings {
     pub cli_acs_mode: CliAcsMode,
     #[serde(default)]
     pub default_open_mode: OpenMode,
+    #[serde(default)]
+    pub desktop_cli_profiles: DesktopCliProfiles,
 }
 
 impl Default for Settings {
@@ -170,6 +270,7 @@ impl Default for Settings {
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
+            desktop_cli_profiles: DesktopCliProfiles::default(),
         }
     }
 }

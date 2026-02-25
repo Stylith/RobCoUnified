@@ -183,7 +183,7 @@ pub fn theme_menu(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
-// ── CLI menu ─────────────────────────────────────────────────────────────────
+// ── Settings menu ─────────────────────────────────────────────────────────────
 
 pub fn cli_menu(terminal: &mut Term) -> Result<()> {
     loop {
@@ -258,8 +258,6 @@ pub fn cli_menu(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
-// ── Settings menu ─────────────────────────────────────────────────────────────
-
 pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
     use crate::apps::edit_menus_menu;
 
@@ -277,16 +275,25 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
         } else {
             "Bootup: OFF [toggle]"
         };
-        let open_mode_label = match s.default_open_mode {
-            OpenMode::Terminal => "Default Open Mode: Terminal [toggle]",
-            OpenMode::Desktop => "Default Open Mode: Desktop [toggle]",
-        };
+        let open_mode_label = format!(
+            "Default Open Mode: {} [toggle]",
+            match s.default_open_mode {
+                OpenMode::Terminal => "Terminal",
+                OpenMode::Desktop => "Desktop",
+            }
+        );
 
         let mut choices = vec!["About", "Theme", "CLI", "Edit Menus"];
         if admin {
             choices.push("User Management");
         }
-        choices.extend_from_slice(&[open_mode_label, bootup_label, sound_label, "---", "Back"]);
+        choices.extend_from_slice(&[
+            open_mode_label.as_str(),
+            bootup_label,
+            sound_label,
+            "---",
+            "Back",
+        ]);
 
         match run_menu(terminal, "Settings", &choices, None)? {
             MenuResult::Back => break,
@@ -301,7 +308,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
                         s.default_open_mode = match s.default_open_mode {
                             OpenMode::Terminal => OpenMode::Desktop,
                             OpenMode::Desktop => OpenMode::Terminal,
-                        };
+                        }
                     });
                     persist_settings();
                 }
