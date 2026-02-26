@@ -1,34 +1,44 @@
 # RobCoOS (Rust)
 
-Fallout-style terminal OS built with Rust, `ratatui`, and `crossterm`.
+Fallout-style terminal environment built with Rust, ratatui, and crossterm.
+
+RobCoOS is an application-layer shell experience, not a full standalone operating system.
 
 ## Version
 
 `0.1.0`
 
-## Features
+## Highlights
 
-- Multi-user login with per-user settings/data.
-- Session switching across menu screens and PTY apps.
-- Embedded PTY launcher for CLI applications.
-- Desktop Mode (Windows 95-style CLI shell) with:
-  - top status bar
-  - bottom taskbar + cascading Start menu
-  - draggable/closable windows
-  - fixed desktop icon (`My Computer`) opening file manager
-- Built-in app: `Nuke Codes`.
-- Custom games can be added from `Settings -> Edit Menus -> Edit Games`.
-- Boot sequence and UI audio effects.
-- Theme-aware status bar and CLI rendering options.
+- Multi-user login with per-user settings and per-user app/menu data.
+- Up to 9 sessions with hot-switching (menu and PTY-aware switching).
+- Terminal-mode main menu: Applications, Documents, Network, Games, Program Installer, Terminal, Desktop Mode, Settings.
+- Desktop Mode with:
+  - top status bar + spotlight icon
+  - taskbar + Start menu
+  - draggable/resizable windows
+  - minimize/maximize/close controls
+  - draggable desktop icons (`My Computer`, `Trash`) with persisted positions
+- Built-in app: `Nuke Codes` (visibility toggle in Edit Applications).
+- Default Apps system (terminal + desktop settings):
+  - separate defaults for Text/Code and Ebook files
+  - supports built-in ROBCO Terminal Writer, menu entries, and custom argv JSON
+  - per-user settings
+  - first-login prompt for new users
+- Document routing with explicit error when no app is configured:
+  - `Error: No App for filetype`
 
 ## Requirements
 
 - Rust stable toolchain (`cargo`, `rustc`)
-- `curl` (preflight dependency)
-- Optional: `vim`, `epy`
+- `curl` (required preflight dependency)
+- Optional external tools:
+  - `epy`
+  - `vim`
+  - other CLI apps you add to menus
 - Optional audio backend:
   - `python3`
-  - `playsound`
+  - Python module `playsound`
 
 Platform audio fallbacks:
 
@@ -68,77 +78,37 @@ cargo run --release -- --no-preflight
 
 ## First Login
 
-On first run, if no users exist, RobCoOS creates a default admin account:
+If no users exist, RobCoOS creates default admin:
 
 - Username: `admin`
 - Password: `admin`
 
-Login flow:
+New users (including the first admin) are prompted once after login to set Default Apps.
 
-- Select a user on the login screen.
-- Enter password (up to 3 attempts).
-- After 3 failed attempts, the terminal locks.
+## Settings Summary
 
-Admin account management is available in:
-
-- `Settings` -> `User Management`
-
-## Controls
-
-Menu navigation:
-
-- `Up`/`Down` or `k`/`j` to move selection
-- `Enter` or `Space` to select
-- `q`, `Esc`, or `Tab` to go back
-
-Session switching:
-
- - `Ctrl + Q`, then `1..9`
- - `Ctrl + Q`, then `N`/`Tab`/`0`/`+` for next/new session
-
-Desktop Mode notes:
-
-- Session switching is disabled while Desktop Mode is active.
-- Start menu contains `Return To Terminal Mode`.
-
-## Menus
-
-Main Menu entries:
-
-- Applications
-- Documents
-- Network
-- Games
-- Program Installer
-- Terminal
-- Desktop Mode
-- Settings
-- Logout
-
-## Settings
-
-Settings menu entries:
+Terminal Settings includes:
 
 - About
 - Theme
+- Default Apps
 - CLI
 - Edit Menus
-- User Management (admin only)
-- Default Open Mode: Terminal/Desktop
-- Bootup: ON/OFF
-- Sound: ON/OFF
+- User Management (admin)
+- Default Open Mode
+- Bootup toggle
+- Sound toggle
 
-CLI submenu entries:
+Desktop Settings includes panels for:
 
-- Styled PTY Rendering: ON/OFF
-- PTY Color Mode:
-  - Theme Lock
-  - Palette-map (Theme Shades)
-  - Color (Default Terminal)
-  - Monochrome
-- Border Glyphs:
-  - Unicode Smooth
-  - ASCII
+- Appearance
+- General
+- Default Apps
+- CLI Display
+- CLI Profiles
+- Edit Menus
+- User Management (admin)
+- About
 
 ## Data Layout
 
@@ -147,9 +117,23 @@ Runtime data is stored relative to the executable directory.
 ```text
 RobCoOS/
   robcos
-  settings.json   (created at runtime)
-  users/          (created at runtime)
+  settings.json
+  users/
+    users.json
+    <username>/
+      settings.json
+      apps.json
+      games.json
+      networks.json
+      documents.json
+  journal_entries/
+    <username>/
+      YYYY-MM-DD.txt
 ```
+
+## Manual
+
+See `USER_MANUAL.md` for full usage details and control reference.
 
 ## Credits and Attribution
 
@@ -166,3 +150,7 @@ Nuclear launch code data in the built-in Nuke Codes app is fetched from communit
 - [NukaTrader](https://nukatrader.com/)
 
 This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.
+
+## AI Assistance Disclaimer
+
+This project was created with the help of AI-assisted development tools.
