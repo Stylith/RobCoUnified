@@ -213,8 +213,9 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 
         // ── Session main menu loop ────────────────────────────────────────────
         let mut logged_out = false;
-        let mut launch_default_desktop = matches!(get_settings().default_open_mode, OpenMode::Desktop)
-            && session::take_default_mode_pending_for_active();
+        let mut launch_default_desktop =
+            matches!(get_settings().default_open_mode, OpenMode::Desktop)
+                && session::take_default_mode_pending_for_active();
 
         'menu: loop {
             if launch_default_desktop {

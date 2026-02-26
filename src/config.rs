@@ -159,6 +159,16 @@ pub enum WallpaperSizeMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum DesktopIconStyle {
+    Dos,
+    #[default]
+    Win95,
+    Minimal,
+    NoIcons,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum FileManagerViewMode {
     #[default]
     Grid,
@@ -344,6 +354,10 @@ pub struct Settings {
     #[serde(default = "default_desktop_wallpaper")]
     pub desktop_wallpaper: String,
     #[serde(default)]
+    pub desktop_show_cursor: bool,
+    #[serde(default)]
+    pub desktop_icon_style: DesktopIconStyle,
+    #[serde(default)]
     pub desktop_wallpaper_size_mode: WallpaperSizeMode,
     #[serde(default)]
     pub desktop_file_manager: DesktopFileManagerSettings,
@@ -367,6 +381,8 @@ impl Default for Settings {
             default_open_mode: OpenMode::Terminal,
             desktop_cli_profiles: DesktopCliProfiles::default(),
             desktop_wallpaper: default_desktop_wallpaper(),
+            desktop_show_cursor: false,
+            desktop_icon_style: DesktopIconStyle::Win95,
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),

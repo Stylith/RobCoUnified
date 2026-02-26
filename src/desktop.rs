@@ -11,21 +11,21 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::apps::edit_menus_menu;
-use crate::auth::{is_admin, user_management_menu};
+use crate::auth::{hash_password, is_admin, load_users, save_users, AuthMethod};
 use crate::config::{
-    get_settings, load_apps, load_categories, load_games, load_networks, persist_settings,
-    update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopFileManagerSettings,
+    get_current_user, get_settings, load_apps, load_categories, load_games, load_networks,
+    persist_settings, save_apps, save_categories, save_games, save_networks, update_settings,
+    CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopFileManagerSettings, DesktopIconStyle,
     DesktopPtyProfileSettings, FileManagerSortMode, FileManagerTextOpenMode, FileManagerViewMode,
     OpenMode, WallpaperSizeMode, THEMES,
 };
 use crate::documents;
-use crate::launcher::json_to_cmd;
+use crate::launcher::{json_to_cmd, with_suspended};
 use crate::ui::{
     dim_style, flash_message, normal_style, sel_style, session_switch_scope, title_style, Term,
 };
@@ -43,6 +43,33 @@ enum StartLaunch {
     Terminal,
     Settings,
     FileManager,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopHubKind {
+    Applications,
+    Documents,
+    DocumentCategory,
+    Logs,
+    LogEntry,
+    Network,
+    Games,
+    ProgramInstaller,
+    InstallerSearch,
+    InstallerInstalled,
+    InstallerPackage,
+    EditMenus,
+    EditApps,
+    EditGames,
+    EditNetwork,
+    EditDocuments,
+    UserManagement,
+    UserCreate,
+    UserDelete,
+    UserResetPassword,
+    UserChangeAuthUsers,
+    UserChangeAuthMethod,
+    UserToggleAdmin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +172,24 @@ enum FileManagerOpenRequest {
     External,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileManagerClipboardMode {
+    Copy,
+    Cut,
+}
+
+#[derive(Debug, Clone)]
+struct FileManagerClipboardItem {
+    path: PathBuf,
+    mode: FileManagerClipboardMode,
+}
+
+#[derive(Debug, Clone)]
+enum FileManagerEditOp {
+    CopyCreated { src: PathBuf, dst: PathBuf },
+    Moved { from: PathBuf, to: PathBuf },
+}
+
 const FILE_MANAGER_HEADER_ROWS: u16 = 4;
 const FILE_MANAGER_GRID_CELL_WIDTH: u16 = 18;
 const FILE_MANAGER_GRID_CELL_HEIGHT: u16 = 3;
@@ -153,6 +198,7 @@ const FILE_MANAGER_TREE_MAX_WIDTH: u16 = 28;
 const FILE_MANAGER_TREE_MIN_TOTAL_WIDTH: u16 = 50;
 const FILE_MANAGER_TREE_GAP: u16 = 1;
 const FILE_MANAGER_ENTRY_MIN_WIDTH: u16 = 16;
+const FILE_MANAGER_EMPTY_TRASH_BUTTON: &str = "[Empty Trash]";
 
 impl FileManagerState {
     fn new() -> Self {
@@ -211,9 +257,7 @@ impl FileManagerState {
             self.tree_selected = 0;
             self.tree_scroll = 0;
         } else {
-            self.tree_selected = self
-                .tree_selected
-                .min(tree_items.len().saturating_sub(1));
+            self.tree_selected = self.tree_selected.min(tree_items.len().saturating_sub(1));
             if tree_items
                 .get(self.tree_selected)
                 .and_then(|item| item.path.as_ref())
@@ -399,6 +443,8 @@ enum DesktopProfileSlot {
 enum DesktopSettingsPanel {
     Home,
     Appearance,
+    ThemeSelect,
+    IconStyle,
     General,
     CliDisplay,
     Wallpapers,
@@ -498,9 +544,85 @@ impl Drop for PtyWindowState {
 
 enum WindowKind {
     FileManager(FileManagerState),
+    DesktopHub(DesktopHubState),
     FileManagerSettings(FileManagerSettingsState),
     DesktopSettings(DesktopSettingsState),
     PtyApp(PtyWindowState),
+}
+
+#[derive(Debug, Clone)]
+enum DesktopHubItemAction {
+    None,
+    CloseFocusedWindow,
+    LaunchCommand {
+        title: String,
+        cmd: Vec<String>,
+    },
+    LaunchNukeCodes,
+    OpenHub(DesktopHubKind),
+    OpenHubWithPath {
+        kind: DesktopHubKind,
+        title: String,
+        path: PathBuf,
+    },
+    OpenHubWithText {
+        kind: DesktopHubKind,
+        title: String,
+        text: String,
+    },
+    OpenDocumentFile(PathBuf),
+    RunInstallerSearch,
+    InstallPackage(String),
+    UpdatePackage(String),
+    UninstallPackage(String),
+    AddPackageToApps(String),
+    AddPackageToGames(String),
+    AddPackageToNetwork(String),
+    AddMenuEntry {
+        kind: DesktopHubKind,
+    },
+    DeleteMenuEntry {
+        kind: DesktopHubKind,
+        key: String,
+    },
+    CreateUserSubmit,
+    DeleteUser(String),
+    OpenResetPasswordFor(String),
+    ApplyResetPassword,
+    OpenChangeAuthFor(String),
+    SetUserAuth {
+        username: String,
+        method: crate::auth::AuthMethod,
+    },
+    ToggleUserAdmin(String),
+    InstallAudioRuntime,
+    CreateLog,
+    OpenLogEntry(PathBuf),
+    ViewLog(PathBuf),
+    EditLog(PathBuf),
+    DeleteLog(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct DesktopHubItem {
+    label: String,
+    action: DesktopHubItemAction,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopHubState {
+    kind: DesktopHubKind,
+    selected: usize,
+    scroll: usize,
+    context_path: Option<PathBuf>,
+    context_text: Option<String>,
+    input: String,
+    input2: String,
+    mode_idx: usize,
+    flag: bool,
+    input_mode: bool,
+    cached_rows: Vec<String>,
 }
 
 struct DesktopWindow {
@@ -540,9 +662,24 @@ struct DragState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopIconId {
+    MyComputer,
+    Trash,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IconDragState {
+    icon: DesktopIconId,
+    dx: i32,
+    dy: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClickTarget {
     DesktopIconMyComputer,
+    DesktopIconTrash,
     FileEntry { window_id: u64, row: usize },
+    HubItem { window_id: u64, row: usize },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -624,6 +761,11 @@ enum TopMenuAction {
     None,
     OpenStart,
     OpenSettings,
+    OpenApplications,
+    OpenDocuments,
+    OpenLogs,
+    OpenNetwork,
+    OpenGames,
     OpenProgramInstaller,
     OpenFileManager,
     OpenFileManagerSettings,
@@ -633,9 +775,15 @@ enum TopMenuAction {
     PrevFileManagerTab,
     OpenSelectedFileBuiltin,
     OpenSelectedFileExternal,
-    OpenEditMenus,
-    OpenUserManagement,
-    ShowAppShortcuts,
+    FileManagerCopy,
+    FileManagerCut,
+    FileManagerPaste,
+    FileManagerDuplicate,
+    FileManagerDelete,
+    FileManagerUndo,
+    FileManagerRedo,
+    ShowFileProperties,
+    EmptyTrash,
     CloseFocusedWindow,
     MinimizeFocusedWindow,
     ToggleMaxFocusedWindow,
@@ -724,6 +872,12 @@ struct DesktopState {
     top_menu: TopMenuState,
     help_popup: Option<HelpPopupState>,
     spotlight: SpotlightState,
+    file_clipboard: Option<FileManagerClipboardItem>,
+    file_undo_stack: Vec<FileManagerEditOp>,
+    file_redo_stack: Vec<FileManagerEditOp>,
+    icon_dragging: Option<IconDragState>,
+    my_computer_icon_pos: Option<(i32, i32)>,
+    trash_icon_pos: Option<(i32, i32)>,
 }
 
 const START_ROOT_ITEMS: [(&str, Option<StartSubmenu>); 5] = [
@@ -931,6 +1085,988 @@ fn refresh_start_leaf_items(state: &mut StartState) {
     normalize_start_selection(state);
 }
 
+fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
+    match kind {
+        DesktopHubKind::Applications => "Applications",
+        DesktopHubKind::Documents => "Documents",
+        DesktopHubKind::DocumentCategory => "Documents",
+        DesktopHubKind::Logs => "Logs",
+        DesktopHubKind::LogEntry => "Log",
+        DesktopHubKind::Network => "Network",
+        DesktopHubKind::Games => "Games",
+        DesktopHubKind::ProgramInstaller => "Program Installer",
+        DesktopHubKind::InstallerSearch => "Search Packages",
+        DesktopHubKind::InstallerInstalled => "Installed Apps",
+        DesktopHubKind::InstallerPackage => "Package",
+        DesktopHubKind::EditMenus => "Edit Menus",
+        DesktopHubKind::EditApps => "Edit Applications",
+        DesktopHubKind::EditGames => "Edit Games",
+        DesktopHubKind::EditNetwork => "Edit Network",
+        DesktopHubKind::EditDocuments => "Edit Documents",
+        DesktopHubKind::UserManagement => "User Management",
+        DesktopHubKind::UserCreate => "Create User",
+        DesktopHubKind::UserDelete => "Delete User",
+        DesktopHubKind::UserResetPassword => "Reset Password",
+        DesktopHubKind::UserChangeAuthUsers => "Change Auth Method",
+        DesktopHubKind::UserChangeAuthMethod => "Set Auth Method",
+        DesktopHubKind::UserToggleAdmin => "Toggle Admin",
+    }
+}
+
+fn desktop_hub_subtitle(hub: &DesktopHubState) -> String {
+    match hub.kind {
+        DesktopHubKind::Applications => "Terminal-mode applications".to_string(),
+        DesktopHubKind::Documents => "Document categories".to_string(),
+        DesktopHubKind::DocumentCategory => hub
+            .context_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "Browse documents".to_string()),
+        DesktopHubKind::Logs => "Select a log entry".to_string(),
+        DesktopHubKind::LogEntry => hub
+            .context_path
+            .as_ref()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "Log options".to_string()),
+        DesktopHubKind::Network => "Network tools".to_string(),
+        DesktopHubKind::Games => "Installed games".to_string(),
+        DesktopHubKind::ProgramInstaller => "Package and installer tools".to_string(),
+        DesktopHubKind::InstallerSearch => {
+            if hub.input_mode {
+                "Type query and press Enter".to_string()
+            } else {
+                "Press Enter on query row to search".to_string()
+            }
+        }
+        DesktopHubKind::InstallerInstalled => "Installed packages".to_string(),
+        DesktopHubKind::InstallerPackage => {
+            let pkg = hub.context_text.clone().unwrap_or_default();
+            if pkg.is_empty() {
+                "Package actions".to_string()
+            } else {
+                format!("Actions for {pkg}")
+            }
+        }
+        DesktopHubKind::EditMenus => "Choose menu editor".to_string(),
+        DesktopHubKind::EditApps | DesktopHubKind::EditGames | DesktopHubKind::EditNetwork => {
+            "Edit name/command fields, then Add Entry".to_string()
+        }
+        DesktopHubKind::EditDocuments => "Edit category/path fields, then Add Category".to_string(),
+        DesktopHubKind::UserManagement => "Select a user-management action".to_string(),
+        DesktopHubKind::UserCreate => {
+            if hub.input_mode {
+                "Type value, Enter to stop editing".to_string()
+            } else {
+                "Enter to edit fields / create user".to_string()
+            }
+        }
+        DesktopHubKind::UserDelete => "Select user to delete".to_string(),
+        DesktopHubKind::UserResetPassword => {
+            if hub.context_text.is_some() {
+                "Enter new password and apply".to_string()
+            } else {
+                "Select user to reset password".to_string()
+            }
+        }
+        DesktopHubKind::UserChangeAuthUsers => "Select user to change auth method".to_string(),
+        DesktopHubKind::UserChangeAuthMethod => "Pick an auth method".to_string(),
+        DesktopHubKind::UserToggleAdmin => "Toggle admin for selected user".to_string(),
+    }
+}
+
+fn desktop_journal_dir() -> PathBuf {
+    let base = PathBuf::from("journal_entries");
+    if let Some(user) = get_current_user() {
+        let dir = base.join(&user);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    } else {
+        let _ = std::fs::create_dir_all(&base);
+        base
+    }
+}
+
+fn desktop_log_files() -> Vec<PathBuf> {
+    let dir = desktop_journal_dir();
+    let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    logs.sort_by(|a, b| b.cmp(a));
+    logs
+}
+
+fn desktop_doc_label(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().replace('_', " "))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHubItem> {
+    match hub.kind {
+        DesktopHubKind::Applications => {
+            let apps = load_apps();
+            let mut items = vec![DesktopHubItem {
+                label: BUILTIN_NUKE_CODES_APP.to_string(),
+                action: DesktopHubItemAction::LaunchNukeCodes,
+                enabled: true,
+            }];
+            for key in sorted_json_keys(&apps) {
+                if key == BUILTIN_NUKE_CODES_APP {
+                    continue;
+                }
+                if let Some(value) = apps.get(&key) {
+                    let cmd = json_to_cmd(value);
+                    if !cmd.is_empty() {
+                        items.push(DesktopHubItem {
+                            label: key.clone(),
+                            action: DesktopHubItemAction::LaunchCommand { title: key, cmd },
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No applications)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items
+        }
+        DesktopHubKind::Documents => {
+            let categories = load_categories();
+            let mut items = vec![DesktopHubItem {
+                label: "Logs".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
+                enabled: true,
+            }];
+            for key in sorted_json_keys(&categories) {
+                if let Some(path) = categories.get(&key).and_then(|v| v.as_str()) {
+                    items.push(DesktopHubItem {
+                        label: key.clone(),
+                        action: DesktopHubItemAction::OpenHubWithPath {
+                            kind: DesktopHubKind::DocumentCategory,
+                            title: key,
+                            path: PathBuf::from(path),
+                        },
+                        enabled: true,
+                    });
+                }
+            }
+            items
+        }
+        DesktopHubKind::DocumentCategory => {
+            let Some(cwd) = hub.context_path.as_ref() else {
+                return vec![DesktopHubItem {
+                    label: "Invalid category path.".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            };
+            if !cwd.exists() || !cwd.is_dir() {
+                return vec![DesktopHubItem {
+                    label: format!("Missing folder: {}", cwd.display()),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            }
+            let mut items = Vec::new();
+            for sub in documents::scan_subfolders(cwd) {
+                let label = sub
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| sub.display().to_string());
+                items.push(DesktopHubItem {
+                    label: format!("{label}/"),
+                    action: DesktopHubItemAction::OpenHubWithPath {
+                        kind: DesktopHubKind::DocumentCategory,
+                        title: label,
+                        path: sub,
+                    },
+                    enabled: true,
+                });
+            }
+            for file in documents::scan_documents(cwd) {
+                items.push(DesktopHubItem {
+                    label: desktop_doc_label(&file),
+                    action: DesktopHubItemAction::OpenDocumentFile(file),
+                    enabled: true,
+                });
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No documents or subfolders found)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to Documents".to_string(),
+                action: DesktopHubItemAction::CloseFocusedWindow,
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::Logs => {
+            let mut items = vec![DesktopHubItem {
+                label: "Create New Log".to_string(),
+                action: DesktopHubItemAction::CreateLog,
+                enabled: true,
+            }];
+            let logs = desktop_log_files();
+            if logs.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No logs found)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+                return items;
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            for path in logs {
+                let label = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                items.push(DesktopHubItem {
+                    label,
+                    action: DesktopHubItemAction::OpenLogEntry(path),
+                    enabled: true,
+                });
+            }
+            items
+        }
+        DesktopHubKind::LogEntry => {
+            let Some(path) = hub.context_path.as_ref() else {
+                return vec![DesktopHubItem {
+                    label: "Log not found".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            };
+            vec![
+                DesktopHubItem {
+                    label: "View".to_string(),
+                    action: DesktopHubItemAction::ViewLog(path.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Edit".to_string(),
+                    action: DesktopHubItemAction::EditLog(path.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Delete".to_string(),
+                    action: DesktopHubItemAction::DeleteLog(path.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Logs".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
+                    enabled: true,
+                },
+            ]
+        }
+        DesktopHubKind::Network => {
+            let mut items = Vec::new();
+            let networks = load_networks();
+            for key in sorted_json_keys(&networks) {
+                if let Some(value) = networks.get(&key) {
+                    let cmd = json_to_cmd(value);
+                    if !cmd.is_empty() {
+                        items.push(DesktopHubItem {
+                            label: key.clone(),
+                            action: DesktopHubItemAction::LaunchCommand { title: key, cmd },
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No network apps)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items
+        }
+        DesktopHubKind::Games => {
+            let mut items = Vec::new();
+            let games = load_games();
+            for key in sorted_json_keys(&games) {
+                if let Some(value) = games.get(&key) {
+                    let cmd = json_to_cmd(value);
+                    if !cmd.is_empty() {
+                        items.push(DesktopHubItem {
+                            label: key.clone(),
+                            action: DesktopHubItemAction::LaunchCommand { title: key, cmd },
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No games installed)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items
+        }
+        DesktopHubKind::ProgramInstaller => {
+            if !is_admin(current_user) {
+                return vec![DesktopHubItem {
+                    label: "Access denied. Admin only.".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            }
+            vec![
+                DesktopHubItem {
+                    label: "Search Packages".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::InstallerSearch),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Installed Apps".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::InstallerInstalled),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Install Audio Runtime (playsound)".to_string(),
+                    action: DesktopHubItemAction::InstallAudioRuntime,
+                    enabled: true,
+                },
+            ]
+        }
+        DesktopHubKind::InstallerSearch => {
+            let mut items = vec![DesktopHubItem {
+                label: format!(
+                    "Query: {}{}",
+                    hub.input,
+                    if hub.input_mode { "_" } else { "" }
+                ),
+                action: DesktopHubItemAction::RunInstallerSearch,
+                enabled: true,
+            }];
+            if hub.cached_rows.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No results)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                items.push(DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+                for row in &hub.cached_rows {
+                    let pkg = row
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .split('/')
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    if pkg.is_empty() {
+                        items.push(DesktopHubItem {
+                            label: row.clone(),
+                            action: DesktopHubItemAction::None,
+                            enabled: false,
+                        });
+                    } else {
+                        items.push(DesktopHubItem {
+                            label: row.clone(),
+                            action: DesktopHubItemAction::OpenHubWithText {
+                                kind: DesktopHubKind::InstallerPackage,
+                                title: pkg.clone(),
+                                text: pkg,
+                            },
+                            enabled: true,
+                        });
+                    }
+                }
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to Program Installer".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::ProgramInstaller),
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::InstallerInstalled => {
+            let mut items = Vec::new();
+            if hub.cached_rows.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No installed packages)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for pkg in &hub.cached_rows {
+                    items.push(DesktopHubItem {
+                        label: pkg.clone(),
+                        action: DesktopHubItemAction::OpenHubWithText {
+                            kind: DesktopHubKind::InstallerPackage,
+                            title: pkg.clone(),
+                            text: pkg.clone(),
+                        },
+                        enabled: true,
+                    });
+                }
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to Program Installer".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::ProgramInstaller),
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::InstallerPackage => {
+            let pkg = hub.context_text.clone().unwrap_or_default();
+            if pkg.is_empty() {
+                return vec![DesktopHubItem {
+                    label: "No package selected".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            }
+            vec![
+                DesktopHubItem {
+                    label: format!("Install {pkg}"),
+                    action: DesktopHubItemAction::InstallPackage(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!("Update {pkg}"),
+                    action: DesktopHubItemAction::UpdatePackage(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!("Uninstall {pkg}"),
+                    action: DesktopHubItemAction::UninstallPackage(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!("Add '{pkg}' to Applications"),
+                    action: DesktopHubItemAction::AddPackageToApps(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!("Add '{pkg}' to Games"),
+                    action: DesktopHubItemAction::AddPackageToGames(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!("Add '{pkg}' to Network"),
+                    action: DesktopHubItemAction::AddPackageToNetwork(pkg.clone()),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Installed Apps".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::InstallerInstalled),
+                    enabled: true,
+                },
+            ]
+        }
+        DesktopHubKind::EditMenus => vec![
+            DesktopHubItem {
+                label: "Edit Applications".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditApps),
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Edit Documents".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditDocuments),
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Edit Network".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditNetwork),
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Edit Games".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditGames),
+                enabled: true,
+            },
+        ],
+        DesktopHubKind::EditApps | DesktopHubKind::EditGames | DesktopHubKind::EditNetwork => {
+            let mut keys = hub.cached_rows.clone();
+            let mut items = vec![
+                DesktopHubItem {
+                    label: format!(
+                        "Display Name: {}{}",
+                        hub.input,
+                        if hub.input_mode && hub.selected == 0 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Command: {}{}",
+                        hub.input2,
+                        if hub.input_mode && hub.selected == 1 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Add Entry".to_string(),
+                    action: DesktopHubItemAction::AddMenuEntry { kind: hub.kind },
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Edit Menus".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditMenus),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+            ];
+            if keys.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No entries)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for key in keys.drain(..) {
+                    items.push(DesktopHubItem {
+                        label: format!("Delete: {key}"),
+                        action: DesktopHubItemAction::DeleteMenuEntry {
+                            kind: hub.kind,
+                            key,
+                        },
+                        enabled: true,
+                    });
+                }
+            }
+            items
+        }
+        DesktopHubKind::EditDocuments => {
+            let mut keys = hub.cached_rows.clone();
+            let mut items = vec![
+                DesktopHubItem {
+                    label: format!(
+                        "Category Name: {}{}",
+                        hub.input,
+                        if hub.input_mode && hub.selected == 0 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Folder Path: {}{}",
+                        hub.input2,
+                        if hub.input_mode && hub.selected == 1 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Add Category".to_string(),
+                    action: DesktopHubItemAction::AddMenuEntry {
+                        kind: DesktopHubKind::EditDocuments,
+                    },
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Edit Menus".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditMenus),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+            ];
+            if keys.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No categories)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for key in keys.drain(..) {
+                    items.push(DesktopHubItem {
+                        label: format!("Delete: {key}"),
+                        action: DesktopHubItemAction::DeleteMenuEntry {
+                            kind: DesktopHubKind::EditDocuments,
+                            key,
+                        },
+                        enabled: true,
+                    });
+                }
+            }
+            items
+        }
+        DesktopHubKind::UserManagement => {
+            if !is_admin(current_user) {
+                return vec![DesktopHubItem {
+                    label: "Access denied. Admin only.".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                }];
+            }
+            vec![
+                DesktopHubItem {
+                    label: "Create User".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserCreate),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Delete User".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserDelete),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Reset Password".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserResetPassword),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Change Auth Method".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserChangeAuthUsers),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: "Toggle Admin".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserToggleAdmin),
+                    enabled: true,
+                },
+            ]
+        }
+        DesktopHubKind::UserCreate => vec![
+            DesktopHubItem {
+                label: format!(
+                    "Username: {}{}",
+                    hub.input,
+                    if hub.input_mode && hub.selected == 0 {
+                        "_"
+                    } else {
+                        ""
+                    }
+                ),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            },
+            DesktopHubItem {
+                label: format!(
+                    "Auth Method: {}",
+                    match hub.mode_idx {
+                        1 => "No Password",
+                        2 => "Hacking Minigame",
+                        _ => "Password",
+                    }
+                ),
+                action: DesktopHubItemAction::None,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: format!(
+                    "Password: {}{}",
+                    if hub.mode_idx == 0 {
+                        "*".repeat(hub.input2.chars().count())
+                    } else {
+                        "(not used)".to_string()
+                    },
+                    if hub.mode_idx == 0 && hub.input_mode && hub.selected == 2 {
+                        "_"
+                    } else {
+                        ""
+                    }
+                ),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            },
+            DesktopHubItem {
+                label: format!("Admin: {}", if hub.flag { "ON" } else { "OFF" }),
+                action: DesktopHubItemAction::None,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Create User".to_string(),
+                action: DesktopHubItemAction::CreateUserSubmit,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Back to User Management".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                enabled: true,
+            },
+        ],
+        DesktopHubKind::UserDelete => {
+            let mut items = Vec::new();
+            let db = load_users();
+            let mut users: Vec<String> = db
+                .keys()
+                .filter(|u| u.as_str() != current_user)
+                .cloned()
+                .collect();
+            users.sort();
+            if users.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No users available)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for u in users {
+                    items.push(DesktopHubItem {
+                        label: u.clone(),
+                        action: DesktopHubItemAction::DeleteUser(u),
+                        enabled: true,
+                    });
+                }
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to User Management".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::UserResetPassword => {
+            if let Some(username) = &hub.context_text {
+                vec![
+                    DesktopHubItem {
+                        label: format!(
+                            "New Password: {}{}",
+                            "*".repeat(hub.input.chars().count()),
+                            if hub.input_mode { "_" } else { "" }
+                        ),
+                        action: DesktopHubItemAction::None,
+                        enabled: false,
+                    },
+                    DesktopHubItem {
+                        label: format!("Apply for {username}"),
+                        action: DesktopHubItemAction::ApplyResetPassword,
+                        enabled: true,
+                    },
+                    DesktopHubItem {
+                        label: "Back".to_string(),
+                        action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserResetPassword),
+                        enabled: true,
+                    },
+                ]
+            } else {
+                let db = load_users();
+                let mut users: Vec<String> = db.keys().cloned().collect();
+                users.sort();
+                let mut items = Vec::new();
+                for u in users {
+                    items.push(DesktopHubItem {
+                        label: u.clone(),
+                        action: DesktopHubItemAction::OpenResetPasswordFor(u),
+                        enabled: true,
+                    });
+                }
+                if items.is_empty() {
+                    items.push(DesktopHubItem {
+                        label: "(No users)".to_string(),
+                        action: DesktopHubItemAction::None,
+                        enabled: false,
+                    });
+                }
+                items.push(DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+                items.push(DesktopHubItem {
+                    label: "Back to User Management".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                    enabled: true,
+                });
+                items
+            }
+        }
+        DesktopHubKind::UserChangeAuthUsers => {
+            let db = load_users();
+            let mut users: Vec<String> = db.keys().cloned().collect();
+            users.sort();
+            let mut items = Vec::new();
+            for u in users {
+                items.push(DesktopHubItem {
+                    label: u.clone(),
+                    action: DesktopHubItemAction::OpenChangeAuthFor(u),
+                    enabled: true,
+                });
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No users)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to User Management".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::UserChangeAuthMethod => {
+            let username = hub.context_text.clone().unwrap_or_default();
+            let mut items = vec![
+                DesktopHubItem {
+                    label: "Password".to_string(),
+                    action: DesktopHubItemAction::SetUserAuth {
+                        username: username.clone(),
+                        method: AuthMethod::Password,
+                    },
+                    enabled: !username.is_empty(),
+                },
+                DesktopHubItem {
+                    label: "No Password".to_string(),
+                    action: DesktopHubItemAction::SetUserAuth {
+                        username: username.clone(),
+                        method: AuthMethod::NoPassword,
+                    },
+                    enabled: !username.is_empty(),
+                },
+                DesktopHubItem {
+                    label: "Hacking Minigame".to_string(),
+                    action: DesktopHubItemAction::SetUserAuth {
+                        username: username.clone(),
+                        method: AuthMethod::HackingMinigame,
+                    },
+                    enabled: !username.is_empty(),
+                },
+            ];
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserChangeAuthUsers),
+                enabled: true,
+            });
+            items
+        }
+        DesktopHubKind::UserToggleAdmin => {
+            let db = load_users();
+            let mut users: Vec<String> = db
+                .keys()
+                .filter(|u| u.as_str() != current_user)
+                .cloned()
+                .collect();
+            users.sort();
+            let mut items = Vec::new();
+            for u in users {
+                let is_user_admin = db.get(&u).map(|r| r.is_admin).unwrap_or(false);
+                items.push(DesktopHubItem {
+                    label: format!("{u} [{}]", if is_user_admin { "admin" } else { "user" }),
+                    action: DesktopHubItemAction::ToggleUserAdmin(u),
+                    enabled: true,
+                });
+            }
+            if items.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No users available)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to User Management".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                enabled: true,
+            });
+            items
+        }
+    }
+}
+
 fn open_start_menu(state: &mut DesktopState) {
     close_top_menu(state);
     state.help_popup = None;
@@ -995,6 +2131,10 @@ const TASK_START_BUTTON: &str = "[Start]";
 const TASK_START_SEPARATOR: &str = " | ";
 const MIN_WINDOW_W: u16 = 20;
 const MIN_WINDOW_H: u16 = 8;
+const MOUSE_MOTION_THROTTLE_DRAG: Duration = Duration::from_millis(8);
+const MOUSE_MOTION_THROTTLE_IDLE: Duration = Duration::from_millis(12);
+const DESKTOP_ICON_WIDTH: u16 = 16;
+const DESKTOP_ICON_HEIGHT: u16 = 5;
 const CUSTOM_PROFILE_ADD_LABEL: &str = "Add Custom Profile";
 const DESKTOP_SETTINGS_PROFILE_ITEMS: [(DesktopProfileSlot, &str); 5] = [
     (DesktopProfileSlot::Default, "Default"),
@@ -1015,8 +2155,16 @@ const WALLPAPER_DEFAULT_ROBCO: &[&str] = &[
 ];
 const DEFAULT_DESKTOP_WALLPAPERS: &[(&str, &[&str])] = &[("RobCo", WALLPAPER_DEFAULT_ROBCO)];
 static BATTERY_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
-static SHORTCUT_HINT_CACHE: OnceLock<Mutex<HashMap<String, Vec<(String, String)>>>> =
-    OnceLock::new();
+static WALLPAPER_RENDER_CACHE: Mutex<Option<WallpaperRenderCache>> = Mutex::new(None);
+
+#[derive(Debug, Clone)]
+struct WallpaperRenderCache {
+    wallpaper_name: String,
+    mode: WallpaperSizeMode,
+    width: u16,
+    height: u16,
+    rendered: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct PtyCompatibilityProfile {
@@ -1045,16 +2193,40 @@ fn queue_start_hover(state: &mut StartState, target: StartHoverTarget) {
     }
 }
 
-fn advance_start_hover(state: &mut DesktopState) {
+fn advance_start_hover(state: &mut DesktopState) -> bool {
     if !state.start.open {
         state.start.hover_candidate = None;
-        return;
+        return false;
     }
     if let Some((target, at)) = state.start.hover_candidate {
         if at.elapsed() >= START_HOVER_DELAY {
             apply_hover_target(&mut state.start, target);
             state.start.hover_candidate = None;
+            return true;
         }
+    }
+    false
+}
+
+fn has_visible_pty_window(state: &DesktopState) -> bool {
+    state
+        .windows
+        .iter()
+        .any(|w| !w.minimized && matches!(w.kind, WindowKind::PtyApp(_)))
+}
+
+fn desktop_redraw_interval(state: &DesktopState) -> Duration {
+    if state.dragging.is_some() || state.icon_dragging.is_some() {
+        Duration::from_millis(16)
+    } else if has_visible_pty_window(state)
+        || state.start.open
+        || state.top_menu.open.is_some()
+        || state.spotlight.open
+        || state.help_popup.is_some()
+    {
+        Duration::from_millis(33)
+    } else {
+        Duration::from_millis(120)
     }
 }
 
@@ -1073,14 +2245,24 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
         next_id: 1,
         ..DesktopState::default()
     };
-    let mut last_tick = Instant::now();
+    let mut needs_redraw = true;
+    let mut last_draw = Instant::now();
+    let mut last_motion_event = Instant::now() - Duration::from_secs(1);
 
     loop {
         reap_closed_pty_windows(&mut state);
-        advance_start_hover(&mut state);
-        draw_desktop(terminal, &mut state)?;
+        if advance_start_hover(&mut state) {
+            needs_redraw = true;
+        }
 
-        let timeout = Duration::from_millis(16);
+        let interval = desktop_redraw_interval(&state);
+        if needs_redraw || last_draw.elapsed() >= interval {
+            draw_desktop(terminal, &mut state)?;
+            needs_redraw = false;
+            last_draw = Instant::now();
+        }
+
+        let timeout = interval.saturating_sub(last_draw.elapsed());
         if event::poll(timeout)? {
             match event::read()? {
                 Event::Key(key) => {
@@ -1093,24 +2275,72 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
                         terminate_all_pty_windows(&mut state);
                         return Ok(exit);
                     }
+                    needs_redraw = true;
                 }
                 Event::Mouse(mouse) => {
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left)
+                    ) {
+                        let throttle = if state.dragging.is_some() || state.icon_dragging.is_some()
+                        {
+                            MOUSE_MOTION_THROTTLE_DRAG
+                        } else {
+                            MOUSE_MOTION_THROTTLE_IDLE
+                        };
+                        if last_motion_event.elapsed() < throttle {
+                            continue;
+                        }
+                        if matches!(mouse.kind, MouseEventKind::Moved)
+                            && state.dragging.is_none()
+                            && state.icon_dragging.is_none()
+                            && mouse.column == state.cursor_x
+                            && mouse.row == state.cursor_y
+                        {
+                            continue;
+                        }
+                        last_motion_event = Instant::now();
+                    }
+                    let moved = matches!(mouse.kind, MouseEventKind::Moved);
+                    let focused_is_desktop_settings = focused_visible_window_idx(&state)
+                        .is_some_and(|idx| {
+                            matches!(state.windows[idx].kind, WindowKind::DesktopSettings(_))
+                        });
+                    let process_move = state.dragging.is_some()
+                        || state.icon_dragging.is_some()
+                        || state.start.open
+                        || state.top_menu.open.is_some()
+                        || state.help_popup.is_some()
+                        || state.spotlight.open
+                        || focused_is_desktop_settings
+                        || mouse.row == 0;
+                    if moved && !process_move {
+                        continue;
+                    }
                     if let Some(exit) = handle_mouse(terminal, current_user, &mut state, mouse)? {
                         terminate_all_pty_windows(&mut state);
                         return Ok(exit);
+                    }
+                    if !moved
+                        || state.dragging.is_some()
+                        || state.icon_dragging.is_some()
+                        || state.top_menu.open.is_some()
+                        || state.start.open
+                        || state.help_popup.is_some()
+                        || state.spotlight.open
+                        || focused_is_desktop_settings
+                    {
+                        needs_redraw = true;
                     }
                 }
                 Event::Resize(_, _) => {
                     let ts = terminal.size()?;
                     let size = full_rect(ts.width, ts.height);
                     clamp_all_windows(&mut state, desktop_area(size));
+                    needs_redraw = true;
                 }
                 _ => {}
             }
-        }
-
-        if last_tick.elapsed() > Duration::from_millis(250) {
-            last_tick = Instant::now();
         }
     }
 }
@@ -1185,7 +2415,10 @@ fn handle_key(
     }
 
     if modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(code, KeyCode::Char(' ') | KeyCode::Char('k') | KeyCode::Char('K'))
+        && matches!(
+            code,
+            KeyCode::Char(' ') | KeyCode::Char('k') | KeyCode::Char('K')
+        )
     {
         close_top_menu(state);
         close_start_menu(&mut state.start);
@@ -1398,6 +2631,8 @@ fn handle_key(
         let mut settings_action = DesktopSettingsAction::None;
         let mut file_open_request: Option<(PathBuf, FileManagerOpenRequest)> = None;
         let mut refresh_file_managers = false;
+        let mut hub_action: Option<DesktopHubItemAction> = None;
+        let mut top_menu_action: Option<TopMenuAction> = None;
         match &mut state.windows[last_idx].kind {
             WindowKind::PtyApp(app) => {
                 app.session.send_key(code, modifiers);
@@ -1429,12 +2664,35 @@ fn handle_key(
                             file_manager_ensure_selection_visible(fm, entry_area);
                         }
                         KeyCode::Tab => {
-                            let _ = fm.switch_tab_relative(!modifiers.contains(KeyModifiers::SHIFT));
+                            let _ =
+                                fm.switch_tab_relative(!modifiers.contains(KeyModifiers::SHIFT));
                             file_manager_ensure_selection_visible(fm, entry_area);
                         }
                         KeyCode::BackTab => {
                             let _ = fm.switch_tab_relative(false);
                             file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            top_menu_action = Some(TopMenuAction::FileManagerCopy);
+                        }
+                        KeyCode::Char('x') | KeyCode::Char('X') => {
+                            top_menu_action = Some(TopMenuAction::FileManagerCut);
+                        }
+                        KeyCode::Char('v') | KeyCode::Char('V') => {
+                            top_menu_action = Some(TopMenuAction::FileManagerPaste);
+                        }
+                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                            top_menu_action = Some(TopMenuAction::FileManagerDuplicate);
+                        }
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            top_menu_action = Some(TopMenuAction::FileManagerRedo);
+                        }
+                        KeyCode::Char('z') | KeyCode::Char('Z') => {
+                            if modifiers.contains(KeyModifiers::SHIFT) {
+                                top_menu_action = Some(TopMenuAction::FileManagerRedo);
+                            } else {
+                                top_menu_action = Some(TopMenuAction::FileManagerUndo);
+                            }
                         }
                         _ => {}
                     }
@@ -1507,59 +2765,195 @@ fn handle_key(
                         }
                     } else {
                         match code {
-                        KeyCode::Esc => {
-                            close_focused = true;
-                        }
-                        KeyCode::Up => {
-                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
-                                let (cols, _) = file_manager_grid_metrics(entry_area);
-                                if cols > 0 {
-                                    fm.selected = fm.selected.saturating_sub(cols);
-                                }
-                            } else {
-                                fm.up();
+                            KeyCode::Esc => {
+                                close_focused = true;
                             }
-                            file_manager_ensure_selection_visible(fm, entry_area);
-                        }
-                        KeyCode::Down => {
-                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
-                                let (cols, _) = file_manager_grid_metrics(entry_area);
-                                if cols > 0 && !fm.entries.is_empty() {
-                                    fm.selected = (fm.selected + cols).min(fm.entries.len() - 1);
-                                }
-                            } else {
-                                fm.down();
-                            }
-                            file_manager_ensure_selection_visible(fm, entry_area);
-                        }
-                        KeyCode::Left => {
-                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
-                                fm.selected = fm.selected.saturating_sub(1);
-                                file_manager_ensure_selection_visible(fm, entry_area);
-                            }
-                        }
-                        KeyCode::Right => {
-                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
-                                if fm.selected + 1 < fm.entries.len() {
-                                    fm.selected += 1;
+                            KeyCode::Up => {
+                                if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                    let (cols, _) = file_manager_grid_metrics(entry_area);
+                                    if cols > 0 {
+                                        fm.selected = fm.selected.saturating_sub(cols);
+                                    }
+                                } else {
+                                    fm.up();
                                 }
                                 file_manager_ensure_selection_visible(fm, entry_area);
                             }
+                            KeyCode::Down => {
+                                if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                    let (cols, _) = file_manager_grid_metrics(entry_area);
+                                    if cols > 0 && !fm.entries.is_empty() {
+                                        fm.selected =
+                                            (fm.selected + cols).min(fm.entries.len() - 1);
+                                    }
+                                } else {
+                                    fm.down();
+                                }
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                            KeyCode::Left => {
+                                if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                    fm.selected = fm.selected.saturating_sub(1);
+                                    file_manager_ensure_selection_visible(fm, entry_area);
+                                }
+                            }
+                            KeyCode::Right => {
+                                if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                    if fm.selected + 1 < fm.entries.len() {
+                                        fm.selected += 1;
+                                    }
+                                    file_manager_ensure_selection_visible(fm, entry_area);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if modifiers.contains(KeyModifiers::ALT) {
+                                    top_menu_action = Some(TopMenuAction::ShowFileProperties);
+                                } else {
+                                    file_open_request =
+                                        fm.activate_selected(FileManagerOpenRequest::Builtin);
+                                }
+                            }
+                            KeyCode::Char('x') | KeyCode::Char('X') => {
+                                file_open_request =
+                                    fm.activate_selected(FileManagerOpenRequest::External)
+                            }
+                            KeyCode::Backspace => {
+                                fm.parent();
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                            KeyCode::Delete => {
+                                top_menu_action = Some(TopMenuAction::FileManagerDelete);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Enter => {
-                            file_open_request = fm.activate_selected(FileManagerOpenRequest::Builtin)
-                        }
-                        KeyCode::Char('x') | KeyCode::Char('X') => {
-                            file_open_request = fm.activate_selected(FileManagerOpenRequest::External)
-                        }
-                        KeyCode::Backspace => {
-                            fm.parent();
-                            file_manager_ensure_selection_visible(fm, entry_area);
-                        }
-                        _ => {}
-                    }
                     }
                 }
+            }
+            WindowKind::DesktopHub(hub) => {
+                let items = desktop_hub_items(hub, current_user);
+                let list_rect = desktop_hub_list_rect(focused_area);
+                match code {
+                    KeyCode::Esc => {
+                        if hub.input_mode {
+                            hub.input_mode = false;
+                        } else {
+                            close_focused = true;
+                        }
+                    }
+                    KeyCode::Up => {
+                        hub.selected = hub.selected.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        if !items.is_empty() {
+                            hub.selected = (hub.selected + 1).min(items.len().saturating_sub(1));
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        let step = (list_rect.height as usize).max(1);
+                        hub.selected = hub.selected.saturating_sub(step);
+                    }
+                    KeyCode::PageDown => {
+                        if !items.is_empty() {
+                            let step = (list_rect.height as usize).max(1);
+                            hub.selected = (hub.selected + step).min(items.len().saturating_sub(1));
+                        }
+                    }
+                    KeyCode::Home => {
+                        hub.selected = 0;
+                    }
+                    KeyCode::End => {
+                        hub.selected = items.len().saturating_sub(1);
+                    }
+                    KeyCode::Left => {
+                        if matches!(hub.kind, DesktopHubKind::UserCreate)
+                            && !hub.input_mode
+                            && hub.selected == 1
+                        {
+                            hub.mode_idx = if hub.mode_idx == 0 {
+                                2
+                            } else {
+                                hub.mode_idx - 1
+                            };
+                            if hub.mode_idx != 0 {
+                                hub.input2.clear();
+                            }
+                        }
+                    }
+                    KeyCode::Right => {
+                        if matches!(hub.kind, DesktopHubKind::UserCreate)
+                            && !hub.input_mode
+                            && hub.selected == 1
+                        {
+                            hub.mode_idx = (hub.mode_idx + 1) % 3;
+                            if hub.mode_idx != 0 {
+                                hub.input2.clear();
+                            }
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => match hub.kind {
+                        DesktopHubKind::InstallerSearch if hub.input_mode || hub.selected == 0 => {
+                            hub.input_mode = false;
+                            hub_action = Some(DesktopHubItemAction::RunInstallerSearch);
+                        }
+                        DesktopHubKind::UserCreate => {
+                            if matches!(hub.selected, 0 | 2) {
+                                hub.input_mode = !hub.input_mode;
+                            } else if hub.selected == 1 {
+                                hub.mode_idx = (hub.mode_idx + 1) % 3;
+                                if hub.mode_idx != 0 {
+                                    hub.input2.clear();
+                                }
+                            } else if hub.selected == 3 {
+                                hub.flag = !hub.flag;
+                            } else if let Some(item) = items.get(hub.selected) {
+                                if item.enabled {
+                                    hub_action = Some(item.action.clone());
+                                }
+                            }
+                        }
+                        _ => {
+                            if desktop_hub_input_slot(hub).is_some() {
+                                hub.input_mode = !hub.input_mode;
+                            } else if let Some(item) = items.get(hub.selected) {
+                                if item.enabled {
+                                    hub_action = Some(item.action.clone());
+                                }
+                            }
+                        }
+                    },
+                    KeyCode::Backspace => {
+                        if hub.input_mode && desktop_hub_input_slot(hub).is_some() {
+                            desktop_hub_pop_char(hub);
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        if hub.input_mode
+                            && desktop_hub_input_slot(hub).is_some()
+                            && !modifiers.contains(KeyModifiers::CONTROL)
+                            && !modifiers.contains(KeyModifiers::ALT)
+                            && !modifiers.contains(KeyModifiers::SUPER)
+                        {
+                            desktop_hub_push_char(hub, c);
+                        }
+                    }
+                    KeyCode::Tab => {
+                        if matches!(
+                            hub.kind,
+                            DesktopHubKind::InstallerSearch
+                                | DesktopHubKind::EditApps
+                                | DesktopHubKind::EditGames
+                                | DesktopHubKind::EditNetwork
+                                | DesktopHubKind::EditDocuments
+                                | DesktopHubKind::UserCreate
+                                | DesktopHubKind::UserResetPassword
+                        ) && desktop_hub_input_slot(hub).is_some()
+                        {
+                            hub.input_mode = !hub.input_mode;
+                        }
+                    }
+                    _ => {}
+                }
+                desktop_hub_ensure_selection_visible(hub, list_rect, items.len());
             }
             WindowKind::FileManagerSettings(settings) => {
                 let (refresh, close) = handle_file_manager_settings_key(settings, code, modifiers);
@@ -1589,6 +2983,12 @@ fn handle_key(
         if let Some((path, request)) = file_open_request {
             handle_file_open_request(terminal, state, &path, request)?;
         }
+        if let Some(action) = top_menu_action {
+            run_top_menu_action(terminal, current_user, state, action)?;
+        }
+        if let Some(action) = hub_action {
+            run_desktop_hub_action(terminal, current_user, state, action)?;
+        }
         if close_focused {
             close_window_by_id(state, focused_id);
         }
@@ -1608,11 +3008,36 @@ fn handle_mouse(
     state.cursor_x = mouse.column;
     state.cursor_y = mouse.row;
 
+    if matches!(mouse.kind, MouseEventKind::Moved)
+        && state.dragging.is_none()
+        && state.icon_dragging.is_none()
+        && !state.start.open
+        && state.top_menu.open.is_none()
+        && !state.spotlight.open
+        && state.help_popup.is_none()
+        && mouse.row != 0
+    {
+        state.top_menu.hover_label = None;
+        state.top_menu.hover_item = None;
+        if let Some(idx) = focused_visible_window_idx(state) {
+            let area = state.windows[idx].rect.to_rect();
+            if let WindowKind::DesktopSettings(settings) = &mut state.windows[idx].kind {
+                let _ = handle_desktop_settings_mouse(settings, area, mouse);
+            }
+        }
+        return Ok(None);
+    }
+
     let term_size = terminal.size()?;
     let size = full_rect(term_size.width, term_size.height);
     let top = top_status_area(size);
     let desk = desktop_area(size);
     let task = taskbar_area(size);
+
+    if state.top_menu.open.is_none() && !point_in_rect(mouse.column, mouse.row, top) {
+        state.top_menu.hover_label = None;
+        state.top_menu.hover_item = None;
+    }
 
     if let Some(popup) = &mut state.help_popup {
         match mouse.kind {
@@ -1690,6 +3115,14 @@ fn handle_mouse(
         let spotlight_hit = top_status_spotlight_rect(top)
             .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
         let label_hit = hit_top_menu_label(top, state, mouse.column, mouse.row);
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && state.top_menu.open.is_none()
+        {
+            state.top_menu.hover_label = label_hit;
+            if label_hit.is_none() {
+                state.top_menu.hover_item = None;
+            }
+        }
         if matches!(mouse.kind, MouseEventKind::Moved) {
             state.top_menu.hover_label = label_hit;
             if let Some(open_kind) = state.top_menu.open {
@@ -1716,6 +3149,9 @@ fn handle_mouse(
                 .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
             if label_hit.is_some() || over_dropdown {
                 return Ok(None);
+            }
+            if state.top_menu.open.is_some() {
+                close_top_menu(state);
             }
         } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             if spotlight_hit {
@@ -1766,6 +3202,14 @@ fn handle_mouse(
     }
 
     if let MouseEventKind::Drag(MouseButton::Left) = mouse.kind {
+        if let Some(icon_drag) = state.icon_dragging {
+            let rect = desktop_icon_rect(state, desk, icon_drag.icon);
+            let next_x = i32::from(mouse.column) - icon_drag.dx;
+            let next_y = i32::from(mouse.row) - icon_drag.dy;
+            let (x, y) = clamp_icon_origin(next_x, next_y, desk, rect.width, rect.height);
+            desktop_icon_set_origin(state, icon_drag.icon, x, y);
+            return Ok(None);
+        }
         if let Some(drag) = state.dragging {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == drag.window_id) {
                 match drag.action {
@@ -1801,6 +3245,10 @@ fn handle_mouse(
     }
 
     if let MouseEventKind::Up(MouseButton::Left) = mouse.kind {
+        let was_icon_dragging = state.icon_dragging.take().is_some();
+        if was_icon_dragging {
+            return Ok(None);
+        }
         let was_dragging = state.dragging.take().is_some();
         if was_dragging {
             return Ok(None);
@@ -1822,6 +3270,9 @@ fn handle_mouse(
             return Ok(None);
         }
         if handle_file_manager_scroll_mouse(state, mouse) {
+            return Ok(None);
+        }
+        if handle_settings_scroll_mouse(state, mouse) {
             return Ok(None);
         }
         return Ok(None);
@@ -1934,9 +3385,29 @@ fn handle_mouse(
             return Ok(None);
         }
 
-        if hit_my_computer_icon(mouse.column, mouse.row, desk) {
+        if hit_my_computer_icon(state, mouse.column, mouse.row, desk) {
+            let rect = my_computer_icon_rect(state, desk);
+            state.icon_dragging = Some(IconDragState {
+                icon: DesktopIconId::MyComputer,
+                dx: i32::from(mouse.column) - i32::from(rect.x),
+                dy: i32::from(mouse.row) - i32::from(rect.y),
+            });
             if is_double_click(state, ClickTarget::DesktopIconMyComputer) {
+                state.icon_dragging = None;
                 open_file_manager_window(state);
+            }
+            return Ok(None);
+        }
+        if hit_trash_icon(state, mouse.column, mouse.row, desk) {
+            let rect = trash_icon_rect(state, desk);
+            state.icon_dragging = Some(IconDragState {
+                icon: DesktopIconId::Trash,
+                dx: i32::from(mouse.column) - i32::from(rect.x),
+                dy: i32::from(mouse.row) - i32::from(rect.y),
+            });
+            if is_double_click(state, ClickTarget::DesktopIconTrash) {
+                state.icon_dragging = None;
+                open_trash_in_file_manager(state);
             }
             return Ok(None);
         }
@@ -1980,12 +3451,10 @@ fn run_start_action(
                     &default_shell_command(),
                     Some("Terminal"),
                 ),
-                StartLaunch::ProgramInstaller => open_pty_window_named(
-                    terminal,
-                    state,
-                    &build_desktop_tool_command(current_user, "program-installer")?,
-                    Some("Program Installer"),
-                ),
+                StartLaunch::ProgramInstaller => {
+                    open_desktop_hub_window(state, DesktopHubKind::ProgramInstaller);
+                    Ok(())
+                }
                 StartLaunch::Settings => {
                     open_desktop_settings_window(terminal, state, current_user);
                     Ok(())
@@ -2018,13 +3487,17 @@ fn run_start_action(
             Ok(None)
         }
         StartAction::OpenDocumentLogs => {
-            run_with_mouse_capture_paused(terminal, documents::logs_menu)?;
+            open_desktop_hub_window(state, DesktopHubKind::Logs);
             Ok(None)
         }
         StartAction::OpenDocumentCategory { name, path } => {
-            run_with_mouse_capture_paused(terminal, |terminal| {
-                documents::open_documents_category(terminal, &name, &path)
-            })?;
+            open_desktop_hub_window_with_context(
+                state,
+                DesktopHubKind::DocumentCategory,
+                Some(name),
+                Some(path),
+                None,
+            );
             Ok(None)
         }
     }
@@ -2043,8 +3516,8 @@ where
 }
 
 fn run_desktop_settings_action(
-    terminal: &mut Term,
-    current_user: &str,
+    _terminal: &mut Term,
+    _current_user: &str,
     state: &mut DesktopState,
     window_id: u64,
     action: DesktopSettingsAction,
@@ -2053,10 +3526,10 @@ fn run_desktop_settings_action(
         DesktopSettingsAction::None => {}
         DesktopSettingsAction::CloseWindow => close_window_by_id(state, window_id),
         DesktopSettingsAction::OpenEditMenus => {
-            run_with_mouse_capture_paused(terminal, edit_menus_menu)?;
+            open_desktop_hub_window(state, DesktopHubKind::EditMenus);
         }
         DesktopSettingsAction::OpenUserManagement => {
-            run_with_mouse_capture_paused(terminal, |t| user_management_menu(t, current_user))?;
+            open_desktop_hub_window(state, DesktopHubKind::UserManagement);
         }
     }
     Ok(())
@@ -2162,10 +3635,6 @@ fn wrap_manual_text(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-fn shortcut_hint_cache() -> &'static Mutex<HashMap<String, Vec<(String, String)>>> {
-    SHORTCUT_HINT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|p| p == &path) {
         paths.push(path);
@@ -2225,6 +3694,10 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
     let win = &state.windows[idx];
     let (title, key) = match &win.kind {
         WindowKind::PtyApp(app) => (win.title.clone(), app.manual_key.clone()),
+        WindowKind::DesktopHub(hub) => (
+            desktop_hub_title(hub.kind).to_string(),
+            slugify_manual_key(desktop_hub_title(hub.kind)),
+        ),
         WindowKind::DesktopSettings(_) => ("Settings".to_string(), "settings".to_string()),
         WindowKind::FileManager(_) => ("My Computer".to_string(), "my_computer".to_string()),
         WindowKind::FileManagerSettings(_) => (
@@ -2349,107 +3822,6 @@ fn load_manual_text_for_focused_app(state: &DesktopState) -> Option<(String, Str
     load_manual_text_for_keys(&keys).map(|text| (title, text))
 }
 
-fn split_shortcut_line(line: &str) -> Option<(String, String)> {
-    let trimmed = line.trim();
-    if trimmed.len() < 4 {
-        return None;
-    }
-    for sep in [" - ", " -- ", " : ", ": ", "\t"] {
-        if let Some((left, right)) = trimmed.split_once(sep) {
-            let key = left
-                .trim()
-                .trim_matches(|c| c == '`' || c == '*' || c == '"' || c == '\'');
-            let desc = right.trim();
-            if key.is_empty() || desc.is_empty() {
-                continue;
-            }
-            if key.chars().count() > 18 || key.split_whitespace().count() > 3 {
-                continue;
-            }
-            if desc.chars().count() < 3 {
-                continue;
-            }
-            return Some((desc.to_string(), key.to_string()));
-        }
-    }
-
-    let bytes = trimmed.as_bytes();
-    let mut split_at = None;
-    for i in 1..bytes.len().saturating_sub(1) {
-        if bytes[i] == b' ' && bytes[i - 1] == b' ' {
-            split_at = Some(i - 1);
-            break;
-        }
-    }
-    let idx = split_at?;
-    let key = trimmed[..idx].trim();
-    let desc = trimmed[idx..].trim();
-    if key.is_empty() || desc.is_empty() {
-        return None;
-    }
-    if key.chars().count() > 18 || key.split_whitespace().count() > 3 || desc.chars().count() < 3 {
-        return None;
-    }
-    Some((desc.to_string(), key.to_string()))
-}
-
-fn extract_shortcut_hints(text: &str, limit: usize) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    for line in text.lines() {
-        if out.len() >= limit {
-            break;
-        }
-        let Some((desc, key)) = split_shortcut_line(line) else {
-            continue;
-        };
-        if out
-            .iter()
-            .any(|(_, existing)| existing.eq_ignore_ascii_case(&key))
-        {
-            continue;
-        }
-        out.push((desc, key));
-    }
-    out
-}
-
-fn shortcut_hints_for_focused_app(state: &DesktopState) -> Vec<(String, String)> {
-    let Some((_, keys)) = focused_app_manual_context(state) else {
-        return Vec::new();
-    };
-    let cache_key = keys.join("|");
-    if let Ok(cache) = shortcut_hint_cache().lock() {
-        if let Some(cached) = cache.get(&cache_key) {
-            return cached.clone();
-        }
-    }
-    let hints = load_manual_text_for_keys(&keys)
-        .map(|text| extract_shortcut_hints(&text, 6))
-        .unwrap_or_default();
-    if let Ok(mut cache) = shortcut_hint_cache().lock() {
-        cache.insert(cache_key, hints.clone());
-    }
-    hints
-}
-
-fn open_shortcuts_popup(state: &mut DesktopState) {
-    if let Some((title, _)) = focused_app_manual_context(state) {
-        let hints = shortcut_hints_for_focused_app(state);
-        let text = if hints.is_empty() {
-            "No shortcut hints could be extracted from available docs/man page.".to_string()
-        } else {
-            hints
-                .into_iter()
-                .map(|(desc, key)| format!("{desc} : {key}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        open_help_popup(state, &format!("{title} Shortcuts"), &text);
-        return;
-    }
-    open_help_popup(state, "App Shortcuts", "No active app window.");
-}
-
 fn user_manual_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for root in manual_search_roots() {
@@ -2499,10 +3871,15 @@ fn run_top_menu_action(
         TopMenuAction::None => {}
         TopMenuAction::OpenStart => open_start_menu(state),
         TopMenuAction::OpenSettings => open_desktop_settings_window(terminal, state, current_user),
+        TopMenuAction::OpenApplications => {
+            open_desktop_hub_window(state, DesktopHubKind::Applications)
+        }
+        TopMenuAction::OpenDocuments => open_desktop_hub_window(state, DesktopHubKind::Documents),
+        TopMenuAction::OpenLogs => open_desktop_hub_window(state, DesktopHubKind::Logs),
+        TopMenuAction::OpenNetwork => open_desktop_hub_window(state, DesktopHubKind::Network),
+        TopMenuAction::OpenGames => open_desktop_hub_window(state, DesktopHubKind::Games),
         TopMenuAction::OpenProgramInstaller => {
-            if let Ok(cmd) = build_desktop_tool_command(current_user, "program-installer") {
-                let _ = open_pty_window_named(terminal, state, &cmd, Some("Program Installer"));
-            }
+            open_desktop_hub_window(state, DesktopHubKind::ProgramInstaller);
         }
         TopMenuAction::OpenFileManager => open_file_manager_window(state),
         TopMenuAction::OpenFileManagerSettings => open_file_manager_settings_window(state),
@@ -2532,13 +3909,26 @@ fn run_top_menu_action(
         TopMenuAction::OpenSelectedFileExternal => {
             open_focused_file_manager_selection(terminal, state, FileManagerOpenRequest::External)?;
         }
-        TopMenuAction::OpenEditMenus => {
-            run_with_mouse_capture_paused(terminal, edit_menus_menu)?;
+        TopMenuAction::FileManagerCopy
+        | TopMenuAction::FileManagerCut
+        | TopMenuAction::FileManagerPaste
+        | TopMenuAction::FileManagerDuplicate
+        | TopMenuAction::FileManagerDelete
+        | TopMenuAction::FileManagerUndo
+        | TopMenuAction::FileManagerRedo => {
+            run_file_manager_edit_action(terminal, state, action);
         }
-        TopMenuAction::OpenUserManagement => {
-            run_with_mouse_capture_paused(terminal, |t| user_management_menu(t, current_user))?;
+        TopMenuAction::ShowFileProperties => {
+            open_selected_file_properties_popup(state);
         }
-        TopMenuAction::ShowAppShortcuts => open_shortcuts_popup(state),
+        TopMenuAction::EmptyTrash => match empty_trash_and_refresh(state) {
+            Ok(count) => {
+                flash_message(terminal, &format!("Trash emptied ({count} items)."), 1000)?;
+            }
+            Err(err) => {
+                flash_message(terminal, &format!("Empty trash failed: {err}"), 1200)?;
+            }
+        },
         TopMenuAction::CloseFocusedWindow => {
             if let Some(id) = focused_window_id(state) {
                 close_window_by_id(state, id);
@@ -2869,6 +4259,7 @@ fn reap_closed_pty_windows(state: &mut DesktopState) {
                 WindowKind::PtyApp(app) => app.session.is_alive(),
                 WindowKind::DesktopSettings(_) => true,
                 WindowKind::FileManager(_) => true,
+                WindowKind::DesktopHub(_) => true,
                 WindowKind::FileManagerSettings(_) => true,
             }
         };
@@ -2894,6 +4285,9 @@ fn terminate_all_pty_windows(state: &mut DesktopState) {
 
 fn sync_pty_window_sizes(state: &mut DesktopState) {
     for win in &mut state.windows {
+        if win.minimized {
+            continue;
+        }
         if let WindowKind::PtyApp(app) = &mut win.kind {
             let area = win.rect.to_rect();
             let cols = area.width.saturating_sub(2).max(1);
@@ -2904,11 +4298,9 @@ fn sync_pty_window_sizes(state: &mut DesktopState) {
 }
 
 fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
-    let ts = terminal.size()?;
-    let size = full_rect(ts.width, ts.height);
-    clamp_all_windows(state, desktop_area(size));
     state.task_scroll = state.task_scroll.min(state.windows.len().saturating_sub(1));
     sync_pty_window_sizes(state);
+    let show_cursor = get_settings().desktop_show_cursor;
 
     terminal.draw(|f| {
         let size = f.area();
@@ -2920,13 +4312,20 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
         f.render_widget(Clear, size);
 
         draw_top_status(f, top, state);
-        draw_desktop_background(f, desktop);
+        draw_desktop_background(f, desktop, state);
         draw_taskbar(f, state, task);
 
         let focused = focused_visible_window_id(state);
+        let visible_pty_count = state
+            .windows
+            .iter()
+            .filter(|w| !w.minimized && matches!(w.kind, WindowKind::PtyApp(_)))
+            .count();
+        let dragging = state.dragging.is_some();
         for win in &state.windows {
             let is_focused = Some(win.id) == focused;
-            draw_window(f, win, is_focused);
+            let pty_force_plain = dragging || (visible_pty_count > 1 && !is_focused);
+            draw_window(f, win, is_focused, pty_force_plain);
         }
 
         if state.start.open {
@@ -2940,7 +4339,9 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
             draw_help_popup(f, size, popup);
         }
 
-        draw_cursor(f, state.cursor_x, state.cursor_y, size);
+        if show_cursor {
+            draw_cursor(f, state.cursor_x, state.cursor_y, size);
+        }
     })?;
     Ok(())
 }
@@ -3005,7 +4406,7 @@ fn top_menu_labels(area: Rect, state: &DesktopState) -> Vec<TopMenuLabel> {
 }
 
 fn top_status_right_text() -> String {
-    let now = Local::now().format("%a %d %b | %H.%M").to_string();
+    let now = Local::now().format("%a %d %b %H:%M").to_string();
     let batt = battery_display();
     let batt_clean = batt
         .chars()
@@ -3051,6 +4452,9 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
     }
     if let Some(icon_rect) = top_status_spotlight_rect(area) {
         write_text_in_area(&mut row, area, icon_rect.x, TOP_SPOTLIGHT_ICON);
+        if icon_rect.x.saturating_add(1) < area.x.saturating_add(area.width) {
+            write_text_in_area(&mut row, area, icon_rect.x.saturating_add(1), "|");
+        }
     }
 
     let line: String = row.into_iter().collect();
@@ -3230,6 +4634,457 @@ fn focused_file_manager_mut(state: &mut DesktopState) -> Option<&mut FileManager
     }
 }
 
+fn is_parent_dir_entry(entry: &FileEntry) -> bool {
+    entry.name == ".."
+}
+
+fn focused_editable_file_manager_entry(state: &DesktopState) -> Option<FileEntry> {
+    let entry = focused_file_manager_selected_entry(state)?;
+    if is_parent_dir_entry(&entry) {
+        return None;
+    }
+    Some(entry)
+}
+
+fn focused_file_manager_cwd(state: &DesktopState) -> Option<PathBuf> {
+    let idx = focused_visible_window_idx(state)?;
+    match &state.windows[idx].kind {
+        WindowKind::FileManager(fm) => Some(fm.cwd.clone()),
+        _ => None,
+    }
+}
+
+fn path_display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn split_file_name(name: &str) -> (String, String) {
+    let p = Path::new(name);
+    let stem = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name)
+        .to_string();
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| format!(".{s}"))
+        .unwrap_or_default();
+    (stem, ext)
+}
+
+fn unique_copy_path_in_dir(dir: &Path, original_name: &str, prefer_copy_suffix: bool) -> PathBuf {
+    let direct = dir.join(original_name);
+    if !prefer_copy_suffix && !direct.exists() {
+        return direct;
+    }
+    let (stem, ext) = split_file_name(original_name);
+    for idx in 1..=9999usize {
+        let candidate = if idx == 1 {
+            format!("{stem} copy{ext}")
+        } else {
+            format!("{stem} copy {idx}{ext}")
+        };
+        let path = dir.join(candidate);
+        if !path.exists() {
+            return path;
+        }
+    }
+    direct
+}
+
+fn unique_path_in_dir(dir: &Path, original_name: &str) -> PathBuf {
+    let direct = dir.join(original_name);
+    if !direct.exists() {
+        return direct;
+    }
+    for idx in 1..=9999usize {
+        let candidate = dir.join(format!("{original_name}.{idx}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    direct
+}
+
+fn copy_path_recursive(src: &Path, dst: &Path) -> Result<()> {
+    let meta =
+        std::fs::metadata(src).map_err(|e| anyhow!("Failed reading {}: {e}", src.display()))?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(dst)
+            .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
+        let read =
+            std::fs::read_dir(src).map_err(|e| anyhow!("Failed listing {}: {e}", src.display()))?;
+        for item in read {
+            let item = item.map_err(|e| anyhow!("Failed reading {} entry: {e}", src.display()))?;
+            let child_src = item.path();
+            let child_dst = dst.join(item.file_name());
+            copy_path_recursive(&child_src, &child_dst)?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("Failed creating {}: {e}", parent.display()))?;
+        }
+        std::fs::copy(src, dst)
+            .map_err(|e| anyhow!("Failed copying {} -> {}: {e}", src.display(), dst.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_path_recursive(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+            .map_err(|e| anyhow!("Failed deleting {}: {e}", path.display()))?;
+    } else {
+        std::fs::remove_file(path)
+            .map_err(|e| anyhow!("Failed deleting {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn move_path(src: &Path, dst: &Path) -> Result<()> {
+    if src == dst {
+        return Ok(());
+    }
+    if dst.exists() {
+        return Err(anyhow!("Destination already exists: {}", dst.display()));
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("Failed creating {}: {e}", parent.display()))?;
+    }
+    match std::fs::rename(src, dst) {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            copy_path_recursive(src, dst)?;
+            remove_path_recursive(src)
+        }
+    }
+}
+
+fn file_manager_trash_dir() -> PathBuf {
+    if let Some(user) = get_current_user() {
+        crate::config::user_dir(&user).join(".fm_trash")
+    } else {
+        crate::config::base_dir().join(".fm_trash")
+    }
+}
+
+fn is_trash_dir(path: &Path) -> bool {
+    path == file_manager_trash_dir()
+}
+
+fn format_bytes_human(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+fn format_system_time(value: std::io::Result<std::time::SystemTime>) -> String {
+    match value {
+        Ok(ts) => chrono::DateTime::<Local>::from(ts)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        Err(_) => "N/A".to_string(),
+    }
+}
+
+fn selected_file_properties_text(state: &DesktopState) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    let meta = std::fs::symlink_metadata(&entry.path)
+        .map_err(|e| anyhow!("Cannot read metadata for {}: {e}", entry.path.display()))?;
+    let kind = if meta.is_dir() {
+        "Directory"
+    } else if meta.file_type().is_symlink() {
+        "Symlink"
+    } else {
+        "File"
+    };
+    let size = if meta.is_file() {
+        format!("{} ({})", format_bytes_human(meta.len()), meta.len())
+    } else {
+        "N/A".to_string()
+    };
+    let child_count = if meta.is_dir() {
+        std::fs::read_dir(&entry.path)
+            .map(|it| it.flatten().count().to_string())
+            .unwrap_or_else(|_| "N/A".to_string())
+    } else {
+        "N/A".to_string()
+    };
+    #[cfg(unix)]
+    let perms = {
+        use std::os::unix::fs::PermissionsExt;
+        format!("{:o}", meta.permissions().mode() & 0o777)
+    };
+    #[cfg(not(unix))]
+    let perms = {
+        if meta.permissions().readonly() {
+            "readonly".to_string()
+        } else {
+            "read/write".to_string()
+        }
+    };
+    let canonical = std::fs::canonicalize(&entry.path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| entry.path.display().to_string());
+    let ext = entry
+        .path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("(none)");
+    Ok([
+        format!("Name: {}", entry.name),
+        format!("Type: {kind}"),
+        format!("Path: {}", entry.path.display()),
+        format!("Canonical Path: {canonical}"),
+        format!("Extension: {ext}"),
+        format!("Size: {size}"),
+        format!("Items Inside: {child_count}"),
+        format!("Permissions: {perms}"),
+        format!(
+            "Readonly: {}",
+            if meta.permissions().readonly() {
+                "Yes"
+            } else {
+                "No"
+            }
+        ),
+        format!("Created: {}", format_system_time(meta.created())),
+        format!("Modified: {}", format_system_time(meta.modified())),
+        format!("Accessed: {}", format_system_time(meta.accessed())),
+    ]
+    .join("\n"))
+}
+
+fn open_selected_file_properties_popup(state: &mut DesktopState) {
+    match selected_file_properties_text(state) {
+        Ok(text) => open_help_popup(state, "File Properties", &text),
+        Err(_) => open_help_popup(state, "File Properties", "Select a file or folder first."),
+    }
+}
+
+fn empty_trash_and_refresh(state: &mut DesktopState) -> Result<usize> {
+    let dir = file_manager_trash_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| anyhow!("Cannot access trash folder {}: {e}", dir.display()))?;
+    let mut removed = 0usize;
+    let read = std::fs::read_dir(&dir)
+        .map_err(|e| anyhow!("Cannot list trash folder {}: {e}", dir.display()))?;
+    for item in read {
+        let item = item.map_err(|e| anyhow!("Cannot read trash item: {e}"))?;
+        remove_path_recursive(&item.path())?;
+        removed += 1;
+    }
+    refresh_all_file_manager_windows(state);
+    Ok(removed)
+}
+
+fn record_file_manager_edit_op(state: &mut DesktopState, op: FileManagerEditOp) {
+    state.file_undo_stack.push(op);
+    state.file_redo_stack.clear();
+    if state.file_undo_stack.len() > 100 {
+        let overflow = state.file_undo_stack.len().saturating_sub(100);
+        state.file_undo_stack.drain(0..overflow);
+    }
+}
+
+fn apply_file_manager_op(op: &FileManagerEditOp, reverse: bool) -> Result<()> {
+    match op {
+        FileManagerEditOp::CopyCreated { src, dst } => {
+            if reverse {
+                remove_path_recursive(dst)
+            } else {
+                copy_path_recursive(src, dst)
+            }
+        }
+        FileManagerEditOp::Moved { from, to } => {
+            if reverse {
+                move_path(to, from)
+            } else {
+                move_path(from, to)
+            }
+        }
+    }
+}
+
+fn file_manager_set_clipboard_from_selected(
+    state: &mut DesktopState,
+    mode: FileManagerClipboardMode,
+) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    state.file_clipboard = Some(FileManagerClipboardItem {
+        path: entry.path.clone(),
+        mode,
+    });
+    let verb = if matches!(mode, FileManagerClipboardMode::Cut) {
+        "Cut"
+    } else {
+        "Copied"
+    };
+    Ok(format!("{verb} {}", entry.name))
+}
+
+fn file_manager_duplicate_selected(state: &mut DesktopState) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    let Some(parent) = entry.path.parent() else {
+        return Err(anyhow!("Cannot duplicate this item."));
+    };
+    let name = path_display_name(&entry.path);
+    let dst = unique_copy_path_in_dir(parent, &name, true);
+    copy_path_recursive(&entry.path, &dst)?;
+    record_file_manager_edit_op(
+        state,
+        FileManagerEditOp::CopyCreated {
+            src: entry.path.clone(),
+            dst: dst.clone(),
+        },
+    );
+    Ok(format!("Duplicated as {}", path_display_name(&dst)))
+}
+
+fn file_manager_paste_clipboard(state: &mut DesktopState) -> Result<String> {
+    let Some(clip) = state.file_clipboard.clone() else {
+        return Err(anyhow!("Clipboard is empty."));
+    };
+    if !clip.path.exists() {
+        state.file_clipboard = None;
+        return Err(anyhow!("Clipboard source no longer exists."));
+    }
+    let Some(target_dir) = focused_file_manager_cwd(state) else {
+        return Err(anyhow!("No focused file manager."));
+    };
+    let source_name = path_display_name(&clip.path);
+    let mut dst = target_dir.join(&source_name);
+
+    match clip.mode {
+        FileManagerClipboardMode::Copy => {
+            if dst.exists() {
+                dst = unique_copy_path_in_dir(&target_dir, &source_name, false);
+            }
+            copy_path_recursive(&clip.path, &dst)?;
+            record_file_manager_edit_op(
+                state,
+                FileManagerEditOp::CopyCreated {
+                    src: clip.path.clone(),
+                    dst: dst.clone(),
+                },
+            );
+            Ok(format!("Copied to {}", path_display_name(&dst)))
+        }
+        FileManagerClipboardMode::Cut => {
+            let source_parent = clip.path.parent().map(Path::to_path_buf);
+            if source_parent.as_deref() == Some(target_dir.as_path()) {
+                return Ok("Item is already in this folder.".to_string());
+            }
+            if dst.exists() {
+                dst = unique_path_in_dir(&target_dir, &source_name);
+            }
+            move_path(&clip.path, &dst)?;
+            record_file_manager_edit_op(
+                state,
+                FileManagerEditOp::Moved {
+                    from: clip.path.clone(),
+                    to: dst.clone(),
+                },
+            );
+            state.file_clipboard = None;
+            Ok(format!("Moved to {}", path_display_name(&dst)))
+        }
+    }
+}
+
+fn file_manager_delete_selected(state: &mut DesktopState) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    let trash_dir = file_manager_trash_dir();
+    std::fs::create_dir_all(&trash_dir)
+        .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
+    let name = path_display_name(&entry.path);
+    let trash_target = unique_path_in_dir(&trash_dir, &name);
+    move_path(&entry.path, &trash_target)?;
+    record_file_manager_edit_op(
+        state,
+        FileManagerEditOp::Moved {
+            from: entry.path.clone(),
+            to: trash_target,
+        },
+    );
+    Ok(format!("Moved {} to trash", entry.name))
+}
+
+fn file_manager_undo(state: &mut DesktopState) -> Result<String> {
+    let Some(op) = state.file_undo_stack.pop() else {
+        return Err(anyhow!("Nothing to undo."));
+    };
+    apply_file_manager_op(&op, true)?;
+    state.file_redo_stack.push(op);
+    Ok("Undo complete".to_string())
+}
+
+fn file_manager_redo(state: &mut DesktopState) -> Result<String> {
+    let Some(op) = state.file_redo_stack.pop() else {
+        return Err(anyhow!("Nothing to redo."));
+    };
+    apply_file_manager_op(&op, false)?;
+    state.file_undo_stack.push(op);
+    Ok("Redo complete".to_string())
+}
+
+fn run_file_manager_edit_action(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    action: TopMenuAction,
+) {
+    let outcome = match action {
+        TopMenuAction::FileManagerCopy => {
+            file_manager_set_clipboard_from_selected(state, FileManagerClipboardMode::Copy)
+        }
+        TopMenuAction::FileManagerCut => {
+            file_manager_set_clipboard_from_selected(state, FileManagerClipboardMode::Cut)
+        }
+        TopMenuAction::FileManagerPaste => file_manager_paste_clipboard(state),
+        TopMenuAction::FileManagerDuplicate => file_manager_duplicate_selected(state),
+        TopMenuAction::FileManagerDelete => file_manager_delete_selected(state),
+        TopMenuAction::FileManagerUndo => file_manager_undo(state),
+        TopMenuAction::FileManagerRedo => file_manager_redo(state),
+        _ => return,
+    };
+    match outcome {
+        Ok(msg) => {
+            refresh_all_file_manager_windows(state);
+            let _ = flash_message(terminal, &msg, 850);
+        }
+        Err(err) => {
+            let _ = flash_message(terminal, &format!("File action failed: {err}"), 1200);
+        }
+    }
+}
+
 fn top_menu_separator_item() -> TopMenuItem {
     TopMenuItem {
         label: String::new(),
@@ -3254,6 +5109,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 Some(WindowKind::FileManager(_)) => {
                     "Open Enter | External X | Ctrl+T New Tab | Ctrl+Tab Next Tab"
                 }
+                Some(WindowKind::DesktopHub(_)) => "Arrows/Mouse scroll | Enter to open",
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
                 Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
                 Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
@@ -3338,6 +5194,43 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 items.push(top_menu_separator_item());
             }
             items.push(TopMenuItem {
+                label: "Applications".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenApplications,
+                enabled: true,
+            });
+            items.push(TopMenuItem {
+                label: "Documents".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenDocuments,
+                enabled: true,
+            });
+            items.push(TopMenuItem {
+                label: "Logs".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenLogs,
+                enabled: true,
+            });
+            items.push(TopMenuItem {
+                label: "Network".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenNetwork,
+                enabled: true,
+            });
+            items.push(TopMenuItem {
+                label: "Games".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenGames,
+                enabled: true,
+            });
+            items.push(TopMenuItem {
+                label: "Program Installer".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenProgramInstaller,
+                enabled: true,
+            });
+            items.push(top_menu_separator_item());
+            items.push(TopMenuItem {
                 label: "Settings".to_string(),
                 shortcut: None,
                 action: TopMenuAction::OpenSettings,
@@ -3351,49 +5244,120 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
             });
             items.push(top_menu_separator_item());
             items.push(TopMenuItem {
-                label: "Program Installer".to_string(),
-                shortcut: None,
-                action: TopMenuAction::OpenProgramInstaller,
+                label: "My Computer".to_string(),
+                shortcut: Some("M".to_string()),
+                action: TopMenuAction::OpenFileManager,
                 enabled: true,
             });
             items
         }
         TopMenuKind::Edit => {
+            if !matches!(focused_window_kind(state), Some(WindowKind::FileManager(_))) {
+                return vec![TopMenuItem {
+                    label: "No file manager actions".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::None,
+                    enabled: false,
+                }];
+            }
+            let selected = focused_file_manager_selected_entry(state);
+            let can_edit_selected = selected.as_ref().is_some_and(|e| !is_parent_dir_entry(e));
+            let paste_enabled = state
+                .file_clipboard
+                .as_ref()
+                .is_some_and(|clip| clip.path.exists());
+            let paste_label = if let Some(clip) = &state.file_clipboard {
+                let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
+                    "Move"
+                } else {
+                    "Paste"
+                };
+                format!("{mode} {}", path_display_name(&clip.path))
+            } else {
+                "Paste".to_string()
+            };
             vec![
                 TopMenuItem {
-                    label: "Edit Menus".to_string(),
-                    shortcut: None,
-                    action: TopMenuAction::OpenEditMenus,
-                    enabled: true,
+                    label: "Copy".to_string(),
+                    shortcut: Some("Ctrl+C".to_string()),
+                    action: TopMenuAction::FileManagerCopy,
+                    enabled: can_edit_selected,
                 },
                 TopMenuItem {
-                    label: "User Management".to_string(),
-                    shortcut: None,
-                    action: TopMenuAction::OpenUserManagement,
-                    enabled: true,
+                    label: "Cut".to_string(),
+                    shortcut: Some("Ctrl+X".to_string()),
+                    action: TopMenuAction::FileManagerCut,
+                    enabled: can_edit_selected,
                 },
                 TopMenuItem {
-                    label: "App Shortcuts".to_string(),
-                    shortcut: None,
-                    action: TopMenuAction::ShowAppShortcuts,
-                    enabled: focused_window_id(state).is_some(),
+                    label: paste_label,
+                    shortcut: Some("Ctrl+V".to_string()),
+                    action: TopMenuAction::FileManagerPaste,
+                    enabled: paste_enabled,
+                },
+                TopMenuItem {
+                    label: "Duplicate".to_string(),
+                    shortcut: Some("Ctrl+D".to_string()),
+                    action: TopMenuAction::FileManagerDuplicate,
+                    enabled: can_edit_selected,
+                },
+                TopMenuItem {
+                    label: "Delete".to_string(),
+                    shortcut: Some("Del".to_string()),
+                    action: TopMenuAction::FileManagerDelete,
+                    enabled: can_edit_selected,
+                },
+                top_menu_separator_item(),
+                TopMenuItem {
+                    label: "Undo".to_string(),
+                    shortcut: Some("Ctrl+Z".to_string()),
+                    action: TopMenuAction::FileManagerUndo,
+                    enabled: !state.file_undo_stack.is_empty(),
+                },
+                TopMenuItem {
+                    label: "Redo".to_string(),
+                    shortcut: Some("Ctrl+Y".to_string()),
+                    action: TopMenuAction::FileManagerRedo,
+                    enabled: !state.file_redo_stack.is_empty(),
                 },
             ]
         }
-        TopMenuKind::View => vec![
-            TopMenuItem {
+        TopMenuKind::View => {
+            let mut items = Vec::new();
+            if let Some(WindowKind::FileManager(fm)) = focused_window_kind(state) {
+                let selected = focused_editable_file_manager_entry(state).is_some();
+                let in_trash = is_trash_dir(&fm.cwd);
+                let trash_has_items = fm.entries.iter().any(|e| !is_parent_dir_entry(e));
+                items.push(TopMenuItem {
+                    label: "File Properties".to_string(),
+                    shortcut: Some("Alt+Enter".to_string()),
+                    action: TopMenuAction::ShowFileProperties,
+                    enabled: selected,
+                });
+                if in_trash {
+                    items.push(TopMenuItem {
+                        label: "Empty Trash".to_string(),
+                        shortcut: None,
+                        action: TopMenuAction::EmptyTrash,
+                        enabled: trash_has_items,
+                    });
+                }
+                items.push(top_menu_separator_item());
+            }
+            items.push(TopMenuItem {
                 label: "My Computer".to_string(),
                 shortcut: Some("M".to_string()),
                 action: TopMenuAction::OpenFileManager,
                 enabled: true,
-            },
-            TopMenuItem {
+            });
+            items.push(TopMenuItem {
                 label: "Maximize/Restore Focused".to_string(),
                 shortcut: Some("Ctrl+Enter".to_string()),
                 action: TopMenuAction::ToggleMaxFocusedWindow,
                 enabled: focused_window_id(state).is_some(),
-            },
-        ],
+            });
+            items
+        }
         TopMenuKind::Window => {
             let mut items = Vec::new();
             for win in state.windows.iter().rev().take(8) {
@@ -3406,10 +5370,10 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
             }
             if items.is_empty() {
                 items.push(TopMenuItem {
-                    label: "No windows".to_string(),
+                    label: "No open windows".to_string(),
                     shortcut: None,
                     action: TopMenuAction::None,
-                    enabled: false,
+                    enabled: true,
                 });
             }
             items
@@ -3436,6 +5400,26 @@ fn spotlight_items(state: &DesktopState) -> Vec<SpotlightItem> {
         SpotlightItem {
             label: "My Computer".to_string(),
             action: TopMenuAction::OpenFileManager,
+        },
+        SpotlightItem {
+            label: "Applications".to_string(),
+            action: TopMenuAction::OpenApplications,
+        },
+        SpotlightItem {
+            label: "Documents".to_string(),
+            action: TopMenuAction::OpenDocuments,
+        },
+        SpotlightItem {
+            label: "Logs".to_string(),
+            action: TopMenuAction::OpenLogs,
+        },
+        SpotlightItem {
+            label: "Network".to_string(),
+            action: TopMenuAction::OpenNetwork,
+        },
+        SpotlightItem {
+            label: "Games".to_string(),
+            action: TopMenuAction::OpenGames,
         },
         SpotlightItem {
             label: "Settings".to_string(),
@@ -3641,7 +5625,7 @@ fn format_top_menu_row(width: usize, label: &str, shortcut: Option<&str>) -> Str
     chars.into_iter().collect()
 }
 
-fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect) {
+fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -3656,13 +5640,7 @@ fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 
     let settings = get_settings();
-    let wallpaper = resolve_wallpaper_lines(&settings);
-    let wallpaper = render_wallpaper_for_mode(
-        &wallpaper,
-        settings.desktop_wallpaper_size_mode,
-        area.width as usize,
-        area.height as usize,
-    );
+    let wallpaper = wallpaper_for_area_cached(&settings, area.width, area.height);
     if !wallpaper.is_empty() {
         let art_h = wallpaper.len();
         let art_w = wallpaper
@@ -3689,24 +5667,85 @@ fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect) {
         }
     }
 
-    // Fixed desktop icon: My Computer
-    if area.height >= 4 && area.width >= 14 {
-        let ix = area.x + 2;
-        let iy = area.y + 1;
-        let icon_lines = vec![
-            Line::from(Span::styled(" [PC] ", title_style())),
-            Line::from(Span::styled("My Computer", normal_style())),
-        ];
-        f.render_widget(
-            Paragraph::new(icon_lines),
-            Rect {
-                x: ix,
-                y: iy,
-                width: 12,
-                height: 2,
-            },
-        );
+    // Fixed desktop icons
+    if area.height >= DESKTOP_ICON_HEIGHT && area.width >= DESKTOP_ICON_WIDTH {
+        if let Some((pc_art, tr_art)) = match settings.desktop_icon_style {
+            DesktopIconStyle::Dos => Some((
+                [".------.", "|[::::]|", "'------'"],
+                [".------.", "| #### |", "'------'"],
+            )),
+            DesktopIconStyle::Win95 => Some((
+                [".---------.", "| [====]  |", "'---------'"],
+                [".---____---.", "|  ____    |", "'----------'"],
+            )),
+            DesktopIconStyle::Minimal => Some((
+                ["  [===]  ", "  |___|  ", "   |_|   "],
+                ["  .--.   ", " /____\\  ", " \\____/  "],
+            )),
+            DesktopIconStyle::NoIcons => None,
+        } {
+            let pc_icon = my_computer_icon_rect(state, area);
+            let pc_w = pc_icon.width as usize;
+            let pc_lines = vec![
+                Line::from(Span::styled(centered_text(pc_art[0], pc_w), title_style())),
+                Line::from(Span::styled(centered_text(pc_art[1], pc_w), title_style())),
+                Line::from(Span::styled(centered_text(pc_art[2], pc_w), title_style())),
+                Line::from(Span::styled(
+                    centered_text("My Computer", pc_w),
+                    normal_style(),
+                )),
+            ];
+            f.render_widget(Paragraph::new(pc_lines), pc_icon);
+
+            let tr_icon = trash_icon_rect(state, area);
+            let tr_w = tr_icon.width as usize;
+            let tr_lines = vec![
+                Line::from(Span::styled(centered_text(tr_art[0], tr_w), title_style())),
+                Line::from(Span::styled(centered_text(tr_art[1], tr_w), title_style())),
+                Line::from(Span::styled(centered_text(tr_art[2], tr_w), title_style())),
+                Line::from(Span::styled(centered_text("Trash", tr_w), normal_style())),
+            ];
+            f.render_widget(Paragraph::new(tr_lines), tr_icon);
+        }
     }
+}
+
+fn wallpaper_for_area_cached(
+    settings: &crate::config::Settings,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    if let Ok(cache) = WALLPAPER_RENDER_CACHE.lock() {
+        if let Some(entry) = &*cache {
+            if entry.wallpaper_name == settings.desktop_wallpaper
+                && entry.mode == settings.desktop_wallpaper_size_mode
+                && entry.width == width
+                && entry.height == height
+            {
+                return entry.rendered.clone();
+            }
+        }
+    }
+
+    let source = resolve_wallpaper_lines(settings);
+    let rendered = render_wallpaper_for_mode(
+        &source,
+        settings.desktop_wallpaper_size_mode,
+        width as usize,
+        height as usize,
+    );
+
+    if let Ok(mut cache) = WALLPAPER_RENDER_CACHE.lock() {
+        *cache = Some(WallpaperRenderCache {
+            wallpaper_name: settings.desktop_wallpaper.clone(),
+            mode: settings.desktop_wallpaper_size_mode,
+            width,
+            height,
+            rendered: rendered.clone(),
+        });
+    }
+
+    rendered
 }
 
 fn draw_taskbar(f: &mut ratatui::Frame, state: &DesktopState, area: Rect) {
@@ -3758,7 +5797,7 @@ fn draw_taskbar(f: &mut ratatui::Frame, state: &DesktopState, area: Rect) {
     );
 }
 
-fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool) {
+fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool, pty_force_plain: bool) {
     if win.minimized {
         return;
     }
@@ -3804,13 +5843,14 @@ fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool) {
 
     match &win.kind {
         WindowKind::FileManager(fm) => draw_file_manager_window(f, area, fm, focused),
+        WindowKind::DesktopHub(hub) => draw_desktop_hub_window(f, area, hub, focused),
         WindowKind::FileManagerSettings(settings) => {
             draw_file_manager_settings_window(f, area, settings, focused)
         }
         WindowKind::DesktopSettings(settings) => {
             draw_desktop_settings_window(f, area, settings, focused)
         }
-        WindowKind::PtyApp(app) => draw_pty_window(f, area, app),
+        WindowKind::PtyApp(app) => draw_pty_window(f, area, app, pty_force_plain),
     }
 }
 
@@ -3848,7 +5888,10 @@ fn draw_file_manager_window(
         },
     )));
     header.push(Line::from(Span::styled(
-        truncate_with_ellipsis(&format!("Path: {}", fm.cwd.display()), content.width as usize),
+        truncate_with_ellipsis(
+            &format!("Path: {}", fm.cwd.display()),
+            content.width as usize,
+        ),
         dim_style(),
     )));
     if content.height >= FILE_MANAGER_HEADER_ROWS {
@@ -3866,6 +5909,15 @@ fn draw_file_manager_window(
                 width: content.width,
                 height: content.height.min(FILE_MANAGER_HEADER_ROWS),
             },
+        );
+    }
+    if let Some(btn) = file_manager_empty_trash_button_rect(content, &fm.cwd) {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                FILE_MANAGER_EMPTY_TRASH_BUTTON,
+                sel_style(),
+            ))),
+            btn,
         );
     }
 
@@ -3957,7 +6009,8 @@ fn draw_file_manager_window(
 
                     let x = entry_area.x + (col as u16 * cell_width);
                     let y = entry_area.y + (vis_row as u16 * FILE_MANAGER_GRID_CELL_HEIGHT);
-                    if x >= entry_area.x + entry_area.width || y >= entry_area.y + entry_area.height {
+                    if x >= entry_area.x + entry_area.width || y >= entry_area.y + entry_area.height
+                    {
                         continue;
                     }
                     let width = if col + 1 == cols {
@@ -3965,7 +6018,8 @@ fn draw_file_manager_window(
                     } else {
                         cell_width.min(entry_area.x + entry_area.width - x)
                     };
-                    let height = FILE_MANAGER_GRID_CELL_HEIGHT.min(entry_area.y + entry_area.height - y);
+                    let height =
+                        FILE_MANAGER_GRID_CELL_HEIGHT.min(entry_area.y + entry_area.height - y);
                     let style = if focused && idx == fm.selected {
                         sel_style()
                     } else {
@@ -4053,6 +6107,22 @@ fn file_manager_tree_and_entry_rects(content: Rect, show_tree_panel: bool) -> (O
 fn file_manager_entry_rect(content: Rect, show_tree_panel: bool) -> Rect {
     let (_, entry) = file_manager_tree_and_entry_rects(content, show_tree_panel);
     entry
+}
+
+fn file_manager_empty_trash_button_rect(content: Rect, cwd: &Path) -> Option<Rect> {
+    if !is_trash_dir(cwd) || content.width == 0 || content.height < 3 {
+        return None;
+    }
+    let w = FILE_MANAGER_EMPTY_TRASH_BUTTON.chars().count() as u16;
+    if content.width <= w + 1 {
+        return None;
+    }
+    Some(Rect {
+        x: content.x + content.width - w,
+        y: content.y + 2,
+        width: w,
+        height: 1,
+    })
 }
 
 fn file_manager_tab_title(path: &Path) -> String {
@@ -4352,7 +6422,11 @@ fn file_manager_ensure_selection_visible(fm: &mut FileManagerState, entry_rect: 
     }
 }
 
-fn file_manager_apply_scroll_delta(fm: &mut FileManagerState, entry_rect: Rect, delta: isize) -> bool {
+fn file_manager_apply_scroll_delta(
+    fm: &mut FileManagerState,
+    entry_rect: Rect,
+    delta: isize,
+) -> bool {
     if delta == 0 || fm.entries.is_empty() {
         return false;
     }
@@ -4370,7 +6444,8 @@ fn file_manager_apply_scroll_delta(fm: &mut FileManagerState, entry_rect: Rect, 
             } else {
                 fm.scroll = (fm.scroll + delta as usize).min(max_scroll);
             }
-            let last_visible = (fm.scroll + visible_rows.saturating_sub(1)).min(fm.entries.len() - 1);
+            let last_visible =
+                (fm.scroll + visible_rows.saturating_sub(1)).min(fm.entries.len() - 1);
             if fm.selected < fm.scroll {
                 fm.selected = fm.scroll;
             } else if fm.selected > last_visible {
@@ -4454,6 +6529,97 @@ fn centered_text(text: &str, width: usize) -> String {
     let left = (width - used) / 2;
     let right = width - used - left;
     format!("{}{}{}", " ".repeat(left), clipped, " ".repeat(right))
+}
+
+fn draw_desktop_hub_window(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    hub: &DesktopHubState,
+    focused: bool,
+) {
+    let content = desktop_hub_content_rect(area);
+    if content.height == 0 || content.width == 0 {
+        return;
+    }
+
+    let current_user = get_current_user().unwrap_or_else(|| "admin".to_string());
+    let items = desktop_hub_items(hub, &current_user);
+    let list = desktop_hub_list_rect(area);
+    let visible = list.height as usize;
+
+    let mut selected = if items.is_empty() {
+        0
+    } else {
+        hub.selected.min(items.len().saturating_sub(1))
+    };
+    let mut scroll = hub.scroll;
+    if visible == 0 || items.is_empty() {
+        selected = 0;
+        scroll = 0;
+    } else {
+        let max_scroll = items.len().saturating_sub(visible);
+        scroll = scroll.min(max_scroll);
+        if selected < scroll {
+            scroll = selected;
+        } else if selected >= scroll.saturating_add(visible) {
+            scroll = selected.saturating_sub(visible.saturating_sub(1));
+        }
+    }
+
+    let subtitle = desktop_hub_subtitle(hub);
+    let hint = "Enter open | Esc close | Mouse wheel scroll";
+    let mut header = Vec::new();
+    header.push(Line::from(Span::styled(
+        truncate_with_ellipsis(&subtitle, content.width as usize),
+        dim_style(),
+    )));
+    header.push(Line::from(Span::styled(
+        truncate_with_ellipsis(hint, content.width as usize),
+        if focused { normal_style() } else { dim_style() },
+    )));
+    f.render_widget(
+        Paragraph::new(header),
+        Rect {
+            x: content.x,
+            y: content.y,
+            width: content.width,
+            height: content.height.min(2),
+        },
+    );
+
+    if list.height == 0 || list.width == 0 {
+        return;
+    }
+
+    let start = scroll.min(items.len().saturating_sub(visible));
+    let end = (start + visible).min(items.len());
+    let mut lines = Vec::new();
+    for idx in start..end {
+        let item = &items[idx];
+        let style = if item.label.is_empty() {
+            dim_style()
+        } else if focused && idx == selected {
+            if item.enabled {
+                sel_style()
+            } else {
+                dim_style()
+            }
+        } else if item.enabled {
+            normal_style()
+        } else {
+            dim_style()
+        };
+        let text = if item.label.is_empty() {
+            "-".repeat(list.width as usize)
+        } else {
+            truncate_with_ellipsis(&item.label, list.width as usize)
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+    while lines.len() < visible {
+        lines.push(Line::from(""));
+    }
+    f.render_widget(Paragraph::new(lines), list);
 }
 
 fn file_manager_settings_rows() -> Vec<String> {
@@ -4656,9 +6822,7 @@ fn normalize_wallpaper_lines(lines: Vec<String>) -> Vec<String> {
         .into_iter()
         .map(|line| {
             let sanitized = sanitize_wallpaper_line(&line);
-            sanitized
-                .trim_end_matches(is_wallpaper_space)
-                .to_string()
+            sanitized.trim_end_matches(is_wallpaper_space).to_string()
         })
         .collect();
     while lines
@@ -4834,6 +6998,33 @@ fn wallpaper_size_rows() -> Vec<String> {
     rows
 }
 
+fn desktop_theme_rows() -> Vec<String> {
+    let current = get_settings().theme;
+    let mut rows = Vec::new();
+    for (name, _) in THEMES {
+        let marker = if *name == current { "*" } else { " " };
+        rows.push(format!("[{marker}] {name}"));
+    }
+    rows.push("Back".to_string());
+    rows
+}
+
+fn desktop_icon_style_rows() -> Vec<String> {
+    let current = get_settings().desktop_icon_style;
+    let mut rows = Vec::new();
+    for style in [
+        DesktopIconStyle::Dos,
+        DesktopIconStyle::Win95,
+        DesktopIconStyle::Minimal,
+        DesktopIconStyle::NoIcons,
+    ] {
+        let marker = if style == current { "*" } else { " " };
+        rows.push(format!("[{marker}] {}", desktop_icon_style_label(style)));
+    }
+    rows.push("Back".to_string());
+    rows
+}
+
 fn wallpaper_choose_rows() -> Vec<String> {
     let s = get_settings();
     let mut rows = custom_wallpaper_names(&s);
@@ -4883,7 +7074,11 @@ fn wallpaper_preview_name(settings: &DesktopSettingsState) -> Option<String> {
 
 fn wallpaper_source_grid(lines: &[String]) -> (Vec<Vec<char>>, usize, usize) {
     let src_h = lines.len();
-    let src_w = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let src_w = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
     if src_h == 0 || src_w == 0 {
         return (Vec::new(), src_w, src_h);
     }
@@ -4988,7 +7183,11 @@ fn centered_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> V
     let min_h = ((max_h * 40) / 100).clamp(4, max_h);
 
     let mut out = fit_wallpaper_to_area(lines, target_w, target_h);
-    let out_w = out.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let out_w = out
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
     let out_h = out.len();
     if out_w < min_w || out_h < min_h {
         out = fit_wallpaper_to_area(lines, min_w, min_h);
@@ -5146,10 +7345,19 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
     let s = get_settings();
     match &settings.panel {
         DesktopSettingsPanel::Appearance => vec![
-            format!("Theme: {} [cycle]", s.theme),
+            format!("Theme: {} [choose]", s.theme),
+            format!(
+                "Desktop Cursor: {} [toggle]",
+                if s.desktop_show_cursor { "ON" } else { "OFF" }
+            ),
+            format!(
+                "Desktop Icons: {} [choose]",
+                desktop_icon_style_label(s.desktop_icon_style)
+            ),
             "Wallpapers".to_string(),
             "Back".to_string(),
         ],
+        DesktopSettingsPanel::ThemeSelect => desktop_theme_rows(),
         DesktopSettingsPanel::General => vec![
             format!("Sound: {} [toggle]", if s.sound { "ON" } else { "OFF" }),
             format!("Bootup: {} [toggle]", if s.bootup { "ON" } else { "OFF" }),
@@ -5189,6 +7397,7 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
             .into_iter()
             .map(|row| row.label)
             .collect(),
+        DesktopSettingsPanel::IconStyle => desktop_icon_style_rows(),
         DesktopSettingsPanel::WallpaperSize => wallpaper_size_rows(),
         DesktopSettingsPanel::WallpaperChoose => wallpaper_choose_rows(),
         DesktopSettingsPanel::WallpaperDelete => wallpaper_delete_rows(),
@@ -5351,10 +7560,12 @@ fn draw_desktop_settings_window(
     let header = match &settings.panel {
         DesktopSettingsPanel::Home => "Settings",
         DesktopSettingsPanel::Appearance => "Appearance",
+        DesktopSettingsPanel::ThemeSelect => "Theme",
         DesktopSettingsPanel::General => "General",
         DesktopSettingsPanel::CliDisplay => "CLI Display",
         DesktopSettingsPanel::Wallpapers => "Wallpapers",
         DesktopSettingsPanel::WallpaperSize => "Wallpaper Size",
+        DesktopSettingsPanel::IconStyle => "Desktop Icon Style",
         DesktopSettingsPanel::WallpaperAdd => "Add Wallpaper",
         DesktopSettingsPanel::WallpaperChoose => "Choose Wallpaper",
         DesktopSettingsPanel::WallpaperDelete => "Delete Wallpaper",
@@ -5632,7 +7843,7 @@ fn draw_desktop_settings_window(
     }
 }
 
-fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState) {
+fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState, force_plain: bool) {
     let inner = Rect {
         x: area.x + 1,
         y: area.y + 1,
@@ -5642,7 +7853,7 @@ fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState) {
     if inner.height == 0 || inner.width == 0 {
         return;
     }
-    app.session.render(f, inner);
+    app.session.render_with_hint(f, inner, force_plain);
 }
 
 fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
@@ -5931,6 +8142,28 @@ fn handle_window_content_mouse(
     let mut settings_action = DesktopSettingsAction::None;
     let mut settings_window_id = None;
     let mut refresh_file_managers = false;
+    let empty_trash_clicked = if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        if let Some(win) = state.windows.get(idx_last) {
+            if let WindowKind::FileManager(fm) = &win.kind {
+                let content = file_manager_content_rect(win.rect.to_rect());
+                file_manager_empty_trash_button_rect(content, &fm.cwd)
+                    .is_some_and(|btn| point_in_rect(mouse.column, mouse.row, btn))
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if empty_trash_clicked {
+        match empty_trash_and_refresh(state) {
+            Ok(count) => flash_message(terminal, &format!("Trash emptied ({count} items)."), 900)?,
+            Err(err) => flash_message(terminal, &format!("Empty trash failed: {err}"), 1200)?,
+        }
+        return Ok(());
+    }
     let clicked_target = {
         let win = &mut state.windows[idx_last];
         let rect = win.rect;
@@ -5965,7 +8198,9 @@ fn handle_window_content_mouse(
                 }
                 if mouse.row == content.y {
                     let rel_x = mouse.column.saturating_sub(content.x) as usize;
-                    if let Some(tab_idx) = file_manager_tab_index_at(fm, content.width as usize, rel_x) {
+                    if let Some(tab_idx) =
+                        file_manager_tab_index_at(fm, content.width as usize, rel_x)
+                    {
                         let _ = fm.switch_to_tab(tab_idx);
                         let entry_area = file_manager_entry_rect(content, cfg.show_tree_panel);
                         file_manager_ensure_selection_visible(fm, entry_area);
@@ -6054,6 +8289,32 @@ fn handle_window_content_mouse(
                     row: idx,
                 })
             }
+            WindowKind::DesktopHub(hub) => {
+                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    return Ok(());
+                }
+                let list = desktop_hub_list_rect(win.rect.to_rect());
+                if !point_in_rect(mouse.column, mouse.row, list) || list.height == 0 {
+                    return Ok(());
+                }
+                let items = desktop_hub_items(hub, current_user);
+                let row = (mouse.row - list.y) as usize;
+                let visible = list.height as usize;
+                if row >= visible {
+                    return Ok(());
+                }
+                let start = hub.scroll.min(items.len().saturating_sub(visible));
+                let idx = start + row;
+                if idx >= items.len() {
+                    return Ok(());
+                }
+                hub.selected = idx;
+                desktop_hub_ensure_selection_visible(hub, list, items.len());
+                Some(ClickTarget::HubItem {
+                    window_id: win.id,
+                    row: idx,
+                })
+            }
             WindowKind::FileManagerSettings(settings) => {
                 if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                     return Ok(());
@@ -6110,19 +8371,46 @@ fn handle_window_content_mouse(
         return Ok(());
     };
     if is_double_click(state, clicked_target) {
-        if let ClickTarget::FileEntry { window_id, .. } = clicked_target {
-            let pending = if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
-                if let WindowKind::FileManager(fm) = &mut win.kind {
-                    fm.activate_selected(FileManagerOpenRequest::Builtin)
-                } else {
-                    None
+        match clicked_target {
+            ClickTarget::FileEntry { window_id, .. } => {
+                let pending =
+                    if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                        if let WindowKind::FileManager(fm) = &mut win.kind {
+                            fm.activate_selected(FileManagerOpenRequest::Builtin)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some((path, request)) = pending {
+                    handle_file_open_request(terminal, state, &path, request)?;
                 }
-            } else {
-                None
-            };
-            if let Some((path, request)) = pending {
-                handle_file_open_request(terminal, state, &path, request)?;
             }
+            ClickTarget::HubItem { window_id, row } => {
+                let action =
+                    state
+                        .windows
+                        .iter()
+                        .find(|w| w.id == window_id)
+                        .and_then(|w| match &w.kind {
+                            WindowKind::DesktopHub(hub) => {
+                                let items = desktop_hub_items(hub, current_user);
+                                items.get(row).and_then(|item| {
+                                    if item.enabled {
+                                        Some(item.action.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }
+                            _ => None,
+                        });
+                if let Some(action) = action {
+                    run_desktop_hub_action(terminal, current_user, state, action)?;
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -6146,6 +8434,10 @@ fn send_mouse_to_focused_pty(
     state: &mut DesktopState,
     mouse: crossterm::event::MouseEvent,
 ) -> bool {
+    if matches!(mouse.kind, MouseEventKind::Moved) {
+        // Mouse-move passthrough is noisy and makes window drag feel sluggish.
+        return false;
+    }
     let Some(idx) = focused_visible_window_idx(state) else {
         return false;
     };
@@ -6168,8 +8460,127 @@ fn send_mouse_to_focused_pty(
     true
 }
 
-fn handle_file_manager_scroll_mouse(state: &mut DesktopState, mouse: crossterm::event::MouseEvent) -> bool {
-    let delta = match mouse.kind {
+fn desktop_hub_content_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn desktop_hub_list_rect(area: Rect) -> Rect {
+    let content = desktop_hub_content_rect(area);
+    Rect {
+        x: content.x,
+        y: content.y.saturating_add(2),
+        width: content.width,
+        height: content.height.saturating_sub(2),
+    }
+}
+
+fn desktop_hub_ensure_selection_visible(
+    hub: &mut DesktopHubState,
+    list_rect: Rect,
+    item_count: usize,
+) {
+    if item_count == 0 || list_rect.height == 0 {
+        hub.selected = 0;
+        hub.scroll = 0;
+        return;
+    }
+    hub.selected = hub.selected.min(item_count.saturating_sub(1));
+    let visible = list_rect.height as usize;
+    if hub.selected < hub.scroll {
+        hub.scroll = hub.selected;
+    } else if hub.selected >= hub.scroll.saturating_add(visible) {
+        hub.scroll = hub.selected.saturating_sub(visible.saturating_sub(1));
+    }
+    let max_scroll = item_count.saturating_sub(visible);
+    hub.scroll = hub.scroll.min(max_scroll);
+}
+
+fn desktop_hub_apply_scroll_delta(
+    hub: &mut DesktopHubState,
+    list_rect: Rect,
+    delta: isize,
+) -> bool {
+    if list_rect.height == 0 {
+        return false;
+    }
+    let current_user = get_current_user().unwrap_or_else(|| "admin".to_string());
+    let item_count = desktop_hub_items(hub, &current_user).len();
+    if item_count == 0 {
+        return false;
+    }
+    let prev_selected = hub.selected;
+    let prev = hub.scroll;
+    match delta.cmp(&0) {
+        Ordering::Less => {
+            hub.selected = hub.selected.saturating_sub(1);
+        }
+        Ordering::Greater => {
+            hub.selected = (hub.selected + 1).min(item_count.saturating_sub(1));
+        }
+        Ordering::Equal => {}
+    }
+    desktop_hub_ensure_selection_visible(hub, list_rect, item_count);
+    prev_selected != hub.selected || prev != hub.scroll
+}
+
+fn desktop_hub_input_slot(hub: &DesktopHubState) -> Option<u8> {
+    match hub.kind {
+        DesktopHubKind::InstallerSearch if hub.selected == 0 => Some(1),
+        DesktopHubKind::EditApps
+        | DesktopHubKind::EditGames
+        | DesktopHubKind::EditNetwork
+        | DesktopHubKind::EditDocuments
+            if hub.selected == 0 =>
+        {
+            Some(1)
+        }
+        DesktopHubKind::EditApps
+        | DesktopHubKind::EditGames
+        | DesktopHubKind::EditNetwork
+        | DesktopHubKind::EditDocuments
+            if hub.selected == 1 =>
+        {
+            Some(2)
+        }
+        DesktopHubKind::UserCreate if hub.selected == 0 => Some(1),
+        DesktopHubKind::UserCreate if hub.selected == 2 && hub.mode_idx == 0 => Some(2),
+        DesktopHubKind::UserResetPassword if hub.context_text.is_some() && hub.selected == 0 => {
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
+fn desktop_hub_push_char(hub: &mut DesktopHubState, c: char) {
+    match desktop_hub_input_slot(hub) {
+        Some(1) => hub.input.push(c),
+        Some(2) => hub.input2.push(c),
+        _ => {}
+    }
+}
+
+fn desktop_hub_pop_char(hub: &mut DesktopHubState) {
+    match desktop_hub_input_slot(hub) {
+        Some(1) => {
+            let _ = hub.input.pop();
+        }
+        Some(2) => {
+            let _ = hub.input2.pop();
+        }
+        _ => {}
+    }
+}
+
+fn handle_file_manager_scroll_mouse(
+    state: &mut DesktopState,
+    mouse: crossterm::event::MouseEvent,
+) -> bool {
+    let delta: isize = match mouse.kind {
         MouseEventKind::ScrollUp => -1,
         MouseEventKind::ScrollDown => 1,
         _ => 0,
@@ -6178,49 +8589,143 @@ fn handle_file_manager_scroll_mouse(state: &mut DesktopState, mouse: crossterm::
         return false;
     }
 
-    let mut target: Option<(usize, bool)> = None;
+    let mut fm_target: Option<(usize, bool)> = None;
+    let mut hub_target: Option<usize> = None;
     for idx in (0..state.windows.len()).rev() {
         let win = &state.windows[idx];
-        if win.minimized || !matches!(win.kind, WindowKind::FileManager(_)) {
+        if win.minimized {
             continue;
         }
-        let content = file_manager_content_rect(win.rect.to_rect());
-        let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-        let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
-        if tree_area.is_some_and(|tree| point_in_rect(mouse.column, mouse.row, tree)) {
-            target = Some((idx, true));
-            break;
-        }
-        if point_in_rect(mouse.column, mouse.row, entry_area) {
-            target = Some((idx, false));
-            break;
+        match &win.kind {
+            WindowKind::FileManager(_) => {
+                let content = file_manager_content_rect(win.rect.to_rect());
+                let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+                let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
+                if tree_area.is_some_and(|tree| point_in_rect(mouse.column, mouse.row, tree)) {
+                    fm_target = Some((idx, true));
+                    break;
+                }
+                if point_in_rect(mouse.column, mouse.row, entry_area) {
+                    fm_target = Some((idx, false));
+                    break;
+                }
+            }
+            WindowKind::DesktopHub(_) => {
+                let list = desktop_hub_list_rect(win.rect.to_rect());
+                if point_in_rect(mouse.column, mouse.row, list) {
+                    hub_target = Some(idx);
+                    break;
+                }
+            }
+            _ => {}
         }
     }
-    if target.is_none() {
+    if fm_target.is_none() && hub_target.is_none() {
         if let Some(idx) = focused_visible_window_idx(state) {
-            if let WindowKind::FileManager(fm) = &state.windows[idx].kind {
-                let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-                target = Some((idx, show_tree && fm.tree_focus));
+            match &state.windows[idx].kind {
+                WindowKind::FileManager(fm) => {
+                    let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+                    fm_target = Some((idx, show_tree && fm.tree_focus));
+                }
+                WindowKind::DesktopHub(_) => {
+                    hub_target = Some(idx);
+                }
+                _ => {}
             }
         }
     }
 
-    let Some((idx, tree_target)) = target else {
-        return false;
-    };
-    let content = file_manager_content_rect(state.windows[idx].rect.to_rect());
-    let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-    let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
-    let WindowKind::FileManager(fm) = &mut state.windows[idx].kind else {
-        return false;
-    };
-    if tree_target {
-        let Some(tree_rect) = tree_area else {
+    if let Some(idx) = hub_target {
+        let list = desktop_hub_list_rect(state.windows[idx].rect.to_rect());
+        let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind else {
             return false;
         };
-        file_manager_tree_apply_scroll_delta(fm, tree_rect, delta)
-    } else {
-        file_manager_apply_scroll_delta(fm, entry_area, delta)
+        return desktop_hub_apply_scroll_delta(hub, list, delta);
+    }
+
+    if let Some((idx, tree_target)) = fm_target {
+        let content = file_manager_content_rect(state.windows[idx].rect.to_rect());
+        let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+        let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
+        let WindowKind::FileManager(fm) = &mut state.windows[idx].kind else {
+            return false;
+        };
+        if tree_target {
+            let Some(tree_rect) = tree_area else {
+                return false;
+            };
+            return file_manager_tree_apply_scroll_delta(fm, tree_rect, delta);
+        }
+        return file_manager_apply_scroll_delta(fm, entry_area, delta);
+    }
+
+    false
+}
+
+fn handle_settings_scroll_mouse(
+    state: &mut DesktopState,
+    mouse: crossterm::event::MouseEvent,
+) -> bool {
+    let delta: i8 = match mouse.kind {
+        MouseEventKind::ScrollUp => -1,
+        MouseEventKind::ScrollDown => 1,
+        _ => 0,
+    };
+    if delta == 0 {
+        return false;
+    }
+
+    let mut target_idx: Option<usize> = None;
+    for idx in (0..state.windows.len()).rev() {
+        let win = &state.windows[idx];
+        if win.minimized {
+            continue;
+        }
+        if !point_in_rect(mouse.column, mouse.row, win.rect.to_rect()) {
+            continue;
+        }
+        if matches!(
+            win.kind,
+            WindowKind::DesktopSettings(_) | WindowKind::FileManagerSettings(_)
+        ) {
+            target_idx = Some(idx);
+            break;
+        }
+    }
+    if target_idx.is_none() {
+        if let Some(idx) = focused_visible_window_idx(state) {
+            if matches!(
+                state.windows[idx].kind,
+                WindowKind::DesktopSettings(_) | WindowKind::FileManagerSettings(_)
+            ) {
+                target_idx = Some(idx);
+            }
+        }
+    }
+    let Some(idx) = target_idx else {
+        return false;
+    };
+
+    match &mut state.windows[idx].kind {
+        WindowKind::DesktopSettings(settings) => {
+            let key = if delta < 0 {
+                KeyCode::Up
+            } else {
+                KeyCode::Down
+            };
+            let _ = handle_desktop_settings_key(settings, key, KeyModifiers::NONE);
+            true
+        }
+        WindowKind::FileManagerSettings(settings) => {
+            let max = file_manager_settings_rows().len().saturating_sub(1);
+            if delta < 0 {
+                settings.selected = settings.selected.saturating_sub(1);
+            } else {
+                settings.selected = (settings.selected + 1).min(max);
+            }
+            true
+        }
+        _ => false,
     }
 }
 
@@ -6252,6 +8757,914 @@ fn open_file_manager_window(state: &mut DesktopState) {
         maximized: false,
         kind: WindowKind::FileManager(FileManagerState::new()),
     });
+}
+
+fn open_trash_in_file_manager(state: &mut DesktopState) {
+    let trash = file_manager_trash_dir();
+    let _ = std::fs::create_dir_all(&trash);
+    open_file_manager_window(state);
+    if let Some(fm) = focused_file_manager_mut(state) {
+        fm.set_cwd(trash);
+        fm.selected = 0;
+        fm.scroll = 0;
+        fm.tree_focus = false;
+        fm.search_mode = false;
+        fm.refresh();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DesktopPackageManager {
+    Brew,
+    Apt,
+    Dnf,
+    Pacman,
+    Zypper,
+}
+
+impl DesktopPackageManager {
+    fn name(self) -> &'static str {
+        match self {
+            DesktopPackageManager::Brew => "brew",
+            DesktopPackageManager::Apt => "apt",
+            DesktopPackageManager::Dnf => "dnf",
+            DesktopPackageManager::Pacman => "pacman",
+            DesktopPackageManager::Zypper => "zypper",
+        }
+    }
+
+    fn install_cmd(self, pkg: &str) -> Vec<String> {
+        match self {
+            DesktopPackageManager::Brew => vec!["brew".into(), "install".into(), pkg.into()],
+            DesktopPackageManager::Apt => vec![
+                "sudo".into(),
+                "apt".into(),
+                "install".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Dnf => vec![
+                "sudo".into(),
+                "dnf".into(),
+                "install".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Pacman => vec![
+                "sudo".into(),
+                "pacman".into(),
+                "-S".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Zypper => vec![
+                "sudo".into(),
+                "zypper".into(),
+                "-n".into(),
+                "install".into(),
+                pkg.into(),
+            ],
+        }
+    }
+
+    fn remove_cmd(self, pkg: &str) -> Vec<String> {
+        match self {
+            DesktopPackageManager::Brew => vec!["brew".into(), "uninstall".into(), pkg.into()],
+            DesktopPackageManager::Apt => vec![
+                "sudo".into(),
+                "apt".into(),
+                "remove".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Dnf => vec![
+                "sudo".into(),
+                "dnf".into(),
+                "remove".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Pacman => vec![
+                "sudo".into(),
+                "pacman".into(),
+                "-R".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Zypper => vec![
+                "sudo".into(),
+                "zypper".into(),
+                "-n".into(),
+                "remove".into(),
+                pkg.into(),
+            ],
+        }
+    }
+
+    fn update_cmd(self, pkg: &str) -> Vec<String> {
+        match self {
+            DesktopPackageManager::Brew => vec!["brew".into(), "upgrade".into(), pkg.into()],
+            DesktopPackageManager::Apt => vec![
+                "sudo".into(),
+                "apt".into(),
+                "upgrade".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Dnf => vec![
+                "sudo".into(),
+                "dnf".into(),
+                "upgrade".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            DesktopPackageManager::Pacman => {
+                vec!["sudo".into(), "pacman".into(), "-U".into(), pkg.into()]
+            }
+            DesktopPackageManager::Zypper => vec![
+                "sudo".into(),
+                "zypper".into(),
+                "-n".into(),
+                "update".into(),
+                pkg.into(),
+            ],
+        }
+    }
+
+    fn search(self, query: &str) -> Vec<String> {
+        let out = Command::new(self.name())
+            .args(["search", query])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        out.lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('='))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn list_installed(self) -> Vec<String> {
+        let (bin, args): (&str, &[&str]) = match self {
+            DesktopPackageManager::Brew => ("brew", &["list"]),
+            DesktopPackageManager::Apt => ("apt", &["list", "--installed"]),
+            DesktopPackageManager::Dnf => ("dnf", &["list", "installed"]),
+            DesktopPackageManager::Pacman => ("pacman", &["-Q"]),
+            DesktopPackageManager::Zypper => ("zypper", &["se", "--installed-only"]),
+        };
+        Command::new(bin)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| {
+                        !l.trim().is_empty()
+                            && !l.starts_with("Listing")
+                            && !l.starts_with("WARNING")
+                    })
+                    .map(|l| {
+                        l.split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .split('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn desktop_which(bin: &str) -> bool {
+    Command::new("which")
+        .arg(bin)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn desktop_detect_package_manager() -> Option<DesktopPackageManager> {
+    let pms: [(&str, DesktopPackageManager); 6] = [
+        ("brew", DesktopPackageManager::Brew),
+        ("apt", DesktopPackageManager::Apt),
+        ("apt-get", DesktopPackageManager::Apt),
+        ("dnf", DesktopPackageManager::Dnf),
+        ("pacman", DesktopPackageManager::Pacman),
+        ("zypper", DesktopPackageManager::Zypper),
+    ];
+    for (bin, pm) in pms {
+        if desktop_which(bin) {
+            return Some(pm);
+        }
+    }
+    None
+}
+
+fn desktop_has_internet() -> bool {
+    Command::new("curl")
+        .args(["-s", "--max-time", "3", "https://www.google.com"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn desktop_has_python_module(module: &str) -> bool {
+    if !desktop_which("python3") {
+        return false;
+    }
+    let code = format!("import {module}");
+    Command::new("python3")
+        .args(["-c", code.as_str()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn run_external_cmd_suspended(terminal: &mut Term, cmd: &[String]) -> Result<bool> {
+    if cmd.is_empty() {
+        return Ok(false);
+    }
+    let mut ok = false;
+    run_with_mouse_capture_paused(terminal, |t| {
+        with_suspended(t, || {
+            let status = Command::new(&cmd[0]).args(&cmd[1..]).status()?;
+            ok = status.success();
+            Ok(())
+        })
+    })?;
+    Ok(ok)
+}
+
+fn desktop_hub_window_title(
+    kind: DesktopHubKind,
+    explicit: Option<&str>,
+    context_path: Option<&Path>,
+    context_text: Option<&str>,
+) -> String {
+    if let Some(s) = explicit {
+        return s.to_string();
+    }
+    match kind {
+        DesktopHubKind::DocumentCategory => context_path
+            .and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Documents".to_string()),
+        DesktopHubKind::LogEntry => context_path
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Log".to_string()),
+        DesktopHubKind::InstallerPackage => context_text
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Package")
+            .to_string(),
+        _ => desktop_hub_title(kind).to_string(),
+    }
+}
+
+fn refresh_desktop_hub_data(hub: &mut DesktopHubState) {
+    match hub.kind {
+        DesktopHubKind::EditApps => {
+            hub.cached_rows = sorted_json_keys(&load_apps());
+        }
+        DesktopHubKind::EditGames => {
+            hub.cached_rows = sorted_json_keys(&load_games());
+        }
+        DesktopHubKind::EditNetwork => {
+            hub.cached_rows = sorted_json_keys(&load_networks());
+        }
+        DesktopHubKind::EditDocuments => {
+            hub.cached_rows = sorted_json_keys(&load_categories());
+        }
+        DesktopHubKind::InstallerInstalled => {
+            hub.cached_rows = desktop_detect_package_manager()
+                .map(|pm| pm.list_installed())
+                .unwrap_or_default();
+            hub.cached_rows.sort_by_key(|s| s.to_lowercase());
+        }
+        _ => {}
+    }
+}
+
+fn refresh_desktop_hub_windows(state: &mut DesktopState, kind: DesktopHubKind) {
+    for win in &mut state.windows {
+        if let WindowKind::DesktopHub(hub) = &mut win.kind {
+            if hub.kind == kind {
+                refresh_desktop_hub_data(hub);
+            }
+        }
+    }
+}
+
+fn open_desktop_hub_window(state: &mut DesktopState, kind: DesktopHubKind) {
+    open_desktop_hub_window_with_context(state, kind, None, None, None);
+}
+
+fn open_desktop_hub_window_with_context(
+    state: &mut DesktopState,
+    kind: DesktopHubKind,
+    title: Option<String>,
+    context_path: Option<PathBuf>,
+    context_text: Option<String>,
+) {
+    if let Some(id) = state.windows.iter().find_map(|w| match &w.kind {
+        WindowKind::DesktopHub(hub)
+            if hub.kind == kind
+                && hub.context_path == context_path
+                && hub.context_text == context_text =>
+        {
+            Some(w.id)
+        }
+        _ => None,
+    }) {
+        if let Some(win) = state.windows.iter_mut().find(|w| w.id == id) {
+            if let WindowKind::DesktopHub(hub) = &mut win.kind {
+                refresh_desktop_hub_data(hub);
+            }
+        }
+        focus_window(state, id);
+        return;
+    }
+
+    let (w, h) = match kind {
+        DesktopHubKind::Logs => (62, 21),
+        DesktopHubKind::LogEntry => (44, 14),
+        DesktopHubKind::DocumentCategory => (66, 22),
+        DesktopHubKind::ProgramInstaller => (58, 18),
+        DesktopHubKind::InstallerSearch => (66, 22),
+        DesktopHubKind::InstallerInstalled => (62, 22),
+        DesktopHubKind::InstallerPackage => (56, 18),
+        DesktopHubKind::EditMenus => (48, 16),
+        DesktopHubKind::EditApps
+        | DesktopHubKind::EditGames
+        | DesktopHubKind::EditNetwork
+        | DesktopHubKind::EditDocuments => (70, 22),
+        DesktopHubKind::UserManagement => (52, 18),
+        DesktopHubKind::UserCreate => (58, 18),
+        DesktopHubKind::UserDelete
+        | DesktopHubKind::UserResetPassword
+        | DesktopHubKind::UserChangeAuthUsers
+        | DesktopHubKind::UserChangeAuthMethod
+        | DesktopHubKind::UserToggleAdmin => (56, 20),
+        _ => (56, 20),
+    };
+    let mut hub = DesktopHubState {
+        kind,
+        selected: 0,
+        scroll: 0,
+        context_path: context_path.clone(),
+        context_text: context_text.clone(),
+        input: String::new(),
+        input2: String::new(),
+        mode_idx: 0,
+        flag: false,
+        input_mode: matches!(kind, DesktopHubKind::InstallerSearch),
+        cached_rows: Vec::new(),
+    };
+    refresh_desktop_hub_data(&mut hub);
+
+    let id = state.next_id;
+    state.next_id += 1;
+    let title = desktop_hub_window_title(
+        kind,
+        title.as_deref(),
+        context_path.as_deref(),
+        context_text.as_deref(),
+    );
+    state.windows.push(DesktopWindow {
+        id,
+        title,
+        rect: WinRect { x: 10, y: 5, w, h },
+        restore_rect: None,
+        minimized: false,
+        maximized: false,
+        kind: WindowKind::DesktopHub(hub),
+    });
+}
+
+fn run_desktop_hub_action(
+    terminal: &mut Term,
+    current_user: &str,
+    state: &mut DesktopState,
+    action: DesktopHubItemAction,
+) -> Result<()> {
+    match action {
+        DesktopHubItemAction::None => {}
+        DesktopHubItemAction::CloseFocusedWindow => {
+            if let Some(idx) = focused_visible_window_idx(state) {
+                let id = state.windows[idx].id;
+                close_window_by_id(state, id);
+            }
+        }
+        DesktopHubItemAction::LaunchCommand { title, cmd } => {
+            if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
+        }
+        DesktopHubItemAction::LaunchNukeCodes => {
+            if let Err(err) = open_pty_window_named(
+                terminal,
+                state,
+                &build_desktop_tool_command(current_user, "nuke-codes")?,
+                Some("Nuke Codes"),
+            ) {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
+        }
+        DesktopHubItemAction::OpenHub(kind) => open_desktop_hub_window(state, kind),
+        DesktopHubItemAction::OpenHubWithPath { kind, title, path } => {
+            open_desktop_hub_window_with_context(state, kind, Some(title), Some(path), None)
+        }
+        DesktopHubItemAction::OpenHubWithText { kind, title, text } => {
+            open_desktop_hub_window_with_context(state, kind, Some(title), None, Some(text))
+        }
+        DesktopHubItemAction::OpenDocumentFile(path) => {
+            let title = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "EPY".to_string());
+            let cmd = vec!["epy".to_string(), path.display().to_string()];
+            if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
+                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            }
+        }
+        DesktopHubItemAction::RunInstallerSearch => {
+            let Some(idx) = focused_visible_window_idx(state) else {
+                return Ok(());
+            };
+            let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind else {
+                return Ok(());
+            };
+            if !matches!(hub.kind, DesktopHubKind::InstallerSearch) {
+                return Ok(());
+            }
+            let query = hub.input.trim().to_string();
+            if query.is_empty() {
+                hub.cached_rows.clear();
+                flash_message(terminal, "Enter a search query.", 900)?;
+                return Ok(());
+            }
+            let Some(pm) = desktop_detect_package_manager() else {
+                flash_message(terminal, "No supported package manager found.", 1000)?;
+                return Ok(());
+            };
+            if !desktop_has_internet() {
+                flash_message(terminal, "No internet connection.", 1000)?;
+                return Ok(());
+            }
+            hub.cached_rows = pm.search(&query);
+            hub.selected = 0;
+            hub.scroll = 0;
+            if hub.cached_rows.is_empty() {
+                flash_message(terminal, "No results found.", 900)?;
+            }
+        }
+        DesktopHubItemAction::InstallPackage(pkg) => {
+            let Some(pm) = desktop_detect_package_manager() else {
+                flash_message(terminal, "No supported package manager found.", 1000)?;
+                return Ok(());
+            };
+            if !desktop_has_internet() {
+                flash_message(terminal, "No internet connection.", 1000)?;
+                return Ok(());
+            }
+            let ok = run_external_cmd_suspended(terminal, &pm.install_cmd(&pkg))?;
+            flash_message(
+                terminal,
+                if ok {
+                    "Install completed."
+                } else {
+                    "Install failed."
+                },
+                1100,
+            )?;
+            refresh_desktop_hub_windows(state, DesktopHubKind::InstallerInstalled);
+        }
+        DesktopHubItemAction::UpdatePackage(pkg) => {
+            let Some(pm) = desktop_detect_package_manager() else {
+                flash_message(terminal, "No supported package manager found.", 1000)?;
+                return Ok(());
+            };
+            if !desktop_has_internet() {
+                flash_message(terminal, "No internet connection.", 1000)?;
+                return Ok(());
+            }
+            let ok = run_external_cmd_suspended(terminal, &pm.update_cmd(&pkg))?;
+            flash_message(
+                terminal,
+                if ok {
+                    "Update completed."
+                } else {
+                    "Update failed."
+                },
+                1100,
+            )?;
+            refresh_desktop_hub_windows(state, DesktopHubKind::InstallerInstalled);
+        }
+        DesktopHubItemAction::UninstallPackage(pkg) => {
+            let Some(pm) = desktop_detect_package_manager() else {
+                flash_message(terminal, "No supported package manager found.", 1000)?;
+                return Ok(());
+            };
+            let ok = run_external_cmd_suspended(terminal, &pm.remove_cmd(&pkg))?;
+            flash_message(
+                terminal,
+                if ok {
+                    "Uninstall completed."
+                } else {
+                    "Uninstall failed."
+                },
+                1100,
+            )?;
+            refresh_desktop_hub_windows(state, DesktopHubKind::InstallerInstalled);
+        }
+        DesktopHubItemAction::AddPackageToApps(pkg) => {
+            let mut d = load_apps();
+            d.insert(
+                pkg.clone(),
+                serde_json::Value::Array(vec![serde_json::Value::String(pkg)]),
+            );
+            save_apps(&d);
+            flash_message(terminal, "Added to Applications.", 900)?;
+        }
+        DesktopHubItemAction::AddPackageToGames(pkg) => {
+            let mut d = load_games();
+            d.insert(
+                pkg.clone(),
+                serde_json::Value::Array(vec![serde_json::Value::String(pkg)]),
+            );
+            save_games(&d);
+            flash_message(terminal, "Added to Games.", 900)?;
+        }
+        DesktopHubItemAction::AddPackageToNetwork(pkg) => {
+            let mut d = load_networks();
+            d.insert(
+                pkg.clone(),
+                serde_json::Value::Array(vec![serde_json::Value::String(pkg)]),
+            );
+            save_networks(&d);
+            flash_message(terminal, "Added to Network.", 900)?;
+        }
+        DesktopHubItemAction::AddMenuEntry { kind } => {
+            let Some(idx) = focused_visible_window_idx(state) else {
+                return Ok(());
+            };
+            let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind else {
+                return Ok(());
+            };
+            let name = hub.input.trim();
+            let rhs = hub.input2.trim();
+            if name.is_empty() || rhs.is_empty() {
+                flash_message(terminal, "Fill both name and value fields.", 1200)?;
+                return Ok(());
+            }
+            match kind {
+                DesktopHubKind::EditApps
+                | DesktopHubKind::EditGames
+                | DesktopHubKind::EditNetwork => {
+                    let cmd_parts: Vec<serde_json::Value> = rhs
+                        .split_whitespace()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| serde_json::Value::String(s.to_string()))
+                        .collect();
+                    if cmd_parts.is_empty() {
+                        flash_message(terminal, "Command cannot be empty.", 1000)?;
+                        return Ok(());
+                    }
+                    match kind {
+                        DesktopHubKind::EditApps => {
+                            let mut m = load_apps();
+                            m.insert(name.to_string(), serde_json::Value::Array(cmd_parts));
+                            save_apps(&m);
+                        }
+                        DesktopHubKind::EditGames => {
+                            let mut m = load_games();
+                            m.insert(name.to_string(), serde_json::Value::Array(cmd_parts));
+                            save_games(&m);
+                        }
+                        DesktopHubKind::EditNetwork => {
+                            let mut m = load_networks();
+                            m.insert(name.to_string(), serde_json::Value::Array(cmd_parts));
+                            save_networks(&m);
+                        }
+                        _ => {}
+                    }
+                }
+                DesktopHubKind::EditDocuments => {
+                    let path = PathBuf::from(rhs);
+                    if !path.exists() || !path.is_dir() {
+                        flash_message(terminal, "Category path must be an existing folder.", 1300)?;
+                        return Ok(());
+                    }
+                    let mut m = load_categories();
+                    m.insert(name.to_string(), serde_json::Value::String(rhs.to_string()));
+                    save_categories(&m);
+                }
+                _ => {}
+            }
+            hub.input.clear();
+            hub.input2.clear();
+            hub.input_mode = false;
+            refresh_desktop_hub_data(hub);
+            flash_message(terminal, "Added.", 800)?;
+        }
+        DesktopHubItemAction::DeleteMenuEntry { kind, key } => {
+            match kind {
+                DesktopHubKind::EditApps => {
+                    let mut m = load_apps();
+                    m.remove(&key);
+                    save_apps(&m);
+                }
+                DesktopHubKind::EditGames => {
+                    let mut m = load_games();
+                    m.remove(&key);
+                    save_games(&m);
+                }
+                DesktopHubKind::EditNetwork => {
+                    let mut m = load_networks();
+                    m.remove(&key);
+                    save_networks(&m);
+                }
+                DesktopHubKind::EditDocuments => {
+                    let mut m = load_categories();
+                    m.remove(&key);
+                    save_categories(&m);
+                }
+                _ => {}
+            }
+            if let Some(idx) = focused_visible_window_idx(state) {
+                if let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind {
+                    refresh_desktop_hub_data(hub);
+                }
+            }
+            flash_message(terminal, "Deleted.", 800)?;
+        }
+        DesktopHubItemAction::CreateUserSubmit => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            let Some(idx) = focused_visible_window_idx(state) else {
+                return Ok(());
+            };
+            let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind else {
+                return Ok(());
+            };
+            let username = hub.input.trim().to_string();
+            if username.is_empty() {
+                flash_message(terminal, "Username required.", 900)?;
+                return Ok(());
+            }
+            let mut db = load_users();
+            if db.contains_key(&username) {
+                flash_message(terminal, "User already exists.", 1000)?;
+                return Ok(());
+            }
+            let method = match hub.mode_idx {
+                1 => AuthMethod::NoPassword,
+                2 => AuthMethod::HackingMinigame,
+                _ => AuthMethod::Password,
+            };
+            let password_hash = if matches!(method, AuthMethod::Password) {
+                if hub.input2.is_empty() {
+                    flash_message(terminal, "Password required for Password auth.", 1300)?;
+                    return Ok(());
+                }
+                hash_password(&hub.input2)
+            } else {
+                String::new()
+            };
+            db.insert(
+                username.clone(),
+                crate::auth::UserRecord {
+                    password_hash,
+                    is_admin: hub.flag,
+                    auth_method: method,
+                },
+            );
+            save_users(&db);
+            let _ = std::fs::create_dir_all(crate::config::users_dir().join(&username));
+            hub.input.clear();
+            hub.input2.clear();
+            hub.flag = false;
+            hub.mode_idx = 0;
+            hub.input_mode = false;
+            flash_message(terminal, "User created.", 900)?;
+        }
+        DesktopHubItemAction::DeleteUser(username) => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            if username == current_user {
+                flash_message(terminal, "Cannot delete current user.", 1000)?;
+                return Ok(());
+            }
+            let mut db = load_users();
+            db.remove(&username);
+            save_users(&db);
+            flash_message(terminal, "User deleted.", 900)?;
+        }
+        DesktopHubItemAction::OpenResetPasswordFor(username) => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            open_desktop_hub_window_with_context(
+                state,
+                DesktopHubKind::UserResetPassword,
+                Some(format!("Reset Password - {username}")),
+                None,
+                Some(username),
+            );
+            if let Some(idx) = focused_visible_window_idx(state) {
+                if let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind {
+                    hub.input_mode = true;
+                }
+            }
+        }
+        DesktopHubItemAction::ApplyResetPassword => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            let Some(idx) = focused_visible_window_idx(state) else {
+                return Ok(());
+            };
+            let WindowKind::DesktopHub(hub) = &mut state.windows[idx].kind else {
+                return Ok(());
+            };
+            let Some(username) = hub.context_text.clone() else {
+                return Ok(());
+            };
+            if hub.input.is_empty() {
+                flash_message(terminal, "Password cannot be empty.", 1100)?;
+                return Ok(());
+            }
+            let mut db = load_users();
+            if let Some(r) = db.get_mut(&username) {
+                r.password_hash = hash_password(&hub.input);
+                r.auth_method = AuthMethod::Password;
+                save_users(&db);
+                hub.input.clear();
+                hub.input_mode = false;
+                flash_message(terminal, "Password reset.", 900)?;
+            } else {
+                flash_message(terminal, "User not found.", 900)?;
+            }
+        }
+        DesktopHubItemAction::OpenChangeAuthFor(username) => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            open_desktop_hub_window_with_context(
+                state,
+                DesktopHubKind::UserChangeAuthMethod,
+                Some(format!("Auth Method - {username}")),
+                None,
+                Some(username),
+            );
+        }
+        DesktopHubItemAction::SetUserAuth { username, method } => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            let mut db = load_users();
+            if let Some(r) = db.get_mut(&username) {
+                r.auth_method = method.clone();
+                if matches!(method, AuthMethod::Password) {
+                    if r.password_hash.is_empty() {
+                        r.password_hash = hash_password("admin");
+                    }
+                } else {
+                    r.password_hash.clear();
+                }
+                save_users(&db);
+                flash_message(
+                    terminal,
+                    if matches!(method, AuthMethod::Password) {
+                        "Auth updated. Default password is 'admin' if none existed."
+                    } else {
+                        "Auth method updated."
+                    },
+                    1200,
+                )?;
+            } else {
+                flash_message(terminal, "User not found.", 900)?;
+            }
+        }
+        DesktopHubItemAction::ToggleUserAdmin(username) => {
+            if !is_admin(current_user) {
+                flash_message(terminal, "Access denied. Admin only.", 1000)?;
+                return Ok(());
+            }
+            if username == current_user {
+                flash_message(terminal, "Cannot change current user admin here.", 1200)?;
+                return Ok(());
+            }
+            let mut db = load_users();
+            if let Some(r) = db.get_mut(&username) {
+                r.is_admin = !r.is_admin;
+                let now_admin = r.is_admin;
+                save_users(&db);
+                flash_message(
+                    terminal,
+                    if now_admin {
+                        "Admin granted."
+                    } else {
+                        "Admin revoked."
+                    },
+                    900,
+                )?;
+            } else {
+                flash_message(terminal, "User not found.", 900)?;
+            }
+        }
+        DesktopHubItemAction::InstallAudioRuntime => {
+            if !desktop_which("python3") {
+                flash_message(terminal, "python3 not found. Install Python first.", 1200)?;
+                return Ok(());
+            }
+            if desktop_has_python_module("playsound") {
+                flash_message(terminal, "playsound is already installed.", 900)?;
+                return Ok(());
+            }
+            if !desktop_has_internet() {
+                flash_message(terminal, "No internet connection.", 1000)?;
+                return Ok(());
+            }
+            let pip_cmd = vec![
+                "python3".to_string(),
+                "-m".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "--user".to_string(),
+                "--upgrade".to_string(),
+                "playsound".to_string(),
+            ];
+            let mut ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
+            if !ok {
+                let ensure_cmd = vec![
+                    "python3".to_string(),
+                    "-m".to_string(),
+                    "ensurepip".to_string(),
+                    "--upgrade".to_string(),
+                ];
+                let _ = run_external_cmd_suspended(terminal, &ensure_cmd)?;
+                ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
+            }
+            if ok && desktop_has_python_module("playsound") {
+                flash_message(terminal, "playsound installed.", 1000)?;
+            } else {
+                flash_message(terminal, "Install completed with errors.", 1300)?;
+            }
+        }
+        DesktopHubItemAction::CreateLog => {
+            run_with_mouse_capture_paused(terminal, documents::journal_new)?;
+        }
+        DesktopHubItemAction::OpenLogEntry(path) => {
+            let title = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Log".to_string());
+            open_desktop_hub_window_with_context(
+                state,
+                DesktopHubKind::LogEntry,
+                Some(title),
+                Some(path),
+                None,
+            );
+        }
+        DesktopHubItemAction::ViewLog(path) => {
+            run_with_mouse_capture_paused(terminal, |t| documents::view_text_file(t, &path))?;
+        }
+        DesktopHubItemAction::EditLog(path) => {
+            run_with_mouse_capture_paused(terminal, |t| documents::edit_text_file(t, &path))?;
+        }
+        DesktopHubItemAction::DeleteLog(path) => {
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            if std::fs::remove_file(&path).is_ok() {
+                flash_message(terminal, &format!("Deleted {name}."), 900)?;
+            } else {
+                flash_message(terminal, "Delete failed.", 1000)?;
+            }
+            open_desktop_hub_window(state, DesktopHubKind::Logs);
+        }
+    }
+    Ok(())
 }
 
 fn open_file_manager_settings_window(state: &mut DesktopState) {
@@ -6338,7 +9751,8 @@ fn handle_file_manager_settings_key(
             }
             1 => {
                 update_settings(|s| {
-                    s.desktop_file_manager.show_tree_panel = !s.desktop_file_manager.show_tree_panel;
+                    s.desktop_file_manager.show_tree_panel =
+                        !s.desktop_file_manager.show_tree_panel;
                 });
                 persist_settings();
                 return (true, false);
@@ -6373,11 +9787,11 @@ fn handle_file_manager_settings_key(
             }
             5 => {
                 update_settings(|s| {
-                    s.desktop_file_manager.text_open_mode = match s.desktop_file_manager.text_open_mode
-                    {
-                        FileManagerTextOpenMode::Editor => FileManagerTextOpenMode::Viewer,
-                        FileManagerTextOpenMode::Viewer => FileManagerTextOpenMode::Editor,
-                    };
+                    s.desktop_file_manager.text_open_mode =
+                        match s.desktop_file_manager.text_open_mode {
+                            FileManagerTextOpenMode::Editor => FileManagerTextOpenMode::Viewer,
+                            FileManagerTextOpenMode::Viewer => FileManagerTextOpenMode::Editor,
+                        };
                 });
                 persist_settings();
                 return (true, false);
@@ -6582,7 +9996,9 @@ fn desktop_settings_profile_default_for_target(
 fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
     match &state.panel {
         DesktopSettingsPanel::Home => desktop_settings_home_items(state).len(),
-        DesktopSettingsPanel::Appearance => 3,
+        DesktopSettingsPanel::Appearance => 5,
+        DesktopSettingsPanel::ThemeSelect => desktop_theme_rows().len(),
+        DesktopSettingsPanel::IconStyle => desktop_icon_style_rows().len(),
         DesktopSettingsPanel::General => 4,
         DesktopSettingsPanel::CliDisplay => 4,
         DesktopSettingsPanel::Wallpapers => desktop_wallpaper_rows().len(),
@@ -6621,21 +10037,22 @@ fn desktop_settings_apply_open_mode_toggle() {
     persist_settings();
 }
 
-fn desktop_settings_cycle_theme(forward: bool) {
-    let current = get_settings().theme;
-    let idx = THEMES
-        .iter()
-        .position(|(name, _)| *name == current)
-        .unwrap_or(0);
-    let next_idx = if forward {
-        (idx + 1) % THEMES.len()
-    } else if idx == 0 {
-        THEMES.len().saturating_sub(1)
-    } else {
-        idx - 1
-    };
-    let next = THEMES[next_idx].0.to_string();
-    update_settings(|s| s.theme = next);
+fn desktop_settings_toggle_desktop_cursor() {
+    update_settings(|s| s.desktop_show_cursor = !s.desktop_show_cursor);
+    persist_settings();
+}
+
+fn desktop_icon_style_label(style: DesktopIconStyle) -> &'static str {
+    match style {
+        DesktopIconStyle::Dos => "DOS",
+        DesktopIconStyle::Win95 => "Win95",
+        DesktopIconStyle::Minimal => "Minimal",
+        DesktopIconStyle::NoIcons => "No Icons",
+    }
+}
+
+fn desktop_settings_set_icon_style(style: DesktopIconStyle) {
+    update_settings(|s| s.desktop_icon_style = style);
     persist_settings();
 }
 
@@ -6836,10 +10253,28 @@ fn handle_desktop_settings_activate(
         }
         DesktopSettingsPanel::Appearance => match state.selected {
             0 => {
-                desktop_settings_cycle_theme(!reverse);
+                state.panel = DesktopSettingsPanel::ThemeSelect;
+                state.selected = THEMES
+                    .iter()
+                    .position(|(name, _)| *name == get_settings().theme)
+                    .unwrap_or(0);
                 DesktopSettingsAction::None
             }
             1 => {
+                desktop_settings_toggle_desktop_cursor();
+                DesktopSettingsAction::None
+            }
+            2 => {
+                state.panel = DesktopSettingsPanel::IconStyle;
+                state.selected = match get_settings().desktop_icon_style {
+                    DesktopIconStyle::Dos => 0,
+                    DesktopIconStyle::Win95 => 1,
+                    DesktopIconStyle::Minimal => 2,
+                    DesktopIconStyle::NoIcons => 3,
+                };
+                DesktopSettingsAction::None
+            }
+            3 => {
                 state.panel = DesktopSettingsPanel::Wallpapers;
                 state.selected = 0;
                 DesktopSettingsAction::None
@@ -6850,6 +10285,33 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
         },
+        DesktopSettingsPanel::ThemeSelect => {
+            if state.selected < THEMES.len() {
+                let theme = THEMES[state.selected].0.to_string();
+                update_settings(|s| s.theme = theme);
+                persist_settings();
+            }
+            state.panel = DesktopSettingsPanel::Appearance;
+            state.selected = 0;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::IconStyle => {
+            let styles = [
+                DesktopIconStyle::Dos,
+                DesktopIconStyle::Win95,
+                DesktopIconStyle::Minimal,
+                DesktopIconStyle::NoIcons,
+            ];
+            if state.selected < styles.len() {
+                desktop_settings_set_icon_style(styles[state.selected]);
+                state.panel = DesktopSettingsPanel::Appearance;
+                state.selected = 2;
+            } else {
+                state.panel = DesktopSettingsPanel::Appearance;
+                state.selected = 2;
+            }
+            DesktopSettingsAction::None
+        }
         DesktopSettingsPanel::General => match state.selected {
             0 => {
                 update_settings(|s| s.sound = !s.sound);
@@ -7023,7 +10485,9 @@ fn handle_desktop_settings_activate(
         DesktopSettingsPanel::ProfileEdit(slot) => {
             match state.selected {
                 4 => desktop_settings_toggle_profile_mouse(&DesktopProfileTarget::Builtin(slot)),
-                5 => desktop_settings_toggle_profile_fullscreen(&DesktopProfileTarget::Builtin(slot)),
+                5 => {
+                    desktop_settings_toggle_profile_fullscreen(&DesktopProfileTarget::Builtin(slot))
+                }
                 6 => desktop_settings_reset_profile(&DesktopProfileTarget::Builtin(slot)),
                 7 => {
                     state.panel = DesktopSettingsPanel::ProfileList;
@@ -7101,6 +10565,18 @@ fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSett
         DesktopSettingsPanel::Appearance => {
             state.panel = DesktopSettingsPanel::Home;
             state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::ThemeSelect => {
+            state.panel = DesktopSettingsPanel::Appearance;
+            state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::IconStyle => {
+            state.panel = DesktopSettingsPanel::Appearance;
+            state.selected = 2;
             state.hovered = None;
             DesktopSettingsAction::None
         }
@@ -7286,8 +10762,8 @@ fn handle_desktop_settings_key(
             DesktopSettingsPanel::Home => {
                 state.selected = state.selected.saturating_sub(1);
             }
-            DesktopSettingsPanel::Appearance if state.selected == 0 => {
-                desktop_settings_cycle_theme(false)
+            DesktopSettingsPanel::Appearance if state.selected == 1 => {
+                desktop_settings_toggle_desktop_cursor()
             }
             DesktopSettingsPanel::General if state.selected == 2 => {
                 desktop_settings_apply_open_mode_toggle()
@@ -7316,8 +10792,8 @@ fn handle_desktop_settings_key(
                 let max = desktop_settings_row_count(state).saturating_sub(1);
                 state.selected = (state.selected + 1).min(max);
             }
-            DesktopSettingsPanel::Appearance if state.selected == 0 => {
-                desktop_settings_cycle_theme(true)
+            DesktopSettingsPanel::Appearance if state.selected == 1 => {
+                desktop_settings_toggle_desktop_cursor()
             }
             DesktopSettingsPanel::General if state.selected == 2 => {
                 desktop_settings_apply_open_mode_toggle()
@@ -7612,6 +11088,7 @@ fn min_window_size_for_kind(kind: &WindowKind) -> (u16, u16) {
         WindowKind::PtyApp(app) => (app.min_w, app.min_h),
         WindowKind::DesktopSettings(_) => (64, 18),
         WindowKind::FileManager(_) => (MIN_WINDOW_W, MIN_WINDOW_H),
+        WindowKind::DesktopHub(_) => (46, 14),
         WindowKind::FileManagerSettings(_) => (46, 10),
     }
 }
@@ -7695,18 +11172,74 @@ fn winrect_from_rect(area: Rect) -> WinRect {
     }
 }
 
-fn hit_my_computer_icon(x: u16, y: u16, desk: Rect) -> bool {
-    let icon = my_computer_icon_rect(desk);
+fn desktop_icon_default_origin(desk: Rect, icon: DesktopIconId) -> (i32, i32) {
+    match icon {
+        DesktopIconId::MyComputer => (desk.x as i32 + 2, desk.y as i32 + 1),
+        DesktopIconId::Trash => (desk.x as i32 + 2, desk.y as i32 + 7),
+    }
+}
+
+fn desktop_icon_saved_origin(state: &DesktopState, icon: DesktopIconId) -> Option<(i32, i32)> {
+    match icon {
+        DesktopIconId::MyComputer => state.my_computer_icon_pos,
+        DesktopIconId::Trash => state.trash_icon_pos,
+    }
+}
+
+fn desktop_icon_set_origin(state: &mut DesktopState, icon: DesktopIconId, x: i32, y: i32) {
+    match icon {
+        DesktopIconId::MyComputer => state.my_computer_icon_pos = Some((x, y)),
+        DesktopIconId::Trash => state.trash_icon_pos = Some((x, y)),
+    }
+}
+
+fn clamp_icon_origin(x: i32, y: i32, desk: Rect, w: u16, h: u16) -> (i32, i32) {
+    let min_x = desk.x as i32;
+    let min_y = desk.y as i32;
+    let max_x = i32::from(desk.x.saturating_add(desk.width.saturating_sub(w)));
+    let max_y = i32::from(desk.y.saturating_add(desk.height.saturating_sub(h)));
+    (
+        x.clamp(min_x, max_x.max(min_x)),
+        y.clamp(min_y, max_y.max(min_y)),
+    )
+}
+
+fn desktop_icon_rect(state: &DesktopState, desk: Rect, icon: DesktopIconId) -> Rect {
+    let w = DESKTOP_ICON_WIDTH.min(desk.width.max(1));
+    let h = DESKTOP_ICON_HEIGHT.min(desk.height.max(1));
+    let (dx, dy) = desktop_icon_default_origin(desk, icon);
+    let (sx, sy) = desktop_icon_saved_origin(state, icon).unwrap_or((dx, dy));
+    let (x, y) = clamp_icon_origin(sx, sy, desk, w, h);
+    Rect {
+        x: x as u16,
+        y: y as u16,
+        width: w,
+        height: h,
+    }
+}
+
+fn hit_my_computer_icon(state: &DesktopState, x: u16, y: u16, desk: Rect) -> bool {
+    if matches!(get_settings().desktop_icon_style, DesktopIconStyle::NoIcons) {
+        return false;
+    }
+    let icon = my_computer_icon_rect(state, desk);
     point_in_rect(x, y, icon)
 }
 
-fn my_computer_icon_rect(desk: Rect) -> Rect {
-    Rect {
-        x: desk.x + 2,
-        y: desk.y + 1,
-        width: 12.min(desk.width.saturating_sub(2)),
-        height: 2.min(desk.height.saturating_sub(1)),
+fn hit_trash_icon(state: &DesktopState, x: u16, y: u16, desk: Rect) -> bool {
+    if matches!(get_settings().desktop_icon_style, DesktopIconStyle::NoIcons) {
+        return false;
     }
+    let icon = trash_icon_rect(state, desk);
+    point_in_rect(x, y, icon)
+}
+
+fn my_computer_icon_rect(state: &DesktopState, desk: Rect) -> Rect {
+    desktop_icon_rect(state, desk, DesktopIconId::MyComputer)
+}
+
+fn trash_icon_rect(state: &DesktopState, desk: Rect) -> Rect {
+    desktop_icon_rect(state, desk, DesktopIconId::Trash)
 }
 
 fn is_double_click(state: &mut DesktopState, target: ClickTarget) -> bool {

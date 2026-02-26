@@ -704,6 +704,12 @@ impl PtySession {
 
     /// Render the current vt100 screen into `area` of the ratatui frame.
     pub fn render(&self, f: &mut ratatui::Frame, area: Rect) {
+        self.render_with_hint(f, area, false);
+    }
+
+    /// Render with a caller-provided performance hint.
+    /// `force_plain=true` bypasses per-cell styling and uses faster line rendering.
+    pub fn render_with_hint(&self, f: &mut ratatui::Frame, area: Rect, force_plain: bool) {
         let Ok(parser) = self.parser.lock() else {
             return;
         };
@@ -712,7 +718,7 @@ impl PtySession {
         let rows = area.height as usize;
         let cols = area.width as usize;
 
-        if matches!(self.render_mode, PtyRenderMode::Plain) {
+        if force_plain || matches!(self.render_mode, PtyRenderMode::Plain) {
             let mut lines: Vec<Line> = screen
                 .rows(0, area.width)
                 .take(rows)
