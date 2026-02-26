@@ -5,7 +5,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::io::stdout;
-use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -46,9 +45,12 @@ pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
     crate::pty::launch_in_pty(terminal, cmd)
 }
 
-pub fn launch_epy(terminal: &mut Term, path: &Path) -> Result<()> {
+pub fn launch_argv(terminal: &mut Term, cmd: &[String]) -> Result<()> {
+    if cmd.is_empty() {
+        return Ok(());
+    }
     with_suspended(terminal, || {
-        Command::new("epy").arg(path).status()?;
+        Command::new(&cmd[0]).args(&cmd[1..]).status()?;
         Ok(())
     })
 }

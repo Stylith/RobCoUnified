@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::{base_dir, load_json, save_json, users_dir};
+use crate::config::{base_dir, load_json, mark_default_apps_prompt_pending, save_json, users_dir};
 use crate::ui::{
     confirm, flash_message, input_prompt, password_prompt, run_menu, MenuResult, Term,
 };
@@ -102,6 +102,7 @@ pub fn ensure_default_admin() {
             },
         );
         save_users(&db);
+        mark_default_apps_prompt_pending("admin");
     }
 }
 
@@ -255,6 +256,7 @@ fn create_user_dialog(terminal: &mut Term) -> Result<()> {
     );
     save_users(&db);
     let _ = std::fs::create_dir_all(users_dir().join(&username));
+    mark_default_apps_prompt_pending(&username);
     flash_message(terminal, &format!("User '{username}' created."), 800)
 }
 

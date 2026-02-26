@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::{get_current_user, is_allowed_extension, load_categories};
-use crate::launcher::launch_epy;
+use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
+use crate::launcher::launch_argv;
 use crate::status::render_status_bar;
 use crate::ui::{
     confirm, dim_style, flash_message, normal_style, pad_horizontal, pager, render_header,
@@ -456,7 +457,17 @@ fn browse_folder(terminal: &mut Term, folder: &Path, title: &str) -> Result<()> 
                             })
                             .unwrap_or(false)
                     }) {
-                        launch_epy(terminal, f)?;
+                        match resolve_document_open(f) {
+                            Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) => {
+                                view_text_file(terminal, f)?;
+                            }
+                            Some(ResolvedDocumentOpen::ExternalArgv(cmd)) => {
+                                launch_argv(terminal, &cmd)?;
+                            }
+                            None => {
+                                flash_message(terminal, "Error: No App for filetype", 1200)?;
+                            }
+                        }
                     }
                 }
             }

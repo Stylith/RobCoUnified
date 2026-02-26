@@ -19,15 +19,21 @@ use std::time::{Duration, Instant};
 use crate::auth::{hash_password, is_admin, load_users, save_users, AuthMethod};
 use crate::config::{
     get_current_user, get_settings, load_apps, load_categories, load_games, load_networks,
-    persist_settings, save_apps, save_categories, save_games, save_networks, update_settings,
-    CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopFileManagerSettings, DesktopIconStyle,
-    DesktopPtyProfileSettings, FileManagerSortMode, FileManagerTextOpenMode, FileManagerViewMode,
-    OpenMode, WallpaperSizeMode, THEMES,
+    mark_default_apps_prompt_pending, persist_settings, save_apps, save_categories, save_games,
+    save_networks, update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles,
+    DesktopFileManagerSettings, DesktopIconStyle, DesktopPtyProfileSettings, FileManagerSortMode,
+    FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode, THEMES,
 };
 use crate::documents;
+use crate::default_apps::{
+    binding_label, default_app_choices, parse_custom_argv_json, resolve_document_open,
+    set_binding_for_slot, slot_label, DefaultAppChoiceAction, DefaultAppSlot,
+    ResolvedDocumentOpen,
+};
 use crate::launcher::{json_to_cmd, with_suspended};
 use crate::ui::{
-    dim_style, flash_message, normal_style, sel_style, session_switch_scope, title_style, Term,
+    dim_style, flash_message, input_prompt, normal_style, sel_style, session_switch_scope,
+    title_style, Term,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +93,6 @@ enum StartAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartSubmenu {
-    Programs,
     System,
 }
 
@@ -444,6 +449,8 @@ enum DesktopSettingsPanel {
     Home,
     Appearance,
     ThemeSelect,
+    DefaultApps,
+    DefaultAppSelect(DefaultAppSlot),
     IconStyle,
     General,
     CliDisplay,
@@ -495,6 +502,7 @@ impl Default for DesktopSettingsState {
 enum DesktopSettingsHomeItem {
     Appearance,
     General,
+    DefaultApps,
     CliDisplay,
     CliProfiles,
     EditMenus,
@@ -509,6 +517,7 @@ enum DesktopSettingsAction {
     CloseWindow,
     OpenEditMenus,
     OpenUserManagement,
+    PromptDefaultAppCustom(DefaultAppSlot),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +563,7 @@ enum WindowKind {
 enum DesktopHubItemAction {
     None,
     CloseFocusedWindow,
+    ToggleBuiltinNukeCodesVisibility,
     LaunchCommand {
         title: String,
         cmd: Vec<String>,
@@ -822,7 +832,6 @@ struct StartLeafItem {
 struct StartState {
     open: bool,
     selected_root: usize,
-    selected_program: usize,
     selected_system: usize,
     selected_leaf_apps: usize,
     selected_leaf_docs: usize,
@@ -842,13 +851,12 @@ impl Default for StartState {
         Self {
             open: false,
             selected_root: 0,
-            selected_program: 0,
             selected_system: 0,
             selected_leaf_apps: 0,
             selected_leaf_docs: 0,
             selected_leaf_network: 0,
             selected_leaf_games: 0,
-            open_submenu: Some(StartSubmenu::Programs),
+            open_submenu: None,
             open_leaf: None,
             hover_candidate: None,
             app_items: Vec::new(),
@@ -880,19 +888,26 @@ struct DesktopState {
     trash_icon_pos: Option<(i32, i32)>,
 }
 
-const START_ROOT_ITEMS: [(&str, Option<StartSubmenu>); 5] = [
-    ("Programs", Some(StartSubmenu::Programs)),
-    ("System", Some(StartSubmenu::System)),
-    ("Return To Terminal Mode", None),
-    ("Logout", None),
-    ("Shutdown", None),
+const START_ROOT_ITEMS: [&str; 8] = [
+    "Applications",
+    "Documents",
+    "Network",
+    "Games",
+    "System",
+    "Return To Terminal Mode",
+    "Logout",
+    "Shutdown",
 ];
-const START_ROOT_VIS_ROWS: [Option<usize>; 6] = [Some(0), Some(1), None, Some(2), Some(3), Some(4)];
-const START_PROGRAMS: [(&str, StartProgramsLeaf); 4] = [
-    ("Applications", StartProgramsLeaf::Applications),
-    ("Documents", StartProgramsLeaf::Documents),
-    ("Network", StartProgramsLeaf::Network),
-    ("Games", StartProgramsLeaf::Games),
+const START_ROOT_VIS_ROWS: [Option<usize>; 9] = [
+    Some(0),
+    Some(1),
+    Some(2),
+    Some(3),
+    Some(4),
+    None,
+    Some(5),
+    Some(6),
+    Some(7),
 ];
 const START_SYSTEM: [(&str, StartLaunch); 4] = [
     ("Program Installer", StartLaunch::ProgramInstaller),
@@ -900,46 +915,69 @@ const START_SYSTEM: [(&str, StartLaunch); 4] = [
     ("File Manager", StartLaunch::FileManager),
     ("Settings", StartLaunch::Settings),
 ];
-const START_PROGRAMS_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
 const START_SYSTEM_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
 const TOP_SPOTLIGHT_ICON: &str = "⌕";
 
-fn submenu_for_root(idx: usize) -> Option<StartSubmenu> {
-    START_ROOT_ITEMS.get(idx).and_then(|(_, sub)| *sub)
+fn root_leaf_for_idx(idx: usize) -> Option<StartProgramsLeaf> {
+    match idx {
+        0 => Some(StartProgramsLeaf::Applications),
+        1 => Some(StartProgramsLeaf::Documents),
+        2 => Some(StartProgramsLeaf::Network),
+        3 => Some(StartProgramsLeaf::Games),
+        _ => None,
+    }
+}
+
+fn root_submenu_for_idx(idx: usize) -> Option<StartSubmenu> {
+    if idx == 4 {
+        Some(StartSubmenu::System)
+    } else {
+        None
+    }
+}
+
+fn root_action_for_idx(idx: usize) -> Option<StartAction> {
+    match idx {
+        5 => Some(StartAction::ReturnToTerminal),
+        6 => Some(StartAction::Logout),
+        7 => Some(StartAction::Shutdown),
+        _ => None,
+    }
+}
+
+fn root_has_expandable_panel(idx: usize) -> bool {
+    root_leaf_for_idx(idx).is_some() || root_submenu_for_idx(idx).is_some()
+}
+
+fn open_start_panel_for_root(state: &mut StartState) {
+    state.open_leaf = root_leaf_for_idx(state.selected_root);
+    state.open_submenu = root_submenu_for_idx(state.selected_root);
 }
 
 fn submenu_items_system() -> &'static [(&'static str, StartLaunch)] {
     &START_SYSTEM
 }
 
-fn submenu_items_programs() -> &'static [(&'static str, StartProgramsLeaf)] {
-    &START_PROGRAMS
-}
-
 fn submenu_items_len(sub: StartSubmenu) -> usize {
     match sub {
-        StartSubmenu::Programs => START_PROGRAMS.len(),
         StartSubmenu::System => START_SYSTEM.len(),
     }
 }
 
 fn submenu_selected_idx(state: &StartState, sub: StartSubmenu) -> usize {
     match sub {
-        StartSubmenu::Programs => state.selected_program,
         StartSubmenu::System => state.selected_system,
     }
 }
 
 fn submenu_selected_idx_mut(state: &mut StartState, sub: StartSubmenu) -> &mut usize {
     match sub {
-        StartSubmenu::Programs => &mut state.selected_program,
         StartSubmenu::System => &mut state.selected_system,
     }
 }
 
 fn submenu_visual_rows(sub: StartSubmenu) -> &'static [Option<usize>] {
     match sub {
-        StartSubmenu::Programs => &START_PROGRAMS_VIS_ROWS,
         StartSubmenu::System => &START_SYSTEM_VIS_ROWS,
     }
 }
@@ -971,17 +1009,6 @@ fn leaf_selected_idx_mut(state: &mut StartState, leaf: StartProgramsLeaf) -> &mu
     }
 }
 
-fn leaf_from_program_idx(idx: usize) -> Option<StartProgramsLeaf> {
-    submenu_items_programs().get(idx).map(|(_, leaf)| *leaf)
-}
-
-fn program_idx_for_leaf(leaf: StartProgramsLeaf) -> usize {
-    submenu_items_programs()
-        .iter()
-        .position(|(_, value)| *value == leaf)
-        .unwrap_or(0)
-}
-
 fn clamp_idx(idx: &mut usize, len: usize) {
     if len == 0 {
         *idx = 0;
@@ -992,14 +1019,13 @@ fn clamp_idx(idx: &mut usize, len: usize) {
 
 fn normalize_start_selection(state: &mut StartState) {
     clamp_idx(&mut state.selected_root, START_ROOT_ITEMS.len());
-    clamp_idx(&mut state.selected_program, START_PROGRAMS.len());
     clamp_idx(&mut state.selected_system, START_SYSTEM.len());
     clamp_idx(&mut state.selected_leaf_apps, state.app_items.len());
     clamp_idx(&mut state.selected_leaf_docs, state.document_items.len());
     clamp_idx(&mut state.selected_leaf_network, state.network_items.len());
     clamp_idx(&mut state.selected_leaf_games, state.game_items.len());
 
-    if state.open_submenu != Some(StartSubmenu::Programs) {
+    if state.open_submenu.is_some() {
         state.open_leaf = None;
     }
     if let Some(leaf) = state.open_leaf {
@@ -1042,10 +1068,14 @@ fn build_command_leaf_items(
 
 fn refresh_start_leaf_items(state: &mut StartState) {
     let apps = load_apps();
-    let mut app_items = vec![StartLeafItem {
-        label: BUILTIN_NUKE_CODES_APP.to_string(),
-        action: StartAction::LaunchNukeCodes,
-    }];
+    let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+    let mut app_items = Vec::new();
+    if nuke_codes_visible {
+        app_items.push(StartLeafItem {
+            label: BUILTIN_NUKE_CODES_APP.to_string(),
+            action: StartAction::LaunchNukeCodes,
+        });
+    }
     for key in sorted_json_keys(&apps) {
         if key == BUILTIN_NUKE_CODES_APP {
             continue;
@@ -1209,11 +1239,15 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
     match hub.kind {
         DesktopHubKind::Applications => {
             let apps = load_apps();
-            let mut items = vec![DesktopHubItem {
-                label: BUILTIN_NUKE_CODES_APP.to_string(),
-                action: DesktopHubItemAction::LaunchNukeCodes,
-                enabled: true,
-            }];
+            let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+            let mut items = Vec::new();
+            if nuke_codes_visible {
+                items.push(DesktopHubItem {
+                    label: BUILTIN_NUKE_CODES_APP.to_string(),
+                    action: DesktopHubItemAction::LaunchNukeCodes,
+                    enabled: true,
+                });
+            }
             for key in sorted_json_keys(&apps) {
                 if key == BUILTIN_NUKE_CODES_APP {
                     continue;
@@ -1608,6 +1642,23 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             ]
         }
         DesktopHubKind::EditMenus => vec![
+            DesktopHubItem {
+                label: format!(
+                    "Nuke Codes in Applications: {} [toggle]",
+                    if get_settings().builtin_menu_visibility.nuke_codes {
+                        "VISIBLE"
+                    } else {
+                        "HIDDEN"
+                    }
+                ),
+                action: DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            },
             DesktopHubItem {
                 label: "Edit Applications".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditApps),
@@ -2073,8 +2124,7 @@ fn open_start_menu(state: &mut DesktopState) {
     refresh_start_leaf_items(&mut state.start);
     state.start.open = true;
     state.start.selected_root = 0;
-    state.start.selected_program = 0;
-    state.start.open_submenu = Some(StartSubmenu::Programs);
+    state.start.open_submenu = None;
     state.start.open_leaf = None;
     state.start.hover_candidate = None;
     normalize_start_selection(&mut state.start);
@@ -2096,9 +2146,7 @@ fn close_top_menu(state: &mut DesktopState) {
 fn is_hover_target_open(state: &StartState, target: StartHoverTarget) -> bool {
     match target {
         StartHoverTarget::Submenu(sub) => state.open_submenu == Some(sub),
-        StartHoverTarget::Leaf(leaf) => {
-            state.open_submenu == Some(StartSubmenu::Programs) && state.open_leaf == Some(leaf)
-        }
+        StartHoverTarget::Leaf(leaf) => state.open_leaf == Some(leaf),
     }
 }
 
@@ -2106,13 +2154,10 @@ fn apply_hover_target(state: &mut StartState, target: StartHoverTarget) {
     match target {
         StartHoverTarget::Submenu(sub) => {
             state.open_submenu = Some(sub);
-            if sub != StartSubmenu::Programs {
-                state.open_leaf = None;
-            }
+            state.open_leaf = None;
         }
         StartHoverTarget::Leaf(leaf) => {
-            state.open_submenu = Some(StartSubmenu::Programs);
-            state.selected_program = program_idx_for_leaf(leaf);
+            state.open_submenu = None;
             state.open_leaf = Some(leaf);
         }
     }
@@ -2496,10 +2541,7 @@ fn handle_key(
                     *sel = sel.saturating_sub(1);
                 } else {
                     state.start.selected_root = state.start.selected_root.saturating_sub(1);
-                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
-                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
-                        state.start.open_leaf = None;
-                    }
+                    open_start_panel_for_root(&mut state.start);
                     state.start.hover_candidate = None;
                 }
             }
@@ -2515,30 +2557,20 @@ fn handle_key(
                 } else {
                     state.start.selected_root =
                         (state.start.selected_root + 1).min(START_ROOT_ITEMS.len() - 1);
-                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
-                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
-                        state.start.open_leaf = None;
-                    }
+                    open_start_panel_for_root(&mut state.start);
                     state.start.hover_candidate = None;
                 }
             }
             KeyCode::Right => {
-                if state.start.open_submenu == Some(StartSubmenu::Programs) {
-                    if let Some(leaf) = leaf_from_program_idx(state.start.selected_program) {
-                        state.start.open_leaf = Some(leaf);
-                    }
-                } else if let Some(sub) = submenu_for_root(state.start.selected_root) {
-                    state.start.open_submenu = Some(sub);
-                    if sub != StartSubmenu::Programs {
-                        state.start.open_leaf = None;
-                    }
-                    state.start.hover_candidate = None;
+                if state.start.open_leaf.is_none() && state.start.open_submenu.is_none() {
+                    open_start_panel_for_root(&mut state.start);
                 }
+                state.start.hover_candidate = None;
             }
             KeyCode::Left => {
                 if state.start.open_leaf.is_some() {
                     state.start.open_leaf = None;
-                } else {
+                } else if state.start.open_submenu.is_some() {
                     state.start.open_submenu = None;
                 }
                 state.start.hover_candidate = None;
@@ -2559,10 +2591,7 @@ fn handle_key(
                 } else {
                     state.start.selected_root =
                         (state.start.selected_root + 1) % START_ROOT_ITEMS.len();
-                    state.start.open_submenu = submenu_for_root(state.start.selected_root);
-                    if state.start.open_submenu != Some(StartSubmenu::Programs) {
-                        state.start.open_leaf = None;
-                    }
+                    open_start_panel_for_root(&mut state.start);
                     state.start.hover_candidate = None;
                 }
             }
@@ -2576,38 +2605,16 @@ fn handle_key(
                             .min(items.len().saturating_sub(1));
                         items[idx].action.clone()
                     }
-                } else if let Some(sub) = submenu_for_root(state.start.selected_root) {
-                    if state.start.open_submenu == Some(sub) {
-                        match sub {
-                            StartSubmenu::Programs => {
-                                if let Some(leaf) =
-                                    leaf_from_program_idx(state.start.selected_program)
-                                {
-                                    state.start.open_leaf = Some(leaf);
-                                }
-                                StartAction::None
-                            }
-                            StartSubmenu::System => {
-                                let items = submenu_items_system();
-                                let idx = submenu_selected_idx(&state.start, sub)
-                                    .min(items.len().saturating_sub(1));
-                                StartAction::Launch(items[idx].1)
-                            }
-                        }
-                    } else {
-                        state.start.open_submenu = Some(sub);
-                        if sub != StartSubmenu::Programs {
-                            state.start.open_leaf = None;
-                        }
-                        state.start.hover_candidate = None;
-                        StartAction::None
-                    }
-                } else if state.start.selected_root == 2 {
-                    StartAction::ReturnToTerminal
-                } else if state.start.selected_root == 3 {
-                    StartAction::Logout
+                } else if let Some(sub) = state.start.open_submenu {
+                    let items = submenu_items_system();
+                    let idx = submenu_selected_idx(&state.start, sub).min(items.len().saturating_sub(1));
+                    StartAction::Launch(items[idx].1)
+                } else if root_has_expandable_panel(state.start.selected_root) {
+                    open_start_panel_for_root(&mut state.start);
+                    state.start.hover_candidate = None;
+                    StartAction::None
                 } else {
-                    StartAction::Shutdown
+                    root_action_for_idx(state.start.selected_root).unwrap_or(StartAction::None)
                 };
                 if !matches!(action, StartAction::None) {
                     return run_start_action(terminal, current_user, state, action);
@@ -3516,7 +3523,7 @@ where
 }
 
 fn run_desktop_settings_action(
-    _terminal: &mut Term,
+    terminal: &mut Term,
     _current_user: &str,
     state: &mut DesktopState,
     window_id: u64,
@@ -3530,6 +3537,42 @@ fn run_desktop_settings_action(
         }
         DesktopSettingsAction::OpenUserManagement => {
             open_desktop_hub_window(state, DesktopHubKind::UserManagement);
+        }
+        DesktopSettingsAction::PromptDefaultAppCustom(slot) => {
+            let mut raw: Option<String> = None;
+            let prompt = format!(
+                "{} argv JSON (example: [\"epy\"]):",
+                slot_label(slot)
+            );
+            run_with_mouse_capture_paused(terminal, |t| {
+                raw = input_prompt(t, &prompt)?;
+                Ok(())
+            })?;
+            if let Some(text) = raw {
+                if let Some(argv) = parse_custom_argv_json(text.trim()) {
+                    update_settings(|s| {
+                        set_binding_for_slot(
+                            s,
+                            slot,
+                            crate::config::DefaultAppBinding::CustomArgv { argv: argv.clone() },
+                        )
+                    });
+                    persist_settings();
+                } else {
+                    flash_message(terminal, "Error: invalid argv JSON", 1300)?;
+                }
+            }
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                if let WindowKind::DesktopSettings(settings) = &mut win.kind {
+                    settings.panel = DesktopSettingsPanel::DefaultApps;
+                    settings.selected = match slot {
+                        DefaultAppSlot::TextCode => 0,
+                        DefaultAppSlot::Ebook => 1,
+                    };
+                    settings.hovered = None;
+                    desktop_settings_reset_selection(settings);
+                }
+            }
         }
     }
     Ok(())
@@ -6694,6 +6737,7 @@ fn desktop_settings_home_items(state: &DesktopSettingsState) -> Vec<DesktopSetti
     let mut items = vec![
         DesktopSettingsHomeItem::Appearance,
         DesktopSettingsHomeItem::General,
+        DesktopSettingsHomeItem::DefaultApps,
         DesktopSettingsHomeItem::CliDisplay,
         DesktopSettingsHomeItem::CliProfiles,
         DesktopSettingsHomeItem::EditMenus,
@@ -6710,6 +6754,7 @@ fn desktop_settings_home_label(item: DesktopSettingsHomeItem) -> &'static str {
     match item {
         DesktopSettingsHomeItem::Appearance => "Appearance",
         DesktopSettingsHomeItem::General => "General",
+        DesktopSettingsHomeItem::DefaultApps => "Default Apps",
         DesktopSettingsHomeItem::CliDisplay => "CLI Display",
         DesktopSettingsHomeItem::CliProfiles => "CLI Profiles",
         DesktopSettingsHomeItem::EditMenus => "Edit Menus",
@@ -6723,6 +6768,7 @@ fn desktop_settings_home_icon(item: DesktopSettingsHomeItem) -> &'static str {
     match item {
         DesktopSettingsHomeItem::Appearance => "[A]",
         DesktopSettingsHomeItem::General => "[*]",
+        DesktopSettingsHomeItem::DefaultApps => "[D]",
         DesktopSettingsHomeItem::CliDisplay => "[#]",
         DesktopSettingsHomeItem::CliProfiles => "[=]",
         DesktopSettingsHomeItem::EditMenus => "[M]",
@@ -7021,6 +7067,32 @@ fn desktop_icon_style_rows() -> Vec<String> {
         let marker = if style == current { "*" } else { " " };
         rows.push(format!("[{marker}] {}", desktop_icon_style_label(style)));
     }
+    rows.push("Back".to_string());
+    rows
+}
+
+fn desktop_default_apps_rows() -> Vec<String> {
+    let s = get_settings();
+    vec![
+        format!(
+            "{}: {} [choose]",
+            slot_label(DefaultAppSlot::TextCode),
+            binding_label(&s.default_apps.text_code)
+        ),
+        format!(
+            "{}: {} [choose]",
+            slot_label(DefaultAppSlot::Ebook),
+            binding_label(&s.default_apps.ebook)
+        ),
+        "Back".to_string(),
+    ]
+}
+
+fn desktop_default_app_select_rows(slot: DefaultAppSlot) -> Vec<String> {
+    let mut rows: Vec<String> = default_app_choices(slot)
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
     rows.push("Back".to_string());
     rows
 }
@@ -7357,6 +7429,8 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
             "Wallpapers".to_string(),
             "Back".to_string(),
         ],
+        DesktopSettingsPanel::DefaultApps => desktop_default_apps_rows(),
+        DesktopSettingsPanel::DefaultAppSelect(slot) => desktop_default_app_select_rows(*slot),
         DesktopSettingsPanel::ThemeSelect => desktop_theme_rows(),
         DesktopSettingsPanel::General => vec![
             format!("Sound: {} [toggle]", if s.sound { "ON" } else { "OFF" }),
@@ -7560,6 +7634,8 @@ fn draw_desktop_settings_window(
     let header = match &settings.panel {
         DesktopSettingsPanel::Home => "Settings",
         DesktopSettingsPanel::Appearance => "Appearance",
+        DesktopSettingsPanel::DefaultApps => "Default Apps",
+        DesktopSettingsPanel::DefaultAppSelect(slot) => slot_label(*slot),
         DesktopSettingsPanel::ThemeSelect => "Theme",
         DesktopSettingsPanel::General => "General",
         DesktopSettingsPanel::CliDisplay => "CLI Display",
@@ -7775,8 +7851,15 @@ fn draw_desktop_settings_window(
     };
 
     let rows = desktop_settings_rows(settings);
+    let visible_rows = rows_area.height as usize;
+    let start_row = desktop_settings_list_scroll_start(settings, visible_rows);
     let mut lines = Vec::new();
-    for (idx, row) in rows.iter().enumerate() {
+    for (idx, row) in rows
+        .iter()
+        .enumerate()
+        .skip(start_row)
+        .take(visible_rows.max(1))
+    {
         let style = if focused && settings.hovered == Some(idx) {
             sel_style()
         } else {
@@ -7870,13 +7953,17 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
     for row in START_ROOT_VIS_ROWS {
         match row {
             Some(i) => {
-                let (label, submenu) = START_ROOT_ITEMS[i];
+                let label = START_ROOT_ITEMS[i];
                 let style = if i == state.start.selected_root {
                     sel_style()
                 } else {
                     normal_style()
                 };
-                let arrow = if submenu.is_some() { Some('>') } else { None };
+                let arrow = if root_has_expandable_panel(i) {
+                    Some('>')
+                } else {
+                    None
+                };
                 root_lines.push(Line::from(Span::styled(
                     format_menu_row(inner_root_w, label, arrow),
                     style,
@@ -7914,23 +8001,14 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
         for row in rows {
             match row {
                 Some(i) => {
-                    let (label, arrow) = match submenu {
-                        StartSubmenu::Programs => {
-                            let (label, _) = submenu_items_programs()[*i];
-                            (label, Some('>'))
-                        }
-                        StartSubmenu::System => {
-                            let (label, _) = submenu_items_system()[*i];
-                            (label, None)
-                        }
-                    };
+                    let (label, _) = submenu_items_system()[*i];
                     let style = if *i == selected {
                         sel_style()
                     } else {
                         normal_style()
                     };
                     sub_lines.push(Line::from(Span::styled(
-                        format_menu_row(inner_sub_w, label, arrow),
+                        format_menu_row(inner_sub_w, label, None),
                         style,
                     )));
                 }
@@ -7951,41 +8029,39 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
                 height: sub.height.saturating_sub(2),
             },
         );
+    }
 
-        if submenu == StartSubmenu::Programs {
-            if let Some(leaf) = state.start.open_leaf {
-                let leaf_rect = start_leaf_rect(sub, size, &state.start, leaf);
-                f.render_widget(Clear, leaf_rect);
-                f.render_widget(
-                    Block::default().borders(Borders::ALL).style(title_style()),
-                    leaf_rect,
-                );
-                let inner_leaf_w = leaf_rect.width.saturating_sub(2) as usize;
-                let mut leaf_lines = Vec::new();
-                let items = leaf_items(&state.start, leaf);
-                let selected_leaf = leaf_selected_idx(&state.start, leaf);
-                for (idx, item) in items.iter().enumerate() {
-                    let style = if idx == selected_leaf {
-                        sel_style()
-                    } else {
-                        normal_style()
-                    };
-                    leaf_lines.push(Line::from(Span::styled(
-                        format_menu_row(inner_leaf_w, &item.label, None),
-                        style,
-                    )));
-                }
-                f.render_widget(
-                    Paragraph::new(leaf_lines),
-                    Rect {
-                        x: leaf_rect.x + 1,
-                        y: leaf_rect.y + 1,
-                        width: leaf_rect.width.saturating_sub(2),
-                        height: leaf_rect.height.saturating_sub(2),
-                    },
-                );
-            }
+    if let Some(leaf) = state.start.open_leaf {
+        let leaf_rect = start_leaf_rect(root, size, &state.start, leaf);
+        f.render_widget(Clear, leaf_rect);
+        f.render_widget(
+            Block::default().borders(Borders::ALL).style(title_style()),
+            leaf_rect,
+        );
+        let inner_leaf_w = leaf_rect.width.saturating_sub(2) as usize;
+        let mut leaf_lines = Vec::new();
+        let items = leaf_items(&state.start, leaf);
+        let selected_leaf = leaf_selected_idx(&state.start, leaf);
+        for (idx, item) in items.iter().enumerate() {
+            let style = if idx == selected_leaf {
+                sel_style()
+            } else {
+                normal_style()
+            };
+            leaf_lines.push(Line::from(Span::styled(
+                format_menu_row(inner_leaf_w, &item.label, None),
+                style,
+            )));
         }
+        f.render_widget(
+            Paragraph::new(leaf_lines),
+            Rect {
+                x: leaf_rect.x + 1,
+                y: leaf_rect.y + 1,
+                width: leaf_rect.width.saturating_sub(2),
+                height: leaf_rect.height.saturating_sub(2),
+            },
+        );
     }
 }
 
@@ -8019,7 +8095,16 @@ fn hit_start_menu(
                 return Some(StartAction::None);
             };
             state.start.selected_root = root_idx;
-            if let Some(sub) = submenu_for_root(root_idx) {
+            if let Some(leaf) = root_leaf_for_idx(root_idx) {
+                if is_click {
+                    apply_hover_target(&mut state.start, StartHoverTarget::Leaf(leaf));
+                    state.start.hover_candidate = None;
+                } else {
+                    queue_start_hover(&mut state.start, StartHoverTarget::Leaf(leaf));
+                }
+                return Some(StartAction::None);
+            }
+            if let Some(sub) = root_submenu_for_idx(root_idx) {
                 if is_click {
                     apply_hover_target(&mut state.start, StartHoverTarget::Submenu(sub));
                     state.start.hover_candidate = None;
@@ -8031,12 +8116,7 @@ fn hit_start_menu(
             state.start.open_submenu = None;
             state.start.open_leaf = None;
             state.start.hover_candidate = None;
-            return Some(match root_idx {
-                2 => StartAction::ReturnToTerminal,
-                3 => StartAction::Logout,
-                4 => StartAction::Shutdown,
-                _ => StartAction::None,
-            });
+            return Some(root_action_for_idx(root_idx).unwrap_or(StartAction::None));
         }
         return Some(StartAction::None);
     }
@@ -8051,46 +8131,28 @@ fn hit_start_menu(
                     return Some(StartAction::None);
                 };
                 *submenu_selected_idx_mut(&mut state.start, submenu) = item_idx;
-                return Some(match submenu {
-                    StartSubmenu::Programs => {
-                        if let Some(leaf) = leaf_from_program_idx(item_idx) {
-                            if is_click {
-                                apply_hover_target(&mut state.start, StartHoverTarget::Leaf(leaf));
-                                state.start.hover_candidate = None;
-                            } else {
-                                queue_start_hover(&mut state.start, StartHoverTarget::Leaf(leaf));
-                            }
-                        }
-                        StartAction::None
-                    }
-                    StartSubmenu::System => {
-                        if is_click {
-                            let items = submenu_items_system();
-                            StartAction::Launch(items[item_idx].1)
-                        } else {
-                            StartAction::None
-                        }
-                    }
+                return Some(if is_click {
+                    let items = submenu_items_system();
+                    StartAction::Launch(items[item_idx].1)
+                } else {
+                    StartAction::None
                 });
             }
             return Some(StartAction::None);
         }
-
-        if submenu == StartSubmenu::Programs {
-            if let Some(leaf) = state.start.open_leaf {
-                let leaf_rect = start_leaf_rect(sub, size, &state.start, leaf);
-                if point_in_rect(x, y, leaf_rect) {
-                    let row = y.saturating_sub(leaf_rect.y + 1) as usize;
-                    let leaf_len = leaf_items(&state.start, leaf).len();
-                    if row < leaf_len {
-                        *leaf_selected_idx_mut(&mut state.start, leaf) = row;
-                        if is_click {
-                            return Some(leaf_items(&state.start, leaf)[row].action.clone());
-                        }
-                    }
-                    return Some(StartAction::None);
+    }
+    if let Some(leaf) = state.start.open_leaf {
+        let leaf_rect = start_leaf_rect(root, size, &state.start, leaf);
+        if point_in_rect(x, y, leaf_rect) {
+            let row = y.saturating_sub(leaf_rect.y + 1) as usize;
+            let leaf_len = leaf_items(&state.start, leaf).len();
+            if row < leaf_len {
+                *leaf_selected_idx_mut(&mut state.start, leaf) = row;
+                if is_click {
+                    return Some(leaf_items(&state.start, leaf)[row].action.clone());
                 }
             }
+            return Some(StartAction::None);
         }
     }
 
@@ -9164,6 +9226,15 @@ fn run_desktop_hub_action(
                 close_window_by_id(state, id);
             }
         }
+        DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility => {
+            update_settings(|s| {
+                s.builtin_menu_visibility.nuke_codes = !s.builtin_menu_visibility.nuke_codes;
+            });
+            persist_settings();
+            refresh_start_leaf_items(&mut state.start);
+            refresh_desktop_hub_windows(state, DesktopHubKind::EditMenus);
+            refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
+        }
         DesktopHubItemAction::LaunchCommand { title, cmd } => {
             if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
                 flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
@@ -9191,9 +9262,20 @@ fn run_desktop_hub_action(
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "EPY".to_string());
-            let cmd = vec!["epy".to_string(), path.display().to_string()];
-            if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
-                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+            match resolve_document_open(&path) {
+                Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) => {
+                    run_with_mouse_capture_paused(terminal, |t| documents::view_text_file(t, &path))?;
+                }
+                Some(ResolvedDocumentOpen::ExternalArgv(cmd)) => {
+                    if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str()))
+                    {
+                        flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
+                    }
+                }
+                None => {
+                    flash_message(terminal, "Error: No App for filetype", 1300)?;
+                    return Ok(());
+                }
             }
         }
         DesktopHubItemAction::RunInstallerSearch => {
@@ -9452,6 +9534,7 @@ fn run_desktop_hub_action(
             );
             save_users(&db);
             let _ = std::fs::create_dir_all(crate::config::users_dir().join(&username));
+            mark_default_apps_prompt_pending(&username);
             hub.input.clear();
             hub.input2.clear();
             hub.flag = false;
@@ -9997,6 +10080,8 @@ fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
     match &state.panel {
         DesktopSettingsPanel::Home => desktop_settings_home_items(state).len(),
         DesktopSettingsPanel::Appearance => 5,
+        DesktopSettingsPanel::DefaultApps => desktop_default_apps_rows().len(),
+        DesktopSettingsPanel::DefaultAppSelect(slot) => desktop_default_app_select_rows(*slot).len(),
         DesktopSettingsPanel::ThemeSelect => desktop_theme_rows().len(),
         DesktopSettingsPanel::IconStyle => desktop_icon_style_rows().len(),
         DesktopSettingsPanel::General => 4,
@@ -10014,6 +10099,17 @@ fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
         DesktopSettingsPanel::CustomProfileAdd => 3,
         DesktopSettingsPanel::About => 4,
     }
+}
+
+fn desktop_settings_list_scroll_start(state: &DesktopSettingsState, visible_rows: usize) -> usize {
+    let total = desktop_settings_row_count(state);
+    if visible_rows == 0 || total <= visible_rows {
+        return 0;
+    }
+    state
+        .selected
+        .saturating_sub(visible_rows.saturating_sub(1))
+        .min(total.saturating_sub(visible_rows))
 }
 
 fn desktop_settings_reset_selection(state: &mut DesktopSettingsState) {
@@ -10224,6 +10320,11 @@ fn handle_desktop_settings_activate(
                     state.selected = 0;
                     DesktopSettingsAction::None
                 }
+                DesktopSettingsHomeItem::DefaultApps => {
+                    state.panel = DesktopSettingsPanel::DefaultApps;
+                    state.selected = 0;
+                    DesktopSettingsAction::None
+                }
                 DesktopSettingsHomeItem::Appearance => {
                     state.panel = DesktopSettingsPanel::Appearance;
                     state.selected = 0;
@@ -10285,6 +10386,49 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
         },
+        DesktopSettingsPanel::DefaultApps => match state.selected {
+            0 => {
+                state.panel = DesktopSettingsPanel::DefaultAppSelect(DefaultAppSlot::TextCode);
+                state.selected = 0;
+                DesktopSettingsAction::None
+            }
+            1 => {
+                state.panel = DesktopSettingsPanel::DefaultAppSelect(DefaultAppSlot::Ebook);
+                state.selected = 0;
+                DesktopSettingsAction::None
+            }
+            _ => {
+                state.panel = DesktopSettingsPanel::Home;
+                state.selected = 0;
+                DesktopSettingsAction::None
+            }
+        },
+        DesktopSettingsPanel::DefaultAppSelect(slot) => {
+            let choices = default_app_choices(slot);
+            if state.selected < choices.len() {
+                match &choices[state.selected].action {
+                    DefaultAppChoiceAction::Set(binding) => {
+                        update_settings(|s| set_binding_for_slot(s, slot, binding.clone()));
+                        persist_settings();
+                        state.panel = DesktopSettingsPanel::DefaultApps;
+                        state.selected = match slot {
+                            DefaultAppSlot::TextCode => 0,
+                            DefaultAppSlot::Ebook => 1,
+                        };
+                    }
+                    DefaultAppChoiceAction::PromptCustom => {
+                        return DesktopSettingsAction::PromptDefaultAppCustom(slot);
+                    }
+                }
+            } else {
+                state.panel = DesktopSettingsPanel::DefaultApps;
+                state.selected = match slot {
+                    DefaultAppSlot::TextCode => 0,
+                    DefaultAppSlot::Ebook => 1,
+                };
+            }
+            DesktopSettingsAction::None
+        }
         DesktopSettingsPanel::ThemeSelect => {
             if state.selected < THEMES.len() {
                 let theme = THEMES[state.selected].0.to_string();
@@ -10565,6 +10709,21 @@ fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSett
         DesktopSettingsPanel::Appearance => {
             state.panel = DesktopSettingsPanel::Home;
             state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::DefaultApps => {
+            state.panel = DesktopSettingsPanel::Home;
+            state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::DefaultAppSelect(slot) => {
+            state.panel = DesktopSettingsPanel::DefaultApps;
+            state.selected = match slot {
+                DefaultAppSlot::TextCode => 0,
+                DefaultAppSlot::Ebook => 1,
+            };
             state.hovered = None;
             DesktopSettingsAction::None
         }
@@ -10932,10 +11091,15 @@ fn handle_desktop_settings_mouse(
             return DesktopSettingsAction::None;
         }
         let row = (mouse.row - list_y) as usize;
-        if row >= desktop_settings_row_count(state) {
+        let visible_rows = content
+            .height
+            .saturating_sub(desktop_settings_list_offset(state)) as usize;
+        let start_row = desktop_settings_list_scroll_start(state, visible_rows);
+        let idx = start_row + row;
+        if idx >= desktop_settings_row_count(state) {
             state.hovered = None;
         } else {
-            state.hovered = Some(row);
+            state.hovered = Some(idx);
         }
         return DesktopSettingsAction::None;
     }
@@ -10984,11 +11148,16 @@ fn handle_desktop_settings_mouse(
         return DesktopSettingsAction::None;
     }
     let row = (mouse.row - list_y) as usize;
-    if row >= desktop_settings_row_count(state) {
+    let visible_rows = content
+        .height
+        .saturating_sub(desktop_settings_list_offset(state)) as usize;
+    let start_row = desktop_settings_list_scroll_start(state, visible_rows);
+    let idx = start_row + row;
+    if idx >= desktop_settings_row_count(state) {
         return DesktopSettingsAction::None;
     }
-    state.selected = row;
-    state.hovered = Some(row);
+    state.selected = idx;
+    state.hovered = Some(idx);
     handle_desktop_settings_activate(state, false)
 }
 
@@ -11479,11 +11648,6 @@ fn start_root_rect(task: Rect) -> Rect {
 fn start_submenu_rect(root: Rect, size: Rect, submenu: StartSubmenu) -> Rect {
     let h = (submenu_visual_rows(submenu).len() as u16) + 2;
     let longest = match submenu {
-        StartSubmenu::Programs => submenu_items_programs()
-            .iter()
-            .map(|(label, _)| label.chars().count())
-            .max()
-            .unwrap_or(8),
         StartSubmenu::System => submenu_items_system()
             .iter()
             .map(|(label, _)| label.chars().count())
@@ -11503,7 +11667,7 @@ fn start_submenu_rect(root: Rect, size: Rect, submenu: StartSubmenu) -> Rect {
     }
 }
 
-fn start_leaf_rect(sub: Rect, size: Rect, start: &StartState, leaf: StartProgramsLeaf) -> Rect {
+fn start_leaf_rect(anchor: Rect, size: Rect, start: &StartState, leaf: StartProgramsLeaf) -> Rect {
     let items = leaf_items(start, leaf);
     let h = ((items.len() as u16) + 2).max(3);
     let longest = items
@@ -11511,10 +11675,10 @@ fn start_leaf_rect(sub: Rect, size: Rect, start: &StartState, leaf: StartProgram
         .map(|item| item.label.chars().count())
         .max()
         .unwrap_or(8);
-    let x = sub.x + sub.width.saturating_sub(1);
+    let x = anchor.x + anchor.width.saturating_sub(1);
     let max_w = size.width.saturating_sub(x).max(12);
     let width = ((longest + 4).min(52)) as u16;
-    let mut y = sub.y;
+    let mut y = anchor.y;
     if y + h >= size.height {
         y = size.height.saturating_sub(h);
     }

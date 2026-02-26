@@ -1,7 +1,10 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::config::{load_apps, load_games, load_networks, save_apps, save_games, save_networks};
+use crate::config::{
+    get_settings, load_apps, load_games, load_networks, persist_settings, save_apps, save_games,
+    save_networks, update_settings,
+};
 use crate::launcher::{json_to_cmd, launch_in_pty};
 use crate::ui::{confirm, flash_message, input_prompt, run_menu, MenuResult, Term};
 
@@ -78,7 +81,11 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             break;
         }
         let apps = load_apps();
-        let mut choices: Vec<String> = vec![BUILTIN_NUKE_CODES_APP.to_string()];
+        let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+        let mut choices: Vec<String> = Vec::new();
+        if nuke_codes_visible {
+            choices.push(BUILTIN_NUKE_CODES_APP.to_string());
+        }
         choices.extend(
             apps.keys()
                 .filter(|name| name.as_str() != BUILTIN_NUKE_CODES_APP)
@@ -230,10 +237,17 @@ pub fn edit_network_menu(terminal: &mut Term) -> Result<()> {
 pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
     use crate::docedit::edit_documents_menu;
     loop {
+        let nuke_codes_label = if get_settings().builtin_menu_visibility.nuke_codes {
+            "Nuke Codes in Applications: VISIBLE [toggle]"
+        } else {
+            "Nuke Codes in Applications: HIDDEN [toggle]"
+        };
         match run_menu(
             terminal,
             "Edit Menus",
             &[
+                nuke_codes_label,
+                "---",
                 "Edit Applications",
                 "Edit Documents",
                 "Edit Network",
@@ -245,6 +259,13 @@ pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                l if l == nuke_codes_label => {
+                    update_settings(|cfg| {
+                        cfg.builtin_menu_visibility.nuke_codes =
+                            !cfg.builtin_menu_visibility.nuke_codes;
+                    });
+                    persist_settings();
+                }
                 "Edit Applications" => edit_apps_menu(terminal)?,
                 "Edit Documents" => edit_documents_menu(terminal)?,
                 "Edit Network" => edit_network_menu(terminal)?,

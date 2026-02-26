@@ -25,6 +25,23 @@ pub fn user_dir(username: &str) -> PathBuf {
     d
 }
 
+fn default_apps_prompt_marker(username: &str) -> PathBuf {
+    user_dir(username).join(".default_apps_prompt")
+}
+
+pub fn mark_default_apps_prompt_pending(username: &str) {
+    let _ = std::fs::write(default_apps_prompt_marker(username), b"1");
+}
+
+pub fn take_default_apps_prompt_pending(username: &str) -> bool {
+    let marker = default_apps_prompt_marker(username);
+    if marker.exists() {
+        let _ = std::fs::remove_file(marker);
+        return true;
+    }
+    false
+}
+
 pub fn global_settings_file() -> PathBuf {
     base_dir().join("settings.json")
 }
@@ -105,10 +122,20 @@ pub fn load_settings() -> Settings {
     if let Some(u) = get_current_user() {
         let f = user_dir(&u).join("settings.json");
         if f.exists() {
-            return load_json(&f);
+            let mut s: Settings = load_json(&f);
+            if s.hide_builtin_apps_in_menus {
+                s.builtin_menu_visibility.nuke_codes = false;
+                s.hide_builtin_apps_in_menus = false;
+            }
+            return s;
         }
     }
-    load_json(&global_settings_file())
+    let mut s: Settings = load_json(&global_settings_file());
+    if s.hide_builtin_apps_in_menus {
+        s.builtin_menu_visibility.nuke_codes = false;
+        s.hide_builtin_apps_in_menus = false;
+    }
+    s
 }
 pub fn save_settings(d: &Settings) {
     if let Some(u) = get_current_user() {
@@ -144,6 +171,59 @@ pub enum OpenMode {
     #[default]
     Terminal,
     Desktop,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultAppMenuSource {
+    #[default]
+    Applications,
+    Games,
+    Network,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DefaultAppBinding {
+    Builtin {
+        id: String,
+    },
+    MenuEntry {
+        source: DefaultAppMenuSource,
+        name: String,
+    },
+    CustomArgv {
+        argv: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DefaultAppsSettings {
+    #[serde(default = "default_default_app_text_code")]
+    pub text_code: DefaultAppBinding,
+    #[serde(default = "default_default_app_ebook")]
+    pub ebook: DefaultAppBinding,
+}
+
+fn default_default_app_text_code() -> DefaultAppBinding {
+    DefaultAppBinding::Builtin {
+        id: "robco_terminal_writer".to_string(),
+    }
+}
+
+fn default_default_app_ebook() -> DefaultAppBinding {
+    DefaultAppBinding::CustomArgv {
+        argv: vec!["epy".to_string()],
+    }
+}
+
+impl Default for DefaultAppsSettings {
+    fn default() -> Self {
+        Self {
+            text_code: default_default_app_text_code(),
+            ebook: default_default_app_ebook(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -337,6 +417,22 @@ impl Default for DesktopCliProfiles {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltinMenuVisibilitySettings {
+    #[serde(default = "default_true")]
+    pub nuke_codes: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for BuiltinMenuVisibilitySettings {
+    fn default() -> Self {
+        Self { nuke_codes: true }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound: bool,
     pub bootup: bool,
@@ -349,6 +445,13 @@ pub struct Settings {
     pub cli_acs_mode: CliAcsMode,
     #[serde(default)]
     pub default_open_mode: OpenMode,
+    #[serde(default)]
+    // Legacy field migrated into `builtin_menu_visibility`.
+    pub hide_builtin_apps_in_menus: bool,
+    #[serde(default)]
+    pub builtin_menu_visibility: BuiltinMenuVisibilitySettings,
+    #[serde(default)]
+    pub default_apps: DefaultAppsSettings,
     #[serde(default)]
     pub desktop_cli_profiles: DesktopCliProfiles,
     #[serde(default = "default_desktop_wallpaper")]
@@ -379,6 +482,9 @@ impl Default for Settings {
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
+            hide_builtin_apps_in_menus: false,
+            builtin_menu_visibility: BuiltinMenuVisibilitySettings::default(),
+            default_apps: DefaultAppsSettings::default(),
             desktop_cli_profiles: DesktopCliProfiles::default(),
             desktop_wallpaper: default_desktop_wallpaper(),
             desktop_show_cursor: false,

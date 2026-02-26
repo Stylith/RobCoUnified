@@ -10,13 +10,17 @@ use sysinfo::System;
 
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
-    get_settings, load_about, persist_settings, update_settings, CliAcsMode, CliColorMode,
-    OpenMode, THEMES,
+    get_settings, load_about, persist_settings, take_default_apps_prompt_pending, update_settings,
+    CliAcsMode, CliColorMode, OpenMode, THEMES,
+};
+use crate::default_apps::{
+    binding_label, default_app_choices, parse_custom_argv_json, set_binding_for_slot, slot_label,
+    DefaultAppChoiceAction, DefaultAppSlot,
 };
 use crate::status::render_status_bar;
 use crate::ui::{
-    dim_style, normal_style, pad_horizontal, render_header, render_separator, run_menu, MenuResult,
-    Term,
+    dim_style, flash_message, input_prompt, normal_style, pad_horizontal, render_header,
+    render_separator, run_menu, MenuResult, Term,
 };
 
 // ── System info ────────────────────────────────────────────────────────────────
@@ -258,6 +262,92 @@ pub fn cli_menu(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+fn select_default_app_for_slot(terminal: &mut Term, slot: DefaultAppSlot) -> Result<()> {
+    loop {
+        let choices = default_app_choices(slot);
+        let mut rows: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
+        rows.push("---".to_string());
+        rows.push("Back".to_string());
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+        match run_menu(terminal, &format!("Default App: {}", slot_label(slot)), &refs, None)? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) => {
+                let Some(choice) = choices.iter().find(|c| c.label == sel) else {
+                    continue;
+                };
+                match &choice.action {
+                    DefaultAppChoiceAction::Set(binding) => {
+                        update_settings(|s| set_binding_for_slot(s, slot, binding.clone()));
+                        persist_settings();
+                        break;
+                    }
+                    DefaultAppChoiceAction::PromptCustom => {
+                        let prompt = format!(
+                            "{} argv JSON (example: [\"epy\"]):",
+                            slot_label(slot)
+                        );
+                        let Some(raw) = input_prompt(terminal, &prompt)? else {
+                            continue;
+                        };
+                        let Some(argv) = parse_custom_argv_json(raw.trim()) else {
+                            flash_message(terminal, "Error: invalid argv JSON", 1200)?;
+                            continue;
+                        };
+                        update_settings(|s| {
+                            set_binding_for_slot(
+                                s,
+                                slot,
+                                crate::config::DefaultAppBinding::CustomArgv { argv: argv.clone() },
+                            )
+                        });
+                        persist_settings();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn default_apps_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        let s = get_settings();
+        let text_label = format!(
+            "Text/Code Files: {} [choose]",
+            binding_label(&s.default_apps.text_code)
+        );
+        let ebook_label = format!(
+            "Ebook Files: {} [choose]",
+            binding_label(&s.default_apps.ebook)
+        );
+        let rows = [text_label.clone(), ebook_label.clone(), "---".to_string(), "Back".to_string()];
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        match run_menu(terminal, "Default Apps", &refs, None)? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) if sel == text_label => {
+                select_default_app_for_slot(terminal, DefaultAppSlot::TextCode)?;
+            }
+            MenuResult::Selected(sel) if sel == ebook_label => {
+                select_default_app_for_slot(terminal, DefaultAppSlot::Ebook)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> Result<()> {
+    if !take_default_apps_prompt_pending(username) {
+        return Ok(());
+    }
+    flash_message(terminal, "Set default apps for your files.", 1100)?;
+    default_apps_menu(terminal)
+}
+
 pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
     use crate::apps::edit_menus_menu;
 
@@ -283,7 +373,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
             }
         );
 
-        let mut choices = vec!["About", "Theme", "CLI", "Edit Menus"];
+        let mut choices = vec!["About", "Theme", "Default Apps", "CLI", "Edit Menus"];
         if admin {
             choices.push("User Management");
         }
@@ -300,6 +390,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
             MenuResult::Selected(s) => match s.as_str() {
                 "About" => about_screen(terminal)?,
                 "Theme" => theme_menu(terminal)?,
+                "Default Apps" => default_apps_menu(terminal)?,
                 "CLI" => cli_menu(terminal)?,
                 "Edit Menus" => edit_menus_menu(terminal)?,
                 "User Management" => user_management_menu(terminal, current_user)?,

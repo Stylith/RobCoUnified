@@ -15,6 +15,7 @@ mod config;
 mod desktop;
 mod docedit;
 mod documents;
+mod default_apps;
 mod hacking;
 mod installer;
 mod launcher;
@@ -200,6 +201,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
             }
         };
         set_current_user(Some(&username));
+        settings::prompt_default_apps_first_login(terminal, &username)?;
 
         // If this session has a suspended PTY command (e.g. vim), resume it
         // immediately so switching behaves like tmux-style windows.
