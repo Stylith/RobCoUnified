@@ -157,6 +157,67 @@ pub enum WallpaperSizeMode {
     Stretch,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FileManagerViewMode {
+    #[default]
+    Grid,
+    List,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FileManagerSortMode {
+    #[default]
+    Name,
+    Type,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FileManagerTextOpenMode {
+    Editor,
+    #[default]
+    Viewer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopFileManagerSettings {
+    #[serde(default)]
+    pub show_hidden_files: bool,
+    #[serde(default = "default_file_manager_tree_panel")]
+    pub show_tree_panel: bool,
+    #[serde(default)]
+    pub view_mode: FileManagerViewMode,
+    #[serde(default)]
+    pub sort_mode: FileManagerSortMode,
+    #[serde(default = "default_file_manager_dirs_first")]
+    pub directories_first: bool,
+    #[serde(default)]
+    pub text_open_mode: FileManagerTextOpenMode,
+}
+
+const fn default_file_manager_dirs_first() -> bool {
+    true
+}
+
+const fn default_file_manager_tree_panel() -> bool {
+    true
+}
+
+impl Default for DesktopFileManagerSettings {
+    fn default() -> Self {
+        Self {
+            show_hidden_files: false,
+            show_tree_panel: true,
+            view_mode: FileManagerViewMode::Grid,
+            sort_mode: FileManagerSortMode::Name,
+            directories_first: true,
+            text_open_mode: FileManagerTextOpenMode::Viewer,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopPtyProfileSettings {
     pub min_w: u16,
@@ -285,6 +346,8 @@ pub struct Settings {
     #[serde(default)]
     pub desktop_wallpaper_size_mode: WallpaperSizeMode,
     #[serde(default)]
+    pub desktop_file_manager: DesktopFileManagerSettings,
+    #[serde(default)]
     pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
 }
 
@@ -305,6 +368,7 @@ impl Default for Settings {
             desktop_cli_profiles: DesktopCliProfiles::default(),
             desktop_wallpaper: default_desktop_wallpaper(),
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
+            desktop_file_manager: DesktopFileManagerSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
         }
     }

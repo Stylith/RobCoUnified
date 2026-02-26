@@ -20,7 +20,8 @@ use crate::apps::edit_menus_menu;
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
     get_settings, load_apps, load_categories, load_games, load_networks, persist_settings,
-    update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopPtyProfileSettings,
+    update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopFileManagerSettings,
+    DesktopPtyProfileSettings, FileManagerSortMode, FileManagerTextOpenMode, FileManagerViewMode,
     OpenMode, WallpaperSizeMode, THEMES,
 };
 use crate::documents;
@@ -41,6 +42,7 @@ enum StartLaunch {
     ProgramInstaller,
     Terminal,
     Settings,
+    FileManager,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,48 +113,129 @@ struct FileEntry {
 }
 
 #[derive(Debug, Clone)]
+struct FileTreeItem {
+    line: String,
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 struct FileManagerState {
     cwd: PathBuf,
+    tabs: Vec<PathBuf>,
+    active_tab: usize,
     entries: Vec<FileEntry>,
     selected: usize,
     scroll: usize,
+    tree_selected: usize,
+    tree_scroll: usize,
+    tree_focus: bool,
 }
+
+#[derive(Debug, Clone)]
+struct FileManagerSettingsState {
+    selected: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FileManagerOpenRequest {
+    Builtin,
+    External,
+}
+
+const FILE_MANAGER_HEADER_ROWS: u16 = 3;
+const FILE_MANAGER_GRID_CELL_WIDTH: u16 = 18;
+const FILE_MANAGER_GRID_CELL_HEIGHT: u16 = 3;
+const FILE_MANAGER_TREE_MIN_WIDTH: u16 = 16;
+const FILE_MANAGER_TREE_MAX_WIDTH: u16 = 28;
+const FILE_MANAGER_TREE_MIN_TOTAL_WIDTH: u16 = 50;
+const FILE_MANAGER_TREE_GAP: u16 = 1;
+const FILE_MANAGER_ENTRY_MIN_WIDTH: u16 = 16;
 
 impl FileManagerState {
     fn new() -> Self {
         let cwd = dirs::home_dir()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        let entries = read_entries(&cwd);
+        let entries = read_entries(&cwd, &get_settings().desktop_file_manager);
         Self {
-            cwd,
+            cwd: cwd.clone(),
+            tabs: vec![cwd],
+            active_tab: 0,
             entries,
             selected: 0,
             scroll: 0,
+            tree_selected: 0,
+            tree_scroll: 0,
+            tree_focus: false,
         }
     }
 
+    fn sync_active_tab_path(&mut self) {
+        if self.tabs.is_empty() {
+            self.tabs.push(self.cwd.clone());
+            self.active_tab = 0;
+            return;
+        }
+        self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
+        self.tabs[self.active_tab] = self.cwd.clone();
+    }
+
+    fn set_cwd(&mut self, path: PathBuf) {
+        self.cwd = path;
+        self.sync_active_tab_path();
+    }
+
     fn refresh(&mut self) {
-        self.entries = read_entries(&self.cwd);
+        self.sync_active_tab_path();
+        self.entries = read_entries(&self.cwd, &get_settings().desktop_file_manager);
         if self.selected >= self.entries.len() && !self.entries.is_empty() {
             self.selected = self.entries.len() - 1;
         }
+        self.scroll = self.scroll.min(self.entries.len().saturating_sub(1));
         if self.entries.is_empty() {
             self.selected = 0;
             self.scroll = 0;
         }
+        let tree_items = file_manager_tree_items(
+            &self.cwd,
+            get_settings().desktop_file_manager.show_hidden_files,
+        );
+        if tree_items.is_empty() {
+            self.tree_selected = 0;
+            self.tree_scroll = 0;
+        } else {
+            self.tree_selected = self
+                .tree_selected
+                .min(tree_items.len().saturating_sub(1));
+            if tree_items
+                .get(self.tree_selected)
+                .and_then(|item| item.path.as_ref())
+                .is_none()
+            {
+                self.tree_selected = file_manager_tree_selected_for_cwd(&tree_items, &self.cwd);
+            }
+            self.tree_scroll = self.tree_scroll.min(tree_items.len().saturating_sub(1));
+        }
     }
 
-    fn open_selected(&mut self) {
+    fn activate_selected(
+        &mut self,
+        request: FileManagerOpenRequest,
+    ) -> Option<(PathBuf, FileManagerOpenRequest)> {
         let Some(entry) = self.entries.get(self.selected) else {
-            return;
+            return None;
         };
         if entry.is_dir {
-            self.cwd = entry.path.clone();
+            if matches!(request, FileManagerOpenRequest::External) {
+                return None;
+            }
+            self.set_cwd(entry.path.clone());
             self.selected = 0;
             self.scroll = 0;
             self.refresh();
+            return None;
         }
+        Some((entry.path.clone(), request))
     }
 
     fn up(&mut self) {
@@ -167,11 +250,103 @@ impl FileManagerState {
 
     fn parent(&mut self) {
         if let Some(parent) = self.cwd.parent() {
-            self.cwd = parent.to_path_buf();
+            self.set_cwd(parent.to_path_buf());
             self.selected = 0;
             self.scroll = 0;
             self.refresh();
         }
+    }
+
+    fn open_tab(&mut self, path: PathBuf) {
+        self.tabs.push(path.clone());
+        self.active_tab = self.tabs.len().saturating_sub(1);
+        self.cwd = path;
+        self.selected = 0;
+        self.scroll = 0;
+        self.tree_focus = false;
+        self.refresh();
+    }
+
+    fn open_tab_here(&mut self) {
+        self.open_tab(self.cwd.clone());
+    }
+
+    fn switch_to_tab(&mut self, idx: usize) -> bool {
+        if idx >= self.tabs.len() {
+            return false;
+        }
+        if idx == self.active_tab {
+            return true;
+        }
+        self.active_tab = idx;
+        self.cwd = self.tabs[idx].clone();
+        self.selected = 0;
+        self.scroll = 0;
+        self.tree_focus = false;
+        self.refresh();
+        true
+    }
+
+    fn switch_tab_relative(&mut self, forward: bool) -> bool {
+        if self.tabs.len() <= 1 {
+            return false;
+        }
+        let next = if forward {
+            (self.active_tab + 1) % self.tabs.len()
+        } else if self.active_tab == 0 {
+            self.tabs.len().saturating_sub(1)
+        } else {
+            self.active_tab - 1
+        };
+        self.switch_to_tab(next)
+    }
+
+    fn close_active_tab(&mut self) -> bool {
+        if self.tabs.len() <= 1 {
+            return false;
+        }
+        self.tabs.remove(self.active_tab);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len().saturating_sub(1);
+        }
+        self.cwd = self.tabs[self.active_tab].clone();
+        self.selected = 0;
+        self.scroll = 0;
+        self.tree_focus = false;
+        self.refresh();
+        true
+    }
+
+    fn tree_move_selection(&mut self, forward: bool) {
+        let items = file_manager_tree_items(
+            &self.cwd,
+            get_settings().desktop_file_manager.show_hidden_files,
+        );
+        if items.is_empty() {
+            self.tree_selected = 0;
+            self.tree_scroll = 0;
+            return;
+        }
+        self.tree_selected = file_manager_step_tree_selection(&items, self.tree_selected, forward)
+            .unwrap_or_else(|| file_manager_tree_selected_for_cwd(&items, &self.cwd));
+    }
+
+    fn open_selected_tree_path(&mut self) -> bool {
+        let items = file_manager_tree_items(
+            &self.cwd,
+            get_settings().desktop_file_manager.show_hidden_files,
+        );
+        let Some(path) = items
+            .get(self.tree_selected)
+            .and_then(|item| item.path.clone())
+        else {
+            return false;
+        };
+        self.set_cwd(path);
+        self.selected = 0;
+        self.scroll = 0;
+        self.refresh();
+        true
     }
 }
 
@@ -287,6 +462,7 @@ impl Drop for PtyWindowState {
 
 enum WindowKind {
     FileManager(FileManagerState),
+    FileManagerSettings(FileManagerSettingsState),
     DesktopSettings(DesktopSettingsState),
     PtyApp(PtyWindowState),
 }
@@ -414,6 +590,13 @@ enum TopMenuAction {
     OpenSettings,
     OpenProgramInstaller,
     OpenFileManager,
+    OpenFileManagerSettings,
+    NewFileManagerTab,
+    CloseFileManagerTab,
+    NextFileManagerTab,
+    PrevFileManagerTab,
+    OpenSelectedFileBuiltin,
+    OpenSelectedFileExternal,
     OpenEditMenus,
     OpenUserManagement,
     ShowAppShortcuts,
@@ -507,13 +690,14 @@ const START_PROGRAMS: [(&str, StartProgramsLeaf); 4] = [
     ("Network", StartProgramsLeaf::Network),
     ("Games", StartProgramsLeaf::Games),
 ];
-const START_SYSTEM: [(&str, StartLaunch); 3] = [
+const START_SYSTEM: [(&str, StartLaunch); 4] = [
     ("Program Installer", StartLaunch::ProgramInstaller),
     ("Terminal", StartLaunch::Terminal),
+    ("File Manager", StartLaunch::FileManager),
     ("Settings", StartLaunch::Settings),
 ];
 const START_PROGRAMS_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
-const START_SYSTEM_VIS_ROWS: [Option<usize>; 4] = [Some(0), None, Some(1), Some(2)];
+const START_SYSTEM_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
 
 fn submenu_for_root(idx: usize) -> Option<StartSubmenu> {
     START_ROOT_ITEMS.get(idx).and_then(|(_, sub)| *sub)
@@ -1109,8 +1293,11 @@ fn handle_key(
 
     if let Some(last_idx) = focused_visible_window_idx(state) {
         let focused_id = state.windows[last_idx].id;
+        let focused_area = state.windows[last_idx].rect.to_rect();
         let mut close_focused = false;
         let mut settings_action = DesktopSettingsAction::None;
+        let mut file_open_request: Option<(PathBuf, FileManagerOpenRequest)> = None;
+        let mut refresh_file_managers = false;
         match &mut state.windows[last_idx].kind {
             WindowKind::PtyApp(app) => {
                 app.session.send_key(code, modifiers);
@@ -1119,16 +1306,139 @@ fn handle_key(
             WindowKind::DesktopSettings(settings) => {
                 settings_action = handle_desktop_settings_key(settings, code, modifiers);
             }
-            WindowKind::FileManager(fm) => match code {
-                KeyCode::Esc => {
+            WindowKind::FileManager(fm) => {
+                let s = get_settings().desktop_file_manager;
+                let content = file_manager_content_rect(focused_area);
+                let (tree_area, entry_area) =
+                    file_manager_tree_and_entry_rects(content, s.show_tree_panel);
+                if tree_area.is_none() {
+                    fm.tree_focus = false;
+                }
+                if modifiers.contains(KeyModifiers::CONTROL) {
+                    match code {
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            fm.open_tab_here();
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::Char('w') | KeyCode::Char('W') => {
+                            let _ = fm.close_active_tab();
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::Tab => {
+                            let _ = fm.switch_tab_relative(!modifiers.contains(KeyModifiers::SHIFT));
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::BackTab => {
+                            let _ = fm.switch_tab_relative(false);
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    if matches!(code, KeyCode::Tab) && tree_area.is_some() {
+                        fm.tree_focus = !fm.tree_focus;
+                        if fm.tree_focus {
+                            if let Some(tree_rect) = tree_area {
+                                file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                            }
+                        } else {
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                    } else if fm.tree_focus && tree_area.is_some() {
+                        match code {
+                            KeyCode::Esc => {
+                                close_focused = true;
+                            }
+                            KeyCode::Up => {
+                                fm.tree_move_selection(false);
+                                if let Some(tree_rect) = tree_area {
+                                    file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                                }
+                            }
+                            KeyCode::Down => {
+                                fm.tree_move_selection(true);
+                                if let Some(tree_rect) = tree_area {
+                                    file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let _ = fm.open_selected_tree_path();
+                                if let Some(tree_rect) = tree_area {
+                                    file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                                }
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                            KeyCode::Right => {
+                                fm.tree_focus = false;
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match code {
+                        KeyCode::Esc => {
+                            close_focused = true;
+                        }
+                        KeyCode::Up => {
+                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                let (cols, _) = file_manager_grid_metrics(entry_area);
+                                if cols > 0 {
+                                    fm.selected = fm.selected.saturating_sub(cols);
+                                }
+                            } else {
+                                fm.up();
+                            }
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::Down => {
+                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                let (cols, _) = file_manager_grid_metrics(entry_area);
+                                if cols > 0 && !fm.entries.is_empty() {
+                                    fm.selected = (fm.selected + cols).min(fm.entries.len() - 1);
+                                }
+                            } else {
+                                fm.down();
+                            }
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        KeyCode::Left => {
+                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                fm.selected = fm.selected.saturating_sub(1);
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                        }
+                        KeyCode::Right => {
+                            if matches!(s.view_mode, FileManagerViewMode::Grid) {
+                                if fm.selected + 1 < fm.entries.len() {
+                                    fm.selected += 1;
+                                }
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                        }
+                        KeyCode::Enter => {
+                            file_open_request = fm.activate_selected(FileManagerOpenRequest::Builtin)
+                        }
+                        KeyCode::Char('x') | KeyCode::Char('X') => {
+                            file_open_request = fm.activate_selected(FileManagerOpenRequest::External)
+                        }
+                        KeyCode::Backspace => {
+                            fm.parent();
+                            file_manager_ensure_selection_visible(fm, entry_area);
+                        }
+                        _ => {}
+                    }
+                    }
+                }
+            }
+            WindowKind::FileManagerSettings(settings) => {
+                let (refresh, close) = handle_file_manager_settings_key(settings, code, modifiers);
+                if refresh {
+                    refresh_file_managers = true;
+                }
+                if close {
                     close_focused = true;
                 }
-                KeyCode::Up => fm.up(),
-                KeyCode::Down => fm.down(),
-                KeyCode::Enter => fm.open_selected(),
-                KeyCode::Backspace => fm.parent(),
-                _ => {}
-            },
+            }
         }
         if !matches!(settings_action, DesktopSettingsAction::None) {
             run_desktop_settings_action(
@@ -1141,6 +1451,12 @@ fn handle_key(
         }
         if matches!(settings_action, DesktopSettingsAction::CloseWindow) {
             close_focused = false;
+        }
+        if refresh_file_managers {
+            refresh_all_file_manager_windows(state);
+        }
+        if let Some((path, request)) = file_open_request {
+            handle_file_open_request(terminal, state, &path, request)?;
         }
         if close_focused {
             close_window_by_id(state, focused_id);
@@ -1313,6 +1629,9 @@ fn handle_mouse(
         if send_mouse_to_focused_pty(state, mouse) {
             return Ok(None);
         }
+        if handle_file_manager_scroll_mouse(state, mouse) {
+            return Ok(None);
+        }
         return Ok(None);
     }
 
@@ -1477,6 +1796,10 @@ fn run_start_action(
                 ),
                 StartLaunch::Settings => {
                     open_desktop_settings_window(terminal, state, current_user);
+                    Ok(())
+                }
+                StartLaunch::FileManager => {
+                    open_file_manager_window(state);
                     Ok(())
                 }
             };
@@ -1712,6 +2035,10 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
         WindowKind::PtyApp(app) => (win.title.clone(), app.manual_key.clone()),
         WindowKind::DesktopSettings(_) => ("Settings".to_string(), "settings".to_string()),
         WindowKind::FileManager(_) => ("My Computer".to_string(), "my_computer".to_string()),
+        WindowKind::FileManagerSettings(_) => (
+            "File Manager Settings".to_string(),
+            "file_manager_settings".to_string(),
+        ),
     };
     let mut keys = manual_key_aliases(&key);
     let title_key = slugify_manual_key(&win.title);
@@ -1986,6 +2313,33 @@ fn run_top_menu_action(
             }
         }
         TopMenuAction::OpenFileManager => open_file_manager_window(state),
+        TopMenuAction::OpenFileManagerSettings => open_file_manager_settings_window(state),
+        TopMenuAction::NewFileManagerTab => {
+            if let Some(fm) = focused_file_manager_mut(state) {
+                fm.open_tab_here();
+            }
+        }
+        TopMenuAction::CloseFileManagerTab => {
+            if let Some(fm) = focused_file_manager_mut(state) {
+                let _ = fm.close_active_tab();
+            }
+        }
+        TopMenuAction::NextFileManagerTab => {
+            if let Some(fm) = focused_file_manager_mut(state) {
+                let _ = fm.switch_tab_relative(true);
+            }
+        }
+        TopMenuAction::PrevFileManagerTab => {
+            if let Some(fm) = focused_file_manager_mut(state) {
+                let _ = fm.switch_tab_relative(false);
+            }
+        }
+        TopMenuAction::OpenSelectedFileBuiltin => {
+            open_focused_file_manager_selection(terminal, state, FileManagerOpenRequest::Builtin)?;
+        }
+        TopMenuAction::OpenSelectedFileExternal => {
+            open_focused_file_manager_selection(terminal, state, FileManagerOpenRequest::External)?;
+        }
         TopMenuAction::OpenEditMenus => {
             run_with_mouse_capture_paused(terminal, edit_menus_menu)?;
         }
@@ -2323,6 +2677,7 @@ fn reap_closed_pty_windows(state: &mut DesktopState) {
                 WindowKind::PtyApp(app) => app.session.is_alive(),
                 WindowKind::DesktopSettings(_) => true,
                 WindowKind::FileManager(_) => true,
+                WindowKind::FileManagerSettings(_) => true,
             }
         };
         if is_alive {
@@ -2539,17 +2894,21 @@ fn draw_top_menu_overlay(f: &mut ratatui::Frame, area: Rect, state: &DesktopStat
     let inner_w = area.width.saturating_sub(2) as usize;
     let mut lines = Vec::new();
     for (idx, item) in items.iter().enumerate() {
-        let style = if state.top_menu.hover_item == Some(idx) && item.enabled {
-            sel_style()
-        } else if item.enabled {
-            normal_style()
+        if item.label.is_empty() {
+            lines.push(Line::from(Span::styled("-".repeat(inner_w), dim_style())));
         } else {
-            dim_style()
-        };
-        lines.push(Line::from(Span::styled(
-            format_top_menu_row(inner_w, &item.label, item.shortcut.as_deref()),
-            style,
-        )));
+            let style = if state.top_menu.hover_item == Some(idx) && item.enabled {
+                sel_style()
+            } else if item.enabled {
+                normal_style()
+            } else {
+                dim_style()
+            };
+            lines.push(Line::from(Span::styled(
+                format_top_menu_row(inner_w, &item.label, item.shortcut.as_deref()),
+                style,
+            )));
+        }
     }
     f.render_widget(
         Paragraph::new(lines),
@@ -2628,6 +2987,31 @@ fn focused_window_kind(state: &DesktopState) -> Option<&WindowKind> {
     Some(&state.windows[idx].kind)
 }
 
+fn focused_file_manager_selected_entry(state: &DesktopState) -> Option<FileEntry> {
+    let idx = focused_visible_window_idx(state)?;
+    match &state.windows[idx].kind {
+        WindowKind::FileManager(fm) => fm.entries.get(fm.selected).cloned(),
+        _ => None,
+    }
+}
+
+fn focused_file_manager_mut(state: &mut DesktopState) -> Option<&mut FileManagerState> {
+    let idx = focused_visible_window_idx(state)?;
+    match &mut state.windows[idx].kind {
+        WindowKind::FileManager(fm) => Some(fm),
+        _ => None,
+    }
+}
+
+fn top_menu_separator_item() -> TopMenuItem {
+    TopMenuItem {
+        label: String::new(),
+        shortcut: None,
+        action: TopMenuAction::None,
+        enabled: false,
+    }
+}
+
 fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
     match kind {
         TopMenuKind::App => {
@@ -2640,7 +3024,10 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 }];
             };
             let app_hint = match focused_window_kind(state) {
-                Some(WindowKind::FileManager(_)) => "Open Enter | Parent Backspace",
+                Some(WindowKind::FileManager(_)) => {
+                    "Open Enter | External X | Ctrl+T New Tab | Ctrl+Tab Next Tab"
+                }
+                Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
                 Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
                 Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
                 None => "",
@@ -2672,26 +3059,78 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 },
             ]
         }
-        TopMenuKind::File => vec![
-            TopMenuItem {
-                label: "Program Installer".to_string(),
-                shortcut: None,
-                action: TopMenuAction::OpenProgramInstaller,
-                enabled: true,
-            },
-            TopMenuItem {
+        TopMenuKind::File => {
+            let mut items = Vec::new();
+            if let Some(WindowKind::FileManager(fm)) = focused_window_kind(state) {
+                let selected = focused_file_manager_selected_entry(state);
+                let has_any = selected.is_some();
+                let has_file = selected.as_ref().is_some_and(|e| !e.is_dir);
+                let has_extra_tabs = fm.tabs.len() > 1;
+                items.push(TopMenuItem {
+                    label: "File Manager Settings".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::OpenFileManagerSettings,
+                    enabled: true,
+                });
+                items.push(TopMenuItem {
+                    label: "New Tab".to_string(),
+                    shortcut: Some("Ctrl+T".to_string()),
+                    action: TopMenuAction::NewFileManagerTab,
+                    enabled: true,
+                });
+                items.push(TopMenuItem {
+                    label: "Close Tab".to_string(),
+                    shortcut: Some("Ctrl+W".to_string()),
+                    action: TopMenuAction::CloseFileManagerTab,
+                    enabled: has_extra_tabs,
+                });
+                items.push(TopMenuItem {
+                    label: "Next Tab".to_string(),
+                    shortcut: Some("Ctrl+Tab".to_string()),
+                    action: TopMenuAction::NextFileManagerTab,
+                    enabled: has_extra_tabs,
+                });
+                items.push(TopMenuItem {
+                    label: "Previous Tab".to_string(),
+                    shortcut: Some("Ctrl+Shift+Tab".to_string()),
+                    action: TopMenuAction::PrevFileManagerTab,
+                    enabled: has_extra_tabs,
+                });
+                items.push(TopMenuItem {
+                    label: "Open Selected".to_string(),
+                    shortcut: Some("Enter".to_string()),
+                    action: TopMenuAction::OpenSelectedFileBuiltin,
+                    enabled: has_any,
+                });
+                items.push(TopMenuItem {
+                    label: "Open Selected Externally".to_string(),
+                    shortcut: Some("X".to_string()),
+                    action: TopMenuAction::OpenSelectedFileExternal,
+                    enabled: has_file,
+                });
+                items.push(top_menu_separator_item());
+            }
+            items.push(TopMenuItem {
                 label: "Settings".to_string(),
                 shortcut: None,
                 action: TopMenuAction::OpenSettings,
                 enabled: true,
-            },
-            TopMenuItem {
+            });
+            items.push(TopMenuItem {
                 label: "Open Start Menu".to_string(),
                 shortcut: Some("F10".to_string()),
                 action: TopMenuAction::OpenStart,
                 enabled: true,
-            },
-        ],
+            });
+            items.push(top_menu_separator_item());
+            items.push(TopMenuItem {
+                label: "Program Installer".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenProgramInstaller,
+                enabled: true,
+            });
+            items
+        }
         TopMenuKind::Edit => {
             vec![
                 TopMenuItem {
@@ -2976,6 +3415,9 @@ fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool) {
 
     match &win.kind {
         WindowKind::FileManager(fm) => draw_file_manager_window(f, area, fm, focused),
+        WindowKind::FileManagerSettings(settings) => {
+            draw_file_manager_settings_window(f, area, settings, focused)
+        }
         WindowKind::DesktopSettings(settings) => {
             draw_desktop_settings_window(f, area, settings, focused)
         }
@@ -2989,6 +3431,683 @@ fn draw_file_manager_window(
     fm: &FileManagerState,
     focused: bool,
 ) {
+    let content = file_manager_content_rect(area);
+    if content.height == 0 || content.width == 0 {
+        return;
+    }
+    let cfg = get_settings().desktop_file_manager;
+    let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, cfg.show_tree_panel);
+
+    let mut header = Vec::new();
+    header.push(Line::from(Span::styled(
+        file_manager_tab_line(fm, content.width as usize),
+        if focused { normal_style() } else { dim_style() },
+    )));
+    header.push(Line::from(Span::styled(
+        truncate_with_ellipsis(&format!("Path: {}", fm.cwd.display()), content.width as usize),
+        dim_style(),
+    )));
+    if content.height >= 3 {
+        header.push(Line::from(Span::styled(
+            "-".repeat(content.width as usize),
+            dim_style(),
+        )));
+    }
+    if !header.is_empty() {
+        f.render_widget(
+            Paragraph::new(header),
+            Rect {
+                x: content.x,
+                y: content.y,
+                width: content.width,
+                height: content.height.min(FILE_MANAGER_HEADER_ROWS),
+            },
+        );
+    }
+
+    if entry_area.height == 0 || entry_area.width == 0 {
+        return;
+    }
+
+    if let Some(tree) = tree_area {
+        let tree_items = file_manager_tree_items(&fm.cwd, cfg.show_hidden_files);
+        let visible = tree.height as usize;
+        let start = fm.tree_scroll.min(tree_items.len().saturating_sub(visible));
+        let end = (start + visible).min(tree_items.len());
+        let mut tree_lines = Vec::new();
+        for idx in start..end {
+            let item = &tree_items[idx];
+            let style = if focused && fm.tree_focus && idx == fm.tree_selected {
+                sel_style()
+            } else {
+                dim_style()
+            };
+            tree_lines.push(Line::from(Span::styled(
+                truncate_with_ellipsis(&item.line, tree.width as usize),
+                style,
+            )));
+        }
+        while tree_lines.len() < visible {
+            tree_lines.push(Line::from(""));
+        }
+        f.render_widget(Paragraph::new(tree_lines), tree);
+
+        if entry_area.x > tree.x {
+            let sep_x = entry_area.x - 1;
+            let sep_lines: Vec<Line> = (0..entry_area.height)
+                .map(|_| Line::from(Span::styled("|", dim_style())))
+                .collect();
+            f.render_widget(
+                Paragraph::new(sep_lines),
+                Rect {
+                    x: sep_x,
+                    y: entry_area.y,
+                    width: 1,
+                    height: entry_area.height,
+                },
+            );
+        }
+    }
+
+    match cfg.view_mode {
+        FileManagerViewMode::List => {
+            let visible_rows = file_manager_list_visible_rows(entry_area);
+            let start = fm
+                .scroll
+                .min(file_manager_list_max_scroll(fm.entries.len(), visible_rows));
+            let mut lines = Vec::new();
+            for row in 0..visible_rows {
+                let Some(entry) = fm.entries.get(start + row) else {
+                    lines.push(Line::from(""));
+                    continue;
+                };
+                let mut text = format!("{} {}", file_manager_entry_icon(entry), entry.name);
+                text = truncate_with_ellipsis(&text, entry_area.width as usize);
+                let style = if focused && start + row == fm.selected {
+                    sel_style()
+                } else {
+                    normal_style()
+                };
+                lines.push(Line::from(Span::styled(text, style)));
+            }
+            f.render_widget(Paragraph::new(lines), entry_area);
+        }
+        FileManagerViewMode::Grid => {
+            let (cols, visible_rows) = file_manager_grid_metrics(entry_area);
+            if cols == 0 || visible_rows == 0 {
+                return;
+            }
+            let start_row = fm.scroll.min(file_manager_grid_max_scroll(
+                fm.entries.len(),
+                cols,
+                visible_rows,
+            ));
+            let cell_width = (entry_area.width / cols as u16).max(1);
+
+            for vis_row in 0..visible_rows {
+                for col in 0..cols {
+                    let idx = (start_row + vis_row) * cols + col;
+                    let Some(entry) = fm.entries.get(idx) else {
+                        continue;
+                    };
+
+                    let x = entry_area.x + (col as u16 * cell_width);
+                    let y = entry_area.y + (vis_row as u16 * FILE_MANAGER_GRID_CELL_HEIGHT);
+                    if x >= entry_area.x + entry_area.width || y >= entry_area.y + entry_area.height {
+                        continue;
+                    }
+                    let width = if col + 1 == cols {
+                        entry_area.x + entry_area.width - x
+                    } else {
+                        cell_width.min(entry_area.x + entry_area.width - x)
+                    };
+                    let height = FILE_MANAGER_GRID_CELL_HEIGHT.min(entry_area.y + entry_area.height - y);
+                    let style = if focused && idx == fm.selected {
+                        sel_style()
+                    } else {
+                        normal_style()
+                    };
+
+                    let icon = centered_text(file_manager_entry_icon(entry), width as usize);
+                    let name = centered_text(&entry.name, width as usize);
+                    let mut lines = vec![Line::from(Span::styled(icon, style))];
+                    if height > 1 {
+                        lines.push(Line::from(Span::styled(name, style)));
+                    }
+                    while lines.len() < height as usize {
+                        lines.push(Line::from(Span::styled(" ".repeat(width as usize), style)));
+                    }
+                    f.render_widget(
+                        Paragraph::new(lines),
+                        Rect {
+                            x,
+                            y,
+                            width,
+                            height,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn file_manager_content_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn file_manager_body_rect(content: Rect) -> Rect {
+    Rect {
+        x: content.x,
+        y: content.y + FILE_MANAGER_HEADER_ROWS,
+        width: content.width,
+        height: content.height.saturating_sub(FILE_MANAGER_HEADER_ROWS),
+    }
+}
+
+fn file_manager_tree_and_entry_rects(content: Rect, show_tree_panel: bool) -> (Option<Rect>, Rect) {
+    let body = file_manager_body_rect(content);
+    if !show_tree_panel
+        || body.width < FILE_MANAGER_TREE_MIN_TOTAL_WIDTH
+        || body.width <= FILE_MANAGER_ENTRY_MIN_WIDTH + FILE_MANAGER_TREE_GAP
+    {
+        return (None, body);
+    }
+
+    let desired_tree = (body.width / 4)
+        .max(FILE_MANAGER_TREE_MIN_WIDTH)
+        .min(FILE_MANAGER_TREE_MAX_WIDTH);
+    let max_tree = body
+        .width
+        .saturating_sub(FILE_MANAGER_TREE_GAP)
+        .saturating_sub(FILE_MANAGER_ENTRY_MIN_WIDTH);
+    let tree_w = desired_tree.min(max_tree);
+    if tree_w < FILE_MANAGER_TREE_MIN_WIDTH {
+        return (None, body);
+    }
+
+    let tree_rect = Rect {
+        x: body.x,
+        y: body.y,
+        width: tree_w,
+        height: body.height,
+    };
+    let entry_rect = Rect {
+        x: body.x + tree_w + FILE_MANAGER_TREE_GAP,
+        y: body.y,
+        width: body.width.saturating_sub(tree_w + FILE_MANAGER_TREE_GAP),
+        height: body.height,
+    };
+    (Some(tree_rect), entry_rect)
+}
+
+fn file_manager_entry_rect(content: Rect, show_tree_panel: bool) -> Rect {
+    let (_, entry) = file_manager_tree_and_entry_rects(content, show_tree_panel);
+    entry
+}
+
+fn file_manager_tab_title(path: &Path) -> String {
+    let home = dirs::home_dir();
+    if home.as_ref().is_some_and(|h| h == path) {
+        return "~".to_string();
+    }
+    if path == Path::new("/") {
+        return "/".to_string();
+    }
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn file_manager_tab_line(fm: &FileManagerState, width: usize) -> String {
+    let mut line = String::from("Tabs ");
+    if width == 0 {
+        return line;
+    }
+    for (idx, tab) in fm.tabs.iter().enumerate() {
+        let mut title = file_manager_tab_title(tab);
+        title = truncate_with_ellipsis(&title, 12);
+        let seg = if idx == fm.active_tab {
+            format!("[{}:{}*]", idx + 1, title)
+        } else {
+            format!("[{}:{}]", idx + 1, title)
+        };
+        if line.chars().count() < width {
+            if line.chars().count() > "Tabs ".chars().count() {
+                line.push(' ');
+            }
+            line.push_str(&seg);
+        } else {
+            break;
+        }
+        if line.chars().count() >= width {
+            break;
+        }
+    }
+    truncate_with_ellipsis(&line, width)
+}
+
+fn file_manager_tab_index_at(fm: &FileManagerState, width: usize, x: usize) -> Option<usize> {
+    if width == 0 {
+        return None;
+    }
+    let mut cursor = "Tabs ".chars().count();
+    for (idx, tab) in fm.tabs.iter().enumerate() {
+        let title = truncate_with_ellipsis(&file_manager_tab_title(tab), 12);
+        let seg = if idx == fm.active_tab {
+            format!("[{}:{}*]", idx + 1, title)
+        } else {
+            format!("[{}:{}]", idx + 1, title)
+        };
+        if idx > 0 {
+            cursor += 1;
+        }
+        let start = cursor;
+        let end = (cursor + seg.chars().count()).min(width);
+        if x >= start && x < end {
+            return Some(idx);
+        }
+        cursor += seg.chars().count();
+        if cursor >= width {
+            break;
+        }
+    }
+    None
+}
+
+fn file_manager_tree_items(cwd: &Path, show_hidden: bool) -> Vec<FileTreeItem> {
+    let home = dirs::home_dir();
+    let root = if home.as_ref().is_some_and(|h| cwd.starts_with(h)) {
+        home.unwrap_or_else(|| PathBuf::from("/"))
+    } else {
+        PathBuf::from("/")
+    };
+
+    let mut items = vec![FileTreeItem {
+        line: "Folders".to_string(),
+        path: None,
+    }];
+
+    let root_label = if root == Path::new("/") {
+        "/".to_string()
+    } else {
+        "~".to_string()
+    };
+    items.push(FileTreeItem {
+        line: format!("* {}", root_label),
+        path: Some(root.clone()),
+    });
+
+    let rel = cwd.strip_prefix(&root).unwrap_or(cwd);
+    let comps: Vec<String> = rel
+        .components()
+        .filter_map(|c| {
+            let s = c.as_os_str().to_string_lossy().to_string();
+            if s.is_empty() || s == "/" {
+                None
+            } else {
+                Some(s)
+            }
+        })
+        .collect();
+
+    let mut running = root.clone();
+    for (depth, comp) in comps.iter().enumerate() {
+        running = running.join(comp);
+        items.push(FileTreeItem {
+            line: format!("{}|- {}", "  ".repeat(depth + 1), comp),
+            path: Some(running.clone()),
+        });
+    }
+
+    let mut child_dirs: Vec<String> = std::fs::read_dir(cwd)
+        .ok()
+        .into_iter()
+        .flat_map(|iter| iter.flatten())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !show_hidden && name.starts_with('.') {
+                return None;
+            }
+            Some(name)
+        })
+        .collect();
+    child_dirs.sort_by_key(|n| n.to_lowercase());
+    let child_indent = "  ".repeat(comps.len() + 1);
+    for name in child_dirs {
+        items.push(FileTreeItem {
+            line: format!("{child_indent}+- {name}"),
+            path: Some(cwd.join(&name)),
+        });
+    }
+    items
+}
+
+fn file_manager_tree_selected_for_cwd(items: &[FileTreeItem], cwd: &Path) -> usize {
+    items
+        .iter()
+        .position(|item| item.path.as_ref().is_some_and(|p| p == cwd))
+        .or_else(|| items.iter().position(|item| item.path.is_some()))
+        .unwrap_or(0)
+}
+
+fn file_manager_step_tree_selection(
+    items: &[FileTreeItem],
+    current: usize,
+    forward: bool,
+) -> Option<usize> {
+    if items.is_empty() || !items.iter().any(|i| i.path.is_some()) {
+        return None;
+    }
+    let start = current.min(items.len().saturating_sub(1));
+    for offset in 1..=items.len() {
+        let idx = if forward {
+            (start + offset) % items.len()
+        } else {
+            (start + items.len() - (offset % items.len())) % items.len()
+        };
+        if items[idx].path.is_some() {
+            return Some(idx);
+        }
+    }
+    items.iter().position(|i| i.path.is_some())
+}
+
+fn file_manager_ensure_tree_selection_visible(fm: &mut FileManagerState, tree_rect: Rect) {
+    let items = file_manager_tree_items(
+        &fm.cwd,
+        get_settings().desktop_file_manager.show_hidden_files,
+    );
+    if items.is_empty() {
+        fm.tree_selected = 0;
+        fm.tree_scroll = 0;
+        return;
+    }
+    fm.tree_selected = fm.tree_selected.min(items.len().saturating_sub(1));
+    if items
+        .get(fm.tree_selected)
+        .and_then(|item| item.path.as_ref())
+        .is_none()
+    {
+        fm.tree_selected = file_manager_tree_selected_for_cwd(&items, &fm.cwd);
+    }
+
+    let visible = tree_rect.height as usize;
+    if visible == 0 {
+        fm.tree_scroll = 0;
+        return;
+    }
+    let max_scroll = items.len().saturating_sub(visible);
+    fm.tree_scroll = fm.tree_scroll.min(max_scroll);
+    if fm.tree_selected < fm.tree_scroll {
+        fm.tree_scroll = fm.tree_selected;
+    } else if fm.tree_selected >= fm.tree_scroll + visible {
+        fm.tree_scroll = fm.tree_selected + 1 - visible;
+    }
+}
+
+fn file_manager_tree_apply_scroll_delta(
+    fm: &mut FileManagerState,
+    tree_rect: Rect,
+    delta: isize,
+) -> bool {
+    if delta == 0 {
+        return false;
+    }
+    let items = file_manager_tree_items(
+        &fm.cwd,
+        get_settings().desktop_file_manager.show_hidden_files,
+    );
+    if items.is_empty() {
+        fm.tree_scroll = 0;
+        return false;
+    }
+    let visible = tree_rect.height as usize;
+    if visible == 0 {
+        fm.tree_scroll = 0;
+        return false;
+    }
+    let max_scroll = items.len().saturating_sub(visible);
+    let before = fm.tree_scroll;
+    if delta < 0 {
+        fm.tree_scroll = fm.tree_scroll.saturating_sub((-delta) as usize);
+    } else {
+        fm.tree_scroll = (fm.tree_scroll + delta as usize).min(max_scroll);
+    }
+    fm.tree_scroll != before
+}
+
+fn file_manager_list_visible_rows(entry_rect: Rect) -> usize {
+    entry_rect.height as usize
+}
+
+fn file_manager_grid_metrics(entry_rect: Rect) -> (usize, usize) {
+    if entry_rect.width == 0 || entry_rect.height == 0 {
+        return (0, 0);
+    }
+    let cols = ((entry_rect.width / FILE_MANAGER_GRID_CELL_WIDTH).max(1)) as usize;
+    let visible_rows = ((entry_rect.height / FILE_MANAGER_GRID_CELL_HEIGHT).max(1)) as usize;
+    (cols, visible_rows)
+}
+
+fn file_manager_total_grid_rows(entry_count: usize, cols: usize) -> usize {
+    if entry_count == 0 || cols == 0 {
+        0
+    } else {
+        (entry_count + cols - 1) / cols
+    }
+}
+
+fn file_manager_list_max_scroll(entry_count: usize, visible_rows: usize) -> usize {
+    entry_count.saturating_sub(visible_rows)
+}
+
+fn file_manager_grid_max_scroll(entry_count: usize, cols: usize, visible_rows: usize) -> usize {
+    file_manager_total_grid_rows(entry_count, cols).saturating_sub(visible_rows)
+}
+
+fn file_manager_ensure_selection_visible(fm: &mut FileManagerState, entry_rect: Rect) {
+    if fm.entries.is_empty() {
+        fm.selected = 0;
+        fm.scroll = 0;
+        return;
+    }
+
+    fm.selected = fm.selected.min(fm.entries.len() - 1);
+    match get_settings().desktop_file_manager.view_mode {
+        FileManagerViewMode::List => {
+            let visible_rows = file_manager_list_visible_rows(entry_rect);
+            if visible_rows == 0 {
+                fm.scroll = 0;
+                return;
+            }
+            let max_scroll = file_manager_list_max_scroll(fm.entries.len(), visible_rows);
+            fm.scroll = fm.scroll.min(max_scroll);
+            if fm.selected < fm.scroll {
+                fm.scroll = fm.selected;
+            } else if fm.selected >= fm.scroll + visible_rows {
+                fm.scroll = fm.selected + 1 - visible_rows;
+            }
+        }
+        FileManagerViewMode::Grid => {
+            let (cols, visible_rows) = file_manager_grid_metrics(entry_rect);
+            if cols == 0 || visible_rows == 0 {
+                fm.scroll = 0;
+                return;
+            }
+            let max_scroll = file_manager_grid_max_scroll(fm.entries.len(), cols, visible_rows);
+            fm.scroll = fm.scroll.min(max_scroll);
+            let selected_row = fm.selected / cols;
+            if selected_row < fm.scroll {
+                fm.scroll = selected_row;
+            } else if selected_row >= fm.scroll + visible_rows {
+                fm.scroll = selected_row + 1 - visible_rows;
+            }
+        }
+    }
+}
+
+fn file_manager_apply_scroll_delta(fm: &mut FileManagerState, entry_rect: Rect, delta: isize) -> bool {
+    if delta == 0 || fm.entries.is_empty() {
+        return false;
+    }
+
+    match get_settings().desktop_file_manager.view_mode {
+        FileManagerViewMode::List => {
+            let visible_rows = file_manager_list_visible_rows(entry_rect);
+            if visible_rows == 0 {
+                return false;
+            }
+            let max_scroll = file_manager_list_max_scroll(fm.entries.len(), visible_rows);
+            let before = fm.scroll;
+            if delta < 0 {
+                fm.scroll = fm.scroll.saturating_sub((-delta) as usize);
+            } else {
+                fm.scroll = (fm.scroll + delta as usize).min(max_scroll);
+            }
+            let last_visible = (fm.scroll + visible_rows.saturating_sub(1)).min(fm.entries.len() - 1);
+            if fm.selected < fm.scroll {
+                fm.selected = fm.scroll;
+            } else if fm.selected > last_visible {
+                fm.selected = last_visible;
+            }
+            fm.scroll != before
+        }
+        FileManagerViewMode::Grid => {
+            let (cols, visible_rows) = file_manager_grid_metrics(entry_rect);
+            if cols == 0 || visible_rows == 0 {
+                return false;
+            }
+            let max_scroll = file_manager_grid_max_scroll(fm.entries.len(), cols, visible_rows);
+            let before = fm.scroll;
+            if delta < 0 {
+                fm.scroll = fm.scroll.saturating_sub((-delta) as usize);
+            } else {
+                fm.scroll = (fm.scroll + delta as usize).min(max_scroll);
+            }
+            let selected_col = fm.selected % cols;
+            let first_visible_row = fm.scroll;
+            let last_visible_row = fm.scroll + visible_rows.saturating_sub(1);
+            let selected_row = fm.selected / cols;
+            if selected_row < first_visible_row {
+                fm.selected = (first_visible_row * cols + selected_col).min(fm.entries.len() - 1);
+            } else if selected_row > last_visible_row {
+                fm.selected = (last_visible_row * cols + selected_col).min(fm.entries.len() - 1);
+            }
+            fm.scroll != before
+        }
+    }
+}
+
+fn file_manager_entry_icon(entry: &FileEntry) -> &'static str {
+    if entry.name == ".." {
+        return "[UP]";
+    }
+    if entry.is_dir {
+        return "[DIR]";
+    }
+    let ext = Path::new(&entry.name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "txt" | "md" | "rs" | "json" | "toml" | "yaml" | "yml" => "[TXT]",
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "svg" | "webp" => "[IMG]",
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" => "[ARC]",
+        "mp3" | "wav" | "flac" | "ogg" => "[AUD]",
+        "mp4" | "mkv" | "mov" | "webm" => "[VID]",
+        "sh" | "exe" | "app" | "bat" | "cmd" => "[APP]",
+        _ => "[FILE]",
+    }
+}
+
+fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let mut out: String = text.chars().take(max_chars - 3).collect();
+    out.push_str("...");
+    out
+}
+
+fn centered_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let clipped = truncate_with_ellipsis(text, width);
+    let used = clipped.chars().count();
+    if used >= width {
+        return clipped;
+    }
+    let left = (width - used) / 2;
+    let right = width - used - left;
+    format!("{}{}{}", " ".repeat(left), clipped, " ".repeat(right))
+}
+
+fn file_manager_settings_rows() -> Vec<String> {
+    let s = get_settings().desktop_file_manager;
+    vec![
+        format!(
+            "Show Hidden Files: {} [toggle]",
+            if s.show_hidden_files { "ON" } else { "OFF" }
+        ),
+        format!(
+            "Show Left Tree Panel: {} [toggle]",
+            if s.show_tree_panel { "ON" } else { "OFF" }
+        ),
+        format!(
+            "View Mode: {} [toggle]",
+            match s.view_mode {
+                FileManagerViewMode::Grid => "Grid",
+                FileManagerViewMode::List => "List",
+            }
+        ),
+        format!(
+            "Sort By: {} [cycle]",
+            match s.sort_mode {
+                FileManagerSortMode::Name => "Name",
+                FileManagerSortMode::Type => "Type",
+            }
+        ),
+        format!(
+            "Directories First: {} [toggle]",
+            if s.directories_first { "ON" } else { "OFF" }
+        ),
+        format!(
+            "Open Text Files In: {} [toggle]",
+            match s.text_open_mode {
+                FileManagerTextOpenMode::Editor => "Editor",
+                FileManagerTextOpenMode::Viewer => "Viewer",
+            }
+        ),
+        "Back".to_string(),
+    ]
+}
+
+fn draw_file_manager_settings_window(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    settings: &FileManagerSettingsState,
+    focused: bool,
+) {
     let inner = Rect {
         x: area.x + 1,
         y: area.y + 1,
@@ -2998,49 +4117,16 @@ fn draw_file_manager_window(
     if inner.height == 0 || inner.width == 0 {
         return;
     }
-
+    let rows = file_manager_settings_rows();
     let mut lines = Vec::new();
-    let mut path = fm.cwd.display().to_string();
-    if path.chars().count() > inner.width as usize {
-        let keep = inner.width as usize - 3;
-        path = format!(
-            "...{}",
-            path.chars()
-                .rev()
-                .take(keep)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>()
-        );
-    }
-    lines.push(Line::from(Span::styled(
-        format!("Path: {}", path),
-        dim_style(),
-    )));
-    lines.push(Line::from(Span::styled(
-        "-".repeat(inner.width as usize),
-        dim_style(),
-    )));
-
-    let visible_rows = inner.height.saturating_sub(2) as usize;
-    let start = fm.scroll.min(fm.entries.len());
-    let end = (start + visible_rows).min(fm.entries.len());
-    for (idx, entry) in fm.entries[start..end].iter().enumerate() {
-        let absolute_idx = start + idx;
-        let icon = if entry.is_dir { "[D]" } else { "[F]" };
-        let mut line = format!("{} {}", icon, entry.name);
-        if line.chars().count() > inner.width as usize {
-            line = line.chars().take(inner.width as usize).collect();
-        }
-        let style = if absolute_idx == fm.selected && focused {
+    for (idx, row) in rows.iter().enumerate() {
+        let style = if focused && settings.selected == idx {
             sel_style()
         } else {
             normal_style()
         };
-        lines.push(Line::from(Span::styled(line, style)));
+        lines.push(Line::from(Span::styled(row.as_str(), style)));
     }
-
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -4450,6 +5536,7 @@ fn handle_window_content_mouse(
     let mut close_window_id = None;
     let mut settings_action = DesktopSettingsAction::None;
     let mut settings_window_id = None;
+    let mut refresh_file_managers = false;
     let clicked_target = {
         let win = &mut state.windows[idx_last];
         let rect = win.rect;
@@ -4474,6 +5561,100 @@ fn handle_window_content_mouse(
                 None
             }
             WindowKind::FileManager(fm) => {
+                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    return Ok(());
+                }
+                let cfg = get_settings().desktop_file_manager;
+                let content = file_manager_content_rect(win.rect.to_rect());
+                if !point_in_rect(mouse.column, mouse.row, content) {
+                    return Ok(());
+                }
+                if mouse.row == content.y {
+                    let rel_x = mouse.column.saturating_sub(content.x) as usize;
+                    if let Some(tab_idx) = file_manager_tab_index_at(fm, content.width as usize, rel_x) {
+                        let _ = fm.switch_to_tab(tab_idx);
+                        let entry_area = file_manager_entry_rect(content, cfg.show_tree_panel);
+                        file_manager_ensure_selection_visible(fm, entry_area);
+                    }
+                    return Ok(());
+                }
+                let (tree_area, entry_area) =
+                    file_manager_tree_and_entry_rects(content, cfg.show_tree_panel);
+                if let Some(tree_rect) = tree_area {
+                    if point_in_rect(mouse.column, mouse.row, tree_rect) {
+                        let items = file_manager_tree_items(&fm.cwd, cfg.show_hidden_files);
+                        let row = (mouse.row - tree_rect.y) as usize;
+                        let visible = tree_rect.height as usize;
+                        if row >= visible {
+                            return Ok(());
+                        }
+                        let start = fm.tree_scroll.min(items.len().saturating_sub(visible));
+                        let idx = start + row;
+                        if idx >= items.len() {
+                            return Ok(());
+                        }
+                        fm.tree_selected = idx;
+                        fm.tree_focus = true;
+                        file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                        return Ok(());
+                    }
+                }
+
+                if !point_in_rect(mouse.column, mouse.row, entry_area) || entry_area.height == 0 {
+                    return Ok(());
+                }
+                let idx = match cfg.view_mode {
+                    FileManagerViewMode::List => {
+                        let row = (mouse.row - entry_area.y) as usize;
+                        let visible_rows = entry_area.height as usize;
+                        if row >= visible_rows {
+                            return Ok(());
+                        }
+                        let start = fm
+                            .scroll
+                            .min(file_manager_list_max_scroll(fm.entries.len(), visible_rows));
+                        let idx = start + row;
+                        if idx >= fm.entries.len() {
+                            return Ok(());
+                        }
+                        idx
+                    }
+                    FileManagerViewMode::Grid => {
+                        let (cols, visible_rows) = file_manager_grid_metrics(entry_area);
+                        if cols == 0 || visible_rows == 0 {
+                            return Ok(());
+                        }
+                        let start_row = fm.scroll.min(file_manager_grid_max_scroll(
+                            fm.entries.len(),
+                            cols,
+                            visible_rows,
+                        ));
+                        let cell_width = (entry_area.width / cols as u16).max(1);
+                        let col = ((mouse.column - entry_area.x) / cell_width) as usize;
+                        let row =
+                            ((mouse.row - entry_area.y) / FILE_MANAGER_GRID_CELL_HEIGHT) as usize;
+                        if col >= cols || row >= visible_rows {
+                            return Ok(());
+                        }
+                        let idx = (start_row + row) * cols + col;
+                        if idx >= fm.entries.len() {
+                            return Ok(());
+                        }
+                        idx
+                    }
+                };
+                fm.selected = idx;
+                fm.tree_focus = false;
+                file_manager_ensure_selection_visible(fm, entry_area);
+                Some(ClickTarget::FileEntry {
+                    window_id: win.id,
+                    row: idx,
+                })
+            }
+            WindowKind::FileManagerSettings(settings) => {
+                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    return Ok(());
+                }
                 let area = win.rect.to_rect();
                 let content = Rect {
                     x: area.x + 1,
@@ -4481,29 +5662,23 @@ fn handle_window_content_mouse(
                     width: area.width.saturating_sub(2),
                     height: area.height.saturating_sub(2),
                 };
-                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if !point_in_rect(mouse.column, mouse.row, content) {
                     return Ok(());
                 }
-                if !point_in_rect(mouse.column, mouse.row, content) || content.height < 3 {
+                let row = mouse.row.saturating_sub(content.y) as usize;
+                if row >= file_manager_settings_rows().len() {
                     return Ok(());
                 }
-                if mouse.row <= content.y + 1 {
-                    return Ok(());
+                settings.selected = row;
+                let (refresh, close) =
+                    handle_file_manager_settings_key(settings, KeyCode::Enter, KeyModifiers::NONE);
+                if refresh {
+                    refresh_file_managers = true;
                 }
-                let row = (mouse.row - content.y - 2) as usize;
-                let visible_rows = content.height.saturating_sub(2) as usize;
-                if row >= visible_rows {
-                    return Ok(());
+                if close {
+                    close_window_id = Some(win.id);
                 }
-                let idx = fm.scroll + row;
-                if idx >= fm.entries.len() {
-                    return Ok(());
-                }
-                fm.selected = idx;
-                Some(ClickTarget::FileEntry {
-                    window_id: win.id,
-                    row: idx,
-                })
+                None
             }
         }
     };
@@ -4518,16 +5693,32 @@ fn handle_window_content_mouse(
         if state.windows.iter().any(|w| w.id == id) {
             close_window_by_id(state, id);
         }
+        if refresh_file_managers {
+            refresh_all_file_manager_windows(state);
+        }
         return Ok(());
+    }
+
+    if refresh_file_managers {
+        refresh_all_file_manager_windows(state);
     }
 
     let Some(clicked_target) = clicked_target else {
         return Ok(());
     };
     if is_double_click(state, clicked_target) {
-        if let Some(win) = state.windows.last_mut() {
-            if let WindowKind::FileManager(fm) = &mut win.kind {
-                fm.open_selected();
+        if let ClickTarget::FileEntry { window_id, .. } = clicked_target {
+            let pending = if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                if let WindowKind::FileManager(fm) = &mut win.kind {
+                    fm.activate_selected(FileManagerOpenRequest::Builtin)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some((path, request)) = pending {
+                handle_file_open_request(terminal, state, &path, request)?;
             }
         }
     }
@@ -4574,6 +5765,62 @@ fn send_mouse_to_focused_pty(
     true
 }
 
+fn handle_file_manager_scroll_mouse(state: &mut DesktopState, mouse: crossterm::event::MouseEvent) -> bool {
+    let delta = match mouse.kind {
+        MouseEventKind::ScrollUp => -1,
+        MouseEventKind::ScrollDown => 1,
+        _ => 0,
+    };
+    if delta == 0 {
+        return false;
+    }
+
+    let mut target: Option<(usize, bool)> = None;
+    for idx in (0..state.windows.len()).rev() {
+        let win = &state.windows[idx];
+        if win.minimized || !matches!(win.kind, WindowKind::FileManager(_)) {
+            continue;
+        }
+        let content = file_manager_content_rect(win.rect.to_rect());
+        let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+        let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
+        if tree_area.is_some_and(|tree| point_in_rect(mouse.column, mouse.row, tree)) {
+            target = Some((idx, true));
+            break;
+        }
+        if point_in_rect(mouse.column, mouse.row, entry_area) {
+            target = Some((idx, false));
+            break;
+        }
+    }
+    if target.is_none() {
+        if let Some(idx) = focused_visible_window_idx(state) {
+            if let WindowKind::FileManager(fm) = &state.windows[idx].kind {
+                let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+                target = Some((idx, show_tree && fm.tree_focus));
+            }
+        }
+    }
+
+    let Some((idx, tree_target)) = target else {
+        return false;
+    };
+    let content = file_manager_content_rect(state.windows[idx].rect.to_rect());
+    let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+    let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
+    let WindowKind::FileManager(fm) = &mut state.windows[idx].kind else {
+        return false;
+    };
+    if tree_target {
+        let Some(tree_rect) = tree_area else {
+            return false;
+        };
+        file_manager_tree_apply_scroll_delta(fm, tree_rect, delta)
+    } else {
+        file_manager_apply_scroll_delta(fm, entry_area, delta)
+    }
+}
+
 fn open_file_manager_window(state: &mut DesktopState) {
     if let Some(id) = state.windows.iter().find_map(|w| {
         if matches!(&w.kind, WindowKind::FileManager(_)) {
@@ -4602,6 +5849,193 @@ fn open_file_manager_window(state: &mut DesktopState) {
         maximized: false,
         kind: WindowKind::FileManager(FileManagerState::new()),
     });
+}
+
+fn open_file_manager_settings_window(state: &mut DesktopState) {
+    if let Some(id) = state.windows.iter().find_map(|w| {
+        if matches!(&w.kind, WindowKind::FileManagerSettings(_)) {
+            Some(w.id)
+        } else {
+            None
+        }
+    }) {
+        focus_window(state, id);
+        return;
+    }
+
+    let id = state.next_id;
+    state.next_id += 1;
+    state.windows.push(DesktopWindow {
+        id,
+        title: "File Manager Settings".to_string(),
+        rect: WinRect {
+            x: 14,
+            y: 6,
+            w: 58,
+            h: 14,
+        },
+        restore_rect: None,
+        minimized: false,
+        maximized: false,
+        kind: WindowKind::FileManagerSettings(FileManagerSettingsState { selected: 0 }),
+    });
+}
+
+fn refresh_all_file_manager_windows(state: &mut DesktopState) {
+    for win in &mut state.windows {
+        if let WindowKind::FileManager(fm) = &mut win.kind {
+            fm.refresh();
+        }
+    }
+}
+
+fn handle_file_manager_settings_key(
+    settings: &mut FileManagerSettingsState,
+    code: KeyCode,
+    _modifiers: KeyModifiers,
+) -> (bool, bool) {
+    let rows = file_manager_settings_rows();
+    let max = rows.len().saturating_sub(1);
+    match code {
+        KeyCode::Up => settings.selected = settings.selected.saturating_sub(1),
+        KeyCode::Down => settings.selected = (settings.selected + 1).min(max),
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => return (false, true),
+        KeyCode::Left => {
+            if settings.selected == 3 {
+                update_settings(|s| {
+                    s.desktop_file_manager.sort_mode = match s.desktop_file_manager.sort_mode {
+                        FileManagerSortMode::Name => FileManagerSortMode::Type,
+                        FileManagerSortMode::Type => FileManagerSortMode::Name,
+                    };
+                });
+                persist_settings();
+                return (true, false);
+            }
+        }
+        KeyCode::Right => {
+            if settings.selected == 3 {
+                update_settings(|s| {
+                    s.desktop_file_manager.sort_mode = match s.desktop_file_manager.sort_mode {
+                        FileManagerSortMode::Name => FileManagerSortMode::Type,
+                        FileManagerSortMode::Type => FileManagerSortMode::Name,
+                    };
+                });
+                persist_settings();
+                return (true, false);
+            }
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => match settings.selected {
+            0 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.show_hidden_files =
+                        !s.desktop_file_manager.show_hidden_files;
+                });
+                persist_settings();
+                return (true, false);
+            }
+            1 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.show_tree_panel = !s.desktop_file_manager.show_tree_panel;
+                });
+                persist_settings();
+                return (true, false);
+            }
+            2 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.view_mode = match s.desktop_file_manager.view_mode {
+                        FileManagerViewMode::Grid => FileManagerViewMode::List,
+                        FileManagerViewMode::List => FileManagerViewMode::Grid,
+                    };
+                });
+                persist_settings();
+                return (true, false);
+            }
+            3 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.sort_mode = match s.desktop_file_manager.sort_mode {
+                        FileManagerSortMode::Name => FileManagerSortMode::Type,
+                        FileManagerSortMode::Type => FileManagerSortMode::Name,
+                    };
+                });
+                persist_settings();
+                return (true, false);
+            }
+            4 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.directories_first =
+                        !s.desktop_file_manager.directories_first;
+                });
+                persist_settings();
+                return (true, false);
+            }
+            5 => {
+                update_settings(|s| {
+                    s.desktop_file_manager.text_open_mode = match s.desktop_file_manager.text_open_mode
+                    {
+                        FileManagerTextOpenMode::Editor => FileManagerTextOpenMode::Viewer,
+                        FileManagerTextOpenMode::Viewer => FileManagerTextOpenMode::Editor,
+                    };
+                });
+                persist_settings();
+                return (true, false);
+            }
+            6 => return (false, true),
+            _ => {}
+        },
+        _ => {}
+    }
+    (false, false)
+}
+
+fn open_focused_file_manager_selection(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    request: FileManagerOpenRequest,
+) -> Result<()> {
+    let Some(idx) = focused_visible_window_idx(state) else {
+        return Ok(());
+    };
+    let pending = match &mut state.windows[idx].kind {
+        WindowKind::FileManager(fm) => fm.activate_selected(request),
+        _ => None,
+    };
+    if let Some((path, mode)) = pending {
+        handle_file_open_request(terminal, state, &path, mode)?;
+    }
+    Ok(())
+}
+
+fn handle_file_open_request(
+    terminal: &mut Term,
+    _state: &mut DesktopState,
+    path: &Path,
+    request: FileManagerOpenRequest,
+) -> Result<()> {
+    match request {
+        FileManagerOpenRequest::Builtin => {
+            let open_mode = get_settings().desktop_file_manager.text_open_mode;
+            run_with_mouse_capture_paused(terminal, |t| match open_mode {
+                FileManagerTextOpenMode::Editor => documents::edit_text_file(t, path),
+                FileManagerTextOpenMode::Viewer => documents::view_text_file(t, path),
+            })?;
+        }
+        FileManagerOpenRequest::External => {
+            #[cfg(target_os = "macos")]
+            let status = std::process::Command::new("open").arg(path).status();
+            #[cfg(target_os = "linux")]
+            let status = std::process::Command::new("xdg-open").arg(path).status();
+            #[cfg(target_os = "windows")]
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "start", "", &path.display().to_string()])
+                .status();
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            let status = std::process::Command::new("xdg-open").arg(path).status();
+            if status.is_err() {
+                flash_message(terminal, "External open failed", 1000)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn open_desktop_settings_window(terminal: &mut Term, state: &mut DesktopState, current_user: &str) {
@@ -5775,6 +7209,7 @@ fn min_window_size_for_kind(kind: &WindowKind) -> (u16, u16) {
         WindowKind::PtyApp(app) => (app.min_w, app.min_h),
         WindowKind::DesktopSettings(_) => (64, 18),
         WindowKind::FileManager(_) => (MIN_WINDOW_W, MIN_WINDOW_H),
+        WindowKind::FileManagerSettings(_) => (46, 10),
     }
 }
 
@@ -6191,7 +7626,7 @@ fn format_menu_row(width: usize, label: &str, right_arrow: Option<char>) -> Stri
     chars.into_iter().collect()
 }
 
-fn read_entries(path: &Path) -> Vec<FileEntry> {
+fn read_entries(path: &Path, settings: &DesktopFileManagerSettings) -> Vec<FileEntry> {
     let mut entries = Vec::new();
     if let Some(parent) = path.parent() {
         entries.push(FileEntry {
@@ -6206,6 +7641,9 @@ fn read_entries(path: &Path) -> Vec<FileEntry> {
             let p = entry.path();
             let is_dir = p.is_dir();
             let name = entry.file_name().to_string_lossy().to_string();
+            if !settings.show_hidden_files && name.starts_with('.') {
+                continue;
+            }
             entries.push(FileEntry {
                 name,
                 path: p,
@@ -6214,10 +7652,32 @@ fn read_entries(path: &Path) -> Vec<FileEntry> {
         }
     }
 
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    entries.sort_by(|a, b| {
+        if settings.directories_first {
+            match (a.is_dir, b.is_dir) {
+                (true, false) => return Ordering::Less,
+                (false, true) => return Ordering::Greater,
+                _ => {}
+            }
+        }
+        match settings.sort_mode {
+            FileManagerSortMode::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            FileManagerSortMode::Type => {
+                let a_ext = Path::new(&a.name)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let b_ext = Path::new(&b.name)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                a_ext
+                    .cmp(&b_ext)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            }
+        }
     });
     entries
 }

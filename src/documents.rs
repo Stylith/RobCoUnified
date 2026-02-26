@@ -235,6 +235,47 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
     }
 }
 
+pub fn view_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
+    let title = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| format!("View: {n}"))
+        .unwrap_or_else(|| "View File".to_string());
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes).to_string();
+            pager(terminal, &text, &title)?;
+        }
+        Err(_) => {
+            flash_message(terminal, "Could not open file", 1000)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn edit_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
+    let title = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| format!("Edit: {n}"))
+        .unwrap_or_else(|| "Edit File".to_string());
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => {
+            flash_message(terminal, "File is not UTF-8 text", 1000)?;
+            return Ok(());
+        }
+    };
+    if let Some(new_text) = run_editor(terminal, &title, &text)? {
+        if std::fs::write(path, new_text).is_ok() {
+            flash_message(terminal, "Saved.", 800)?;
+        } else {
+            flash_message(terminal, "Could not save file", 1000)?;
+        }
+    }
+    Ok(())
+}
+
 // ── Journal ───────────────────────────────────────────────────────────────────
 
 fn journal_dir() -> PathBuf {
