@@ -123,12 +123,15 @@ struct FileManagerState {
     cwd: PathBuf,
     tabs: Vec<PathBuf>,
     active_tab: usize,
+    all_entries: Vec<FileEntry>,
     entries: Vec<FileEntry>,
     selected: usize,
     scroll: usize,
     tree_selected: usize,
     tree_scroll: usize,
     tree_focus: bool,
+    search_query: String,
+    search_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +145,7 @@ enum FileManagerOpenRequest {
     External,
 }
 
-const FILE_MANAGER_HEADER_ROWS: u16 = 3;
+const FILE_MANAGER_HEADER_ROWS: u16 = 4;
 const FILE_MANAGER_GRID_CELL_WIDTH: u16 = 18;
 const FILE_MANAGER_GRID_CELL_HEIGHT: u16 = 3;
 const FILE_MANAGER_TREE_MIN_WIDTH: u16 = 16;
@@ -156,17 +159,20 @@ impl FileManagerState {
         let cwd = dirs::home_dir()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        let entries = read_entries(&cwd, &get_settings().desktop_file_manager);
+        let all_entries = read_entries(&cwd, &get_settings().desktop_file_manager);
         Self {
             cwd: cwd.clone(),
             tabs: vec![cwd],
             active_tab: 0,
-            entries,
+            all_entries: all_entries.clone(),
+            entries: all_entries,
             selected: 0,
             scroll: 0,
             tree_selected: 0,
             tree_scroll: 0,
             tree_focus: false,
+            search_query: String::new(),
+            search_mode: false,
         }
     }
 
@@ -187,7 +193,8 @@ impl FileManagerState {
 
     fn refresh(&mut self) {
         self.sync_active_tab_path();
-        self.entries = read_entries(&self.cwd, &get_settings().desktop_file_manager);
+        self.all_entries = read_entries(&self.cwd, &get_settings().desktop_file_manager);
+        self.apply_search_filter();
         if self.selected >= self.entries.len() && !self.entries.is_empty() {
             self.selected = self.entries.len() - 1;
         }
@@ -264,6 +271,7 @@ impl FileManagerState {
         self.selected = 0;
         self.scroll = 0;
         self.tree_focus = false;
+        self.search_mode = false;
         self.refresh();
     }
 
@@ -283,6 +291,7 @@ impl FileManagerState {
         self.selected = 0;
         self.scroll = 0;
         self.tree_focus = false;
+        self.search_mode = false;
         self.refresh();
         true
     }
@@ -313,6 +322,7 @@ impl FileManagerState {
         self.selected = 0;
         self.scroll = 0;
         self.tree_focus = false;
+        self.search_mode = false;
         self.refresh();
         true
     }
@@ -347,6 +357,32 @@ impl FileManagerState {
         self.scroll = 0;
         self.refresh();
         true
+    }
+
+    fn apply_search_filter(&mut self) {
+        let q = self.search_query.trim().to_ascii_lowercase();
+        if q.is_empty() {
+            self.entries = self.all_entries.clone();
+            return;
+        }
+        self.entries = self
+            .all_entries
+            .iter()
+            .filter(|entry| entry.name.to_ascii_lowercase().contains(&q))
+            .cloned()
+            .collect();
+    }
+
+    fn update_search_query(&mut self, query: String) {
+        self.search_query = query;
+        self.apply_search_filter();
+        if self.selected >= self.entries.len() {
+            self.selected = self.entries.len().saturating_sub(1);
+        }
+        if self.entries.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+        }
     }
 }
 
@@ -615,6 +651,19 @@ struct HelpPopupState {
     scroll: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct SpotlightState {
+    open: bool,
+    query: String,
+    selected: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SpotlightItem {
+    label: String,
+    action: TopMenuAction,
+}
+
 #[derive(Debug, Clone)]
 struct StartLeafItem {
     label: String,
@@ -674,6 +723,7 @@ struct DesktopState {
     start: StartState,
     top_menu: TopMenuState,
     help_popup: Option<HelpPopupState>,
+    spotlight: SpotlightState,
 }
 
 const START_ROOT_ITEMS: [(&str, Option<StartSubmenu>); 5] = [
@@ -698,6 +748,7 @@ const START_SYSTEM: [(&str, StartLaunch); 4] = [
 ];
 const START_PROGRAMS_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
 const START_SYSTEM_VIS_ROWS: [Option<usize>; 4] = [Some(0), Some(1), Some(2), Some(3)];
+const TOP_SPOTLIGHT_ICON: &str = "⌕";
 
 fn submenu_for_root(idx: usize) -> Option<StartSubmenu> {
     START_ROOT_ITEMS.get(idx).and_then(|(_, sub)| *sub)
@@ -1093,6 +1144,55 @@ fn handle_key(
         return Ok(None);
     }
 
+    if state.spotlight.open {
+        match code {
+            KeyCode::Esc => {
+                spotlight_close(state);
+            }
+            KeyCode::Up => {
+                state.spotlight.selected = state.spotlight.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let max = spotlight_items(state).len().saturating_sub(1);
+                state.spotlight.selected = (state.spotlight.selected + 1).min(max);
+            }
+            KeyCode::Enter => {
+                let action = spotlight_items(state)
+                    .get(state.spotlight.selected)
+                    .map(|item| item.action.clone());
+                spotlight_close(state);
+                if let Some(action) = action {
+                    run_top_menu_action(terminal, current_user, state, action)?;
+                }
+            }
+            KeyCode::Backspace => {
+                let _ = state.spotlight.query.pop();
+                state.spotlight.selected = 0;
+            }
+            KeyCode::Char(c) => {
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT)
+                    && !modifiers.contains(KeyModifiers::SUPER)
+                {
+                    state.spotlight.query.push(c);
+                    state.spotlight.selected = 0;
+                }
+            }
+            _ => {}
+        }
+        spotlight_clamp_selection(state);
+        return Ok(None);
+    }
+
+    if modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(code, KeyCode::Char(' ') | KeyCode::Char('k') | KeyCode::Char('K'))
+    {
+        close_top_menu(state);
+        close_start_menu(&mut state.start);
+        spotlight_open(state);
+        return Ok(None);
+    }
+
     if let Some(kind) = state.top_menu.open {
         match code {
             KeyCode::Esc => {
@@ -1316,6 +1416,10 @@ fn handle_key(
                 }
                 if modifiers.contains(KeyModifiers::CONTROL) {
                     match code {
+                        KeyCode::Char('f') | KeyCode::Char('F') => {
+                            fm.search_mode = true;
+                            fm.tree_focus = false;
+                        }
                         KeyCode::Char('t') | KeyCode::Char('T') => {
                             fm.open_tab_here();
                             file_manager_ensure_selection_visible(fm, entry_area);
@@ -1335,7 +1439,30 @@ fn handle_key(
                         _ => {}
                     }
                 } else {
-                    if matches!(code, KeyCode::Tab) && tree_area.is_some() {
+                    if fm.search_mode {
+                        match code {
+                            KeyCode::Esc | KeyCode::Enter => {
+                                fm.search_mode = false;
+                            }
+                            KeyCode::Backspace => {
+                                let mut next = fm.search_query.clone();
+                                let _ = next.pop();
+                                fm.update_search_query(next);
+                                file_manager_ensure_selection_visible(fm, entry_area);
+                            }
+                            KeyCode::Char(c) => {
+                                if !modifiers.contains(KeyModifiers::ALT)
+                                    && !modifiers.contains(KeyModifiers::SUPER)
+                                {
+                                    let mut next = fm.search_query.clone();
+                                    next.push(c);
+                                    fm.update_search_query(next);
+                                    file_manager_ensure_selection_visible(fm, entry_area);
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else if matches!(code, KeyCode::Tab) && tree_area.is_some() {
                         fm.tree_focus = !fm.tree_focus;
                         if fm.tree_focus {
                             if let Some(tree_rect) = tree_area {
@@ -1351,15 +1478,19 @@ fn handle_key(
                             }
                             KeyCode::Up => {
                                 fm.tree_move_selection(false);
+                                let _ = fm.open_selected_tree_path();
                                 if let Some(tree_rect) = tree_area {
                                     file_manager_ensure_tree_selection_visible(fm, tree_rect);
                                 }
+                                file_manager_ensure_selection_visible(fm, entry_area);
                             }
                             KeyCode::Down => {
                                 fm.tree_move_selection(true);
+                                let _ = fm.open_selected_tree_path();
                                 if let Some(tree_rect) = tree_area {
                                     file_manager_ensure_tree_selection_visible(fm, tree_rect);
                                 }
+                                file_manager_ensure_selection_visible(fm, entry_area);
                             }
                             KeyCode::Enter => {
                                 let _ = fm.open_selected_tree_path();
@@ -1499,10 +1630,65 @@ fn handle_mouse(
         return Ok(None);
     }
 
+    if state.spotlight.open {
+        let overlay = spotlight_overlay_rect(size);
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                state.spotlight.selected = state.spotlight.selected.saturating_sub(1);
+                spotlight_clamp_selection(state);
+                return Ok(None);
+            }
+            MouseEventKind::ScrollDown => {
+                let max = spotlight_items(state).len().saturating_sub(1);
+                state.spotlight.selected = (state.spotlight.selected + 1).min(max);
+                spotlight_clamp_selection(state);
+                return Ok(None);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(icon) = top_status_spotlight_rect(top) {
+                    if point_in_rect(mouse.column, mouse.row, icon) {
+                        return Ok(None);
+                    }
+                }
+                if let Some(area) = overlay {
+                    if point_in_rect(mouse.column, mouse.row, area) {
+                        let list = spotlight_list_area(area);
+                        if point_in_rect(mouse.column, mouse.row, list) {
+                            let row = (mouse.row - list.y) as usize;
+                            let items = spotlight_items(state);
+                            if !items.is_empty() {
+                                let visible = list.height as usize;
+                                let start = state
+                                    .spotlight
+                                    .selected
+                                    .saturating_sub(visible.saturating_sub(1));
+                                let idx = start + row;
+                                if idx < items.len() {
+                                    state.spotlight.selected = idx;
+                                    let action = items[idx].action.clone();
+                                    spotlight_close(state);
+                                    run_top_menu_action(terminal, current_user, state, action)?;
+                                }
+                            }
+                        }
+                        return Ok(None);
+                    }
+                }
+                spotlight_close(state);
+                return Ok(None);
+            }
+            _ => {
+                return Ok(None);
+            }
+        }
+    }
+
     if matches!(
         mouse.kind,
         MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left)
     ) {
+        let spotlight_hit = top_status_spotlight_rect(top)
+            .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
         let label_hit = hit_top_menu_label(top, state, mouse.column, mouse.row);
         if matches!(mouse.kind, MouseEventKind::Moved) {
             state.top_menu.hover_label = label_hit;
@@ -1532,6 +1718,12 @@ fn handle_mouse(
                 return Ok(None);
             }
         } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if spotlight_hit {
+                close_top_menu(state);
+                close_start_menu(&mut state.start);
+                spotlight_open(state);
+                return Ok(None);
+            }
             if let Some(kind) = label_hit {
                 if state.top_menu.open == Some(kind) {
                     close_top_menu(state);
@@ -2742,6 +2934,7 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
         }
 
         draw_top_menu_overlay(f, top, state);
+        draw_spotlight_overlay(f, size, state);
 
         if let Some(popup) = &state.help_popup {
             draw_help_popup(f, size, popup);
@@ -2826,6 +3019,25 @@ fn top_status_right_text() -> String {
     format!("{now} | {batt_text}")
 }
 
+fn top_status_spotlight_rect(area: Rect) -> Option<Rect> {
+    let right = top_status_right_text();
+    let right_len = right.chars().count() as u16;
+    if area.width <= right_len + 3 {
+        return None;
+    }
+    let right_start = area.x + area.width - right_len - 1;
+    let icon_x = right_start.saturating_sub(2);
+    if icon_x <= area.x {
+        return None;
+    }
+    Some(Rect {
+        x: icon_x,
+        y: area.y,
+        width: 1,
+        height: 1,
+    })
+}
+
 fn draw_top_status(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
     if area.height == 0 {
         return;
@@ -2836,6 +3048,9 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
     if width >= right.chars().count() + 1 {
         let start = width.saturating_sub(right.chars().count() + 1);
         write_text(&mut row, start, &right);
+    }
+    if let Some(icon_rect) = top_status_spotlight_rect(area) {
+        write_text_in_area(&mut row, area, icon_rect.x, TOP_SPOTLIGHT_ICON);
     }
 
     let line: String = row.into_iter().collect();
@@ -2851,6 +3066,18 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(label.text, style))),
             label.rect,
+        );
+    }
+
+    if let Some(icon_rect) = top_status_spotlight_rect(area) {
+        let style = if state.spotlight.open {
+            normal_style()
+        } else {
+            sel_style()
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(TOP_SPOTLIGHT_ICON, style))),
+            icon_rect,
         );
     }
 }
@@ -3204,6 +3431,168 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
     }
 }
 
+fn spotlight_items(state: &DesktopState) -> Vec<SpotlightItem> {
+    let mut items = vec![
+        SpotlightItem {
+            label: "My Computer".to_string(),
+            action: TopMenuAction::OpenFileManager,
+        },
+        SpotlightItem {
+            label: "Settings".to_string(),
+            action: TopMenuAction::OpenSettings,
+        },
+        SpotlightItem {
+            label: "Program Installer".to_string(),
+            action: TopMenuAction::OpenProgramInstaller,
+        },
+        SpotlightItem {
+            label: "Open Start Menu".to_string(),
+            action: TopMenuAction::OpenStart,
+        },
+        SpotlightItem {
+            label: "App Manual".to_string(),
+            action: TopMenuAction::OpenAppManual,
+        },
+        SpotlightItem {
+            label: "User Manual".to_string(),
+            action: TopMenuAction::OpenUserManual,
+        },
+    ];
+    if matches!(focused_window_kind(state), Some(WindowKind::FileManager(_))) {
+        items.push(SpotlightItem {
+            label: "File Manager Settings".to_string(),
+            action: TopMenuAction::OpenFileManagerSettings,
+        });
+    }
+    for win in state.windows.iter().rev().take(10) {
+        items.push(SpotlightItem {
+            label: format!("Switch to {}", win.title),
+            action: TopMenuAction::FocusWindow(win.id),
+        });
+    }
+
+    let q = state.spotlight.query.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return items;
+    }
+    let mut filtered: Vec<SpotlightItem> = items
+        .into_iter()
+        .filter(|item| item.label.to_ascii_lowercase().contains(&q))
+        .collect();
+    filtered.sort_by_key(|item| {
+        let key = item.label.to_ascii_lowercase();
+        (!key.starts_with(&q), key)
+    });
+    filtered
+}
+
+fn spotlight_overlay_rect(size: Rect) -> Option<Rect> {
+    if size.width < 36 || size.height < 8 {
+        return None;
+    }
+    let width = size.width.saturating_sub(20).clamp(36, 72);
+    let height = size.height.saturating_sub(6).clamp(7, 14);
+    Some(Rect {
+        x: size.x + (size.width.saturating_sub(width)) / 2,
+        y: size.y + 2,
+        width,
+        height,
+    })
+}
+
+fn spotlight_search_row(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    }
+}
+
+fn spotlight_list_area(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 2,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(3),
+    }
+}
+
+fn spotlight_open(state: &mut DesktopState) {
+    state.spotlight.open = true;
+    state.spotlight.query.clear();
+    state.spotlight.selected = 0;
+}
+
+fn spotlight_close(state: &mut DesktopState) {
+    state.spotlight.open = false;
+    state.spotlight.query.clear();
+    state.spotlight.selected = 0;
+}
+
+fn spotlight_clamp_selection(state: &mut DesktopState) {
+    let max = spotlight_items(state).len().saturating_sub(1);
+    state.spotlight.selected = state.spotlight.selected.min(max);
+}
+
+fn draw_spotlight_overlay(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
+    if !state.spotlight.open {
+        return;
+    }
+    let Some(area) = spotlight_overlay_rect(size) else {
+        return;
+    };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).style(title_style()),
+        area,
+    );
+
+    let search_row = spotlight_search_row(area);
+    let query_text = format!("{TOP_SPOTLIGHT_ICON} {}_", state.spotlight.query);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate_with_ellipsis(&query_text, search_row.width as usize),
+            sel_style(),
+        ))),
+        search_row,
+    );
+
+    let list = spotlight_list_area(area);
+    if list.height == 0 || list.width == 0 {
+        return;
+    }
+    let items = spotlight_items(state);
+    if items.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled("No results", dim_style()))),
+            list,
+        );
+        return;
+    }
+
+    let visible = list.height as usize;
+    let start = state
+        .spotlight
+        .selected
+        .saturating_sub(visible.saturating_sub(1));
+    let end = (start + visible).min(items.len());
+    let mut lines = Vec::new();
+    for (idx, item) in items[start..end].iter().enumerate() {
+        let absolute = start + idx;
+        let style = if absolute == state.spotlight.selected {
+            sel_style()
+        } else {
+            normal_style()
+        };
+        lines.push(Line::from(Span::styled(
+            truncate_with_ellipsis(&item.label, list.width as usize),
+            style,
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), list);
+}
+
 fn first_enabled_menu_item(items: &[TopMenuItem]) -> Option<usize> {
     items.iter().position(|i| i.enabled)
 }
@@ -3443,11 +3832,26 @@ fn draw_file_manager_window(
         file_manager_tab_line(fm, content.width as usize),
         if focused { normal_style() } else { dim_style() },
     )));
+    let search_text = if fm.search_mode && focused {
+        format!("Search: {}_", fm.search_query)
+    } else if fm.search_query.is_empty() {
+        "Search: (Ctrl+F)".to_string()
+    } else {
+        format!("Search: {}", fm.search_query)
+    };
+    header.push(Line::from(Span::styled(
+        truncate_with_ellipsis(&search_text, content.width as usize),
+        if focused && fm.search_mode {
+            sel_style()
+        } else {
+            dim_style()
+        },
+    )));
     header.push(Line::from(Span::styled(
         truncate_with_ellipsis(&format!("Path: {}", fm.cwd.display()), content.width as usize),
         dim_style(),
     )));
-    if content.height >= 3 {
+    if content.height >= FILE_MANAGER_HEADER_ROWS {
         header.push(Line::from(Span::styled(
             "-".repeat(content.width as usize),
             dim_style(),
@@ -3723,25 +4127,15 @@ fn file_manager_tab_index_at(fm: &FileManagerState, width: usize, x: usize) -> O
 }
 
 fn file_manager_tree_items(cwd: &Path, show_hidden: bool) -> Vec<FileTreeItem> {
-    let home = dirs::home_dir();
-    let root = if home.as_ref().is_some_and(|h| cwd.starts_with(h)) {
-        home.unwrap_or_else(|| PathBuf::from("/"))
-    } else {
-        PathBuf::from("/")
-    };
+    let root = PathBuf::from("/");
 
     let mut items = vec![FileTreeItem {
         line: "Folders".to_string(),
         path: None,
     }];
 
-    let root_label = if root == Path::new("/") {
-        "/".to_string()
-    } else {
-        "~".to_string()
-    };
     items.push(FileTreeItem {
-        line: format!("* {}", root_label),
+        line: "* /".to_string(),
         path: Some(root.clone()),
     });
 
@@ -5578,6 +5972,11 @@ fn handle_window_content_mouse(
                     }
                     return Ok(());
                 }
+                if mouse.row == content.y.saturating_add(1) {
+                    fm.search_mode = true;
+                    fm.tree_focus = false;
+                    return Ok(());
+                }
                 let (tree_area, entry_area) =
                     file_manager_tree_and_entry_rects(content, cfg.show_tree_panel);
                 if let Some(tree_rect) = tree_area {
@@ -5595,7 +5994,10 @@ fn handle_window_content_mouse(
                         }
                         fm.tree_selected = idx;
                         fm.tree_focus = true;
+                        fm.search_mode = false;
+                        let _ = fm.open_selected_tree_path();
                         file_manager_ensure_tree_selection_visible(fm, tree_rect);
+                        file_manager_ensure_selection_visible(fm, entry_area);
                         return Ok(());
                     }
                 }
@@ -5645,6 +6047,7 @@ fn handle_window_content_mouse(
                 };
                 fm.selected = idx;
                 fm.tree_focus = false;
+                fm.search_mode = false;
                 file_manager_ensure_selection_visible(fm, entry_area);
                 Some(ClickTarget::FileEntry {
                     window_id: win.id,
