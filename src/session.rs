@@ -17,6 +17,7 @@ pub const MAX_SESSIONS: usize = 9;
 pub struct SessionEntry {
     pub username: String,
     pub label: String, // current location e.g. "Main Menu", "Documents"
+    pub default_mode_pending: bool,
 }
 
 // ── Global state ──────────────────────────────────────────────────────────────
@@ -28,14 +29,19 @@ static SWITCH_REQUEST: AtomicI32 = AtomicI32::new(-1);
 
 // ── Session list accessors ────────────────────────────────────────────────────
 
-pub fn push_session(username: &str) -> usize {
+pub fn push_session_with_default_mode(username: &str, default_mode_pending: bool) -> usize {
     let mut s = SESSIONS.lock().unwrap();
     let idx = s.len();
     s.push(SessionEntry {
         username: username.to_string(),
         label: "Main Menu".into(),
+        default_mode_pending,
     });
     idx
+}
+
+pub fn push_session(username: &str) -> usize {
+    push_session_with_default_mode(username, true)
 }
 
 pub fn clear_sessions() {
@@ -63,6 +69,19 @@ pub fn active_username() -> Option<String> {
     let s = SESSIONS.lock().unwrap();
     let idx = ACTIVE.load(Ordering::Relaxed);
     s.get(idx).map(|e| e.username.clone())
+}
+
+/// Consume the "default open mode pending" flag for the active session.
+/// Returns true exactly once per session lifetime.
+pub fn take_default_mode_pending_for_active() -> bool {
+    let mut s = SESSIONS.lock().unwrap();
+    let idx = ACTIVE.load(Ordering::Relaxed);
+    if let Some(e) = s.get_mut(idx) {
+        let was_pending = e.default_mode_pending;
+        e.default_mode_pending = false;
+        return was_pending;
+    }
+    false
 }
 
 /// Update the label for the currently active session (call from menus).

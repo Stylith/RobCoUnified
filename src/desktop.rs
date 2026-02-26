@@ -11,8 +11,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::apps::edit_menus_menu;
@@ -20,7 +21,7 @@ use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
     get_settings, load_apps, load_categories, load_games, load_networks, persist_settings,
     update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles, DesktopPtyProfileSettings,
-    OpenMode, THEMES,
+    OpenMode, WallpaperSizeMode, THEMES,
 };
 use crate::documents;
 use crate::launcher::json_to_cmd;
@@ -186,9 +187,15 @@ enum DesktopProfileSlot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DesktopSettingsPanel {
     Home,
+    Appearance,
     General,
-    Startup,
     CliDisplay,
+    Wallpapers,
+    WallpaperSize,
+    WallpaperChoose,
+    WallpaperDelete,
+    WallpaperAdd,
+    WallpaperPaste,
     ProfileList,
     ProfileEdit(DesktopProfileSlot),
     CustomProfileList,
@@ -204,6 +211,10 @@ struct DesktopSettingsState {
     is_admin: bool,
     custom_profile_input: String,
     custom_profile_error: Option<String>,
+    wallpaper_name_input: String,
+    wallpaper_path_input: String,
+    wallpaper_art_input: String,
+    wallpaper_error: Option<String>,
 }
 
 impl Default for DesktopSettingsState {
@@ -215,14 +226,18 @@ impl Default for DesktopSettingsState {
             is_admin: false,
             custom_profile_input: String::new(),
             custom_profile_error: None,
+            wallpaper_name_input: String::new(),
+            wallpaper_path_input: String::new(),
+            wallpaper_art_input: String::new(),
+            wallpaper_error: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopSettingsHomeItem {
+    Appearance,
     General,
-    Startup,
     CliDisplay,
     CliProfiles,
     EditMenus,
@@ -239,11 +254,29 @@ enum DesktopSettingsAction {
     OpenUserManagement,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WallpaperRowAction {
+    None,
+    Set(String),
+    OpenSizeMenu,
+    OpenChooseMenu,
+    OpenDeleteMenu,
+    AddCustom,
+    Back,
+}
+
+#[derive(Debug, Clone)]
+struct WallpaperRow {
+    label: String,
+    action: WallpaperRowAction,
+}
+
 struct PtyWindowState {
     session: crate::pty::PtySession,
     min_w: u16,
     min_h: u16,
     mouse_passthrough: bool,
+    manual_key: String,
 }
 
 impl Drop for PtyWindowState {
@@ -332,6 +365,73 @@ impl TaskbarLayout {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopMenuKind {
+    App,
+    File,
+    Edit,
+    View,
+    Window,
+    Help,
+}
+
+#[derive(Debug, Clone)]
+struct TopMenuState {
+    open: Option<TopMenuKind>,
+    hover_label: Option<TopMenuKind>,
+    hover_item: Option<usize>,
+}
+
+impl Default for TopMenuState {
+    fn default() -> Self {
+        Self {
+            open: None,
+            hover_label: None,
+            hover_item: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TopMenuLabel {
+    kind: TopMenuKind,
+    text: String,
+    rect: Rect,
+}
+
+#[derive(Debug, Clone)]
+struct TopMenuItem {
+    label: String,
+    shortcut: Option<String>,
+    action: TopMenuAction,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+enum TopMenuAction {
+    None,
+    OpenStart,
+    OpenSettings,
+    OpenProgramInstaller,
+    OpenFileManager,
+    OpenEditMenus,
+    OpenUserManagement,
+    ShowAppShortcuts,
+    CloseFocusedWindow,
+    MinimizeFocusedWindow,
+    ToggleMaxFocusedWindow,
+    FocusWindow(u64),
+    OpenAppManual,
+    OpenUserManual,
+}
+
+#[derive(Debug, Clone)]
+struct HelpPopupState {
+    title: String,
+    lines: Vec<String>,
+    scroll: usize,
+}
+
 #[derive(Debug, Clone)]
 struct StartLeafItem {
     label: String,
@@ -389,6 +489,8 @@ struct DesktopState {
     task_scroll: usize,
     last_click: Option<LastClick>,
     start: StartState,
+    top_menu: TopMenuState,
+    help_popup: Option<HelpPopupState>,
 }
 
 const START_ROOT_ITEMS: [(&str, Option<StartSubmenu>); 5] = [
@@ -595,6 +697,8 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 }
 
 fn open_start_menu(state: &mut DesktopState) {
+    close_top_menu(state);
+    state.help_popup = None;
     refresh_start_leaf_items(&mut state.start);
     state.start.open = true;
     state.start.selected_root = 0;
@@ -610,6 +714,12 @@ fn close_start_menu(state: &mut StartState) {
     state.open_submenu = None;
     state.open_leaf = None;
     state.hover_candidate = None;
+}
+
+fn close_top_menu(state: &mut DesktopState) {
+    state.top_menu.open = None;
+    state.top_menu.hover_label = None;
+    state.top_menu.hover_item = None;
 }
 
 fn is_hover_target_open(state: &StartState, target: StartHoverTarget) -> bool {
@@ -660,7 +770,18 @@ const DESKTOP_SETTINGS_PROFILE_ITEMS: [(DesktopProfileSlot, &str); 5] = [
 ];
 const NO_ENV_OVERRIDES: &[(&str, &str)] = &[];
 const CALCURSE_ENV_OVERRIDES: &[(&str, &str)] = &[("NCURSES_NO_UTF8_ACS", "1")];
+const WALLPAPER_DEFAULT_ROBCO: &[&str] = &[
+    "██████╗  ██████╗ ██████╗  ██████╗  ██████╗",
+    "██╔══██╗██╔═══██╗██╔══██╗██╔════╝ ██╔═══██╗",
+    "██████╔╝██║   ██║██████╔╝██║      ██║   ██║",
+    "██╔══██╗██║   ██║██╔══██╗██║      ██║   ██║",
+    "██║  ██║╚██████╔╝██████╔╝╚██████╗ ╚██████╔╝",
+    "╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝",
+];
+const DEFAULT_DESKTOP_WALLPAPERS: &[(&str, &[&str])] = &[("RobCo", WALLPAPER_DEFAULT_ROBCO)];
 static BATTERY_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+static SHORTCUT_HINT_CACHE: OnceLock<Mutex<HashMap<String, Vec<(String, String)>>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 struct PtyCompatibilityProfile {
@@ -669,6 +790,7 @@ struct PtyCompatibilityProfile {
     preferred_w: Option<u16>,
     preferred_h: Option<u16>,
     mouse_passthrough: bool,
+    open_fullscreen: bool,
     env: &'static [(&'static str, &'static str)],
 }
 
@@ -765,6 +887,84 @@ fn handle_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<Option<DesktopExit>> {
+    if let Some(popup) = &mut state.help_popup {
+        match code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                state.help_popup = None;
+            }
+            KeyCode::Up => {
+                popup.scroll = popup.scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                popup.scroll = (popup.scroll + 1).min(popup.lines.len().saturating_sub(1));
+            }
+            KeyCode::PageUp => {
+                popup.scroll = popup.scroll.saturating_sub(8);
+            }
+            KeyCode::PageDown => {
+                popup.scroll = (popup.scroll + 8).min(popup.lines.len().saturating_sub(1));
+            }
+            _ => {}
+        }
+        return Ok(None);
+    }
+
+    if let Some(kind) = state.top_menu.open {
+        match code {
+            KeyCode::Esc => {
+                close_top_menu(state);
+            }
+            KeyCode::Left | KeyCode::Right => {
+                let order = top_menu_order();
+                let cur = order.iter().position(|k| *k == kind).unwrap_or(0);
+                let next_idx = if matches!(code, KeyCode::Right) {
+                    (cur + 1) % order.len()
+                } else if cur == 0 {
+                    order.len().saturating_sub(1)
+                } else {
+                    cur - 1
+                };
+                let next_kind = order[next_idx];
+                state.top_menu.open = Some(next_kind);
+                state.top_menu.hover_label = Some(next_kind);
+                let items = top_menu_items(state, next_kind);
+                state.top_menu.hover_item = first_enabled_menu_item(&items);
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let items = top_menu_items(state, kind);
+                state.top_menu.hover_item = step_enabled_menu_item(
+                    &items,
+                    state.top_menu.hover_item,
+                    matches!(code, KeyCode::Down),
+                );
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let items = top_menu_items(state, kind);
+                let Some(idx) = state
+                    .top_menu
+                    .hover_item
+                    .or_else(|| first_enabled_menu_item(&items))
+                else {
+                    close_top_menu(state);
+                    return Ok(None);
+                };
+                if let Some(item) = items.get(idx) {
+                    if item.enabled {
+                        let action = item.action.clone();
+                        close_top_menu(state);
+                        run_top_menu_action(terminal, current_user, state, action)?;
+                    } else {
+                        close_top_menu(state);
+                    }
+                } else {
+                    close_top_menu(state);
+                }
+            }
+            _ => {}
+        }
+        return Ok(None);
+    }
+
     if state.start.open {
         match code {
             KeyCode::Esc => {
@@ -963,8 +1163,99 @@ fn handle_mouse(
 
     let term_size = terminal.size()?;
     let size = full_rect(term_size.width, term_size.height);
+    let top = top_status_area(size);
     let desk = desktop_area(size);
     let task = taskbar_area(size);
+
+    if let Some(popup) = &mut state.help_popup {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                popup.scroll = popup.scroll.saturating_sub(1);
+            }
+            MouseEventKind::ScrollDown => {
+                popup.scroll = (popup.scroll + 1).min(popup.lines.len().saturating_sub(1));
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                state.help_popup = None;
+            }
+            _ => {}
+        }
+        return Ok(None);
+    }
+
+    if matches!(
+        mouse.kind,
+        MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left)
+    ) {
+        let label_hit = hit_top_menu_label(top, state, mouse.column, mouse.row);
+        if matches!(mouse.kind, MouseEventKind::Moved) {
+            state.top_menu.hover_label = label_hit;
+            if let Some(open_kind) = state.top_menu.open {
+                if let Some(label_kind) = label_hit {
+                    if label_kind != open_kind {
+                        state.top_menu.open = Some(label_kind);
+                        let items = top_menu_items(state, label_kind);
+                        state.top_menu.hover_item = first_enabled_menu_item(&items);
+                    } else {
+                        state.top_menu.hover_item = None;
+                    }
+                } else {
+                    state.top_menu.hover_item =
+                        hit_top_menu_item(top, state, open_kind, mouse.column, mouse.row);
+                }
+            } else {
+                state.top_menu.hover_item = None;
+            }
+
+            let over_dropdown = state
+                .top_menu
+                .open
+                .and_then(|kind| top_menu_dropdown_rect(top, state, kind))
+                .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
+            if label_hit.is_some() || over_dropdown {
+                return Ok(None);
+            }
+        } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if let Some(kind) = label_hit {
+                if state.top_menu.open == Some(kind) {
+                    close_top_menu(state);
+                } else {
+                    close_start_menu(&mut state.start);
+                    state.top_menu.open = Some(kind);
+                    state.top_menu.hover_label = Some(kind);
+                    let items = top_menu_items(state, kind);
+                    state.top_menu.hover_item = first_enabled_menu_item(&items);
+                }
+                return Ok(None);
+            }
+
+            if let Some(open_kind) = state.top_menu.open {
+                if let Some(item_idx) =
+                    hit_top_menu_item(top, state, open_kind, mouse.column, mouse.row)
+                {
+                    let items = top_menu_items(state, open_kind);
+                    if let Some(item) = items.get(item_idx) {
+                        if item.enabled {
+                            let action = item.action.clone();
+                            close_top_menu(state);
+                            run_top_menu_action(terminal, current_user, state, action)?;
+                        } else {
+                            close_top_menu(state);
+                        }
+                    } else {
+                        close_top_menu(state);
+                    }
+                    return Ok(None);
+                }
+                if top_menu_dropdown_rect(top, state, open_kind)
+                    .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect))
+                {
+                    return Ok(None);
+                }
+                close_top_menu(state);
+            }
+        }
+    }
 
     if let MouseEventKind::Drag(MouseButton::Left) = mouse.kind {
         if let Some(drag) = state.dragging {
@@ -1256,6 +1547,489 @@ fn run_desktop_settings_action(
     Ok(())
 }
 
+fn top_menu_dropdown_rect(area: Rect, state: &DesktopState, kind: TopMenuKind) -> Option<Rect> {
+    let labels = top_menu_labels(area, state);
+    let label = labels.iter().find(|l| l.kind == kind)?;
+    let items = top_menu_items(state, kind);
+    if items.is_empty() {
+        return None;
+    }
+    let width = items
+        .iter()
+        .map(|i| {
+            i.label.chars().count()
+                + i.shortcut
+                    .as_ref()
+                    .map(|s| s.chars().count() + 3)
+                    .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(8)
+        .min(56) as u16
+        + 4;
+    Some(Rect {
+        x: label.rect.x,
+        y: area.y.saturating_add(1),
+        width,
+        height: (items.len() as u16).saturating_add(2),
+    })
+}
+
+fn hit_top_menu_label(area: Rect, state: &DesktopState, x: u16, y: u16) -> Option<TopMenuKind> {
+    top_menu_labels(area, state)
+        .into_iter()
+        .find(|label| point_in_rect(x, y, label.rect))
+        .map(|label| label.kind)
+}
+
+fn hit_top_menu_item(
+    area: Rect,
+    state: &DesktopState,
+    kind: TopMenuKind,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    let menu_rect = top_menu_dropdown_rect(area, state, kind)?;
+    if !point_in_rect(x, y, menu_rect) {
+        return None;
+    }
+    if x == menu_rect.x
+        || x == menu_rect
+            .x
+            .saturating_add(menu_rect.width)
+            .saturating_sub(1)
+        || y == menu_rect.y
+        || y == menu_rect
+            .y
+            .saturating_add(menu_rect.height)
+            .saturating_sub(1)
+    {
+        return None;
+    }
+    let row = y.saturating_sub(menu_rect.y + 1) as usize;
+    let items = top_menu_items(state, kind);
+    if row < items.len() {
+        Some(row)
+    } else {
+        None
+    }
+}
+
+fn wrap_manual_text(text: &str, width: usize) -> Vec<String> {
+    if width < 8 {
+        return text.lines().map(|l| l.to_string()).collect();
+    }
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut cur = String::new();
+        for word in line.split_whitespace() {
+            if cur.is_empty() {
+                cur.push_str(word);
+            } else if cur.chars().count() + 1 + word.chars().count() <= width {
+                cur.push(' ');
+                cur.push_str(word);
+            } else {
+                out.push(cur);
+                cur = word.to_string();
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn shortcut_hint_cache() -> &'static Mutex<HashMap<String, Vec<(String, String)>>> {
+    SHORTCUT_HINT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|p| p == &path) {
+        paths.push(path);
+    }
+}
+
+fn manual_search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    push_unique_path(&mut roots, crate::config::base_dir());
+    if let Ok(cwd) = std::env::current_dir() {
+        push_unique_path(&mut roots, cwd.clone());
+        if let Some(parent) = cwd.parent() {
+            push_unique_path(&mut roots, parent.to_path_buf());
+        }
+    }
+    if let Some(parent) = crate::config::base_dir().parent() {
+        push_unique_path(&mut roots, parent.to_path_buf());
+    }
+    roots
+}
+
+fn manual_key_aliases(key: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut push = |value: String| {
+        if !value.is_empty() && !keys.contains(&value) {
+            keys.push(value);
+        }
+    };
+    let base = slugify_manual_key(key);
+    if !base.is_empty() {
+        push(base.clone());
+        push(base.replace('_', "-"));
+        push(base.replace('-', "_"));
+    }
+    push(key.trim().to_ascii_lowercase());
+    keys
+}
+
+fn manual_paths_for_key(key: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let keys = manual_key_aliases(key);
+    for root in manual_search_roots() {
+        let manual_dirs = [root.join("manuals"), root.join("docs").join("manuals")];
+        for dir in manual_dirs {
+            for alias in &keys {
+                for ext in ["txt", "md"] {
+                    paths.push(dir.join(format!("{alias}.{ext}")));
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<String>)> {
+    let idx = focused_visible_window_idx(state)?;
+    let win = &state.windows[idx];
+    let (title, key) = match &win.kind {
+        WindowKind::PtyApp(app) => (win.title.clone(), app.manual_key.clone()),
+        WindowKind::DesktopSettings(_) => ("Settings".to_string(), "settings".to_string()),
+        WindowKind::FileManager(_) => ("My Computer".to_string(), "my_computer".to_string()),
+    };
+    let mut keys = manual_key_aliases(&key);
+    let title_key = slugify_manual_key(&win.title);
+    if !title_key.is_empty() {
+        for alias in manual_key_aliases(&title_key) {
+            if !keys.contains(&alias) {
+                keys.push(alias);
+            }
+        }
+    }
+    Some((title, keys))
+}
+
+fn read_first_manual_file(keys: &[String]) -> Option<String> {
+    for key in keys {
+        for path in manual_paths_for_key(&key) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if !text.trim().is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn strip_ansi_sequences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                let _ = chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn strip_overstrikes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{8}' {
+            continue;
+        }
+        if matches!(chars.peek(), Some('\u{8}')) {
+            let _ = chars.next();
+            if let Some(next) = chars.next() {
+                out.push(next);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn man_page_candidates(keys: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in keys {
+        for alias in manual_key_aliases(key) {
+            let candidate = alias.trim().to_string();
+            if candidate.is_empty() {
+                continue;
+            }
+            if candidate
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'))
+                && !out.contains(&candidate)
+            {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+fn read_man_page_text(keys: &[String]) -> Option<String> {
+    for page in man_page_candidates(keys) {
+        let output = std::process::Command::new("man")
+            .arg(&page)
+            .env("MANPAGER", "cat")
+            .env("PAGER", "cat")
+            .env("MANWIDTH", "110")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).to_string();
+        let cleaned = strip_overstrikes(&strip_ansi_sequences(&raw));
+        if cleaned.trim().is_empty() {
+            continue;
+        }
+        return Some(cleaned);
+    }
+    None
+}
+
+fn load_manual_text_for_keys(keys: &[String]) -> Option<String> {
+    read_first_manual_file(keys).or_else(|| read_man_page_text(keys))
+}
+
+fn load_manual_text_for_focused_app(state: &DesktopState) -> Option<(String, String)> {
+    let (title, keys) = focused_app_manual_context(state)?;
+    load_manual_text_for_keys(&keys).map(|text| (title, text))
+}
+
+fn split_shortcut_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    if trimmed.len() < 4 {
+        return None;
+    }
+    for sep in [" - ", " -- ", " : ", ": ", "\t"] {
+        if let Some((left, right)) = trimmed.split_once(sep) {
+            let key = left
+                .trim()
+                .trim_matches(|c| c == '`' || c == '*' || c == '"' || c == '\'');
+            let desc = right.trim();
+            if key.is_empty() || desc.is_empty() {
+                continue;
+            }
+            if key.chars().count() > 18 || key.split_whitespace().count() > 3 {
+                continue;
+            }
+            if desc.chars().count() < 3 {
+                continue;
+            }
+            return Some((desc.to_string(), key.to_string()));
+        }
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut split_at = None;
+    for i in 1..bytes.len().saturating_sub(1) {
+        if bytes[i] == b' ' && bytes[i - 1] == b' ' {
+            split_at = Some(i - 1);
+            break;
+        }
+    }
+    let idx = split_at?;
+    let key = trimmed[..idx].trim();
+    let desc = trimmed[idx..].trim();
+    if key.is_empty() || desc.is_empty() {
+        return None;
+    }
+    if key.chars().count() > 18 || key.split_whitespace().count() > 3 || desc.chars().count() < 3 {
+        return None;
+    }
+    Some((desc.to_string(), key.to_string()))
+}
+
+fn extract_shortcut_hints(text: &str, limit: usize) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if out.len() >= limit {
+            break;
+        }
+        let Some((desc, key)) = split_shortcut_line(line) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|(_, existing)| existing.eq_ignore_ascii_case(&key))
+        {
+            continue;
+        }
+        out.push((desc, key));
+    }
+    out
+}
+
+fn shortcut_hints_for_focused_app(state: &DesktopState) -> Vec<(String, String)> {
+    let Some((_, keys)) = focused_app_manual_context(state) else {
+        return Vec::new();
+    };
+    let cache_key = keys.join("|");
+    if let Ok(cache) = shortcut_hint_cache().lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached.clone();
+        }
+    }
+    let hints = load_manual_text_for_keys(&keys)
+        .map(|text| extract_shortcut_hints(&text, 6))
+        .unwrap_or_default();
+    if let Ok(mut cache) = shortcut_hint_cache().lock() {
+        cache.insert(cache_key, hints.clone());
+    }
+    hints
+}
+
+fn open_shortcuts_popup(state: &mut DesktopState) {
+    if let Some((title, _)) = focused_app_manual_context(state) {
+        let hints = shortcut_hints_for_focused_app(state);
+        let text = if hints.is_empty() {
+            "No shortcut hints could be extracted from available docs/man page.".to_string()
+        } else {
+            hints
+                .into_iter()
+                .map(|(desc, key)| format!("{desc} : {key}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        open_help_popup(state, &format!("{title} Shortcuts"), &text);
+        return;
+    }
+    open_help_popup(state, "App Shortcuts", "No active app window.");
+}
+
+fn user_manual_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for root in manual_search_roots() {
+        push_unique_path(&mut out, root.join("USER_MANUAL.md"));
+        push_unique_path(&mut out, root.join("README.md"));
+        push_unique_path(&mut out, root.join("docs").join("USER_MANUAL.md"));
+        push_unique_path(&mut out, root.join("docs").join("README.md"));
+    }
+    out
+}
+
+fn open_help_popup(state: &mut DesktopState, title: &str, text: &str) {
+    state.help_popup = Some(HelpPopupState {
+        title: title.to_string(),
+        lines: wrap_manual_text(text, 92),
+        scroll: 0,
+    });
+}
+
+fn open_user_manual_popup(state: &mut DesktopState) {
+    for path in user_manual_paths() {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            open_help_popup(state, "User Manual", &text);
+            return;
+        }
+    }
+    open_help_popup(state, "User Manual", "Manual file not found.");
+}
+
+fn open_app_manual_popup(state: &mut DesktopState) {
+    if let Some((title, text)) = load_manual_text_for_focused_app(state) {
+        open_help_popup(state, &format!("{title} Manual"), &text);
+    } else {
+        let fallback =
+            "No manual found for this app.\n\nAdd a file in manuals/<app>.txt or manuals/<app>.md.";
+        open_help_popup(state, "App Manual", fallback);
+    }
+}
+
+fn run_top_menu_action(
+    terminal: &mut Term,
+    current_user: &str,
+    state: &mut DesktopState,
+    action: TopMenuAction,
+) -> Result<()> {
+    match action {
+        TopMenuAction::None => {}
+        TopMenuAction::OpenStart => open_start_menu(state),
+        TopMenuAction::OpenSettings => open_desktop_settings_window(terminal, state, current_user),
+        TopMenuAction::OpenProgramInstaller => {
+            if let Ok(cmd) = build_desktop_tool_command(current_user, "program-installer") {
+                let _ = open_pty_window_named(terminal, state, &cmd, Some("Program Installer"));
+            }
+        }
+        TopMenuAction::OpenFileManager => open_file_manager_window(state),
+        TopMenuAction::OpenEditMenus => {
+            run_with_mouse_capture_paused(terminal, edit_menus_menu)?;
+        }
+        TopMenuAction::OpenUserManagement => {
+            run_with_mouse_capture_paused(terminal, |t| user_management_menu(t, current_user))?;
+        }
+        TopMenuAction::ShowAppShortcuts => open_shortcuts_popup(state),
+        TopMenuAction::CloseFocusedWindow => {
+            if let Some(id) = focused_window_id(state) {
+                close_window_by_id(state, id);
+            }
+        }
+        TopMenuAction::MinimizeFocusedWindow => {
+            if let Some(id) = focused_window_id(state) {
+                minimize_window_by_id(state, id);
+            }
+        }
+        TopMenuAction::ToggleMaxFocusedWindow => {
+            if let Some(id) = focused_window_id(state) {
+                let size = terminal.size()?;
+                toggle_maximize_window_by_id(
+                    state,
+                    id,
+                    desktop_area(full_rect(size.width, size.height)),
+                );
+            }
+        }
+        TopMenuAction::FocusWindow(id) => {
+            if let Ok(size) = terminal.size() {
+                activate_window_from_taskbar(
+                    state,
+                    id,
+                    desktop_area(full_rect(size.width, size.height)),
+                );
+            } else {
+                focus_window(state, id);
+            }
+        }
+        TopMenuAction::OpenAppManual => open_app_manual_popup(state),
+        TopMenuAction::OpenUserManual => open_user_manual_popup(state),
+    }
+    Ok(())
+}
+
 fn open_pty_window_named(
     terminal: &mut Term,
     state: &mut DesktopState,
@@ -1289,6 +2063,13 @@ fn open_pty_window_named(
         h: base_h,
     };
     clamp_window_with_min(&mut rect, desk, profile.min_w, profile.min_h);
+    let mut restore_rect = None;
+    let mut maximized = false;
+    if profile.open_fullscreen {
+        restore_rect = Some(rect);
+        maximized = true;
+        rect = winrect_from_rect(desk);
+    }
 
     let cols = rect.w.saturating_sub(2).max(1);
     let rows = rect.h.saturating_sub(2).max(1);
@@ -1305,20 +2086,22 @@ fn open_pty_window_named(
     let title = title_override
         .map(str::to_string)
         .unwrap_or_else(|| command_title(&cmd[0]));
+    let manual_key = manual_key_for_command(&cmd, title_override.unwrap_or(&title));
     let id = state.next_id;
     state.next_id += 1;
     state.windows.push(DesktopWindow {
         id,
         title,
         rect,
-        restore_rect: None,
+        restore_rect,
         minimized: false,
-        maximized: false,
+        maximized,
         kind: WindowKind::PtyApp(PtyWindowState {
             session,
             min_w: profile.min_w,
             min_h: profile.min_h,
             mouse_passthrough: profile.mouse_passthrough,
+            manual_key,
         }),
     });
     Ok(())
@@ -1422,6 +2205,46 @@ fn command_title(program: &str) -> String {
     name
 }
 
+fn slugify_manual_key(value: &str) -> String {
+    let mut out = String::new();
+    let mut prev_us = false;
+    for ch in value.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_us = false;
+        } else if (c == '_' || c == '-' || c == ' ') && !prev_us && !out.is_empty() {
+            out.push('_');
+            prev_us = true;
+        }
+    }
+    if out.ends_with('_') {
+        out.pop();
+    }
+    out
+}
+
+fn manual_key_for_command(cmd: &[String], display_title: &str) -> String {
+    if let Some(i) = cmd.iter().position(|part| part == "--desktop-tool") {
+        if let Some(tool) = cmd.get(i + 1) {
+            let key = slugify_manual_key(tool);
+            if !key.is_empty() {
+                return key;
+            }
+        }
+    }
+    if let Some(base) = normalize_profile_key(cmd.first().map(String::as_str).unwrap_or("")) {
+        if !base.is_empty() {
+            return base;
+        }
+    }
+    let title_key = slugify_manual_key(display_title);
+    if !title_key.is_empty() {
+        return title_key;
+    }
+    "app".to_string()
+}
+
 fn pty_profile_for_program(program: &str) -> PtyCompatibilityProfile {
     let base = normalize_profile_key(program).unwrap_or_else(|| program.to_ascii_lowercase());
 
@@ -1455,6 +2278,7 @@ fn profile_from_settings(
         preferred_w,
         preferred_h,
         mouse_passthrough: profile.mouse_passthrough,
+        open_fullscreen: profile.open_fullscreen,
         env,
     }
 }
@@ -1548,7 +2372,7 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
         // Fully clear each frame so overlapped windows cannot leak old cells.
         f.render_widget(Clear, size);
 
-        draw_top_status(f, top);
+        draw_top_status(f, top, state);
         draw_desktop_background(f, desktop);
         draw_taskbar(f, state, task);
 
@@ -1562,24 +2386,101 @@ fn draw_desktop(terminal: &mut Term, state: &mut DesktopState) -> Result<()> {
             draw_start_menu(f, size, state);
         }
 
+        draw_top_menu_overlay(f, top, state);
+
+        if let Some(popup) = &state.help_popup {
+            draw_help_popup(f, size, popup);
+        }
+
         draw_cursor(f, state.cursor_x, state.cursor_y, size);
     })?;
     Ok(())
 }
 
-fn draw_top_status(f: &mut ratatui::Frame, area: Rect) {
+fn focused_window_title(state: &DesktopState) -> Option<String> {
+    let idx = focused_visible_window_idx(state)?;
+    Some(state.windows[idx].title.clone())
+}
+
+fn top_app_menu_name(state: &DesktopState) -> String {
+    focused_window_title(state).unwrap_or_else(|| "Desktop".to_string())
+}
+
+fn top_menu_order() -> [TopMenuKind; 6] {
+    [
+        TopMenuKind::App,
+        TopMenuKind::File,
+        TopMenuKind::Edit,
+        TopMenuKind::View,
+        TopMenuKind::Window,
+        TopMenuKind::Help,
+    ]
+}
+
+fn top_menu_label_text(kind: TopMenuKind, state: &DesktopState) -> String {
+    match kind {
+        TopMenuKind::App => top_app_menu_name(state),
+        TopMenuKind::File => "File".to_string(),
+        TopMenuKind::Edit => "Edit".to_string(),
+        TopMenuKind::View => "View".to_string(),
+        TopMenuKind::Window => "Window".to_string(),
+        TopMenuKind::Help => "Help".to_string(),
+    }
+}
+
+fn top_menu_labels(area: Rect, state: &DesktopState) -> Vec<TopMenuLabel> {
+    let mut labels = Vec::new();
+    if area.width == 0 {
+        return labels;
+    }
+    let mut x = area.x.saturating_add(1);
+    let max_x = area.x.saturating_add(area.width);
+    for kind in top_menu_order() {
+        let text = top_menu_label_text(kind, state);
+        let w = text.chars().count() as u16;
+        if w == 0 || x.saturating_add(w) > max_x {
+            break;
+        }
+        labels.push(TopMenuLabel {
+            kind,
+            text,
+            rect: Rect {
+                x,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+        });
+        x = x.saturating_add(w).saturating_add(2);
+    }
+    labels
+}
+
+fn top_status_right_text() -> String {
+    let now = Local::now().format("%a %d %b | %H.%M").to_string();
+    let batt = battery_display();
+    let batt_clean = batt
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>();
+    let batt_text = if batt_clean.is_empty() {
+        "--%".to_string()
+    } else {
+        format!("{batt_clean}%")
+    };
+    format!("{now} | {batt_text}")
+}
+
+fn draw_top_status(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
     if area.height == 0 {
         return;
     }
-    let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
-    let batt = battery_display();
     let width = area.width as usize;
     let mut row = vec![' '; width];
-
-    write_text(&mut row, 0, &format!(" {} ", now));
-    if width >= batt.len() + 2 {
-        let start = width.saturating_sub(batt.len() + 2);
-        write_text(&mut row, start, &format!(" {} ", batt));
+    let right = top_status_right_text();
+    if width >= right.chars().count() + 1 {
+        let start = width.saturating_sub(right.chars().count() + 1);
+        write_text(&mut row, start, &right);
     }
 
     let line: String = row.into_iter().collect();
@@ -1587,6 +2488,329 @@ fn draw_top_status(f: &mut ratatui::Frame, area: Rect) {
         Paragraph::new(Line::from(Span::styled(line, sel_style()))),
         area,
     );
+
+    for label in top_menu_labels(area, state) {
+        let active = state.top_menu.open == Some(label.kind)
+            || (state.top_menu.open.is_none() && state.top_menu.hover_label == Some(label.kind));
+        let style = if active { normal_style() } else { sel_style() };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(label.text, style))),
+            label.rect,
+        );
+    }
+}
+
+fn draw_top_menu_overlay(f: &mut ratatui::Frame, area: Rect, state: &DesktopState) {
+    let Some(kind) = state.top_menu.open else {
+        return;
+    };
+    let labels = top_menu_labels(area, state);
+    let Some(label) = labels.iter().find(|l| l.kind == kind) else {
+        return;
+    };
+    let items = top_menu_items(state, kind);
+    if items.is_empty() {
+        return;
+    }
+    let width = items
+        .iter()
+        .map(|i| {
+            i.label.chars().count()
+                + i.shortcut
+                    .as_ref()
+                    .map(|s| s.chars().count() + 3)
+                    .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(8)
+        .min(56) as u16
+        + 4;
+    let area = Rect {
+        x: label.rect.x,
+        y: label.rect.y.saturating_add(1),
+        width,
+        height: (items.len() as u16).saturating_add(2),
+    };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).style(title_style()),
+        area,
+    );
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let mut lines = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        let style = if state.top_menu.hover_item == Some(idx) && item.enabled {
+            sel_style()
+        } else if item.enabled {
+            normal_style()
+        } else {
+            dim_style()
+        };
+        lines.push(Line::from(Span::styled(
+            format_top_menu_row(inner_w, &item.label, item.shortcut.as_deref()),
+            style,
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        },
+    );
+}
+
+fn draw_help_popup(f: &mut ratatui::Frame, size: Rect, popup: &HelpPopupState) {
+    if size.width < 24 || size.height < 10 {
+        return;
+    }
+    let width = size.width.saturating_sub(12).clamp(24, 100);
+    let height = size.height.saturating_sub(8).clamp(8, 24);
+    let area = Rect {
+        x: size.x + (size.width.saturating_sub(width)) / 2,
+        y: size.y + (size.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().borders(Borders::ALL).style(title_style()),
+        area,
+    );
+    let title = format!(" {} ", popup.title);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(title, title_style()))),
+        Rect {
+            x: area.x + 1,
+            y: area.y,
+            width: area.width.saturating_sub(2),
+            height: 1,
+        },
+    );
+    let visible = area.height.saturating_sub(3) as usize;
+    let start = popup.scroll.min(popup.lines.len().saturating_sub(visible));
+    let end = (start + visible).min(popup.lines.len());
+    let lines: Vec<Line> = popup.lines[start..end]
+        .iter()
+        .map(|line| Line::from(Span::styled(line.as_str(), normal_style())))
+        .collect();
+    f.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        },
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Esc / Click = Close   Up/Down = Scroll",
+            dim_style(),
+        ))),
+        Rect {
+            x: area.x + 1,
+            y: area.y + area.height.saturating_sub(1),
+            width: area.width.saturating_sub(2),
+            height: 1,
+        },
+    );
+}
+
+fn focused_window_id(state: &DesktopState) -> Option<u64> {
+    focused_visible_window_idx(state).map(|idx| state.windows[idx].id)
+}
+
+fn focused_window_kind(state: &DesktopState) -> Option<&WindowKind> {
+    let idx = focused_visible_window_idx(state)?;
+    Some(&state.windows[idx].kind)
+}
+
+fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
+    match kind {
+        TopMenuKind::App => {
+            let Some(title) = focused_window_title(state) else {
+                return vec![TopMenuItem {
+                    label: "No active app".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::None,
+                    enabled: false,
+                }];
+            };
+            let app_hint = match focused_window_kind(state) {
+                Some(WindowKind::FileManager(_)) => "Open Enter | Parent Backspace",
+                Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
+                Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
+                None => "",
+            };
+            vec![
+                TopMenuItem {
+                    label: format!("Close {title}"),
+                    shortcut: Some("Ctrl+W".to_string()),
+                    action: TopMenuAction::CloseFocusedWindow,
+                    enabled: true,
+                },
+                TopMenuItem {
+                    label: "Minimize".to_string(),
+                    shortcut: Some("Ctrl+M".to_string()),
+                    action: TopMenuAction::MinimizeFocusedWindow,
+                    enabled: true,
+                },
+                TopMenuItem {
+                    label: "Maximize/Restore".to_string(),
+                    shortcut: Some("Ctrl+Enter".to_string()),
+                    action: TopMenuAction::ToggleMaxFocusedWindow,
+                    enabled: true,
+                },
+                TopMenuItem {
+                    label: app_hint.to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::None,
+                    enabled: false,
+                },
+            ]
+        }
+        TopMenuKind::File => vec![
+            TopMenuItem {
+                label: "Program Installer".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenProgramInstaller,
+                enabled: true,
+            },
+            TopMenuItem {
+                label: "Settings".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenSettings,
+                enabled: true,
+            },
+            TopMenuItem {
+                label: "Open Start Menu".to_string(),
+                shortcut: Some("F10".to_string()),
+                action: TopMenuAction::OpenStart,
+                enabled: true,
+            },
+        ],
+        TopMenuKind::Edit => {
+            vec![
+                TopMenuItem {
+                    label: "Edit Menus".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::OpenEditMenus,
+                    enabled: true,
+                },
+                TopMenuItem {
+                    label: "User Management".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::OpenUserManagement,
+                    enabled: true,
+                },
+                TopMenuItem {
+                    label: "App Shortcuts".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::ShowAppShortcuts,
+                    enabled: focused_window_id(state).is_some(),
+                },
+            ]
+        }
+        TopMenuKind::View => vec![
+            TopMenuItem {
+                label: "My Computer".to_string(),
+                shortcut: Some("M".to_string()),
+                action: TopMenuAction::OpenFileManager,
+                enabled: true,
+            },
+            TopMenuItem {
+                label: "Maximize/Restore Focused".to_string(),
+                shortcut: Some("Ctrl+Enter".to_string()),
+                action: TopMenuAction::ToggleMaxFocusedWindow,
+                enabled: focused_window_id(state).is_some(),
+            },
+        ],
+        TopMenuKind::Window => {
+            let mut items = Vec::new();
+            for win in state.windows.iter().rev().take(8) {
+                items.push(TopMenuItem {
+                    label: win.title.clone(),
+                    shortcut: None,
+                    action: TopMenuAction::FocusWindow(win.id),
+                    enabled: true,
+                });
+            }
+            if items.is_empty() {
+                items.push(TopMenuItem {
+                    label: "No windows".to_string(),
+                    shortcut: None,
+                    action: TopMenuAction::None,
+                    enabled: false,
+                });
+            }
+            items
+        }
+        TopMenuKind::Help => vec![
+            TopMenuItem {
+                label: "App Manual".to_string(),
+                shortcut: Some("F1".to_string()),
+                action: TopMenuAction::OpenAppManual,
+                enabled: focused_window_id(state).is_some(),
+            },
+            TopMenuItem {
+                label: "User Manual".to_string(),
+                shortcut: None,
+                action: TopMenuAction::OpenUserManual,
+                enabled: true,
+            },
+        ],
+    }
+}
+
+fn first_enabled_menu_item(items: &[TopMenuItem]) -> Option<usize> {
+    items.iter().position(|i| i.enabled)
+}
+
+fn step_enabled_menu_item(
+    items: &[TopMenuItem],
+    current: Option<usize>,
+    forward: bool,
+) -> Option<usize> {
+    if items.is_empty() || !items.iter().any(|i| i.enabled) {
+        return None;
+    }
+    let start = current.unwrap_or_else(|| {
+        if forward {
+            items.len().saturating_sub(1)
+        } else {
+            0
+        }
+    });
+    for offset in 1..=items.len() {
+        let idx = if forward {
+            (start + offset) % items.len()
+        } else {
+            (start + items.len() - (offset % items.len())) % items.len()
+        };
+        if items[idx].enabled {
+            return Some(idx);
+        }
+    }
+    first_enabled_menu_item(items)
+}
+
+fn format_top_menu_row(width: usize, label: &str, shortcut: Option<&str>) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut chars = vec![' '; width];
+    write_text(&mut chars, 0, label);
+    if let Some(short) = shortcut {
+        let short_len = short.chars().count();
+        if short_len < width {
+            let start = width.saturating_sub(short_len);
+            write_text(&mut chars, start, short);
+        }
+    }
+    chars.into_iter().collect()
 }
 
 fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect) {
@@ -1602,6 +2826,40 @@ fn draw_desktop_background(f: &mut ratatui::Frame, area: Rect) {
         )));
     }
     f.render_widget(Paragraph::new(lines), area);
+
+    let settings = get_settings();
+    let wallpaper = resolve_wallpaper_lines(&settings);
+    let wallpaper = render_wallpaper_for_mode(
+        &wallpaper,
+        settings.desktop_wallpaper_size_mode,
+        area.width as usize,
+        area.height as usize,
+    );
+    if !wallpaper.is_empty() {
+        let art_h = wallpaper.len();
+        let art_w = wallpaper
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
+        if art_h > 0 && art_w > 0 {
+            let start_x = area.x + area.width.saturating_sub(art_w as u16) / 2;
+            let start_y = area.y + area.height.saturating_sub(art_h as u16) / 2;
+            let mut art_lines = Vec::new();
+            for line in wallpaper {
+                art_lines.push(Line::from(Span::styled(line, dim_style())));
+            }
+            f.render_widget(
+                Paragraph::new(art_lines),
+                Rect {
+                    x: start_x,
+                    y: start_y,
+                    width: art_w as u16,
+                    height: art_h as u16,
+                },
+            );
+        }
+    }
 
     // Fixed desktop icon: My Computer
     if area.height >= 4 && area.width >= 14 {
@@ -1788,8 +3046,8 @@ fn draw_file_manager_window(
 
 fn desktop_settings_home_items(state: &DesktopSettingsState) -> Vec<DesktopSettingsHomeItem> {
     let mut items = vec![
+        DesktopSettingsHomeItem::Appearance,
         DesktopSettingsHomeItem::General,
-        DesktopSettingsHomeItem::Startup,
         DesktopSettingsHomeItem::CliDisplay,
         DesktopSettingsHomeItem::CliProfiles,
         DesktopSettingsHomeItem::EditMenus,
@@ -1804,8 +3062,8 @@ fn desktop_settings_home_items(state: &DesktopSettingsState) -> Vec<DesktopSetti
 
 fn desktop_settings_home_label(item: DesktopSettingsHomeItem) -> &'static str {
     match item {
+        DesktopSettingsHomeItem::Appearance => "Appearance",
         DesktopSettingsHomeItem::General => "General",
-        DesktopSettingsHomeItem::Startup => "Startup",
         DesktopSettingsHomeItem::CliDisplay => "CLI Display",
         DesktopSettingsHomeItem::CliProfiles => "CLI Profiles",
         DesktopSettingsHomeItem::EditMenus => "Edit Menus",
@@ -1817,8 +3075,8 @@ fn desktop_settings_home_label(item: DesktopSettingsHomeItem) -> &'static str {
 
 fn desktop_settings_home_icon(item: DesktopSettingsHomeItem) -> &'static str {
     match item {
+        DesktopSettingsHomeItem::Appearance => "[A]",
         DesktopSettingsHomeItem::General => "[*]",
-        DesktopSettingsHomeItem::Startup => "[^]",
         DesktopSettingsHomeItem::CliDisplay => "[#]",
         DesktopSettingsHomeItem::CliProfiles => "[=]",
         DesktopSettingsHomeItem::EditMenus => "[M]",
@@ -1896,26 +3154,525 @@ fn desktop_settings_custom_profile_keys() -> Vec<String> {
         .collect()
 }
 
+fn sanitize_wallpaper_line(line: &str) -> String {
+    line.chars()
+        .filter_map(|ch| match ch {
+            '\u{feff}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' => None,
+            '\u{00a0}' | '\u{1680}' | '\u{2000}' | '\u{2001}' | '\u{2002}' | '\u{2003}'
+            | '\u{2004}' | '\u{2005}' | '\u{2006}' | '\u{2007}' | '\u{2008}' | '\u{2009}'
+            | '\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{2800}' => Some(' '),
+            '\t' => Some(' '),
+            _ => Some(ch),
+        })
+        .collect()
+}
+
+fn is_wallpaper_space(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '\u{2800}')
+}
+
+fn normalize_wallpaper_lines(lines: Vec<String>) -> Vec<String> {
+    let mut lines: Vec<String> = lines
+        .into_iter()
+        .map(|line| {
+            let sanitized = sanitize_wallpaper_line(&line);
+            sanitized
+                .trim_end_matches(is_wallpaper_space)
+                .to_string()
+        })
+        .collect();
+    while lines
+        .first()
+        .is_some_and(|l| l.chars().all(is_wallpaper_space))
+    {
+        lines.remove(0);
+    }
+    while lines
+        .last()
+        .is_some_and(|l| l.chars().all(is_wallpaper_space))
+    {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return lines;
+    }
+
+    let mut min_leading = usize::MAX;
+    let mut max_right = 0usize;
+    for line in &lines {
+        if line.chars().all(is_wallpaper_space) {
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let leading = chars.iter().take_while(|c| is_wallpaper_space(**c)).count();
+        let trailing = chars
+            .iter()
+            .rev()
+            .take_while(|c| is_wallpaper_space(**c))
+            .count();
+        let right = chars.len().saturating_sub(trailing);
+        min_leading = min_leading.min(leading);
+        max_right = max_right.max(right);
+    }
+    if min_leading == usize::MAX || max_right <= min_leading {
+        return lines;
+    }
+    let crop_w = max_right - min_leading;
+    lines
+        .into_iter()
+        .map(|line| {
+            if line.chars().all(is_wallpaper_space) {
+                String::new()
+            } else {
+                line.chars().skip(min_leading).take(crop_w).collect()
+            }
+        })
+        .collect()
+}
+
+fn is_default_wallpaper(name: &str) -> bool {
+    DEFAULT_DESKTOP_WALLPAPERS
+        .iter()
+        .any(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
+fn default_wallpaper_lines(name: &str) -> Option<Vec<String>> {
+    DEFAULT_DESKTOP_WALLPAPERS
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, lines)| {
+            normalize_wallpaper_lines(lines.iter().map(|s| (*s).to_string()).collect())
+        })
+}
+
+fn resolve_wallpaper_lines(settings: &crate::config::Settings) -> Vec<String> {
+    if let Some(lines) = settings
+        .desktop_wallpapers_custom
+        .get(&settings.desktop_wallpaper)
+        .cloned()
+    {
+        return normalize_wallpaper_lines(lines);
+    }
+    if let Some(lines) = default_wallpaper_lines(&settings.desktop_wallpaper) {
+        return lines;
+    }
+    DEFAULT_DESKTOP_WALLPAPERS
+        .first()
+        .map(|(_, lines)| lines.iter().map(|s| (*s).to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn wallpaper_name_exists(settings: &crate::config::Settings, name: &str) -> bool {
+    is_default_wallpaper(name) || settings.desktop_wallpapers_custom.contains_key(name)
+}
+
+fn custom_wallpaper_names(settings: &crate::config::Settings) -> Vec<String> {
+    settings.desktop_wallpapers_custom.keys().cloned().collect()
+}
+
+fn wallpaper_lines_for_name(settings: &crate::config::Settings, name: &str) -> Option<Vec<String>> {
+    if let Some(lines) = settings.desktop_wallpapers_custom.get(name).cloned() {
+        return Some(normalize_wallpaper_lines(lines));
+    }
+    default_wallpaper_lines(name)
+}
+
+fn desktop_wallpaper_rows() -> Vec<WallpaperRow> {
+    let s = get_settings();
+    let mut rows = Vec::new();
+    rows.push(WallpaperRow {
+        label: format!("Current: {}", s.desktop_wallpaper),
+        action: WallpaperRowAction::None,
+    });
+    rows.push(WallpaperRow {
+        label: format!(
+            "Size Mode: {} [choose]",
+            wallpaper_size_mode_label(s.desktop_wallpaper_size_mode)
+        ),
+        action: WallpaperRowAction::OpenSizeMenu,
+    });
+
+    for (name, _) in DEFAULT_DESKTOP_WALLPAPERS {
+        rows.push(WallpaperRow {
+            label: format!("Set Default: {name}"),
+            action: WallpaperRowAction::Set((*name).to_string()),
+        });
+    }
+
+    rows.push(WallpaperRow {
+        label: "Choose Custom Wallpaper...".to_string(),
+        action: if s.desktop_wallpapers_custom.is_empty() {
+            WallpaperRowAction::None
+        } else {
+            WallpaperRowAction::OpenChooseMenu
+        },
+    });
+    rows.push(WallpaperRow {
+        label: "Delete Custom Wallpaper...".to_string(),
+        action: if s.desktop_wallpapers_custom.is_empty() {
+            WallpaperRowAction::None
+        } else {
+            WallpaperRowAction::OpenDeleteMenu
+        },
+    });
+
+    rows.push(WallpaperRow {
+        label: "Add Custom Wallpaper".to_string(),
+        action: WallpaperRowAction::AddCustom,
+    });
+    rows.push(WallpaperRow {
+        label: "Back".to_string(),
+        action: WallpaperRowAction::Back,
+    });
+    rows
+}
+
+fn wallpaper_size_mode_label(mode: WallpaperSizeMode) -> &'static str {
+    match mode {
+        WallpaperSizeMode::DefaultSize => "Default Size",
+        WallpaperSizeMode::FitToScreen => "Fit to Screen",
+        WallpaperSizeMode::Centered => "Centered",
+        WallpaperSizeMode::Tile => "Tile",
+        WallpaperSizeMode::Stretch => "Stretch",
+    }
+}
+
+fn wallpaper_size_rows() -> Vec<String> {
+    let current = get_settings().desktop_wallpaper_size_mode;
+    let mut rows = Vec::new();
+    for mode in [
+        WallpaperSizeMode::DefaultSize,
+        WallpaperSizeMode::FitToScreen,
+        WallpaperSizeMode::Centered,
+        WallpaperSizeMode::Tile,
+        WallpaperSizeMode::Stretch,
+    ] {
+        let marker = if mode == current { "*" } else { " " };
+        rows.push(format!("[{marker}] {}", wallpaper_size_mode_label(mode)));
+    }
+    rows.push("Back".to_string());
+    rows
+}
+
+fn wallpaper_choose_rows() -> Vec<String> {
+    let s = get_settings();
+    let mut rows = custom_wallpaper_names(&s);
+    if rows.is_empty() {
+        rows.push("(No custom wallpapers)".to_string());
+    }
+    rows.push("Back".to_string());
+    rows
+}
+
+fn wallpaper_delete_rows() -> Vec<String> {
+    let s = get_settings();
+    let mut rows: Vec<String> = custom_wallpaper_names(&s)
+        .into_iter()
+        .map(|name| format!("Delete: {name}"))
+        .collect();
+    if rows.is_empty() {
+        rows.push("(No custom wallpapers)".to_string());
+    }
+    rows.push("Back".to_string());
+    rows
+}
+
+fn wallpaper_preview_name(settings: &DesktopSettingsState) -> Option<String> {
+    let cfg = get_settings();
+    let idx = settings.hovered.unwrap_or(settings.selected);
+    match settings.panel {
+        DesktopSettingsPanel::Wallpapers => {
+            let rows = desktop_wallpaper_rows();
+            match rows.get(idx).map(|r| &r.action) {
+                Some(WallpaperRowAction::Set(name)) => Some(name.clone()),
+                _ => Some(cfg.desktop_wallpaper),
+            }
+        }
+        DesktopSettingsPanel::WallpaperSize => Some(cfg.desktop_wallpaper),
+        DesktopSettingsPanel::WallpaperChoose => {
+            let names = custom_wallpaper_names(&cfg);
+            names.get(idx).cloned()
+        }
+        DesktopSettingsPanel::WallpaperDelete => {
+            let names = custom_wallpaper_names(&cfg);
+            names.get(idx).cloned()
+        }
+        _ => None,
+    }
+}
+
+fn wallpaper_source_grid(lines: &[String]) -> (Vec<Vec<char>>, usize, usize) {
+    let src_h = lines.len();
+    let src_w = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    if src_h == 0 || src_w == 0 {
+        return (Vec::new(), src_w, src_h);
+    }
+    let rows: Vec<Vec<char>> = lines
+        .iter()
+        .map(|line| {
+            let mut row: Vec<char> = line.chars().collect();
+            if row.len() < src_w {
+                row.resize(src_w, ' ');
+            }
+            row
+        })
+        .collect();
+    (rows, src_w, src_h)
+}
+
+fn fit_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> Vec<String> {
+    if lines.is_empty() || max_w == 0 || max_h == 0 {
+        return Vec::new();
+    }
+    let (source_rows, src_w, src_h) = wallpaper_source_grid(lines);
+    if src_h == 0 || src_w == 0 {
+        return Vec::new();
+    }
+
+    let scale_x = max_w as f32 / src_w as f32;
+    let scale_y = max_h as f32 / src_h as f32;
+    let scale = scale_x.min(scale_y);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Vec::new();
+    }
+
+    let dst_w = ((src_w as f32 * scale).round() as usize).clamp(1, max_w);
+    let dst_h = ((src_h as f32 * scale).round() as usize).clamp(1, max_h);
+
+    let mut scaled = Vec::with_capacity(dst_h);
+    for y in 0..dst_h {
+        let src_y = y.saturating_mul(src_h) / dst_h;
+        let src_row = &source_rows[src_y.min(src_h - 1)];
+        let mut row = String::with_capacity(dst_w);
+        for x in 0..dst_w {
+            let src_x = x.saturating_mul(src_w) / dst_w;
+            row.push(src_row[src_x.min(src_w - 1)]);
+        }
+        scaled.push(row);
+    }
+
+    scaled
+}
+
+fn default_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> Vec<String> {
+    if lines.is_empty() || max_w == 0 || max_h == 0 {
+        return Vec::new();
+    }
+    let (source_rows, src_w, src_h) = wallpaper_source_grid(lines);
+    if src_h == 0 || src_w == 0 {
+        return Vec::new();
+    }
+
+    let out_w = src_w.min(max_w);
+    let out_h = src_h.min(max_h);
+    let start_x = src_w.saturating_sub(out_w) / 2;
+    let start_y = src_h.saturating_sub(out_h) / 2;
+
+    let mut out = Vec::with_capacity(out_h);
+    for y in 0..out_h {
+        let src_row = &source_rows[(start_y + y).min(src_h - 1)];
+        out.push(src_row[start_x..start_x + out_w].iter().collect());
+    }
+    out
+}
+
+fn tile_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> Vec<String> {
+    if lines.is_empty() || max_w == 0 || max_h == 0 {
+        return Vec::new();
+    }
+    let (source_rows, src_w, src_h) = wallpaper_source_grid(lines);
+    if src_h == 0 || src_w == 0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(max_h);
+    for y in 0..max_h {
+        let src_row = &source_rows[y % src_h];
+        let mut row = String::with_capacity(max_w);
+        for x in 0..max_w {
+            row.push(src_row[x % src_w]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn centered_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> Vec<String> {
+    if lines.is_empty() || max_w == 0 || max_h == 0 {
+        return Vec::new();
+    }
+
+    let target_w = ((max_w * 70) / 100).clamp(24, max_w);
+    let target_h = ((max_h * 70) / 100).clamp(8, max_h);
+    let min_w = ((max_w * 40) / 100).clamp(12, max_w);
+    let min_h = ((max_h * 40) / 100).clamp(4, max_h);
+
+    let mut out = fit_wallpaper_to_area(lines, target_w, target_h);
+    let out_w = out.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let out_h = out.len();
+    if out_w < min_w || out_h < min_h {
+        out = fit_wallpaper_to_area(lines, min_w, min_h);
+    }
+    out
+}
+
+fn stretch_wallpaper_to_area(lines: &[String], max_w: usize, max_h: usize) -> Vec<String> {
+    if lines.is_empty() || max_w == 0 || max_h == 0 {
+        return Vec::new();
+    }
+    let (source_rows, src_w, src_h) = wallpaper_source_grid(lines);
+    if src_h == 0 || src_w == 0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(max_h);
+    for y in 0..max_h {
+        let src_y = y.saturating_mul(src_h) / max_h;
+        let src_row = &source_rows[src_y.min(src_h - 1)];
+        let mut row = String::with_capacity(max_w);
+        for x in 0..max_w {
+            let src_x = x.saturating_mul(src_w) / max_w;
+            row.push(src_row[src_x.min(src_w - 1)]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn render_wallpaper_for_mode(
+    lines: &[String],
+    mode: WallpaperSizeMode,
+    max_w: usize,
+    max_h: usize,
+) -> Vec<String> {
+    match mode {
+        WallpaperSizeMode::DefaultSize => default_wallpaper_to_area(lines, max_w, max_h),
+        WallpaperSizeMode::FitToScreen => fit_wallpaper_to_area(lines, max_w, max_h),
+        WallpaperSizeMode::Centered => centered_wallpaper_to_area(lines, max_w, max_h),
+        WallpaperSizeMode::Tile => tile_wallpaper_to_area(lines, max_w, max_h),
+        WallpaperSizeMode::Stretch => stretch_wallpaper_to_area(lines, max_w, max_h),
+    }
+}
+
+fn desktop_settings_add_wallpaper(state: &mut DesktopSettingsState) {
+    state.wallpaper_error = None;
+    let name = state.wallpaper_name_input.trim();
+    let path = state.wallpaper_path_input.trim();
+
+    if name.is_empty() {
+        state.wallpaper_error = Some("Enter wallpaper name".to_string());
+        return;
+    }
+    let text = if !state.wallpaper_art_input.trim().is_empty() {
+        state.wallpaper_art_input.clone()
+    } else if !path.is_empty() {
+        let input_path = PathBuf::from(path);
+        match std::fs::read_to_string(&input_path) {
+            Ok(text) => text,
+            Err(_) => {
+                state.wallpaper_error = Some("Could not read file path".to_string());
+                return;
+            }
+        }
+    } else {
+        state.wallpaper_error = Some("Paste art or enter wallpaper file path".to_string());
+        return;
+    };
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect();
+    let lines = normalize_wallpaper_lines(lines);
+    if lines.is_empty() {
+        state.wallpaper_error = Some("Wallpaper file is empty".to_string());
+        return;
+    }
+    if lines.len() > 120 {
+        state.wallpaper_error = Some("Wallpaper too tall (max 120 lines)".to_string());
+        return;
+    }
+
+    let key = name.to_string();
+    let mut name_in_use = false;
+    update_settings(|s| {
+        if is_default_wallpaper(&key) {
+            name_in_use = true;
+            return;
+        }
+        if wallpaper_name_exists(s, &key) {
+            name_in_use = true;
+            return;
+        }
+        s.desktop_wallpapers_custom
+            .insert(key.clone(), lines.clone());
+        s.desktop_wallpaper = key.clone();
+    });
+    if name_in_use {
+        state.wallpaper_error = Some("Wallpaper name already exists".to_string());
+        return;
+    }
+
+    persist_settings();
+    state.wallpaper_name_input.clear();
+    state.wallpaper_path_input.clear();
+    state.wallpaper_art_input.clear();
+    state.wallpaper_error = None;
+    state.panel = DesktopSettingsPanel::Wallpapers;
+    state.selected = 0;
+}
+
+fn desktop_settings_delete_custom_wallpaper(name: &str) {
+    update_settings(|s| {
+        s.desktop_wallpapers_custom.remove(name);
+        if s.desktop_wallpaper == name {
+            s.desktop_wallpaper = DEFAULT_DESKTOP_WALLPAPERS
+                .first()
+                .map(|(n, _)| (*n).to_string())
+                .unwrap_or_else(|| "Vault Door".to_string());
+        }
+    });
+    persist_settings();
+}
+
+fn desktop_settings_set_wallpaper(name: &str) {
+    update_settings(|s| {
+        if wallpaper_name_exists(s, name) {
+            s.desktop_wallpaper = name.to_string();
+        }
+    });
+    persist_settings();
+}
+
+fn desktop_settings_set_wallpaper_size_mode(mode: WallpaperSizeMode) {
+    update_settings(|s| s.desktop_wallpaper_size_mode = mode);
+    persist_settings();
+}
+
 fn desktop_settings_list_offset(settings: &DesktopSettingsState) -> u16 {
     if matches!(&settings.panel, DesktopSettingsPanel::CustomProfileAdd)
         && settings.custom_profile_error.is_some()
     {
-        3
-    } else {
-        2
+        return 3;
     }
+    if matches!(&settings.panel, DesktopSettingsPanel::WallpaperAdd)
+        && settings.wallpaper_error.is_some()
+    {
+        return 3;
+    }
+    2
 }
 
 fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
     let s = get_settings();
     match &settings.panel {
-        DesktopSettingsPanel::General => vec![
+        DesktopSettingsPanel::Appearance => vec![
             format!("Theme: {} [cycle]", s.theme),
-            format!("Sound: {} [toggle]", if s.sound { "ON" } else { "OFF" }),
-            format!("Bootup: {} [toggle]", if s.bootup { "ON" } else { "OFF" }),
+            "Wallpapers".to_string(),
             "Back".to_string(),
         ],
-        DesktopSettingsPanel::Startup => vec![
+        DesktopSettingsPanel::General => vec![
+            format!("Sound: {} [toggle]", if s.sound { "ON" } else { "OFF" }),
+            format!("Bootup: {} [toggle]", if s.bootup { "ON" } else { "OFF" }),
             format!(
                 "Default Open Mode: {} [toggle]",
                 match s.default_open_mode {
@@ -1948,6 +3705,43 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
             ),
             "Back".to_string(),
         ],
+        DesktopSettingsPanel::Wallpapers => desktop_wallpaper_rows()
+            .into_iter()
+            .map(|row| row.label)
+            .collect(),
+        DesktopSettingsPanel::WallpaperSize => wallpaper_size_rows(),
+        DesktopSettingsPanel::WallpaperChoose => wallpaper_choose_rows(),
+        DesktopSettingsPanel::WallpaperDelete => wallpaper_delete_rows(),
+        DesktopSettingsPanel::WallpaperAdd => vec![
+            format!(
+                "Name: {}",
+                if settings.wallpaper_name_input.trim().is_empty() {
+                    "<wallpaper name>"
+                } else {
+                    settings.wallpaper_name_input.trim()
+                }
+            ),
+            format!(
+                "Art File: {}",
+                if settings.wallpaper_path_input.trim().is_empty() {
+                    "<path/to/ascii.txt>"
+                } else {
+                    settings.wallpaper_path_input.trim()
+                }
+            ),
+            format!(
+                "Paste Art Editor: {}",
+                if settings.wallpaper_art_input.trim().is_empty() {
+                    "empty [open]"
+                } else {
+                    "has content [open]"
+                }
+            ),
+            "Clear Pasted Art".to_string(),
+            "Save Wallpaper".to_string(),
+            "Back".to_string(),
+        ],
+        DesktopSettingsPanel::WallpaperPaste => Vec::new(),
         DesktopSettingsPanel::ProfileList => {
             let mut rows: Vec<String> = DESKTOP_SETTINGS_PROFILE_ITEMS
                 .iter()
@@ -1977,6 +3771,10 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
                 format!(
                     "Mouse Passthrough: {} [toggle]",
                     if p.mouse_passthrough { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Open Fullscreen by Default: {} [toggle]",
+                    if p.open_fullscreen { "ON" } else { "OFF" }
                 ),
                 "Reset Profile Defaults".to_string(),
                 "Back".to_string(),
@@ -2017,6 +3815,10 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
                 format!(
                     "Mouse Passthrough: {} [toggle]",
                     if p.mouse_passthrough { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Open Fullscreen by Default: {} [toggle]",
+                    if p.open_fullscreen { "ON" } else { "OFF" }
                 ),
                 "Delete Custom Profile".to_string(),
                 "Back".to_string(),
@@ -2068,9 +3870,15 @@ fn draw_desktop_settings_window(
 
     let header = match &settings.panel {
         DesktopSettingsPanel::Home => "Settings",
+        DesktopSettingsPanel::Appearance => "Appearance",
         DesktopSettingsPanel::General => "General",
-        DesktopSettingsPanel::Startup => "Startup",
         DesktopSettingsPanel::CliDisplay => "CLI Display",
+        DesktopSettingsPanel::Wallpapers => "Wallpapers",
+        DesktopSettingsPanel::WallpaperSize => "Wallpaper Size",
+        DesktopSettingsPanel::WallpaperAdd => "Add Wallpaper",
+        DesktopSettingsPanel::WallpaperChoose => "Choose Wallpaper",
+        DesktopSettingsPanel::WallpaperDelete => "Delete Wallpaper",
+        DesktopSettingsPanel::WallpaperPaste => "Paste Wallpaper Art",
         DesktopSettingsPanel::ProfileList => "CLI Profiles",
         DesktopSettingsPanel::ProfileEdit(slot) => desktop_profile_slot_title(*slot),
         DesktopSettingsPanel::CustomProfileList => "Custom Profiles",
@@ -2131,6 +3939,80 @@ fn draw_desktop_settings_window(
         return;
     }
 
+    if matches!(&settings.panel, DesktopSettingsPanel::WallpaperPaste) {
+        let name = if settings.wallpaper_name_input.trim().is_empty() {
+            "<set name in previous screen>"
+        } else {
+            settings.wallpaper_name_input.trim()
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("Name: {name}"),
+                normal_style(),
+            ))),
+            Rect {
+                x: content.x + 1,
+                y: content.y + 1,
+                width: content.width.saturating_sub(2),
+                height: 1,
+            },
+        );
+        let instruction = "Paste ASCII art here. Esc = Done, Backspace = Delete.";
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(instruction, dim_style()))),
+            Rect {
+                x: content.x + 1,
+                y: content.y + 2,
+                width: content.width.saturating_sub(2),
+                height: 1,
+            },
+        );
+
+        let box_area = Rect {
+            x: content.x + 1,
+            y: content.y + 4,
+            width: content.width.saturating_sub(2),
+            height: content.height.saturating_sub(5),
+        };
+        if box_area.width >= 4 && box_area.height >= 3 {
+            f.render_widget(
+                Block::default().borders(Borders::ALL).style(title_style()),
+                box_area,
+            );
+            let inner = Rect {
+                x: box_area.x + 1,
+                y: box_area.y + 1,
+                width: box_area.width.saturating_sub(2),
+                height: box_area.height.saturating_sub(2),
+            };
+            if inner.width > 0 && inner.height > 0 {
+                let all_lines: Vec<String> = if settings.wallpaper_art_input.is_empty() {
+                    Vec::new()
+                } else {
+                    normalize_wallpaper_lines(
+                        settings
+                            .wallpaper_art_input
+                            .lines()
+                            .map(|line| line.to_string())
+                            .collect(),
+                    )
+                };
+                let visible = inner.height as usize;
+                let start = all_lines.len().saturating_sub(visible);
+                let mut lines = Vec::new();
+                for line in all_lines.into_iter().skip(start) {
+                    let clipped: String = line.chars().take(inner.width as usize).collect();
+                    lines.push(Line::from(Span::styled(clipped, normal_style())));
+                }
+                if lines.is_empty() {
+                    lines.push(Line::from(Span::styled("<empty>", dim_style())));
+                }
+                f.render_widget(Paragraph::new(lines), inner);
+            }
+        }
+        return;
+    }
+
     if let Some(err) = settings.custom_profile_error.as_ref() {
         if matches!(&settings.panel, DesktopSettingsPanel::CustomProfileAdd) {
             f.render_widget(
@@ -2144,6 +4026,62 @@ fn draw_desktop_settings_window(
             );
         }
     }
+    if let Some(err) = settings.wallpaper_error.as_ref() {
+        if matches!(&settings.panel, DesktopSettingsPanel::WallpaperAdd) {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(format!(" ! {err}"), dim_style()))),
+                Rect {
+                    x: content.x,
+                    y: content.y + 2,
+                    width: content.width,
+                    height: 1,
+                },
+            );
+        }
+    }
+
+    let list_y = content.y + desktop_settings_list_offset(settings);
+    let list_h = content
+        .height
+        .saturating_sub(desktop_settings_list_offset(settings));
+    let list_x = content.x + 1;
+    let list_w = content.width.saturating_sub(1);
+    let show_preview = matches!(
+        settings.panel,
+        DesktopSettingsPanel::Wallpapers
+            | DesktopSettingsPanel::WallpaperSize
+            | DesktopSettingsPanel::WallpaperChoose
+    ) && content.width >= 70
+        && list_h >= 8;
+
+    let (rows_area, preview_area) = if show_preview {
+        let left_w = ((list_w as u32) * 48 / 100) as u16;
+        let right_w = list_w.saturating_sub(left_w + 1);
+        (
+            Rect {
+                x: list_x,
+                y: list_y,
+                width: left_w.max(18),
+                height: list_h,
+            },
+            Some(Rect {
+                x: list_x + left_w + 1,
+                y: list_y,
+                width: right_w,
+                height: list_h,
+            }),
+        )
+    } else {
+        (
+            Rect {
+                x: list_x,
+                y: list_y,
+                width: list_w,
+                height: list_h,
+            },
+            None,
+        )
+    };
 
     let rows = desktop_settings_rows(settings);
     let mut lines = Vec::new();
@@ -2155,18 +4093,63 @@ fn draw_desktop_settings_window(
         };
         lines.push(Line::from(Span::styled(row.as_str(), style)));
     }
+    f.render_widget(Paragraph::new(lines), rows_area);
 
-    f.render_widget(
-        Paragraph::new(lines),
-        Rect {
-            x: content.x + 1,
-            y: content.y + desktop_settings_list_offset(settings),
-            width: content.width.saturating_sub(1),
-            height: content
-                .height
-                .saturating_sub(desktop_settings_list_offset(settings)),
-        },
-    );
+    if let Some(preview) = preview_area {
+        if preview.width >= 6 && preview.height >= 4 {
+            let title = wallpaper_preview_name(settings)
+                .map(|name| format!(" Preview: {name} "))
+                .unwrap_or_else(|| " Preview ".to_string());
+            f.render_widget(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Line::from(Span::styled(title, title_style())))
+                    .style(title_style()),
+                preview,
+            );
+
+            if let Some(name) = wallpaper_preview_name(settings) {
+                let cfg = get_settings();
+                if let Some(lines) = wallpaper_lines_for_name(&cfg, &name) {
+                    let inner = Rect {
+                        x: preview.x + 1,
+                        y: preview.y + 1,
+                        width: preview.width.saturating_sub(2),
+                        height: preview.height.saturating_sub(2),
+                    };
+                    if inner.width > 0 && inner.height > 0 {
+                        let render = render_wallpaper_for_mode(
+                            &lines,
+                            cfg.desktop_wallpaper_size_mode,
+                            inner.width as usize,
+                            inner.height as usize,
+                        );
+                        let render_h = render.len();
+                        let render_w = render
+                            .iter()
+                            .map(|line| line.chars().count())
+                            .max()
+                            .unwrap_or(0);
+                        if render_h > 0 && render_w > 0 {
+                            let mut render_lines = Vec::new();
+                            for line in render {
+                                render_lines.push(Line::from(Span::styled(line, normal_style())));
+                            }
+                            f.render_widget(
+                                Paragraph::new(render_lines),
+                                Rect {
+                                    x: inner.x + inner.width.saturating_sub(render_w as u16) / 2,
+                                    y: inner.y + inner.height.saturating_sub(render_h as u16) / 2,
+                                    width: render_w as u16,
+                                    height: render_h as u16,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn draw_pty_window(f: &mut ratatui::Frame, area: Rect, app: &PtyWindowState) {
@@ -2762,13 +4745,19 @@ fn desktop_settings_profile_default_for_target(
 fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
     match &state.panel {
         DesktopSettingsPanel::Home => desktop_settings_home_items(state).len(),
+        DesktopSettingsPanel::Appearance => 3,
         DesktopSettingsPanel::General => 4,
-        DesktopSettingsPanel::Startup => 2,
         DesktopSettingsPanel::CliDisplay => 4,
+        DesktopSettingsPanel::Wallpapers => desktop_wallpaper_rows().len(),
+        DesktopSettingsPanel::WallpaperSize => wallpaper_size_rows().len(),
+        DesktopSettingsPanel::WallpaperChoose => wallpaper_choose_rows().len(),
+        DesktopSettingsPanel::WallpaperDelete => wallpaper_delete_rows().len(),
+        DesktopSettingsPanel::WallpaperAdd => 6,
+        DesktopSettingsPanel::WallpaperPaste => 0,
         DesktopSettingsPanel::ProfileList => DESKTOP_SETTINGS_PROFILE_ITEMS.len() + 2,
-        DesktopSettingsPanel::ProfileEdit(_) => 7,
+        DesktopSettingsPanel::ProfileEdit(_) => 8,
         DesktopSettingsPanel::CustomProfileList => desktop_settings_custom_profile_keys().len() + 2,
-        DesktopSettingsPanel::CustomProfileEdit(_) => 8,
+        DesktopSettingsPanel::CustomProfileEdit(_) => 9,
         DesktopSettingsPanel::CustomProfileAdd => 3,
         DesktopSettingsPanel::About => 4,
     }
@@ -2896,6 +4885,17 @@ fn desktop_settings_toggle_profile_mouse(target: &DesktopProfileTarget) {
     persist_settings();
 }
 
+fn desktop_settings_toggle_profile_fullscreen(target: &DesktopProfileTarget) {
+    update_settings(|s| {
+        let Some(p) = desktop_settings_profile_for_target_mut(&mut s.desktop_cli_profiles, target)
+        else {
+            return;
+        };
+        p.open_fullscreen = !p.open_fullscreen;
+    });
+    persist_settings();
+}
+
 fn desktop_settings_reset_profile(target: &DesktopProfileTarget) {
     let defaults = desktop_settings_profile_default_for_target(target);
     update_settings(|s| {
@@ -2970,8 +4970,8 @@ fn handle_desktop_settings_activate(
                     state.selected = 0;
                     DesktopSettingsAction::None
                 }
-                DesktopSettingsHomeItem::Startup => {
-                    state.panel = DesktopSettingsPanel::Startup;
+                DesktopSettingsHomeItem::Appearance => {
+                    state.panel = DesktopSettingsPanel::Appearance;
                     state.selected = 0;
                     DesktopSettingsAction::None
                 }
@@ -2997,19 +4997,14 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsHomeItem::Close => DesktopSettingsAction::CloseWindow,
             }
         }
-        DesktopSettingsPanel::General => match state.selected {
+        DesktopSettingsPanel::Appearance => match state.selected {
             0 => {
                 desktop_settings_cycle_theme(!reverse);
                 DesktopSettingsAction::None
             }
             1 => {
-                update_settings(|s| s.sound = !s.sound);
-                persist_settings();
-                DesktopSettingsAction::None
-            }
-            2 => {
-                update_settings(|s| s.bootup = !s.bootup);
-                persist_settings();
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
                 DesktopSettingsAction::None
             }
             _ => {
@@ -3018,8 +5013,18 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
         },
-        DesktopSettingsPanel::Startup => match state.selected {
+        DesktopSettingsPanel::General => match state.selected {
             0 => {
+                update_settings(|s| s.sound = !s.sound);
+                persist_settings();
+                DesktopSettingsAction::None
+            }
+            1 => {
+                update_settings(|s| s.bootup = !s.bootup);
+                persist_settings();
+                DesktopSettingsAction::None
+            }
+            2 => {
                 desktop_settings_apply_open_mode_toggle();
                 DesktopSettingsAction::None
             }
@@ -3055,6 +5060,115 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
         },
+        DesktopSettingsPanel::Wallpapers => {
+            let rows = desktop_wallpaper_rows();
+            let action = rows
+                .get(state.selected)
+                .map(|row| row.action.clone())
+                .unwrap_or(WallpaperRowAction::None);
+            match action {
+                WallpaperRowAction::None => {}
+                WallpaperRowAction::Set(name) => desktop_settings_set_wallpaper(&name),
+                WallpaperRowAction::OpenSizeMenu => {
+                    state.panel = DesktopSettingsPanel::WallpaperSize;
+                    state.selected = match get_settings().desktop_wallpaper_size_mode {
+                        WallpaperSizeMode::DefaultSize => 0,
+                        WallpaperSizeMode::FitToScreen => 1,
+                        WallpaperSizeMode::Centered => 2,
+                        WallpaperSizeMode::Tile => 3,
+                        WallpaperSizeMode::Stretch => 4,
+                    };
+                }
+                WallpaperRowAction::OpenChooseMenu => {
+                    state.panel = DesktopSettingsPanel::WallpaperChoose;
+                    state.selected = 0;
+                }
+                WallpaperRowAction::OpenDeleteMenu => {
+                    state.panel = DesktopSettingsPanel::WallpaperDelete;
+                    state.selected = 0;
+                }
+                WallpaperRowAction::AddCustom => {
+                    state.panel = DesktopSettingsPanel::WallpaperAdd;
+                    state.selected = 0;
+                    state.wallpaper_error = None;
+                    state.wallpaper_name_input.clear();
+                    state.wallpaper_path_input.clear();
+                    state.wallpaper_art_input.clear();
+                }
+                WallpaperRowAction::Back => {
+                    state.panel = DesktopSettingsPanel::Appearance;
+                    state.selected = 0;
+                }
+            }
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperSize => {
+            let modes = [
+                WallpaperSizeMode::DefaultSize,
+                WallpaperSizeMode::FitToScreen,
+                WallpaperSizeMode::Centered,
+                WallpaperSizeMode::Tile,
+                WallpaperSizeMode::Stretch,
+            ];
+            if state.selected < modes.len() {
+                desktop_settings_set_wallpaper_size_mode(modes[state.selected]);
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
+            } else {
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
+            }
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperChoose => {
+            let names = custom_wallpaper_names(&get_settings());
+            if state.selected < names.len() {
+                desktop_settings_set_wallpaper(&names[state.selected]);
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
+            } else {
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
+            }
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperDelete => {
+            let names = custom_wallpaper_names(&get_settings());
+            if state.selected < names.len() {
+                let to_delete = names[state.selected].clone();
+                desktop_settings_delete_custom_wallpaper(&to_delete);
+                state.selected = state.selected.saturating_sub(1);
+            } else {
+                state.panel = DesktopSettingsPanel::Wallpapers;
+                state.selected = 0;
+            }
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperAdd => {
+            match state.selected {
+                2 => {
+                    if state.wallpaper_name_input.trim().is_empty() {
+                        state.wallpaper_error = Some("Enter wallpaper name first".to_string());
+                    } else {
+                        state.panel = DesktopSettingsPanel::WallpaperPaste;
+                        state.wallpaper_error = None;
+                    }
+                }
+                3 => {
+                    state.wallpaper_art_input.clear();
+                    state.wallpaper_error = None;
+                }
+                4 => desktop_settings_add_wallpaper(state),
+                5 => {
+                    state.panel = DesktopSettingsPanel::Wallpapers;
+                    state.selected = 0;
+                    state.wallpaper_error = None;
+                }
+                _ => {}
+            }
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperPaste => DesktopSettingsAction::None,
         DesktopSettingsPanel::ProfileList => {
             if state.selected < DESKTOP_SETTINGS_PROFILE_ITEMS.len() {
                 let slot = DESKTOP_SETTINGS_PROFILE_ITEMS[state.selected].0;
@@ -3072,8 +5186,9 @@ fn handle_desktop_settings_activate(
         DesktopSettingsPanel::ProfileEdit(slot) => {
             match state.selected {
                 4 => desktop_settings_toggle_profile_mouse(&DesktopProfileTarget::Builtin(slot)),
-                5 => desktop_settings_reset_profile(&DesktopProfileTarget::Builtin(slot)),
-                6 => {
+                5 => desktop_settings_toggle_profile_fullscreen(&DesktopProfileTarget::Builtin(slot)),
+                6 => desktop_settings_reset_profile(&DesktopProfileTarget::Builtin(slot)),
+                7 => {
                     state.panel = DesktopSettingsPanel::ProfileList;
                     state.selected = 0;
                 }
@@ -3101,12 +5216,15 @@ fn handle_desktop_settings_activate(
                 5 => desktop_settings_toggle_profile_mouse(&DesktopProfileTarget::Custom(
                     key.clone(),
                 )),
-                6 => {
+                6 => desktop_settings_toggle_profile_fullscreen(&DesktopProfileTarget::Custom(
+                    key.clone(),
+                )),
+                7 => {
                     desktop_settings_delete_custom_profile(&key);
                     state.panel = DesktopSettingsPanel::CustomProfileList;
                     state.selected = 0;
                 }
-                7 => {
+                8 => {
                     state.panel = DesktopSettingsPanel::CustomProfileList;
                     state.selected = 0;
                 }
@@ -3143,6 +5261,39 @@ fn handle_desktop_settings_activate(
 fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSettingsAction {
     match state.panel.clone() {
         DesktopSettingsPanel::Home => DesktopSettingsAction::CloseWindow,
+        DesktopSettingsPanel::Appearance => {
+            state.panel = DesktopSettingsPanel::Home;
+            state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::Wallpapers => {
+            state.panel = DesktopSettingsPanel::Appearance;
+            state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperSize
+        | DesktopSettingsPanel::WallpaperChoose
+        | DesktopSettingsPanel::WallpaperDelete => {
+            state.panel = DesktopSettingsPanel::Wallpapers;
+            state.selected = 0;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperAdd => {
+            state.panel = DesktopSettingsPanel::Wallpapers;
+            state.selected = 0;
+            state.wallpaper_error = None;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
+        DesktopSettingsPanel::WallpaperPaste => {
+            state.panel = DesktopSettingsPanel::WallpaperAdd;
+            state.selected = 2;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
         DesktopSettingsPanel::ProfileEdit(_) => {
             state.panel = DesktopSettingsPanel::ProfileList;
             state.selected = 0;
@@ -3189,6 +5340,29 @@ fn handle_desktop_settings_key(
         1
     };
 
+    if matches!(&state.panel, DesktopSettingsPanel::WallpaperPaste) {
+        match code {
+            KeyCode::Esc => {
+                state.panel = DesktopSettingsPanel::WallpaperAdd;
+                state.selected = 2;
+            }
+            KeyCode::Enter => state.wallpaper_art_input.push('\n'),
+            KeyCode::Tab => state.wallpaper_art_input.push_str("    "),
+            KeyCode::Backspace => {
+                let _ = state.wallpaper_art_input.pop();
+            }
+            KeyCode::Char(c)
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT)
+                    && !c.is_control() =>
+            {
+                state.wallpaper_art_input.push(c);
+            }
+            _ => {}
+        }
+        return DesktopSettingsAction::None;
+    }
+
     if matches!(&state.panel, DesktopSettingsPanel::CustomProfileAdd) {
         match code {
             KeyCode::Char(c)
@@ -3205,6 +5379,39 @@ fn handle_desktop_settings_key(
             KeyCode::Backspace if state.selected == 0 => {
                 state.custom_profile_input.pop();
                 state.custom_profile_error = None;
+                desktop_settings_reset_selection(state);
+                return DesktopSettingsAction::None;
+            }
+            _ => {}
+        }
+    }
+
+    if matches!(&state.panel, DesktopSettingsPanel::WallpaperAdd) {
+        match code {
+            KeyCode::Char(c)
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT)
+                    && (state.selected == 0 || state.selected == 1)
+                    && !c.is_control() =>
+            {
+                if state.selected == 0 {
+                    state.wallpaper_name_input.push(c);
+                } else {
+                    state.wallpaper_path_input.push(c);
+                }
+                state.wallpaper_error = None;
+                desktop_settings_reset_selection(state);
+                return DesktopSettingsAction::None;
+            }
+            KeyCode::Backspace if state.selected == 0 => {
+                state.wallpaper_name_input.pop();
+                state.wallpaper_error = None;
+                desktop_settings_reset_selection(state);
+                return DesktopSettingsAction::None;
+            }
+            KeyCode::Backspace if state.selected == 1 => {
+                state.wallpaper_path_input.pop();
+                state.wallpaper_error = None;
                 desktop_settings_reset_selection(state);
                 return DesktopSettingsAction::None;
             }
@@ -3242,10 +5449,10 @@ fn handle_desktop_settings_key(
             DesktopSettingsPanel::Home => {
                 state.selected = state.selected.saturating_sub(1);
             }
-            DesktopSettingsPanel::General if state.selected == 0 => {
+            DesktopSettingsPanel::Appearance if state.selected == 0 => {
                 desktop_settings_cycle_theme(false)
             }
-            DesktopSettingsPanel::Startup if state.selected == 0 => {
+            DesktopSettingsPanel::General if state.selected == 2 => {
                 desktop_settings_apply_open_mode_toggle()
             }
             DesktopSettingsPanel::CliDisplay if state.selected == 1 => {
@@ -3272,10 +5479,10 @@ fn handle_desktop_settings_key(
                 let max = desktop_settings_row_count(state).saturating_sub(1);
                 state.selected = (state.selected + 1).min(max);
             }
-            DesktopSettingsPanel::General if state.selected == 0 => {
+            DesktopSettingsPanel::Appearance if state.selected == 0 => {
                 desktop_settings_cycle_theme(true)
             }
-            DesktopSettingsPanel::Startup if state.selected == 0 => {
+            DesktopSettingsPanel::General if state.selected == 2 => {
                 desktop_settings_apply_open_mode_toggle()
             }
             DesktopSettingsPanel::CliDisplay if state.selected == 1 => {
@@ -3359,6 +5566,14 @@ fn handle_desktop_settings_mouse(
     area: Rect,
     mouse: crossterm::event::MouseEvent,
 ) -> DesktopSettingsAction {
+    let uses_preview = matches!(
+        state.panel,
+        DesktopSettingsPanel::Wallpapers
+            | DesktopSettingsPanel::WallpaperSize
+            | DesktopSettingsPanel::WallpaperChoose
+    ) && area.width >= 72
+        && area.height >= 10;
+
     if matches!(mouse.kind, MouseEventKind::Moved) {
         let content = Rect {
             x: area.x + 1,
@@ -3388,6 +5603,17 @@ fn handle_desktop_settings_mouse(
         }
 
         let list_y = content.y + desktop_settings_list_offset(state);
+        let list_w = content.width.saturating_sub(1);
+        let list_x = content.x + 1;
+        let max_list_x = if uses_preview {
+            list_x + (((list_w as u32) * 48 / 100) as u16).max(18)
+        } else {
+            list_x + list_w
+        };
+        if mouse.column < list_x || mouse.column >= max_list_x {
+            state.hovered = None;
+            return DesktopSettingsAction::None;
+        }
         if mouse.row < list_y {
             state.hovered = None;
             return DesktopSettingsAction::None;
@@ -3431,6 +5657,16 @@ fn handle_desktop_settings_mouse(
     }
 
     let list_y = content.y + desktop_settings_list_offset(state);
+    let list_w = content.width.saturating_sub(1);
+    let list_x = content.x + 1;
+    let max_list_x = if uses_preview {
+        list_x + (((list_w as u32) * 48 / 100) as u16).max(18)
+    } else {
+        list_x + list_w
+    };
+    if mouse.column < list_x || mouse.column >= max_list_x {
+        return DesktopSettingsAction::None;
+    }
     if mouse.row < list_y {
         return DesktopSettingsAction::None;
     }

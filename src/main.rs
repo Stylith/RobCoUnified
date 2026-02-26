@@ -87,7 +87,7 @@ fn apply_pending_switch() {
         } else if target == count && count < session::MAX_SESSIONS {
             // Open a new session for the current user only.
             if let Some(current_user) = session::active_username() {
-                let idx = session::push_session(&current_user);
+                let idx = session::push_session_with_default_mode(&current_user, false);
                 session::set_active(idx);
             }
         }
@@ -213,8 +213,8 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
 
         // ── Session main menu loop ────────────────────────────────────────────
         let mut logged_out = false;
-        let mut launch_default_desktop =
-            matches!(get_settings().default_open_mode, OpenMode::Desktop);
+        let mut launch_default_desktop = matches!(get_settings().default_open_mode, OpenMode::Desktop)
+            && session::take_default_mode_pending_for_active();
 
         'menu: loop {
             if launch_default_desktop {

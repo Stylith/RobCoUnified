@@ -48,6 +48,12 @@ fn plain_or_shift(mods: KeyModifiers) -> bool {
     mods.is_empty() || mods == KeyModifiers::SHIFT
 }
 
+fn leader_follow_mods(mods: KeyModifiers) -> bool {
+    plain_or_shift(mods)
+        || mods == KeyModifiers::CONTROL
+        || mods == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+}
+
 fn option_digit_idx(c: char) -> Option<usize> {
     Some(match c {
         // Common macOS Option outputs across US/intl layouts.
@@ -135,7 +141,7 @@ fn session_idx_from_digit_like_char(c: char) -> Option<usize> {
 }
 
 fn session_idx_from_leader_chord(code: KeyCode, mods: KeyModifiers) -> Option<usize> {
-    if plain_or_shift(mods) {
+    if leader_follow_mods(mods) {
         if let KeyCode::Char(c) = code {
             if take_recent_session_leader_prefix() {
                 return session_idx_from_digit_like_char(c);
@@ -149,7 +155,7 @@ fn session_idx_from_leader_chord(code: KeyCode, mods: KeyModifiers) -> Option<us
 }
 
 fn leader_requests_next_session(code: KeyCode, mods: KeyModifiers) -> bool {
-    if plain_or_shift(mods) {
+    if leader_follow_mods(mods) {
         let wants_next =
             matches!(code, KeyCode::Tab) || matches!(code, KeyCode::Char('n' | 'N' | '0' | '+'));
         return wants_next && take_recent_session_leader_prefix();

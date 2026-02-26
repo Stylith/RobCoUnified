@@ -652,7 +652,21 @@ impl PtySession {
         col: u16,
         row: u16,
     ) {
-        if let Some(bytes) = mouse_to_bytes(kind, mods, col, row) {
+        let (mode, encoding) = self
+            .parser
+            .lock()
+            .map(|p| {
+                let screen = p.screen();
+                (
+                    screen.mouse_protocol_mode(),
+                    screen.mouse_protocol_encoding(),
+                )
+            })
+            .unwrap_or((
+                vt100::MouseProtocolMode::None,
+                vt100::MouseProtocolEncoding::Default,
+            ));
+        if let Some(bytes) = mouse_to_bytes(kind, mods, col, row, mode, encoding) {
             self.write(&bytes);
         }
     }
@@ -1103,15 +1117,16 @@ fn mouse_button_code(btn: MouseButton) -> u16 {
     }
 }
 
-fn mouse_to_bytes(kind: MouseEventKind, mods: KeyModifiers, col: u16, row: u16) -> Option<Vec<u8>> {
+fn mouse_event_cb(kind: MouseEventKind, mods: KeyModifiers) -> Option<(u16, char)> {
     let mut cb = mouse_mod_bits(mods);
     let suffix = match kind {
         MouseEventKind::Down(btn) => {
             cb |= mouse_button_code(btn);
             'M'
         }
-        MouseEventKind::Up(btn) => {
-            cb |= mouse_button_code(btn);
+        MouseEventKind::Up(_) => {
+            // X10/SGR release is button code 3, not the released button id.
+            cb |= 3;
             'm'
         }
         MouseEventKind::Drag(btn) => {
@@ -1134,12 +1149,98 @@ fn mouse_to_bytes(kind: MouseEventKind, mods: KeyModifiers, col: u16, row: u16) 
             cb |= 67;
             'M'
         }
-        MouseEventKind::Moved => return None,
+        MouseEventKind::Moved => {
+            // Any-motion event with no button held.
+            cb |= 35;
+            'M'
+        }
     };
+    Some((cb, suffix))
+}
 
+fn mouse_mode_allows(kind: MouseEventKind, mode: vt100::MouseProtocolMode) -> bool {
+    use vt100::MouseProtocolMode as M;
+    match mode {
+        M::None => false,
+        M::Press => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::PressRelease => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::ButtonMotion => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::AnyMotion => true,
+    }
+}
+
+fn push_x10_coord(out: &mut Vec<u8>, value: u16) {
+    let v = value.max(1).saturating_add(32).min(255) as u8;
+    out.push(v);
+}
+
+fn push_utf8_coord(out: &mut Vec<u8>, value: u16) {
+    let v = value.max(1).saturating_add(32) as u32;
+    if let Some(ch) = char::from_u32(v) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
+fn mouse_to_bytes(
+    kind: MouseEventKind,
+    mods: KeyModifiers,
+    col: u16,
+    row: u16,
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Option<Vec<u8>> {
+    if !mouse_mode_allows(kind, mode) {
+        return None;
+    }
+    let (cb, suffix) = mouse_event_cb(kind, mods)?;
     let x = col.max(1);
     let y = row.max(1);
-    Some(format!("\x1b[<{cb};{x};{y}{suffix}").into_bytes())
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => {
+            Some(format!("\x1b[<{cb};{x};{y}{suffix}").into_bytes())
+        }
+        vt100::MouseProtocolEncoding::Default => {
+            let mut out = Vec::with_capacity(6);
+            out.extend_from_slice(b"\x1b[M");
+            out.push(cb.saturating_add(32).min(255) as u8);
+            push_x10_coord(&mut out, x);
+            push_x10_coord(&mut out, y);
+            Some(out)
+        }
+        vt100::MouseProtocolEncoding::Utf8 => {
+            let mut out = Vec::with_capacity(16);
+            out.extend_from_slice(b"\x1b[M");
+            push_utf8_coord(&mut out, cb.saturating_add(32));
+            push_utf8_coord(&mut out, x);
+            push_utf8_coord(&mut out, y);
+            Some(out)
+        }
+    }
 }
 
 pub fn key_to_bytes(
@@ -1385,9 +1486,11 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
 #[cfg(test)]
 mod tests {
     use super::{
-        key_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char, DecSpecialGraphics,
+        key_to_bytes, mouse_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char,
+        DecSpecialGraphics,
     };
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+    use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
     #[test]
     fn app_cursor_arrows_use_ss3_sequences() {
@@ -1477,5 +1580,32 @@ mod tests {
         p.process(b"1+2");
         let s = p.screen();
         assert_eq!(smooth_ascii_border_char(s, 0, 1, '+'), '+');
+    }
+
+    #[test]
+    fn mouse_release_uses_release_code_in_sgr() {
+        let bytes = mouse_to_bytes(
+            MouseEventKind::Up(MouseButton::Left),
+            KeyModifiers::NONE,
+            10,
+            5,
+            MouseProtocolMode::PressRelease,
+            MouseProtocolEncoding::Sgr,
+        )
+        .expect("mouse bytes");
+        assert_eq!(String::from_utf8_lossy(&bytes), "\u{1b}[<3;10;5m");
+    }
+
+    #[test]
+    fn mouse_events_are_suppressed_when_mode_is_none() {
+        let bytes = mouse_to_bytes(
+            MouseEventKind::Down(MouseButton::Left),
+            KeyModifiers::NONE,
+            1,
+            1,
+            MouseProtocolMode::None,
+            MouseProtocolEncoding::Sgr,
+        );
+        assert!(bytes.is_none());
     }
 }

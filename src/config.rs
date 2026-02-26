@@ -146,6 +146,17 @@ pub enum OpenMode {
     Desktop,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperSizeMode {
+    DefaultSize,
+    #[default]
+    FitToScreen,
+    Centered,
+    Tile,
+    Stretch,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopPtyProfileSettings {
     pub min_w: u16,
@@ -156,10 +167,16 @@ pub struct DesktopPtyProfileSettings {
     pub preferred_h: Option<u16>,
     #[serde(default = "default_profile_mouse_passthrough")]
     pub mouse_passthrough: bool,
+    #[serde(default = "default_profile_open_fullscreen")]
+    pub open_fullscreen: bool,
 }
 
 const fn default_profile_mouse_passthrough() -> bool {
     true
+}
+
+const fn default_profile_open_fullscreen() -> bool {
+    false
 }
 
 impl Default for DesktopPtyProfileSettings {
@@ -170,6 +187,7 @@ impl Default for DesktopPtyProfileSettings {
             preferred_w: None,
             preferred_h: None,
             mouse_passthrough: true,
+            open_fullscreen: false,
         }
     }
 }
@@ -197,6 +215,7 @@ fn default_calcurse_profile() -> DesktopPtyProfileSettings {
         preferred_w: Some(108),
         preferred_h: Some(34),
         mouse_passthrough: false,
+        open_fullscreen: false,
     }
 }
 
@@ -207,6 +226,7 @@ fn default_spotify_profile() -> DesktopPtyProfileSettings {
         preferred_w: Some(118),
         preferred_h: Some(34),
         mouse_passthrough: true,
+        open_fullscreen: false,
     }
 }
 
@@ -217,6 +237,7 @@ fn default_ranger_profile() -> DesktopPtyProfileSettings {
         preferred_w: Some(108),
         preferred_h: Some(32),
         mouse_passthrough: true,
+        open_fullscreen: false,
     }
 }
 
@@ -227,6 +248,7 @@ fn default_reddit_profile() -> DesktopPtyProfileSettings {
         preferred_w: Some(112),
         preferred_h: Some(34),
         mouse_passthrough: true,
+        open_fullscreen: false,
     }
 }
 
@@ -258,6 +280,16 @@ pub struct Settings {
     pub default_open_mode: OpenMode,
     #[serde(default)]
     pub desktop_cli_profiles: DesktopCliProfiles,
+    #[serde(default = "default_desktop_wallpaper")]
+    pub desktop_wallpaper: String,
+    #[serde(default)]
+    pub desktop_wallpaper_size_mode: WallpaperSizeMode,
+    #[serde(default)]
+    pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
+}
+
+fn default_desktop_wallpaper() -> String {
+    "RobCo".to_string()
 }
 
 impl Default for Settings {
@@ -271,6 +303,9 @@ impl Default for Settings {
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
             desktop_cli_profiles: DesktopCliProfiles::default(),
+            desktop_wallpaper: default_desktop_wallpaper(),
+            desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
+            desktop_wallpapers_custom: BTreeMap::new(),
         }
     }
 }
