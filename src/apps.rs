@@ -175,14 +175,26 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
+        let nuke_codes_label = if get_settings().builtin_menu_visibility.nuke_codes {
+            "Nuke Codes in Applications: VISIBLE [toggle]"
+        } else {
+            "Nuke Codes in Applications: HIDDEN [toggle]"
+        };
         match run_menu(
             terminal,
             "Edit Applications",
-            &["Add App", "Delete App", "---", "Back"],
+            &[nuke_codes_label, "---", "Add App", "Delete App", "---", "Back"],
             None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                l if l == nuke_codes_label => {
+                    update_settings(|cfg| {
+                        cfg.builtin_menu_visibility.nuke_codes =
+                            !cfg.builtin_menu_visibility.nuke_codes;
+                    });
+                    persist_settings();
+                }
                 "Add App" => add_entry(terminal, "App", load_apps, save_apps)?,
                 "Delete App" => delete_entry(terminal, "App", load_apps, save_apps)?,
                 _ => break,
@@ -237,17 +249,10 @@ pub fn edit_network_menu(terminal: &mut Term) -> Result<()> {
 pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
     use crate::docedit::edit_documents_menu;
     loop {
-        let nuke_codes_label = if get_settings().builtin_menu_visibility.nuke_codes {
-            "Nuke Codes in Applications: VISIBLE [toggle]"
-        } else {
-            "Nuke Codes in Applications: HIDDEN [toggle]"
-        };
         match run_menu(
             terminal,
             "Edit Menus",
             &[
-                nuke_codes_label,
-                "---",
                 "Edit Applications",
                 "Edit Documents",
                 "Edit Network",
@@ -259,13 +264,6 @@ pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                l if l == nuke_codes_label => {
-                    update_settings(|cfg| {
-                        cfg.builtin_menu_visibility.nuke_codes =
-                            !cfg.builtin_menu_visibility.nuke_codes;
-                    });
-                    persist_settings();
-                }
                 "Edit Applications" => edit_apps_menu(terminal)?,
                 "Edit Documents" => edit_documents_menu(terminal)?,
                 "Edit Network" => edit_network_menu(terminal)?,

@@ -309,6 +309,20 @@ impl Default for DesktopFileManagerSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopIconPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DesktopIconPositionsSettings {
+    #[serde(default)]
+    pub my_computer: Option<DesktopIconPosition>,
+    #[serde(default)]
+    pub trash: Option<DesktopIconPosition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopPtyProfileSettings {
     pub min_w: u16,
     pub min_h: u16,
@@ -465,6 +479,8 @@ pub struct Settings {
     #[serde(default)]
     pub desktop_file_manager: DesktopFileManagerSettings,
     #[serde(default)]
+    pub desktop_icon_positions: DesktopIconPositionsSettings,
+    #[serde(default)]
     pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
 }
 
@@ -491,6 +507,7 @@ impl Default for Settings {
             desktop_icon_style: DesktopIconStyle::Win95,
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
+            desktop_icon_positions: DesktopIconPositionsSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
         }
     }

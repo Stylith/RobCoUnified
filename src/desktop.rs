@@ -21,8 +21,9 @@ use crate::config::{
     get_current_user, get_settings, load_apps, load_categories, load_games, load_networks,
     mark_default_apps_prompt_pending, persist_settings, save_apps, save_categories, save_games,
     save_networks, update_settings, CliAcsMode, CliColorMode, DesktopCliProfiles,
-    DesktopFileManagerSettings, DesktopIconStyle, DesktopPtyProfileSettings, FileManagerSortMode,
-    FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode, THEMES,
+    DesktopFileManagerSettings, DesktopIconPosition, DesktopIconStyle, DesktopPtyProfileSettings,
+    FileManagerSortMode, FileManagerTextOpenMode, FileManagerViewMode, OpenMode,
+    WallpaperSizeMode, THEMES,
 };
 use crate::documents;
 use crate::default_apps::{
@@ -1643,23 +1644,6 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         }
         DesktopHubKind::EditMenus => vec![
             DesktopHubItem {
-                label: format!(
-                    "Nuke Codes in Applications: {} [toggle]",
-                    if get_settings().builtin_menu_visibility.nuke_codes {
-                        "VISIBLE"
-                    } else {
-                        "HIDDEN"
-                    }
-                ),
-                action: DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility,
-                enabled: true,
-            },
-            DesktopHubItem {
-                label: String::new(),
-                action: DesktopHubItemAction::None,
-                enabled: false,
-            },
-            DesktopHubItem {
                 label: "Edit Applications".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditApps),
                 enabled: true,
@@ -1680,7 +1664,96 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 enabled: true,
             },
         ],
-        DesktopHubKind::EditApps | DesktopHubKind::EditGames | DesktopHubKind::EditNetwork => {
+        DesktopHubKind::EditApps => {
+            let mut keys = hub.cached_rows.clone();
+            let mut items = vec![
+                DesktopHubItem {
+                    label: format!(
+                        "Nuke Codes in Applications: {} [toggle]",
+                        if get_settings().builtin_menu_visibility.nuke_codes {
+                            "VISIBLE"
+                        } else {
+                            "HIDDEN"
+                        }
+                    ),
+                    action: DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility,
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Display Name: {}{}",
+                        hub.input,
+                        if hub.input_mode && hub.selected == 2 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Command: {}{}",
+                        hub.input2,
+                        if hub.input_mode && hub.selected == 3 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Add Entry".to_string(),
+                    action: DesktopHubItemAction::AddMenuEntry {
+                        kind: DesktopHubKind::EditApps,
+                    },
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Edit Menus".to_string(),
+                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::EditMenus),
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+            ];
+            if keys.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No entries)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for key in keys.drain(..) {
+                    items.push(DesktopHubItem {
+                        label: format!("Delete: {key}"),
+                        action: DesktopHubItemAction::DeleteMenuEntry {
+                            kind: DesktopHubKind::EditApps,
+                            key,
+                        },
+                        enabled: true,
+                    });
+                }
+            }
+            items
+        }
+        DesktopHubKind::EditGames | DesktopHubKind::EditNetwork => {
             let mut keys = hub.cached_rows.clone();
             let mut items = vec![
                 DesktopHubItem {
@@ -2286,8 +2359,19 @@ pub fn desktop_mode(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
 }
 
 fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopExit> {
+    let settings = get_settings();
     let mut state = DesktopState {
         next_id: 1,
+        my_computer_icon_pos: settings
+            .desktop_icon_positions
+            .my_computer
+            .as_ref()
+            .map(|p| (p.x, p.y)),
+        trash_icon_pos: settings
+            .desktop_icon_positions
+            .trash
+            .as_ref()
+            .map(|p| (p.x, p.y)),
         ..DesktopState::default()
     };
     let mut needs_redraw = true;
@@ -3254,6 +3338,7 @@ fn handle_mouse(
     if let MouseEventKind::Up(MouseButton::Left) = mouse.kind {
         let was_icon_dragging = state.icon_dragging.take().is_some();
         if was_icon_dragging {
+            persist_desktop_icon_positions(state);
             return Ok(None);
         }
         let was_dragging = state.dragging.take().is_some();
@@ -8593,16 +8678,16 @@ fn desktop_hub_apply_scroll_delta(
 fn desktop_hub_input_slot(hub: &DesktopHubState) -> Option<u8> {
     match hub.kind {
         DesktopHubKind::InstallerSearch if hub.selected == 0 => Some(1),
-        DesktopHubKind::EditApps
-        | DesktopHubKind::EditGames
+        DesktopHubKind::EditApps if hub.selected == 2 => Some(1),
+        DesktopHubKind::EditApps if hub.selected == 3 => Some(2),
+        DesktopHubKind::EditGames
         | DesktopHubKind::EditNetwork
         | DesktopHubKind::EditDocuments
             if hub.selected == 0 =>
         {
             Some(1)
         }
-        DesktopHubKind::EditApps
-        | DesktopHubKind::EditGames
+        DesktopHubKind::EditGames
         | DesktopHubKind::EditNetwork
         | DesktopHubKind::EditDocuments
             if hub.selected == 1 =>
@@ -9232,7 +9317,7 @@ fn run_desktop_hub_action(
             });
             persist_settings();
             refresh_start_leaf_items(&mut state.start);
-            refresh_desktop_hub_windows(state, DesktopHubKind::EditMenus);
+            refresh_desktop_hub_windows(state, DesktopHubKind::EditApps);
             refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
         }
         DesktopHubItemAction::LaunchCommand { title, cmd } => {
@@ -11360,6 +11445,18 @@ fn desktop_icon_set_origin(state: &mut DesktopState, icon: DesktopIconId, x: i32
         DesktopIconId::MyComputer => state.my_computer_icon_pos = Some((x, y)),
         DesktopIconId::Trash => state.trash_icon_pos = Some((x, y)),
     }
+}
+
+fn icon_position_to_setting(pos: (i32, i32)) -> DesktopIconPosition {
+    DesktopIconPosition { x: pos.0, y: pos.1 }
+}
+
+fn persist_desktop_icon_positions(state: &DesktopState) {
+    update_settings(|s| {
+        s.desktop_icon_positions.my_computer = state.my_computer_icon_pos.map(icon_position_to_setting);
+        s.desktop_icon_positions.trash = state.trash_icon_pos.map(icon_position_to_setting);
+    });
+    persist_settings();
 }
 
 fn clamp_icon_origin(x: i32, y: i32, desk: Rect, w: u16, h: u16) -> (i32, i32) {
