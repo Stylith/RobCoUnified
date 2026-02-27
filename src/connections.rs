@@ -60,6 +60,14 @@ pub fn macos_blueutil_missing() -> bool {
     cfg!(target_os = "macos") && !command_exists("blueutil")
 }
 
+pub fn macos_connections_disabled() -> bool {
+    cfg!(target_os = "macos")
+}
+
+pub fn macos_connections_disabled_hint() -> &'static str {
+    "Connections are temporarily disabled on macOS due to unstable system command behavior."
+}
+
 pub fn bluetooth_installer_hint() -> &'static str {
     "Bluetooth tools require blueutil. Install it from Program Installer."
 }

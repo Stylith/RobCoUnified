@@ -31,9 +31,9 @@ use crate::connections::{
     disconnect_connection, discovered_row_label, filter_discovered_connections,
     filter_network_discovered_group, filter_network_saved_group, forget_saved_connection,
     kind_label as connection_kind_label, kind_plural_label, macos_blueutil_missing,
-    network_group_label, network_menu_groups, network_requires_password,
-    refresh_discovered_connections, saved_connections, saved_row_label, DiscoveredConnection,
-    NetworkMenuGroup,
+    macos_connections_disabled, macos_connections_disabled_hint, network_group_label,
+    network_menu_groups, network_requires_password, refresh_discovered_connections,
+    saved_connections, saved_row_label, DiscoveredConnection, NetworkMenuGroup,
 };
 use crate::default_apps::{
     binding_label, default_app_choices, parse_custom_argv_json, resolve_document_open,
@@ -537,6 +537,7 @@ enum DesktopSettingsAction {
     OpenEditMenus,
     OpenUserManagement,
     ShowBluetoothInstallerHint,
+    ShowConnectionsDisabledHint,
     PromptDefaultAppCustom(DefaultAppSlot),
     ConnectionsRefresh(ConnectionKind),
     ConnectionsSearchConnect(ConnectionKind),
@@ -4020,8 +4021,13 @@ fn run_start_action(
                     Ok(())
                 }
                 StartLaunch::Connections => {
-                    open_desktop_hub_window(state, DesktopHubKind::Connections);
-                    Ok(())
+                    if macos_connections_disabled() {
+                        flash_message(terminal, macos_connections_disabled_hint(), 1700)?;
+                        Ok(())
+                    } else {
+                        open_desktop_hub_window(state, DesktopHubKind::Connections);
+                        Ok(())
+                    }
                 }
             };
             if let Err(err) = launch_result {
@@ -4082,6 +4088,21 @@ fn run_desktop_settings_action(
     window_id: u64,
     action: DesktopSettingsAction,
 ) -> Result<()> {
+    if macos_connections_disabled()
+        && matches!(
+            action,
+            DesktopSettingsAction::ConnectionsRefresh(_)
+                | DesktopSettingsAction::ConnectionsSearchConnect(_)
+                | DesktopSettingsAction::ConnectionsConnectAvailable(_)
+                | DesktopSettingsAction::ConnectionsDisconnect(_)
+                | DesktopSettingsAction::ConnectionsConnectSaved { .. }
+                | DesktopSettingsAction::ConnectionsDisconnectSaved { .. }
+        )
+    {
+        flash_message(terminal, macos_connections_disabled_hint(), 1700)?;
+        return Ok(());
+    }
+
     match action {
         DesktopSettingsAction::None => {}
         DesktopSettingsAction::CloseWindow => close_window_by_id(state, window_id),
@@ -4090,6 +4111,9 @@ fn run_desktop_settings_action(
         }
         DesktopSettingsAction::OpenUserManagement => {
             open_desktop_hub_window(state, DesktopHubKind::UserManagement);
+        }
+        DesktopSettingsAction::ShowConnectionsDisabledHint => {
+            flash_message(terminal, macos_connections_disabled_hint(), 1700)?;
         }
         DesktopSettingsAction::ShowBluetoothInstallerHint => {
             flash_message(terminal, bluetooth_installer_hint(), 1500)?;
@@ -10102,6 +10126,27 @@ fn run_desktop_hub_action(
     state: &mut DesktopState,
     action: DesktopHubItemAction,
 ) -> Result<()> {
+    if macos_connections_disabled()
+        && matches!(
+            &action,
+            DesktopHubItemAction::OpenHub(
+                DesktopHubKind::Connections
+                    | DesktopHubKind::ConnectionsNetworkMenu
+                    | DesktopHubKind::ConnectionsNetwork
+                    | DesktopHubKind::ConnectionsBluetooth
+            ) | DesktopHubItemAction::OpenConnectionsKind(_)
+                | DesktopHubItemAction::RefreshConnections(_)
+                | DesktopHubItemAction::SearchConnections(_)
+                | DesktopHubItemAction::DisconnectSpecificConnection(_)
+                | DesktopHubItemAction::ConnectConnection { .. }
+                | DesktopHubItemAction::DisconnectConnection { .. }
+                | DesktopHubItemAction::ForgetConnection { .. }
+        )
+    {
+        flash_message(terminal, macos_connections_disabled_hint(), 1700)?;
+        return Ok(());
+    }
+
     match action {
         DesktopHubItemAction::None => {}
         DesktopHubItemAction::CloseFocusedWindow => {
@@ -11431,6 +11476,9 @@ fn handle_desktop_settings_activate(
                     DesktopSettingsAction::None
                 }
                 DesktopSettingsHomeItem::Connections => {
+                    if macos_connections_disabled() {
+                        return DesktopSettingsAction::ShowConnectionsDisabledHint;
+                    }
                     state.panel = DesktopSettingsPanel::Connections;
                     state.selected = 0;
                     DesktopSettingsAction::None
@@ -11540,6 +11588,7 @@ fn handle_desktop_settings_activate(
             DesktopSettingsAction::None
         }
         DesktopSettingsPanel::Connections => match state.selected {
+            _ if macos_connections_disabled() => DesktopSettingsAction::ShowConnectionsDisabledHint,
             0 => {
                 state.panel = DesktopSettingsPanel::ConnectionsKind(ConnectionKind::Network);
                 state.selected = 0;

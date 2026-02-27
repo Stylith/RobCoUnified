@@ -18,7 +18,8 @@ use crate::connections::{
     bluetooth_installer_hint, choose_discovered_connection, connect_connection,
     disconnect_connection, filter_discovered_connections, filter_network_discovered_group,
     filter_network_saved_group, forget_saved_connection, kind_label as connection_kind_label,
-    kind_plural_label, macos_blueutil_missing, network_group_label, network_menu_groups,
+    kind_plural_label, macos_blueutil_missing, macos_connections_disabled,
+    macos_connections_disabled_hint, network_group_label, network_menu_groups,
     network_requires_password, refresh_discovered_connections, saved_connections, saved_row_label,
     DiscoveredConnection, NetworkMenuGroup,
 };
@@ -706,6 +707,10 @@ fn connections_network_menu(terminal: &mut Term) -> Result<()> {
 }
 
 pub fn connections_menu(terminal: &mut Term) -> Result<()> {
+    if macos_connections_disabled() {
+        flash_message(terminal, macos_connections_disabled_hint(), 1700)?;
+        return Ok(());
+    }
     loop {
         match run_menu(
             terminal,
@@ -738,11 +743,7 @@ pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> R
     default_apps_menu(terminal)
 }
 
-pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
-    use crate::apps::edit_menus_menu;
-
-    let admin = is_admin(current_user);
-
+fn settings_general_menu(terminal: &mut Term) -> Result<()> {
     loop {
         let s = get_settings();
         let sound_label = if s.sound {
@@ -763,35 +764,19 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
             }
         );
 
-        let mut choices = vec![
-            "About",
-            "Theme",
-            "Default Apps",
-            "Connections",
-            "CLI",
-            "Edit Menus",
+        let rows = [
+            open_mode_label.clone(),
+            bootup_label.to_string(),
+            sound_label.to_string(),
+            "---".to_string(),
+            "Back".to_string(),
         ];
-        if admin {
-            choices.push("User Management");
-        }
-        choices.extend_from_slice(&[
-            open_mode_label.as_str(),
-            bootup_label,
-            sound_label,
-            "---",
-            "Back",
-        ]);
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
 
-        match run_menu(terminal, "Settings", &choices, None)? {
+        match run_menu(terminal, "Settings — General", &refs, None)? {
             MenuResult::Back => break,
-            MenuResult::Selected(s) => match s.as_str() {
-                "About" => about_screen(terminal)?,
-                "Theme" => theme_menu(terminal)?,
-                "Default Apps" => default_apps_menu(terminal)?,
-                "Connections" => connections_menu(terminal)?,
-                "CLI" => cli_menu(terminal)?,
-                "Edit Menus" => edit_menus_menu(terminal)?,
-                "User Management" => user_management_menu(terminal, current_user)?,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) => match sel.as_str() {
                 l if l == open_mode_label => {
                     update_settings(|s| {
                         s.default_open_mode = match s.default_open_mode {
@@ -809,6 +794,60 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
                     update_settings(|s| s.bootup = !s.bootup);
                     persist_settings();
                 }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
+fn settings_appearance_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        match run_menu(
+            terminal,
+            "Settings — Appearance",
+            &["Theme", "CLI Display", "---", "Back"],
+            None,
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) => match sel.as_str() {
+                "Theme" => theme_menu(terminal)?,
+                "CLI Display" => cli_menu(terminal)?,
+                _ => break,
+            },
+        }
+    }
+    Ok(())
+}
+
+pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
+    use crate::apps::edit_menus_menu;
+
+    let admin = is_admin(current_user);
+
+    loop {
+        let mut choices = vec![
+            "General",
+            "Appearance",
+            "Default Apps",
+            "Connections",
+            "Edit Menus",
+        ];
+        if admin {
+            choices.push("User Management");
+        }
+        choices.extend_from_slice(&["About", "---", "Back"]);
+
+        match run_menu(terminal, "Settings", &choices, None)? {
+            MenuResult::Back => break,
+            MenuResult::Selected(s) => match s.as_str() {
+                "General" => settings_general_menu(terminal)?,
+                "Appearance" => settings_appearance_menu(terminal)?,
+                "About" => about_screen(terminal)?,
+                "Default Apps" => default_apps_menu(terminal)?,
+                "Connections" => connections_menu(terminal)?,
+                "Edit Menus" => edit_menus_menu(terminal)?,
+                "User Management" => user_management_menu(terminal, current_user)?,
                 _ => break,
             },
         }
