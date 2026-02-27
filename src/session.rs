@@ -115,3 +115,27 @@ pub fn take_switch_request() -> Option<usize> {
 pub fn has_switch_request() -> bool {
     SWITCH_REQUEST.load(Ordering::Relaxed) >= 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_request_roundtrip() {
+        clear_sessions();
+        request_switch(3);
+        assert!(has_switch_request());
+        assert_eq!(take_switch_request(), Some(3));
+        assert!(!has_switch_request());
+        assert_eq!(take_switch_request(), None);
+    }
+
+    #[test]
+    fn default_mode_pending_consumed_once() {
+        clear_sessions();
+        let idx = push_session_with_default_mode("admin", true);
+        set_active(idx);
+        assert!(take_default_mode_pending_for_active());
+        assert!(!take_default_mode_pending_for_active());
+    }
+}

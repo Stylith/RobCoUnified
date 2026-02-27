@@ -42,8 +42,8 @@ use crate::default_apps::{
 use crate::documents;
 use crate::launcher::{json_to_cmd, with_suspended};
 use crate::ui::{
-    dim_style, flash_message, input_prompt, normal_style, sel_style, session_switch_scope,
-    title_style, Term,
+    dim_style, flash_message, input_prompt, normal_style, run_menu_compact, sel_style,
+    session_switch_scope, title_style, MenuResult, Term,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +192,12 @@ enum FileManagerOpenRequest {
     External,
 }
 
+#[derive(Debug, Clone)]
+struct RecentFileEntry {
+    path: PathBuf,
+    request: FileManagerOpenRequest,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileManagerClipboardMode {
     Copy,
@@ -219,6 +225,9 @@ const FILE_MANAGER_TREE_MIN_TOTAL_WIDTH: u16 = 50;
 const FILE_MANAGER_TREE_GAP: u16 = 1;
 const FILE_MANAGER_ENTRY_MIN_WIDTH: u16 = 16;
 const FILE_MANAGER_EMPTY_TRASH_BUTTON: &str = "[Empty Trash]";
+const FILE_MANAGER_RECENT_LIMIT: usize = 12;
+const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
+const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
 
 impl FileManagerState {
     fn new() -> Self {
@@ -839,10 +848,14 @@ enum TopMenuAction {
     PrevFileManagerTab,
     OpenSelectedFileBuiltin,
     OpenSelectedFileExternal,
+    OpenSelectedFileWith,
+    OpenRecentFile(PathBuf, FileManagerOpenRequest),
     FileManagerCopy,
     FileManagerCut,
     FileManagerPaste,
     FileManagerDuplicate,
+    FileManagerRename,
+    FileManagerMoveTo,
     FileManagerDelete,
     FileManagerUndo,
     FileManagerRedo,
@@ -940,6 +953,7 @@ struct DesktopState {
     help_popup: Option<HelpPopupState>,
     spotlight: SpotlightState,
     file_clipboard: Option<FileManagerClipboardItem>,
+    file_recent: Vec<RecentFileEntry>,
     file_undo_stack: Vec<FileManagerEditOp>,
     file_redo_stack: Vec<FileManagerEditOp>,
     icon_dragging: Option<IconDragState>,
@@ -3238,6 +3252,11 @@ fn handle_key(
                         KeyCode::Char('d') | KeyCode::Char('D') => {
                             top_menu_action = Some(TopMenuAction::FileManagerDuplicate);
                         }
+                        KeyCode::Char('m') | KeyCode::Char('M')
+                            if modifiers.contains(KeyModifiers::SHIFT) =>
+                        {
+                            top_menu_action = Some(TopMenuAction::FileManagerMoveTo);
+                        }
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             top_menu_action = Some(TopMenuAction::FileManagerRedo);
                         }
@@ -3370,6 +3389,12 @@ fn handle_key(
                             KeyCode::Char('x') | KeyCode::Char('X') => {
                                 file_open_request =
                                     fm.activate_selected(FileManagerOpenRequest::External)
+                            }
+                            KeyCode::Char('o') | KeyCode::Char('O') => {
+                                top_menu_action = Some(TopMenuAction::OpenSelectedFileWith);
+                            }
+                            KeyCode::F(2) => {
+                                top_menu_action = Some(TopMenuAction::FileManagerRename);
                             }
                             KeyCode::Backspace => {
                                 fm.parent();
@@ -3535,7 +3560,7 @@ fn handle_key(
             refresh_all_file_manager_windows(state);
         }
         if let Some((path, request)) = file_open_request {
-            handle_file_open_request(terminal, state, &path, request)?;
+            open_file_request_and_track(terminal, state, &path, request)?;
         }
         if let Some(action) = top_menu_action {
             run_top_menu_action(terminal, current_user, state, action)?;
@@ -4684,10 +4709,27 @@ fn run_top_menu_action(
         TopMenuAction::OpenSelectedFileExternal => {
             open_focused_file_manager_selection(terminal, state, FileManagerOpenRequest::External)?;
         }
+        TopMenuAction::OpenSelectedFileWith => {
+            match file_manager_open_selected_with(terminal, state) {
+                Ok(msg) => flash_message(terminal, &msg, 850)?,
+                Err(err) => flash_message(terminal, &format!("Open With failed: {err}"), 1200)?,
+            }
+            refresh_all_file_manager_windows(state);
+        }
+        TopMenuAction::OpenRecentFile(path, request) => {
+            if !path.exists() {
+                flash_message(terminal, "Recent file no longer exists.", 1100)?;
+                state.file_recent.retain(|entry| entry.path != path);
+            } else {
+                open_file_request_and_track(terminal, state, &path, request)?;
+            }
+        }
         TopMenuAction::FileManagerCopy
         | TopMenuAction::FileManagerCut
         | TopMenuAction::FileManagerPaste
         | TopMenuAction::FileManagerDuplicate
+        | TopMenuAction::FileManagerRename
+        | TopMenuAction::FileManagerMoveTo
         | TopMenuAction::FileManagerDelete
         | TopMenuAction::FileManagerUndo
         | TopMenuAction::FileManagerRedo => {
@@ -5476,6 +5518,89 @@ fn focused_file_manager_cwd(state: &DesktopState) -> Option<PathBuf> {
     }
 }
 
+fn open_with_extension_key(path: &Path) -> String {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| FILE_MANAGER_OPEN_WITH_NO_EXT_KEY.to_string())
+}
+
+fn open_with_extension_label(ext_key: &str) -> String {
+    if ext_key == FILE_MANAGER_OPEN_WITH_NO_EXT_KEY {
+        "(no extension)".to_string()
+    } else {
+        format!(".{ext_key}")
+    }
+}
+
+fn push_open_with_history(history: &mut Vec<String>, command: &str) {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    history.retain(|entry| entry.trim() != normalized);
+    history.insert(0, normalized.to_string());
+    if history.len() > FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT {
+        history.truncate(FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT);
+    }
+}
+
+fn open_with_history_for_extension(ext_key: &str) -> Vec<String> {
+    let settings = get_settings();
+    settings
+        .desktop_file_manager
+        .open_with_by_extension
+        .get(ext_key)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn record_open_with_command(ext_key: &str, command: &str) {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    update_settings(|s| {
+        let history = s
+            .desktop_file_manager
+            .open_with_by_extension
+            .entry(ext_key.to_string())
+            .or_default();
+        push_open_with_history(history, normalized);
+    });
+    persist_settings();
+}
+
+fn record_recent_file_open(state: &mut DesktopState, path: &Path, request: FileManagerOpenRequest) {
+    if !path.is_file() {
+        return;
+    }
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    state.file_recent.retain(|entry| entry.path != normalized);
+    state.file_recent.insert(
+        0,
+        RecentFileEntry {
+            path: normalized,
+            request,
+        },
+    );
+    if state.file_recent.len() > FILE_MANAGER_RECENT_LIMIT {
+        state.file_recent.truncate(FILE_MANAGER_RECENT_LIMIT);
+    }
+}
+
+fn open_file_request_and_track(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    path: &Path,
+    request: FileManagerOpenRequest,
+) -> Result<()> {
+    handle_file_open_request(terminal, state, path, request)?;
+    record_recent_file_open(state, path, request);
+    Ok(())
+}
+
 fn path_display_name(path: &Path) -> String {
     path.file_name()
         .and_then(|s| s.to_str())
@@ -5788,6 +5913,149 @@ fn file_manager_duplicate_selected(state: &mut DesktopState) -> Result<String> {
     Ok(format!("Duplicated as {}", path_display_name(&dst)))
 }
 
+fn file_manager_rename_selected(terminal: &mut Term, state: &mut DesktopState) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    let Some(parent) = entry.path.parent() else {
+        return Err(anyhow!("Cannot rename this item."));
+    };
+
+    let mut raw = None;
+    run_with_mouse_capture_paused(terminal, |t| {
+        raw = input_prompt(t, "Rename to:")?;
+        Ok(())
+    })?;
+    let Some(raw) = raw else {
+        return Ok("Rename canceled.".to_string());
+    };
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(anyhow!("Name cannot be empty."));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(anyhow!("Name cannot contain path separators."));
+    }
+    if name == entry.name {
+        return Ok("Name unchanged.".to_string());
+    }
+
+    let dst = parent.join(name);
+    if dst.exists() {
+        return Err(anyhow!("Destination already exists: {}", dst.display()));
+    }
+    move_path(&entry.path, &dst)?;
+    record_file_manager_edit_op(
+        state,
+        FileManagerEditOp::Moved {
+            from: entry.path.clone(),
+            to: dst.clone(),
+        },
+    );
+    Ok(format!("Renamed to {}", path_display_name(&dst)))
+}
+
+fn file_manager_move_selected(terminal: &mut Term, state: &mut DesktopState) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file or folder first."));
+    };
+    let Some(cwd) = focused_file_manager_cwd(state) else {
+        return Err(anyhow!("No focused file manager."));
+    };
+
+    let mut raw = None;
+    run_with_mouse_capture_paused(terminal, |t| {
+        raw = input_prompt(t, "Move to (dir or full path):")?;
+        Ok(())
+    })?;
+    let Some(raw) = raw else {
+        return Ok("Move canceled.".to_string());
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(anyhow!("Destination cannot be empty."));
+    }
+
+    let mut dst = PathBuf::from(raw);
+    if dst.is_relative() {
+        dst = cwd.join(dst);
+    }
+    if dst.exists() && dst.is_dir() {
+        dst = dst.join(path_display_name(&entry.path));
+    }
+
+    if dst == entry.path {
+        return Ok("Item already at destination.".to_string());
+    }
+    move_path(&entry.path, &dst)?;
+    record_file_manager_edit_op(
+        state,
+        FileManagerEditOp::Moved {
+            from: entry.path.clone(),
+            to: dst.clone(),
+        },
+    );
+    Ok(format!("Moved to {}", dst.display()))
+}
+
+fn file_manager_open_selected_with(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+) -> Result<String> {
+    let Some(entry) = focused_editable_file_manager_entry(state) else {
+        return Err(anyhow!("Select a file first."));
+    };
+    if entry.is_dir {
+        return Err(anyhow!("Open With requires a file."));
+    }
+
+    let ext_key = open_with_extension_key(&entry.path);
+    let ext_label = open_with_extension_label(&ext_key);
+    let saved = open_with_history_for_extension(&ext_key);
+    let mut selected_command: Option<String> = None;
+    let mut rows: Vec<String> = saved.iter().map(|c| format!("Use: {c}")).collect();
+    if !rows.is_empty() {
+        rows.push("---".to_string());
+    }
+    rows.push("New Command...".to_string());
+    rows.push("Back".to_string());
+    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+    let title = format!("Open With — {ext_label}");
+    run_with_mouse_capture_paused(terminal, |t| {
+        match run_menu_compact(t, &title, &refs, Some("Choose command for this extension"))? {
+            MenuResult::Back => {}
+            MenuResult::Selected(sel) if sel == "Back" => {}
+            MenuResult::Selected(sel) if sel == "New Command..." => {
+                selected_command = input_prompt(t, "Open with command:")?;
+            }
+            MenuResult::Selected(sel) => {
+                if let Some(cmd) = sel.strip_prefix("Use: ") {
+                    selected_command = Some(cmd.to_string());
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    let Some(raw) = selected_command else {
+        return Ok("Open With canceled.".to_string());
+    };
+    let command_line = raw.trim().to_string();
+    if command_line.is_empty() {
+        return Ok("Open With canceled.".to_string());
+    }
+    let Some(mut cmd) = parse_custom_command_line(command_line.as_str()) else {
+        return Err(anyhow!("Invalid command line."));
+    };
+    cmd.push(entry.path.display().to_string());
+    let title = format!("{} - {}", command_title(&cmd[0]), entry.name);
+    open_pty_window_named(terminal, state, &cmd, Some(title.as_str()))
+        .map_err(|err| anyhow!("Launch failed: {err}"))?;
+    record_open_with_command(&ext_key, &command_line);
+    record_recent_file_open(state, &entry.path, FileManagerOpenRequest::External);
+    Ok(format!("Opened {} in PTY", entry.name))
+}
+
 fn file_manager_paste_clipboard(state: &mut DesktopState) -> Result<String> {
     let Some(clip) = state.file_clipboard.clone() else {
         return Err(anyhow!("Clipboard is empty."));
@@ -5891,6 +6159,8 @@ fn run_file_manager_edit_action(
         }
         TopMenuAction::FileManagerPaste => file_manager_paste_clipboard(state),
         TopMenuAction::FileManagerDuplicate => file_manager_duplicate_selected(state),
+        TopMenuAction::FileManagerRename => file_manager_rename_selected(terminal, state),
+        TopMenuAction::FileManagerMoveTo => file_manager_move_selected(terminal, state),
         TopMenuAction::FileManagerDelete => file_manager_delete_selected(state),
         TopMenuAction::FileManagerUndo => file_manager_undo(state),
         TopMenuAction::FileManagerRedo => file_manager_redo(state),
@@ -5929,7 +6199,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
             };
             let app_hint = match focused_window_kind(state) {
                 Some(WindowKind::FileManager(_)) => {
-                    "Open Enter | External X | Ctrl+T New Tab | Ctrl+Tab Next Tab"
+                    "Open Enter | External X | Open With O | Rename F2 | Ctrl+T New Tab"
                 }
                 Some(WindowKind::DesktopHub(_)) => "Arrows/Mouse scroll | Enter to open",
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
@@ -6013,6 +6283,26 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                     action: TopMenuAction::OpenSelectedFileExternal,
                     enabled: has_file,
                 });
+                items.push(TopMenuItem {
+                    label: "Open With...".to_string(),
+                    shortcut: Some("O".to_string()),
+                    action: TopMenuAction::OpenSelectedFileWith,
+                    enabled: has_file,
+                });
+                if !state.file_recent.is_empty() {
+                    items.push(top_menu_separator_item());
+                    for recent in state.file_recent.iter().take(6) {
+                        items.push(TopMenuItem {
+                            label: format!("Recent: {}", path_display_name(&recent.path)),
+                            shortcut: None,
+                            action: TopMenuAction::OpenRecentFile(
+                                recent.path.clone(),
+                                recent.request,
+                            ),
+                            enabled: recent.path.exists(),
+                        });
+                    }
+                }
                 items.push(top_menu_separator_item());
             }
             items.push(TopMenuItem {
@@ -6121,6 +6411,18 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                     label: "Duplicate".to_string(),
                     shortcut: Some("Ctrl+D".to_string()),
                     action: TopMenuAction::FileManagerDuplicate,
+                    enabled: can_edit_selected,
+                },
+                TopMenuItem {
+                    label: "Rename".to_string(),
+                    shortcut: Some("F2".to_string()),
+                    action: TopMenuAction::FileManagerRename,
+                    enabled: can_edit_selected,
+                },
+                TopMenuItem {
+                    label: "Move To...".to_string(),
+                    shortcut: Some("Ctrl+Shift+M".to_string()),
+                    action: TopMenuAction::FileManagerMoveTo,
                     enabled: can_edit_selected,
                 },
                 TopMenuItem {
@@ -8734,7 +9036,10 @@ fn draw_desktop_settings_window(
         .skip(start_row)
         .take(visible_rows.max(1))
     {
-        let style = if focused && settings.hovered == Some(idx) {
+        let style = if focused
+            && (settings.hovered == Some(idx)
+                || (settings.hovered.is_none() && settings.selected == idx))
+        {
             sel_style()
         } else {
             normal_style()
@@ -9320,7 +9625,7 @@ fn handle_window_content_mouse(
                         None
                     };
                 if let Some((path, request)) = pending {
-                    handle_file_open_request(terminal, state, &path, request)?;
+                    open_file_request_and_track(terminal, state, &path, request)?;
                 }
             }
             ClickTarget::HubItem { window_id, row } => {
@@ -9646,6 +9951,9 @@ fn handle_settings_scroll_mouse(
                 KeyCode::Down
             };
             let _ = handle_desktop_settings_key(settings, key, KeyModifiers::NONE);
+            if matches!(settings.panel, DesktopSettingsPanel::DefaultAppSelect(_)) {
+                settings.hovered = Some(settings.selected);
+            }
             true
         }
         WindowKind::FileManagerSettings(settings) => {
@@ -11045,7 +11353,7 @@ fn open_focused_file_manager_selection(
         _ => None,
     };
     if let Some((path, mode)) = pending {
-        handle_file_open_request(terminal, state, &path, mode)?;
+        open_file_request_and_track(terminal, state, &path, mode)?;
     }
     Ok(())
 }
@@ -13239,4 +13547,94 @@ enum WindowHit {
     Close,
     Resize(ResizeCorner),
     Content,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_temp_dir(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos_{tag}_{nanos}"));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn unique_copy_path_uses_copy_suffix() {
+        let dir = test_temp_dir("copy");
+        let src = dir.join("notes.txt");
+        std::fs::write(&src, b"hello").expect("create source file");
+
+        let copy1 = unique_copy_path_in_dir(&dir, "notes.txt", true);
+        assert!(copy1.ends_with("notes copy.txt"));
+
+        std::fs::write(&copy1, b"hello copy").expect("create first copy");
+        let copy2 = unique_copy_path_in_dir(&dir, "notes.txt", true);
+        assert!(copy2.ends_with("notes copy 2.txt"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recent_file_list_dedupes_and_caps() {
+        let dir = test_temp_dir("recent");
+        let mut state = DesktopState::default();
+
+        for idx in 0..(FILE_MANAGER_RECENT_LIMIT + 4) {
+            let path = dir.join(format!("f{idx}.txt"));
+            std::fs::write(&path, b"x").expect("create recent file");
+            record_recent_file_open(&mut state, &path, FileManagerOpenRequest::Builtin);
+        }
+        assert_eq!(state.file_recent.len(), FILE_MANAGER_RECENT_LIMIT);
+
+        let duplicate = dir.join("f3.txt");
+        record_recent_file_open(&mut state, &duplicate, FileManagerOpenRequest::External);
+        let duplicate_norm = std::fs::canonicalize(&duplicate).expect("canonical duplicate");
+        assert_eq!(state.file_recent[0].path, duplicate_norm);
+        let dup_count = state
+            .file_recent
+            .iter()
+            .filter(|item| item.path == duplicate_norm)
+            .count();
+        assert_eq!(dup_count, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_with_history_dedupes_and_caps() {
+        let mut history = Vec::new();
+        push_open_with_history(&mut history, "code");
+        push_open_with_history(&mut history, "zed");
+        push_open_with_history(&mut history, "code");
+        assert_eq!(history, vec!["code".to_string(), "zed".to_string()]);
+
+        for idx in 0..(FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT + 3) {
+            push_open_with_history(&mut history, &format!("cmd{idx}"));
+        }
+        assert_eq!(history.len(), FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT);
+        assert_eq!(history[0], "cmd10");
+    }
+
+    #[test]
+    fn open_with_extension_key_uses_no_extension_bucket() {
+        assert_eq!(
+            open_with_extension_key(Path::new("README")),
+            FILE_MANAGER_OPEN_WITH_NO_EXT_KEY
+        );
+        assert_eq!(
+            open_with_extension_key(Path::new("archive.TXT")),
+            "txt".to_string()
+        );
+        assert_eq!(
+            open_with_extension_label(FILE_MANAGER_OPEN_WITH_NO_EXT_KEY),
+            "(no extension)".to_string()
+        );
+        assert_eq!(open_with_extension_label("md"), ".md".to_string());
+    }
 }

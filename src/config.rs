@@ -310,6 +310,8 @@ pub struct DesktopFileManagerSettings {
     pub directories_first: bool,
     #[serde(default)]
     pub text_open_mode: FileManagerTextOpenMode,
+    #[serde(default)]
+    pub open_with_by_extension: BTreeMap<String, Vec<String>>,
 }
 
 const fn default_file_manager_dirs_first() -> bool {
@@ -329,6 +331,7 @@ impl Default for DesktopFileManagerSettings {
             sort_mode: FileManagerSortMode::Name,
             directories_first: true,
             text_open_mode: FileManagerTextOpenMode::Viewer,
+            open_with_by_extension: BTreeMap::new(),
         }
     }
 }

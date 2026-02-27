@@ -466,6 +466,179 @@ pub fn run_menu(
     }
 }
 
+pub fn run_menu_compact(
+    terminal: &mut Term,
+    title: &str,
+    choices: &[&str],
+    subtitle: Option<&str>,
+) -> Result<MenuResult> {
+    let selectable_rows: Vec<usize> = choices
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, choice)| (*choice != "---").then_some(idx))
+        .collect();
+    let mut selected_idx = 0usize;
+    let mut scroll = 0usize;
+
+    loop {
+        let selected_row = selectable_rows
+            .get(selected_idx)
+            .copied()
+            .unwrap_or_default();
+        terminal.draw(|f| {
+            let size = f.area();
+            let max_choice_w = choices
+                .iter()
+                .map(|c| c.chars().count())
+                .max()
+                .unwrap_or(0)
+                .max(title.chars().count())
+                .max(subtitle.map(|s| s.chars().count()).unwrap_or(0));
+            let box_w = ((max_choice_w + 8) as u16).clamp(34, 72);
+            let box_h = ((choices.len() + 5) as u16).clamp(8, 18);
+            let w = box_w.min(size.width.saturating_sub(4)).max(18);
+            let h = box_h.min(size.height.saturating_sub(2)).max(6);
+            let area = Rect {
+                x: size.x + size.width.saturating_sub(w) / 2,
+                y: size.y + size.height.saturating_sub(h) / 2,
+                width: w,
+                height: h,
+            };
+
+            f.render_widget(Clear, area);
+            f.render_widget(
+                Block::default().borders(Borders::ALL).style(title_style()),
+                area,
+            );
+
+            let inner = Rect {
+                x: area.x + 1,
+                y: area.y + 1,
+                width: area.width.saturating_sub(2),
+                height: area.height.saturating_sub(2),
+            };
+            if inner.width == 0 || inner.height == 0 {
+                return;
+            }
+
+            let title_text: String = title.chars().take(inner.width as usize).collect();
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(title_text, title_style())))
+                    .alignment(Alignment::Center),
+                Rect {
+                    x: inner.x,
+                    y: inner.y,
+                    width: inner.width,
+                    height: 1,
+                },
+            );
+
+            let mut list_y = inner.y + 1;
+            if let Some(sub) = subtitle {
+                let sub_text: String = sub.chars().take(inner.width as usize).collect();
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(sub_text, dim_style())))
+                        .alignment(Alignment::Left),
+                    Rect {
+                        x: inner.x,
+                        y: list_y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
+                list_y = list_y.saturating_add(1);
+            }
+
+            let list_h = inner.y + inner.height - list_y;
+            let visible = list_h.max(1) as usize;
+            let max_scroll = choices.len().saturating_sub(visible);
+            let mut start = scroll.min(max_scroll);
+            if selected_row < start {
+                start = selected_row;
+            } else if selected_row >= start.saturating_add(visible) {
+                start = selected_row.saturating_sub(visible.saturating_sub(1));
+            }
+            scroll = start.min(max_scroll);
+
+            let lines: Vec<Line> = choices
+                .iter()
+                .enumerate()
+                .skip(scroll)
+                .take(visible)
+                .map(|(idx, choice)| {
+                    if *choice == "---" {
+                        let sep = "─".repeat(inner.width.saturating_sub(2) as usize);
+                        return Line::from(Span::styled(sep, dim_style()));
+                    }
+                    if idx == selected_row {
+                        Line::from(Span::styled(format!("> {choice}"), sel_style()))
+                    } else {
+                        Line::from(Span::styled(format!("  {choice}"), normal_style()))
+                    }
+                })
+                .collect();
+
+            f.render_widget(
+                Paragraph::new(lines),
+                Rect {
+                    x: inner.x,
+                    y: list_y,
+                    width: inner.width,
+                    height: list_h,
+                },
+            );
+        })?;
+
+        if event::poll(Duration::from_millis(25))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if check_session_switch(key.code, key.modifiers) {
+                    if crate::session::has_switch_request() {
+                        crate::sound::play_navigate();
+                        return Ok(MenuResult::Back);
+                    }
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if !selectable_rows.is_empty() {
+                            let prev = selected_idx;
+                            selected_idx = selected_idx.saturating_sub(1);
+                            if selected_idx != prev {
+                                crate::sound::play_navigate_repeat();
+                            }
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if !selectable_rows.is_empty() {
+                            let prev = selected_idx;
+                            selected_idx = (selected_idx + 1).min(selectable_rows.len() - 1);
+                            if selected_idx != prev {
+                                crate::sound::play_navigate_repeat();
+                            }
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        crate::sound::play_navigate();
+                        if let Some(row_idx) = selectable_rows.get(selected_idx).copied() {
+                            if let Some(sel) = choices.get(row_idx) {
+                                return Ok(MenuResult::Selected((*sel).to_string()));
+                            }
+                        }
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Tab => {
+                        crate::sound::play_navigate();
+                        return Ok(MenuResult::Back);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 // ── Text input ────────────────────────────────────────────────────────────────
 
 pub fn input_prompt(terminal: &mut Term, prompt: &str) -> Result<Option<String>> {

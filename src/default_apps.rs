@@ -349,3 +349,27 @@ pub fn resolve_document_open(path: &Path) -> Option<ResolvedDocumentOpen> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_custom_command_line;
+
+    #[test]
+    fn parse_command_line_basic() {
+        let out = parse_custom_command_line("epy book.epub").expect("expected argv");
+        assert_eq!(out, vec!["epy", "book.epub"]);
+    }
+
+    #[test]
+    fn parse_command_line_quotes_and_escapes() {
+        let out = parse_custom_command_line("mycmd \"two words\" 'three words' four\\ five")
+            .expect("expected argv");
+        assert_eq!(out, vec!["mycmd", "two words", "three words", "four five"]);
+    }
+
+    #[test]
+    fn parse_command_line_rejects_unbalanced_quotes() {
+        assert!(parse_custom_command_line("epy \"book.epub").is_none());
+        assert!(parse_custom_command_line("epy 'book.epub").is_none());
+    }
+}
