@@ -36,7 +36,7 @@ use crate::connections::{
     saved_connections, saved_row_label, DiscoveredConnection, NetworkMenuGroup,
 };
 use crate::default_apps::{
-    binding_label, default_app_choices, parse_custom_argv_json, resolve_document_open,
+    binding_label, default_app_choices, parse_custom_command_line, resolve_document_open,
     set_binding_for_slot, slot_label, DefaultAppChoiceAction, DefaultAppSlot, ResolvedDocumentOpen,
 };
 use crate::documents;
@@ -4275,13 +4275,13 @@ fn run_desktop_settings_action(
         }
         DesktopSettingsAction::PromptDefaultAppCustom(slot) => {
             let mut raw: Option<String> = None;
-            let prompt = format!("{} argv JSON (example: [\"epy\"]):", slot_label(slot));
+            let prompt = format!("{} command (example: epy):", slot_label(slot));
             run_with_mouse_capture_paused(terminal, |t| {
                 raw = input_prompt(t, &prompt)?;
                 Ok(())
             })?;
             if let Some(text) = raw {
-                if let Some(argv) = parse_custom_argv_json(text.trim()) {
+                if let Some(argv) = parse_custom_command_line(text.trim()) {
                     update_settings(|s| {
                         set_binding_for_slot(
                             s,
@@ -4291,7 +4291,7 @@ fn run_desktop_settings_action(
                     });
                     persist_settings();
                 } else {
-                    flash_message(terminal, "Error: invalid argv JSON", 1300)?;
+                    flash_message(terminal, "Error: invalid command line", 1300)?;
                 }
             }
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {

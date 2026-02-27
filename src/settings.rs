@@ -24,8 +24,8 @@ use crate::connections::{
     DiscoveredConnection, NetworkMenuGroup,
 };
 use crate::default_apps::{
-    binding_label, default_app_choices, parse_custom_argv_json, set_binding_for_slot, slot_label,
-    DefaultAppChoiceAction, DefaultAppSlot,
+    binding_label, default_app_choices, parse_custom_command_line, set_binding_for_slot,
+    slot_label, DefaultAppChoiceAction, DefaultAppSlot,
 };
 use crate::status::render_status_bar;
 use crate::ui::{
@@ -299,13 +299,12 @@ fn select_default_app_for_slot(terminal: &mut Term, slot: DefaultAppSlot) -> Res
                         break;
                     }
                     DefaultAppChoiceAction::PromptCustom => {
-                        let prompt =
-                            format!("{} argv JSON (example: [\"epy\"]):", slot_label(slot));
+                        let prompt = format!("{} command (example: epy):", slot_label(slot));
                         let Some(raw) = input_prompt(terminal, &prompt)? else {
                             continue;
                         };
-                        let Some(argv) = parse_custom_argv_json(raw.trim()) else {
-                            flash_message(terminal, "Error: invalid argv JSON", 1200)?;
+                        let Some(argv) = parse_custom_command_line(raw.trim()) else {
+                            flash_message(terminal, "Error: invalid command line", 1200)?;
                             continue;
                         };
                         update_settings(|s| {

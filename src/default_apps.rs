@@ -237,14 +237,52 @@ pub fn default_app_choices(slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
     }
 
     rows.push(DefaultAppChoice {
-        label: "Custom Command (argv JSON)...".to_string(),
+        label: "Custom Command...".to_string(),
         action: DefaultAppChoiceAction::PromptCustom,
     });
     rows
 }
 
-pub fn parse_custom_argv_json(input: &str) -> Option<Vec<String>> {
-    let argv: Vec<String> = serde_json::from_str(input).ok()?;
+pub fn parse_custom_command_line(input: &str) -> Option<Vec<String>> {
+    let mut argv = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !in_single => {
+                escaped = true;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    argv.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if escaped || in_single || in_double {
+        return None;
+    }
+    if !current.is_empty() {
+        argv.push(current);
+    }
+
     if argv.is_empty() {
         return None;
     }
