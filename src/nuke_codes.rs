@@ -90,6 +90,7 @@ pub fn nuke_codes_screen(terminal: &mut Term) -> Result<()> {
                 Err(err) => vec![
                     Line::from(Span::styled("  UNABLE TO FETCH LIVE CODES", sel_style())),
                     Line::from(""),
+                    Line::from(Span::styled(format!("  ERROR: {}", err), normal_style())),
                     Line::from(""),
                     Line::from(Span::styled(
                         "  CHECK INTERNET / SOURCE AVAILABILITY",
