@@ -10,13 +10,24 @@ use sysinfo::System;
 
 use crate::auth::{is_admin, user_management_menu};
 use crate::config::{
-    THEMES, get_settings, update_settings,
-    persist_settings, load_about,
+    get_settings, load_about, persist_settings, take_default_apps_prompt_pending, update_settings,
+    CliAcsMode, CliColorMode, ConnectionKind, OpenMode, THEMES,
+};
+use crate::connections::{
+    choose_discovered_connection, connect_connection, disconnect_connection,
+    filter_discovered_connections, forget_saved_connection,
+    kind_label as connection_kind_label, kind_plural_label, macos_blueutil_missing,
+    network_requires_password, refresh_discovered_connections, saved_connections, saved_row_label,
+    bluetooth_installer_hint,
+};
+use crate::default_apps::{
+    binding_label, default_app_choices, parse_custom_argv_json, set_binding_for_slot, slot_label,
+    DefaultAppChoiceAction, DefaultAppSlot,
 };
 use crate::status::render_status_bar;
 use crate::ui::{
-    Term, run_menu, normal_style, dim_style,
-    render_header, render_separator, pad_horizontal, MenuResult,
+    dim_style, flash_message, input_prompt, normal_style, pad_horizontal, render_header,
+    render_separator, run_menu, MenuResult, Term,
 };
 
 // ── System info ────────────────────────────────────────────────────────────────
@@ -28,23 +39,31 @@ fn get_system_info(fields: &[String]) -> Vec<(String, String)> {
     let mut info = Vec::new();
     for field in fields {
         let val: String = match field.as_str() {
-            "OS"       => format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()),
+            "OS" => format!(
+                "{} {}",
+                System::name().unwrap_or_default(),
+                System::os_version().unwrap_or_default()
+            ),
             "Hostname" => System::host_name().unwrap_or_default(),
-            "CPU"      => sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default(),
-            "RAM"      => {
-                let used  = sys.used_memory() / 1024 / 1024;
+            "CPU" => sys
+                .cpus()
+                .first()
+                .map(|c| c.brand().to_string())
+                .unwrap_or_default(),
+            "RAM" => {
+                let used = sys.used_memory() / 1024 / 1024;
                 let total = sys.total_memory() / 1024 / 1024;
                 format!("{used} MB / {total} MB")
             }
-            "Uptime"   => {
+            "Uptime" => {
                 let secs = System::uptime();
                 format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
             }
-            "Battery"  => battery_str(),
-            "Theme"    => get_settings().theme,
-            "Shell"    => std::env::var("SHELL").unwrap_or_default(),
-            "Rust"     => format!("v{}", env!("CARGO_PKG_VERSION")),
-            _          => continue,
+            "Battery" => battery_str(),
+            "Theme" => get_settings().theme,
+            "Shell" => std::env::var("SHELL").unwrap_or_default(),
+            "Rust" => format!("v{}", env!("CARGO_PKG_VERSION")),
+            _ => continue,
         };
         info.push((field.clone(), val));
     }
@@ -56,7 +75,8 @@ fn battery_str() -> String {
         for entry in rd.flatten() {
             let kind = std::fs::read_to_string(entry.path().join("type")).unwrap_or_default();
             if kind.trim() == "Battery" {
-                let cap = std::fs::read_to_string(entry.path().join("capacity")).unwrap_or_default();
+                let cap =
+                    std::fs::read_to_string(entry.path().join("capacity")).unwrap_or_default();
                 if let Ok(n) = cap.trim().parse::<u8>() {
                     return format!("{n}%");
                 }
@@ -77,7 +97,9 @@ const DEFAULT_ASCII: &[&str] = &[
     "╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝ ",
 ];
 
-const DEFAULT_FIELDS: &[&str] = &["OS","Hostname","CPU","RAM","Uptime","Battery","Theme","Shell"];
+const DEFAULT_FIELDS: &[&str] = &[
+    "OS", "Hostname", "CPU", "RAM", "Uptime", "Battery", "Theme", "Shell",
+];
 
 pub fn about_screen(terminal: &mut Term) -> Result<()> {
     let config = load_about();
@@ -111,24 +133,40 @@ pub fn about_screen(terminal: &mut Term) -> Result<()> {
             render_header(f, chunks[0]);
             render_separator(f, chunks[1]);
 
-            let art: Vec<Line> = ascii.iter()
+            let art: Vec<Line> = ascii
+                .iter()
                 .map(|l| Line::from(Span::styled(l.as_str(), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(art).alignment(Alignment::Center), pad_horizontal(chunks[2]));
+            f.render_widget(
+                Paragraph::new(art).alignment(Alignment::Center),
+                pad_horizontal(chunks[2]),
+            );
 
-            let info_lines: Vec<Line> = info.iter()
+            let info_lines: Vec<Line> = info
+                .iter()
                 .map(|(k, v)| Line::from(Span::styled(format!("{k}: {v}"), normal_style())))
                 .collect();
-            f.render_widget(Paragraph::new(info_lines).alignment(Alignment::Center), pad_horizontal(chunks[3]));
+            f.render_widget(
+                Paragraph::new(info_lines).alignment(Alignment::Center),
+                pad_horizontal(chunks[3]),
+            );
 
             let hint = Paragraph::new("q/Esc = back").style(dim_style());
             f.render_widget(hint, pad_horizontal(chunks[4]));
             render_status_bar(f, chunks[5]);
         })?;
 
-        if event::poll(Duration::from_millis(200))? {
+        if event::poll(Duration::from_millis(30))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
+                    if crate::session::has_switch_request() {
+                        break;
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc | KeyCode::Tab => break,
                     _ => {}
@@ -158,6 +196,406 @@ pub fn theme_menu(terminal: &mut Term) -> Result<()> {
 
 // ── Settings menu ─────────────────────────────────────────────────────────────
 
+pub fn cli_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        let s = get_settings();
+        let styled_label = if s.cli_styled_render {
+            "Styled PTY Rendering: ON  [toggle]"
+        } else {
+            "Styled PTY Rendering: OFF [toggle]"
+        };
+        let color_label = format!(
+            "PTY Color Mode: {} [cycle]",
+            match s.cli_color_mode {
+                CliColorMode::ThemeLock => "Theme Lock",
+                CliColorMode::PaletteMap => "Palette-map (Theme Shades)",
+                CliColorMode::Color => "Color (Default Terminal)",
+                CliColorMode::Monochrome => "Monochrome",
+            }
+        );
+        let border_label = format!(
+            "Border Glyphs: {} [toggle]",
+            match s.cli_acs_mode {
+                CliAcsMode::Ascii => "ASCII",
+                CliAcsMode::Unicode => "Unicode Smooth",
+            }
+        );
+        let choices = [
+            styled_label.to_string(),
+            color_label.clone(),
+            border_label.clone(),
+            "---".to_string(),
+            "Back".to_string(),
+        ];
+        let choice_refs: Vec<&str> = choices.iter().map(String::as_str).collect();
+
+        match run_menu(
+            terminal,
+            "CLI",
+            &choice_refs,
+            Some("Affects embedded terminal apps"),
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) => match sel.as_str() {
+                "Back" => break,
+                l if l == styled_label => {
+                    update_settings(|s| s.cli_styled_render = !s.cli_styled_render);
+                    persist_settings();
+                }
+                l if l == color_label => {
+                    update_settings(|s| {
+                        s.cli_color_mode = match s.cli_color_mode {
+                            CliColorMode::ThemeLock => CliColorMode::PaletteMap,
+                            CliColorMode::PaletteMap => CliColorMode::Color,
+                            CliColorMode::Color => CliColorMode::Monochrome,
+                            CliColorMode::Monochrome => CliColorMode::ThemeLock,
+                        };
+                    });
+                    persist_settings();
+                }
+                l if l == border_label => {
+                    update_settings(|s| {
+                        s.cli_acs_mode = match s.cli_acs_mode {
+                            CliAcsMode::Ascii => CliAcsMode::Unicode,
+                            CliAcsMode::Unicode => CliAcsMode::Ascii,
+                        };
+                    });
+                    persist_settings();
+                }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
+fn select_default_app_for_slot(terminal: &mut Term, slot: DefaultAppSlot) -> Result<()> {
+    loop {
+        let choices = default_app_choices(slot);
+        let mut rows: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
+        rows.push("---".to_string());
+        rows.push("Back".to_string());
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+        match run_menu(terminal, &format!("Default App: {}", slot_label(slot)), &refs, None)? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) => {
+                let Some(choice) = choices.iter().find(|c| c.label == sel) else {
+                    continue;
+                };
+                match &choice.action {
+                    DefaultAppChoiceAction::Set(binding) => {
+                        update_settings(|s| set_binding_for_slot(s, slot, binding.clone()));
+                        persist_settings();
+                        break;
+                    }
+                    DefaultAppChoiceAction::PromptCustom => {
+                        let prompt = format!(
+                            "{} argv JSON (example: [\"epy\"]):",
+                            slot_label(slot)
+                        );
+                        let Some(raw) = input_prompt(terminal, &prompt)? else {
+                            continue;
+                        };
+                        let Some(argv) = parse_custom_argv_json(raw.trim()) else {
+                            flash_message(terminal, "Error: invalid argv JSON", 1200)?;
+                            continue;
+                        };
+                        update_settings(|s| {
+                            set_binding_for_slot(
+                                s,
+                                slot,
+                                crate::config::DefaultAppBinding::CustomArgv { argv: argv.clone() },
+                            )
+                        });
+                        persist_settings();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn default_apps_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        let s = get_settings();
+        let text_label = format!(
+            "Text/Code Files: {} [choose]",
+            binding_label(&s.default_apps.text_code)
+        );
+        let ebook_label = format!(
+            "Ebook Files: {} [choose]",
+            binding_label(&s.default_apps.ebook)
+        );
+        let rows = [text_label.clone(), ebook_label.clone(), "---".to_string(), "Back".to_string()];
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        match run_menu(terminal, "Default Apps", &refs, None)? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) if sel == text_label => {
+                select_default_app_for_slot(terminal, DefaultAppSlot::TextCode)?;
+            }
+            MenuResult::Selected(sel) if sel == ebook_label => {
+                select_default_app_for_slot(terminal, DefaultAppSlot::Ebook)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn parse_action_slot(label: &str, action: &str) -> Option<usize> {
+    let rest = label.strip_prefix(action)?.trim_start();
+    let rest = rest.strip_prefix('[')?;
+    let idx = rest.split(']').next()?.trim().parse::<usize>().ok()?;
+    idx.checked_sub(1)
+}
+
+fn maybe_prompt_network_password(
+    terminal: &mut Term,
+    kind: ConnectionKind,
+    detail: &str,
+) -> Result<Option<String>> {
+    if !matches!(kind, ConnectionKind::Network) || !network_requires_password(detail) {
+        return Ok(Some(String::new()));
+    }
+    input_prompt(terminal, "Wi-Fi password (leave blank to cancel):")
+}
+
+fn saved_connections_menu(terminal: &mut Term, kind: ConnectionKind) -> Result<()> {
+    loop {
+        let saved = saved_connections(kind);
+        if saved.is_empty() {
+            flash_message(
+                terminal,
+                &format!("No saved {}.", kind_plural_label(kind).to_ascii_lowercase()),
+                1000,
+            )?;
+            break;
+        }
+        let mut rows = Vec::new();
+        for (idx, entry) in saved.iter().enumerate() {
+            rows.push(format!("Connect [{}]: {}", idx + 1, saved_row_label(entry)));
+            rows.push(format!("Disconnect [{}]: {}", idx + 1, entry.name));
+            rows.push(format!("Forget  [{}]: {}", idx + 1, entry.name));
+        }
+        rows.push("---".to_string());
+        rows.push("Back".to_string());
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+        match run_menu(
+            terminal,
+            &format!("Saved {}", kind_plural_label(kind)),
+            &refs,
+            Some("Connect or forget previous targets"),
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) => {
+                if let Some(slot) = parse_action_slot(&sel, "Connect") {
+                    if let Some(entry) = saved.get(slot) {
+                        let Some(password) = maybe_prompt_network_password(
+                            terminal,
+                            kind,
+                            entry.detail.as_str(),
+                        )?
+                        else {
+                            continue;
+                        };
+                        let msg = connect_connection(
+                            kind,
+                            &entry.name,
+                            Some(entry.detail.as_str()),
+                            if password.trim().is_empty() {
+                                None
+                            } else {
+                                Some(password.trim())
+                            },
+                        )?;
+                        flash_message(terminal, &msg, 900)?;
+                    }
+                } else if let Some(slot) = parse_action_slot(&sel, "Disconnect") {
+                    if let Some(entry) = saved.get(slot) {
+                        let msg = disconnect_connection(
+                            kind,
+                            Some(entry.name.as_str()),
+                            Some(entry.detail.as_str()),
+                        );
+                        flash_message(terminal, &msg, 900)?;
+                    }
+                } else if let Some(slot) = parse_action_slot(&sel, "Forget") {
+                    if let Some(entry) = saved.get(slot) {
+                        if forget_saved_connection(kind, &entry.name) {
+                            flash_message(terminal, "Removed.", 800)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn connections_kind_menu(terminal: &mut Term, kind: ConnectionKind) -> Result<()> {
+    let mut discovered = refresh_discovered_connections(kind);
+    loop {
+        let refresh_label = format!(
+            "Refresh Available {} ({})",
+            kind_plural_label(kind),
+            discovered.len()
+        );
+        let saved_label = format!(
+            "Saved {} ({})",
+            kind_plural_label(kind),
+            saved_connections(kind).len()
+        );
+        let rows = [
+            "Search and Connect".to_string(),
+            refresh_label.clone(),
+            "Connect to Available".to_string(),
+            "Disconnect Active".to_string(),
+            saved_label.clone(),
+            "---".to_string(),
+            "Back".to_string(),
+        ];
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+        match run_menu(
+            terminal,
+            &format!("Connections — {}", connection_kind_label(kind)),
+            &refs,
+            Some("Search, refresh, connect, manage saved"),
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) if sel == "Back" => break,
+            MenuResult::Selected(sel) if sel == "Search and Connect" => {
+                if discovered.is_empty() {
+                    discovered = refresh_discovered_connections(kind);
+                }
+                let Some(raw) = input_prompt(terminal, "Search query:")? else {
+                    continue;
+                };
+                let query = raw.trim();
+                if query.is_empty() {
+                    flash_message(terminal, "Enter a search query.", 900)?;
+                    continue;
+                }
+                let filtered = filter_discovered_connections(&discovered, query);
+                if filtered.is_empty() {
+                    flash_message(terminal, "No matches found.", 900)?;
+                    continue;
+                }
+                if let Some(target) = choose_discovered_connection(
+                    terminal,
+                    kind,
+                    "Search Results",
+                    &filtered,
+                    true,
+                )? {
+                    let Some(password) =
+                        maybe_prompt_network_password(terminal, kind, target.detail.as_str())?
+                    else {
+                        continue;
+                    };
+                    let msg = connect_connection(
+                        kind,
+                        &target.name,
+                        Some(target.detail.as_str()),
+                        if password.trim().is_empty() {
+                            None
+                        } else {
+                            Some(password.trim())
+                        },
+                    )?;
+                    flash_message(terminal, &msg, 900)?;
+                }
+            }
+            MenuResult::Selected(sel) if sel == refresh_label => {
+                discovered = refresh_discovered_connections(kind);
+                flash_message(
+                    terminal,
+                    &format!("Found {} target(s).", discovered.len()),
+                    900,
+                )?;
+            }
+            MenuResult::Selected(sel) if sel == "Connect to Available" => {
+                if discovered.is_empty() {
+                    discovered = refresh_discovered_connections(kind);
+                }
+                if let Some(target) = choose_discovered_connection(
+                    terminal,
+                    kind,
+                    &format!("Available {}", kind_plural_label(kind)),
+                    &discovered,
+                    true,
+                )? {
+                    let Some(password) =
+                        maybe_prompt_network_password(terminal, kind, target.detail.as_str())?
+                    else {
+                        continue;
+                    };
+                    let msg = connect_connection(
+                        kind,
+                        &target.name,
+                        Some(target.detail.as_str()),
+                        if password.trim().is_empty() {
+                            None
+                        } else {
+                            Some(password.trim())
+                        },
+                    )?;
+                    flash_message(terminal, &msg, 900)?;
+                }
+            }
+            MenuResult::Selected(sel) if sel == "Disconnect Active" => {
+                let msg = disconnect_connection(kind, None, None);
+                flash_message(terminal, &msg, 900)?;
+            }
+            MenuResult::Selected(sel) if sel == saved_label => {
+                saved_connections_menu(terminal, kind)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub fn connections_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        match run_menu(
+            terminal,
+            "Connections",
+            &["Network", "Bluetooth", "---", "Back"],
+            None,
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(sel) => match sel.as_str() {
+                "Network" => connections_kind_menu(terminal, ConnectionKind::Network)?,
+                "Bluetooth" => {
+                    if macos_blueutil_missing() {
+                        flash_message(terminal, bluetooth_installer_hint(), 1500)?;
+                        continue;
+                    }
+                    connections_kind_menu(terminal, ConnectionKind::Bluetooth)?
+                }
+                _ => break,
+            },
+        }
+    }
+    Ok(())
+}
+
+pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> Result<()> {
+    if !take_default_apps_prompt_pending(username) {
+        return Ok(());
+    }
+    flash_message(terminal, "Set default apps for your files.", 1100)?;
+    default_apps_menu(terminal)
+}
+
 pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
     use crate::apps::edit_menus_menu;
 
@@ -165,21 +603,63 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
 
     loop {
         let s = get_settings();
-        let sound_label  = if s.sound  { "Sound: ON  [toggle]" } else { "Sound: OFF [toggle]" };
-        let bootup_label = if s.bootup { "Bootup: ON [toggle]" } else { "Bootup: OFF [toggle]" };
+        let sound_label = if s.sound {
+            "Sound: ON  [toggle]"
+        } else {
+            "Sound: OFF [toggle]"
+        };
+        let bootup_label = if s.bootup {
+            "Bootup: ON [toggle]"
+        } else {
+            "Bootup: OFF [toggle]"
+        };
+        let open_mode_label = format!(
+            "Default Open Mode: {} [toggle]",
+            match s.default_open_mode {
+                OpenMode::Terminal => "Terminal",
+                OpenMode::Desktop => "Desktop",
+            }
+        );
 
-        let mut choices = vec!["About", "Theme", "Edit Menus"];
-        if admin { choices.push("User Management"); }
-        choices.extend_from_slice(&[bootup_label, sound_label, "---", "Back"]);
+        let mut choices = vec![
+            "About",
+            "Theme",
+            "Default Apps",
+            "Connections",
+            "CLI",
+            "Edit Menus",
+        ];
+        if admin {
+            choices.push("User Management");
+        }
+        choices.extend_from_slice(&[
+            open_mode_label.as_str(),
+            bootup_label,
+            sound_label,
+            "---",
+            "Back",
+        ]);
 
         match run_menu(terminal, "Settings", &choices, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "About"            => about_screen(terminal)?,
-                "Theme"            => theme_menu(terminal)?,
-                "Edit Menus"       => edit_menus_menu(terminal)?,
-                "User Management"  => user_management_menu(terminal, current_user)?,
-                l if l == sound_label  => {
+                "About" => about_screen(terminal)?,
+                "Theme" => theme_menu(terminal)?,
+                "Default Apps" => default_apps_menu(terminal)?,
+                "Connections" => connections_menu(terminal)?,
+                "CLI" => cli_menu(terminal)?,
+                "Edit Menus" => edit_menus_menu(terminal)?,
+                "User Management" => user_management_menu(terminal, current_user)?,
+                l if l == open_mode_label => {
+                    update_settings(|s| {
+                        s.default_open_mode = match s.default_open_mode {
+                            OpenMode::Terminal => OpenMode::Desktop,
+                            OpenMode::Desktop => OpenMode::Terminal,
+                        }
+                    });
+                    persist_settings();
+                }
+                l if l == sound_label => {
                     update_settings(|s| s.sound = !s.sound);
                     persist_settings();
                 }
@@ -188,7 +668,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
                     persist_settings();
                 }
                 _ => break,
-            }
+            },
         }
     }
     Ok(())
