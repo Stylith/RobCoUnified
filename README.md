@@ -1,122 +1,156 @@
-# RobCoOS — Rust Edition
+# RobCoOS (Rust)
 
-A Fallout-style terminal operating system, rewritten in Rust.
+Fallout-style terminal environment built with Rust, ratatui, and crossterm.
 
-## Features
+RobCoOS is an application-layer shell experience, not a full standalone operating system.
 
-- 🟢 Themed TUI with Green/Amber/Blue/Red/White/Purple/Cyan color schemes
-- 🔐 Multi-user login with SHA-256 password hashing and session files
-- 📱 Apps / Games / Network launcher menus (JSON-backed, per-user)
-- 📄 Document browser (epub, pdf, txt, mobi, azw3) via `epy`
-- 📓 Built-in journal / log editor with Ctrl+W save, Ctrl+X cancel
-- 💻 Embedded shell terminal (suspends TUI, resumes on exit)
-- 🎮 Fallout-style hacking minigame with dud-removal bracket mechanic
-- 📦 Package manager integration (brew/apt/dnf/pacman/zypper)
-- ⚙️  Per-user settings (theme, sound, bootup animation)
-- 🚀 Animated boot sequence (skippable with Space)
-- 🔋 Live status bar: date/time + battery %
+## Version
 
----
+`0.2.1`
 
-## Building
+## Highlights
 
-### Prerequisites
+- Multi-user login with per-user settings and per-user app/menu data.
+- Up to 9 sessions with hot-switching (menu and PTY-aware switching).
+- Terminal-mode main menu: Applications, Documents, Network, Games, Program Installer, Terminal, Desktop Mode, Settings.
+- Desktop Mode with:
+  - top status bar + spotlight icon
+  - taskbar + Start menu
+  - draggable/resizable windows
+  - minimize/maximize/close controls
+  - draggable desktop icons (`My Computer`, `Trash`) with persisted positions
+- Built-in app: `Nuke Codes` (visibility toggle in Edit Applications).
+- Default Apps system (terminal + desktop settings):
+  - separate defaults for Text/Code and Ebook files
+  - supports built-in ROBCO Terminal Writer, menu entries, and custom argv JSON
+  - per-user settings
+  - first-login prompt for new users
+- Document routing with explicit error when no app is configured:
+  - `Error: No App for filetype`
+
+## Requirements
+
+- Rust stable toolchain (`cargo`, `rustc`)
+- `curl` (required preflight dependency)
+- Optional external tools:
+  - `epy`
+  - `vim`
+  - other CLI apps you add to menus
+- Optional audio backend:
+  - `python3`
+  - Python module `playsound`
+
+Platform audio fallbacks:
+
+- macOS: `afplay`
+- Linux: `aplay` or `paplay`
+- Windows: PowerShell `Media.SoundPlayer`
+
+## Build
 
 ```bash
-# Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# System deps (Debian/Ubuntu)
-sudo apt install tmux epy vim
-
-# Or on macOS
-brew install tmux epy vim
+cargo build
 ```
 
-### Compile & Run
+Release build:
 
 ```bash
 cargo build --release
-./target/release/robcos
 ```
 
-Optional sound support (requires `rodio` dependencies):
+## Run
+
 ```bash
-cargo build --release --features sound
+cargo run
 ```
 
-Skip dependency preflight:
+Release run:
+
 ```bash
-./target/release/robcos --no-preflight
+cargo run --release
 ```
 
----
+Skip preflight checks:
 
-## Project Structure
-
-```
-src/
-├── main.rs          Entry point, terminal setup, outer login loop
-├── config.rs        Paths, JSON helpers, theme colors, global state (RwLock)
-├── ui.rs            Reusable TUI widgets: menu, input, confirm, pager, flash
-├── status.rs        Status bar renderer (date/time, battery)
-├── auth.rs          Login screen, session tokens, password hashing, user mgmt
-├── boot.rs          Animated boot sequence
-├── launcher.rs      Suspend/resume TUI, run subprocesses
-├── apps.rs          App / Game / Network menus with add/delete
-├── docedit.rs       Document category management
-├── documents.rs     Document browser, journal editor, logs menu
-├── hacking.rs       Fallout hacking minigame (word grid + bracket pairs)
-├── settings.rs      Settings menu, theme picker, about/sysinfo screen
-├── installer.rs     Package manager search/install/remove (admin-only)
-├── shell_terminal.rs Embedded shell (suspends TUI, hands off to $SHELL)
-└── checks.rs        Dependency preflight checker
+```bash
+cargo run --release -- --no-preflight
 ```
 
----
+## First Login
 
-## Key Improvements Over Python Version
+If no users exist, RobCoOS creates default admin:
 
-| Area              | Python                       | Rust                                    |
-|-------------------|------------------------------|-----------------------------------------|
-| Concurrency       | GIL, threading               | `OnceLock<RwLock<T>>` — lock-free reads |
-| Error handling    | Exceptions, bare `except:`   | `anyhow::Result<T>` — typed propagation |
-| TUI rendering     | curses + `stdscr.getch()`    | `ratatui` + crossterm event stream      |
-| Startup time      | ~200 ms                      | <5 ms                                   |
-| Memory footprint  | ~30 MB (CPython)             | ~2 MB (static binary w/ strip=true)     |
-| Type safety       | Runtime `KeyError`, crashes  | Exhaustive enum matching at compile time|
-| Distribution      | Requires Python + pip deps   | Single self-contained binary            |
+- Username: `admin`
+- Password: `admin`
 
----
+New users (including the first admin) are prompted once after login to set Default Apps.
 
-## Default Credentials
+## Settings Summary
 
-On first launch, a default admin account is created:
+Terminal Settings includes:
 
-- **Username:** `admin`
-- **Password:** `admin`
+- About
+- Theme
+- Default Apps
+- CLI
+- Edit Menus
+- User Management (admin)
+- Default Open Mode
+- Bootup toggle
+- Sound toggle
 
-Change this immediately via Settings → User Management.
+Desktop Settings includes panels for:
 
----
+- Appearance
+- General
+- Default Apps
+- CLI Display
+- CLI Profiles
+- Edit Menus
+- User Management (admin)
+- About
 
-## Key Bindings
+## Data Layout
 
-| Key               | Action                    |
-|-------------------|---------------------------|
-| ↑ / k             | Move up                   |
-| ↓ / j             | Move down                 |
-| Enter / Space     | Select                    |
-| q / Esc / Tab     | Back / Cancel             |
-| Ctrl+W            | Save (journal editor)     |
-| Ctrl+X / Esc      | Cancel (journal editor)   |
-| Space             | Skip boot animation       |
+Runtime data is stored relative to the executable directory.
 
-### Hacking minigame
+```text
+RobCoOS/
+  robcos
+  settings.json
+  users/
+    users.json
+    <username>/
+      settings.json
+      apps.json
+      games.json
+      networks.json
+      documents.json
+  journal_entries/
+    <username>/
+      YYYY-MM-DD.txt
+```
 
-| Key            | Action                   |
-|----------------|--------------------------|
-| Arrow keys / WASD | Move cursor           |
-| Tab            | Switch column            |
-| Enter / Space  | Select word or bracket   |
-| q / Esc        | Exit (forfeit)           |
+## Manual
+
+See `USER_MANUAL.md` for full usage details and control reference.
+
+## Credits and Attribution
+
+- UI framework: [ratatui](https://github.com/ratatui/ratatui)
+- Terminal/input backend: [crossterm](https://github.com/crossterm-rs/crossterm)
+- PTY support: [portable-pty](https://github.com/wez/wezterm/tree/main/pty)
+- Terminal emulation parser: [vt100](https://crates.io/crates/vt100)
+- System/time utilities: [sysinfo](https://github.com/GuillaumeGomez/sysinfo), [chrono](https://github.com/chronotope/chrono)
+
+Nuclear launch code data in the built-in Nuke Codes app is fetched from community-maintained sources:
+
+- [NukaCrypt](https://nukacrypt.com/)
+- [NukaPD](https://www.nukapd.com/)
+- [NukaTrader](https://nukatrader.com/)
+
+This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.
+
+## AI Assistance Disclaimer
+
+This project was created with the help of AI-assisted development tools.

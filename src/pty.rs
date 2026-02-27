@@ -10,7 +10,9 @@
 //!   launch_in_pty(terminal, &["vim", "file.txt"])
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use ratatui::{
     layout::{Alignment, Rect},
@@ -91,7 +93,9 @@ fn open_key_debug_file() -> Option<std::fs::File> {
 }
 
 fn append_marker_line(line: &str) {
-    let Some(mut file) = open_key_debug_file() else { return };
+    let Some(mut file) = open_key_debug_file() else {
+        return;
+    };
     let _ = writeln!(file, "{line}");
 }
 
@@ -99,7 +103,9 @@ fn append_key_debug_line(line: &str) {
     if std::env::var_os("ROBCOS_KEY_DEBUG").is_none() {
         return;
     }
-    let Some(mut file) = open_key_debug_file() else { return };
+    let Some(mut file) = open_key_debug_file() else {
+        return;
+    };
     let _ = writeln!(file, "{line}");
 }
 
@@ -133,11 +139,7 @@ fn flush_tilde_state(state: &mut TildeChordState, session: &mut PtySession) {
     *state = TildeChordState::None;
 }
 
-fn try_tilde_session_chord(
-    code: KeyCode,
-    mods: KeyModifiers,
-    state: &mut TildeChordState,
-) -> bool {
+fn try_tilde_session_chord(code: KeyCode, mods: KeyModifiers, state: &mut TildeChordState) -> bool {
     let plain_or_shift = mods.is_empty() || mods == KeyModifiers::SHIFT;
     let now = Instant::now();
     match code {
@@ -224,7 +226,9 @@ fn pty_color_mode() -> PtyColorMode {
         Some("ansi") | Some("color") | Some("colours") | Some("colors") => PtyColorMode::Ansi,
         Some("mono") | Some("monochrome") | Some("plain") => PtyColorMode::Monochrome,
         Some("palette") | Some("palette-map") | Some("palettemap") => PtyColorMode::PaletteMap,
-        Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => PtyColorMode::ThemeLock,
+        Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => {
+            PtyColorMode::ThemeLock
+        }
         _ => match crate::config::get_settings().cli_color_mode {
             crate::config::CliColorMode::ThemeLock => PtyColorMode::ThemeLock,
             crate::config::CliColorMode::PaletteMap => PtyColorMode::PaletteMap,
@@ -400,7 +404,9 @@ impl DecSpecialGraphics {
 
             (AcsGlyphMode::Ascii, 0xB3) => '|',
             (AcsGlyphMode::Ascii, 0xC4) => '-',
-            (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => '+',
+            (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => {
+                '+'
+            }
 
             _ => return None,
         })
@@ -417,29 +423,27 @@ impl DecSpecialGraphics {
 
             // Complete ESC-designate sequences that may span read chunks.
             match self.pending {
-                EscPending::Esc => {
-                    match b {
-                        b'(' => {
-                            self.pending = EscPending::EscParen;
-                            continue;
-                        }
-                        b')' => {
-                            self.pending = EscPending::EscParenRight;
-                            continue;
-                        }
-                        b'[' => {
-                            self.pending = EscPending::EscCsi;
-                            self.csi_buf.clear();
-                            continue;
-                        }
-                        _ => {
-                            out.push(0x1b);
-                            self.emit_byte(&mut out, b);
-                            self.pending = EscPending::None;
-                            continue;
-                        }
+                EscPending::Esc => match b {
+                    b'(' => {
+                        self.pending = EscPending::EscParen;
+                        continue;
                     }
-                }
+                    b')' => {
+                        self.pending = EscPending::EscParenRight;
+                        continue;
+                    }
+                    b'[' => {
+                        self.pending = EscPending::EscCsi;
+                        self.csi_buf.clear();
+                        continue;
+                    }
+                    _ => {
+                        out.push(0x1b);
+                        self.emit_byte(&mut out, b);
+                        self.pending = EscPending::None;
+                        continue;
+                    }
+                },
                 EscPending::EscParen => {
                     match b {
                         b'0' => self.g0_special = true,
@@ -500,8 +504,7 @@ impl DecSpecialGraphics {
                     self.use_g1 = false;
                 }
                 _ => {
-                    if self.active_is_special()
-                        && b.is_ascii() {
+                    if self.active_is_special() && b.is_ascii() {
                         let ch = b as char;
                         if let Some(mapped) = self.map_special(ch) {
                             self.emit_char(&mut out, mapped);
@@ -521,14 +524,14 @@ impl DecSpecialGraphics {
 
 pub struct PtySession {
     /// Write end — send keyboard input to the child
-    writer:  Box<dyn Write + Send>,
+    writer: Box<dyn Write + Send>,
     /// Shared vt100 parser — updated by reader thread, read by render loop
-    parser:  Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<vt100::Parser>>,
     /// Child handle — check if still alive
-    child:   Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Current PTY dimensions
-    cols:    u16,
-    rows:    u16,
+    cols: u16,
+    rows: u16,
     /// Selected render mode for this command.
     render_mode: PtyRenderMode,
     /// Selected color mode for this command.
@@ -538,7 +541,7 @@ pub struct PtySession {
     /// Optional top banner shown above PTY content.
     top_bar: Option<String>,
     /// Master — kept alive so the PTY stays open; also used for resize
-    master:  Box<dyn portable_pty::MasterPty + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl PtySession {
@@ -553,12 +556,14 @@ impl PtySession {
         let pair = pty_system.openpty(PtySize {
             rows,
             cols,
-            pixel_width:  0,
+            pixel_width: 0,
             pixel_height: 0,
         })?;
 
         let mut cmd = CommandBuilder::new(program);
-        for arg in args { cmd.arg(arg); }
+        for arg in args {
+            cmd.arg(arg);
+        }
         for (key, value) in &options.env {
             cmd.env(key, value);
         }
@@ -573,7 +578,7 @@ impl PtySession {
         let color_mode = pty_color_mode();
         let acs_mode = AcsGlyphMode::from_config();
 
-        let child  = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
         let writer = pair.master.take_writer()?;
         let reader = pair.master.try_clone_reader()?;
 
@@ -627,12 +632,58 @@ impl PtySession {
         let _ = self.writer.flush();
     }
 
+    /// Translate a terminal key event and send it to the PTY child.
+    pub fn send_key(&mut self, code: KeyCode, mods: KeyModifiers) {
+        let application_cursor = self
+            .parser
+            .lock()
+            .map(|p| p.screen().application_cursor())
+            .unwrap_or(false);
+        if let Some(bytes) = key_to_bytes(code, mods, application_cursor) {
+            self.write(&bytes);
+        }
+    }
+
+    /// Send a translated mouse event to the PTY child using xterm SGR mouse encoding.
+    pub fn send_mouse_event(
+        &mut self,
+        kind: MouseEventKind,
+        mods: KeyModifiers,
+        col: u16,
+        row: u16,
+    ) {
+        let (mode, encoding) = self
+            .parser
+            .lock()
+            .map(|p| {
+                let screen = p.screen();
+                (
+                    screen.mouse_protocol_mode(),
+                    screen.mouse_protocol_encoding(),
+                )
+            })
+            .unwrap_or((
+                vt100::MouseProtocolMode::None,
+                vt100::MouseProtocolEncoding::Default,
+            ));
+        if let Some(bytes) = mouse_to_bytes(kind, mods, col, row, mode, encoding) {
+            self.write(&bytes);
+        }
+    }
+
     /// Resize the PTY and notify the child via SIGWINCH
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        if cols == self.cols && rows == self.rows { return; }
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
         self.cols = cols;
         self.rows = rows;
-        let _ = self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
         if let Ok(mut p) = self.parser.lock() {
             p.set_size(rows, cols);
         }
@@ -653,13 +704,21 @@ impl PtySession {
 
     /// Render the current vt100 screen into `area` of the ratatui frame.
     pub fn render(&self, f: &mut ratatui::Frame, area: Rect) {
-        let Ok(parser) = self.parser.lock() else { return };
+        self.render_with_hint(f, area, false);
+    }
+
+    /// Render with a caller-provided performance hint.
+    /// `force_plain=true` bypasses per-cell styling and uses faster line rendering.
+    pub fn render_with_hint(&self, f: &mut ratatui::Frame, area: Rect, force_plain: bool) {
+        let Ok(parser) = self.parser.lock() else {
+            return;
+        };
         let screen = parser.screen();
 
         let rows = area.height as usize;
-        let cols = area.width  as usize;
+        let cols = area.width as usize;
 
-        if matches!(self.render_mode, PtyRenderMode::Plain) {
+        if force_plain || matches!(self.render_mode, PtyRenderMode::Plain) {
             let mut lines: Vec<Line> = screen
                 .rows(0, area.width)
                 .take(rows)
@@ -668,40 +727,37 @@ impl PtySession {
             while lines.len() < rows {
                 lines.push(Line::from(""));
             }
-            let para = match self.color_mode {
-                PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Paragraph::new(lines).style(
-                    Style::default()
-                        .fg(crate::config::current_theme_color())
-                        .bg(Color::Black),
-                ),
-                _ => Paragraph::new(lines),
-            };
+            let para = Paragraph::new(lines).style(vt100_default_style(self.color_mode));
             f.render_widget(para, area);
             return;
         }
 
-        let lines: Vec<Line> = (0..rows).map(|row| {
-            let spans: Vec<Span> = (0..cols).map(|col| {
-                let row_u16 = row as u16;
-                let col_u16 = col as u16;
-                let cell = screen.cell(row_u16, col_u16);
-                let ch = cell
-                    .and_then(|c| c.contents().chars().next())
-                    .unwrap_or(' ');
-                let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
-                    smooth_ascii_border_char(screen, row_u16, col_u16, ch)
-                } else {
-                    ch
-                };
-                let text = ch.to_string();
+        let lines: Vec<Line> = (0..rows)
+            .map(|row| {
+                let spans: Vec<Span> = (0..cols)
+                    .map(|col| {
+                        let row_u16 = row as u16;
+                        let col_u16 = col as u16;
+                        let cell = screen.cell(row_u16, col_u16);
+                        let ch = cell
+                            .and_then(|c| c.contents().chars().next())
+                            .unwrap_or(' ');
+                        let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
+                            smooth_ascii_border_char(screen, row_u16, col_u16, ch)
+                        } else {
+                            ch
+                        };
+                        let text = ch.to_string();
 
-                let style = cell
-                    .map(|c| vt100_style(c, self.color_mode))
-                    .unwrap_or_else(|| vt100_default_style(self.color_mode));
-                Span::styled(text, style)
-            }).collect();
-            Line::from(spans)
-        }).collect();
+                        let style = cell
+                            .map(|c| vt100_style(c, self.color_mode))
+                            .unwrap_or_else(|| vt100_default_style(self.color_mode));
+                        Span::styled(text, style)
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect();
 
         f.render_widget(Paragraph::new(lines), area);
     }
@@ -841,7 +897,9 @@ fn smooth_ascii_border_char(screen: &vt100::Screen, row: u16, col: u16, ch: char
 }
 
 fn needs_ncurses_ascii_acs(program: &str) -> bool {
-    let Some(name) = command_basename(program) else { return false };
+    let Some(name) = command_basename(program) else {
+        return false;
+    };
 
     name.starts_with("calcurse")
 }
@@ -862,12 +920,13 @@ fn is_ranger_program(program: &str) -> bool {
 // ── vt100 cell → ratatui Style ────────────────────────────────────────────────
 
 fn vt100_default_style(mode: PtyColorMode) -> Style {
-    match mode {
-        PtyColorMode::ThemeLock | PtyColorMode::PaletteMap => Style::default()
-            .fg(crate::config::current_theme_color())
-            .bg(Color::Black),
-        _ => Style::default(),
-    }
+    let fg = match mode {
+        PtyColorMode::Ansi
+        | PtyColorMode::ThemeLock
+        | PtyColorMode::PaletteMap
+        | PtyColorMode::Monochrome => crate::config::current_theme_color(),
+    };
+    Style::default().fg(fg).bg(Color::Black)
 }
 
 fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
@@ -875,8 +934,11 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
 
     match mode {
         PtyColorMode::Ansi => {
-            style = style.fg(vt100_color(cell.fgcolor(), Color::Reset));
-            style = style.bg(vt100_color(cell.bgcolor(), Color::Reset));
+            style = style.fg(vt100_color(
+                cell.fgcolor(),
+                crate::config::current_theme_color(),
+            ));
+            style = style.bg(vt100_color(cell.bgcolor(), Color::Black));
         }
         PtyColorMode::PaletteMap => {
             if !matches!(cell.fgcolor(), vt100::Color::Default) {
@@ -889,13 +951,21 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
         PtyColorMode::ThemeLock | PtyColorMode::Monochrome => {}
     }
 
-    if cell.bold()       { style = style.add_modifier(Modifier::BOLD);          }
-    if cell.italic()     { style = style.add_modifier(Modifier::ITALIC);         }
-    if cell.underline()  { style = style.add_modifier(Modifier::UNDERLINED);     }
+    if cell.bold() {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if cell.italic() {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if cell.underline() {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
     if cell.inverse() {
         match mode {
             PtyColorMode::ThemeLock => {
-                style = style.fg(Color::Black).bg(crate::config::current_theme_color());
+                style = style
+                    .fg(Color::Black)
+                    .bg(crate::config::current_theme_color());
             }
             PtyColorMode::PaletteMap | PtyColorMode::Monochrome | PtyColorMode::Ansi => {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -908,65 +978,71 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
 
 fn vt100_color(c: vt100::Color, default: Color) -> Color {
     match c {
-        vt100::Color::Default         => default,
-        vt100::Color::Idx(i)          => ansi_idx(i),
-        vt100::Color::Rgb(r, g, b)   => Color::Rgb(r, g, b),
+        vt100::Color::Default => default,
+        vt100::Color::Idx(i) => ansi_idx(i),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
 fn ansi_idx(i: u8) -> Color {
     match i {
-        0  => Color::Black,
-        1  => Color::Red,
-        2  => Color::Green,
-        3  => Color::Yellow,
-        4  => Color::Blue,
-        5  => Color::Magenta,
-        6  => Color::Cyan,
-        7  => Color::White,
-        8  => Color::DarkGray,
-        9  => Color::LightRed,
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::White,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
         10 => Color::LightGreen,
         11 => Color::LightYellow,
         12 => Color::LightBlue,
         13 => Color::LightMagenta,
         14 => Color::LightCyan,
         15 => Color::White,
-        n  => Color::Indexed(n),
+        n => Color::Indexed(n),
     }
 }
 
 fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
     let Some((r, g, b)) = vt100_color_rgb(c) else {
-        return if is_background { Color::Black } else { crate::config::current_theme_color() };
+        return if is_background {
+            Color::Black
+        } else {
+            crate::config::current_theme_color()
+        };
     };
 
     let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
     let scale = if is_background {
-        if luma < 0.33 {
-            0.16
-        } else if luma < 0.66 {
-            0.22
+        if luma < 0.25 {
+            0.12
+        } else if luma < 0.50 {
+            0.18
+        } else if luma < 0.75 {
+            0.24
         } else {
-            0.30
+            0.32
         }
     } else if luma < 0.20 {
-        0.40
+        0.90
     } else if luma < 0.40 {
-        0.58
+        0.95
     } else if luma < 0.60 {
-        0.74
-    } else if luma < 0.80 {
-        0.88
-    } else {
         1.00
+    } else if luma < 0.80 {
+        1.05
+    } else {
+        1.10
     };
 
     let (tr, tg, tb) = theme_base_rgb();
     Color::Rgb(
-        ((tr as f32 * scale).round() as u8).max(1),
-        ((tg as f32 * scale).round() as u8).max(1),
-        ((tb as f32 * scale).round() as u8).max(1),
+        (tr as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tg as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tb as f32 * scale).round().clamp(1.0, 255.0) as u8,
     )
 }
 
@@ -1025,38 +1101,228 @@ fn indexed_ansi_rgb(i: u8) -> (u8, u8, u8) {
 
 // ── Key → bytes ───────────────────────────────────────────────────────────────
 
-pub fn key_to_bytes(code: KeyCode, mods: KeyModifiers, application_cursor: bool) -> Option<Vec<u8>> {
+fn mouse_mod_bits(mods: KeyModifiers) -> u16 {
+    let mut bits = 0u16;
+    if mods.contains(KeyModifiers::SHIFT) {
+        bits |= 4;
+    }
+    if mods.contains(KeyModifiers::ALT) || mods.contains(KeyModifiers::META) {
+        bits |= 8;
+    }
+    if mods.contains(KeyModifiers::CONTROL) {
+        bits |= 16;
+    }
+    bits
+}
+
+fn mouse_button_code(btn: MouseButton) -> u16 {
+    match btn {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+fn mouse_event_cb(kind: MouseEventKind, mods: KeyModifiers) -> Option<(u16, char)> {
+    let mut cb = mouse_mod_bits(mods);
+    let suffix = match kind {
+        MouseEventKind::Down(btn) => {
+            cb |= mouse_button_code(btn);
+            'M'
+        }
+        MouseEventKind::Up(_) => {
+            // X10/SGR release is button code 3, not the released button id.
+            cb |= 3;
+            'm'
+        }
+        MouseEventKind::Drag(btn) => {
+            cb |= mouse_button_code(btn) | 32;
+            'M'
+        }
+        MouseEventKind::ScrollUp => {
+            cb |= 64;
+            'M'
+        }
+        MouseEventKind::ScrollDown => {
+            cb |= 65;
+            'M'
+        }
+        MouseEventKind::ScrollLeft => {
+            cb |= 66;
+            'M'
+        }
+        MouseEventKind::ScrollRight => {
+            cb |= 67;
+            'M'
+        }
+        MouseEventKind::Moved => {
+            // Any-motion event with no button held.
+            cb |= 35;
+            'M'
+        }
+    };
+    Some((cb, suffix))
+}
+
+fn mouse_mode_allows(kind: MouseEventKind, mode: vt100::MouseProtocolMode) -> bool {
+    use vt100::MouseProtocolMode as M;
+    match mode {
+        M::None => false,
+        M::Press => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::PressRelease => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::ButtonMotion => matches!(
+            kind,
+            MouseEventKind::Down(_)
+                | MouseEventKind::Up(_)
+                | MouseEventKind::Drag(_)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        ),
+        M::AnyMotion => true,
+    }
+}
+
+fn push_x10_coord(out: &mut Vec<u8>, value: u16) {
+    let v = value.max(1).saturating_add(32).min(255) as u8;
+    out.push(v);
+}
+
+fn push_utf8_coord(out: &mut Vec<u8>, value: u16) {
+    let v = value.max(1).saturating_add(32) as u32;
+    if let Some(ch) = char::from_u32(v) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
+fn mouse_to_bytes(
+    kind: MouseEventKind,
+    mods: KeyModifiers,
+    col: u16,
+    row: u16,
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+) -> Option<Vec<u8>> {
+    if !mouse_mode_allows(kind, mode) {
+        return None;
+    }
+    let (cb, suffix) = mouse_event_cb(kind, mods)?;
+    let x = col.max(1);
+    let y = row.max(1);
+    match encoding {
+        vt100::MouseProtocolEncoding::Sgr => {
+            Some(format!("\x1b[<{cb};{x};{y}{suffix}").into_bytes())
+        }
+        vt100::MouseProtocolEncoding::Default => {
+            let mut out = Vec::with_capacity(6);
+            out.extend_from_slice(b"\x1b[M");
+            out.push(cb.saturating_add(32).min(255) as u8);
+            push_x10_coord(&mut out, x);
+            push_x10_coord(&mut out, y);
+            Some(out)
+        }
+        vt100::MouseProtocolEncoding::Utf8 => {
+            let mut out = Vec::with_capacity(16);
+            out.extend_from_slice(b"\x1b[M");
+            push_utf8_coord(&mut out, cb.saturating_add(32));
+            push_utf8_coord(&mut out, x);
+            push_utf8_coord(&mut out, y);
+            Some(out)
+        }
+    }
+}
+
+pub fn key_to_bytes(
+    code: KeyCode,
+    mods: KeyModifiers,
+    application_cursor: bool,
+) -> Option<Vec<u8>> {
     // Ctrl+<letter>
     if mods.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(c) = code {
             let lc = c.to_ascii_lowercase();
             let byte = (lc as u8).wrapping_sub(b'a').wrapping_add(1);
-            if byte < 32 { return Some(vec![byte]); }
+            if byte < 32 {
+                return Some(vec![byte]);
+            }
         }
     }
 
     Some(match code {
-        KeyCode::Char(c)   => c.to_string().into_bytes(),
-        KeyCode::Enter     => b"\r".to_vec(),
+        KeyCode::Char(c) => c.to_string().into_bytes(),
+        KeyCode::Enter => b"\r".to_vec(),
         KeyCode::Backspace => b"\x7f".to_vec(),
-        KeyCode::Tab       => b"\t".to_vec(),
-        KeyCode::Esc       => b"\x1b".to_vec(),
-        KeyCode::Up        => if application_cursor { b"\x1bOA".to_vec() } else { b"\x1b[A".to_vec() },
-        KeyCode::Down      => if application_cursor { b"\x1bOB".to_vec() } else { b"\x1b[B".to_vec() },
-        KeyCode::Right     => if application_cursor { b"\x1bOC".to_vec() } else { b"\x1b[C".to_vec() },
-        KeyCode::Left      => if application_cursor { b"\x1bOD".to_vec() } else { b"\x1b[D".to_vec() },
-        KeyCode::Home      => if application_cursor { b"\x1bOH".to_vec() } else { b"\x1b[H".to_vec() },
-        KeyCode::End       => if application_cursor { b"\x1bOF".to_vec() } else { b"\x1b[F".to_vec() },
-        KeyCode::PageUp    => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown  => b"\x1b[6~".to_vec(),
-        KeyCode::Delete    => b"\x1b[3~".to_vec(),
-        KeyCode::Insert    => b"\x1b[2~".to_vec(),
-        KeyCode::F(1)      => b"\x1bOP".to_vec(),
-        KeyCode::F(2)      => b"\x1bOQ".to_vec(),
-        KeyCode::F(3)      => b"\x1bOR".to_vec(),
-        KeyCode::F(4)      => b"\x1bOS".to_vec(),
-        KeyCode::F(n)      => format!("\x1b[{}~", n + 10).into_bytes(),
-        _                  => return None,
+        KeyCode::Tab => b"\t".to_vec(),
+        KeyCode::Esc => b"\x1b".to_vec(),
+        KeyCode::Up => {
+            if application_cursor {
+                b"\x1bOA".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }
+        }
+        KeyCode::Down => {
+            if application_cursor {
+                b"\x1bOB".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            }
+        }
+        KeyCode::Right => {
+            if application_cursor {
+                b"\x1bOC".to_vec()
+            } else {
+                b"\x1b[C".to_vec()
+            }
+        }
+        KeyCode::Left => {
+            if application_cursor {
+                b"\x1bOD".to_vec()
+            } else {
+                b"\x1b[D".to_vec()
+            }
+        }
+        KeyCode::Home => {
+            if application_cursor {
+                b"\x1bOH".to_vec()
+            } else {
+                b"\x1b[H".to_vec()
+            }
+        }
+        KeyCode::End => {
+            if application_cursor {
+                b"\x1bOF".to_vec()
+            } else {
+                b"\x1b[F".to_vec()
+            }
+        }
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+        KeyCode::F(1) => b"\x1bOP".to_vec(),
+        KeyCode::F(2) => b"\x1bOQ".to_vec(),
+        KeyCode::F(3) => b"\x1bOR".to_vec(),
+        KeyCode::F(4) => b"\x1bOS".to_vec(),
+        KeyCode::F(n) => format!("\x1b[{}~", n + 10).into_bytes(),
+        _ => return None,
     })
 }
 
@@ -1073,7 +1339,12 @@ fn render_top_bar(f: &mut ratatui::Frame, area: Rect, label: &str) {
         .fg(Color::Black)
         .bg(crate::config::current_theme_color())
         .add_modifier(Modifier::BOLD);
-    f.render_widget(Paragraph::new(text).alignment(Alignment::Center).style(style), area);
+    f.render_widget(
+        Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .style(style),
+        area,
+    );
 }
 
 /// Run a program in a PTY inside the ratatui TUI.
@@ -1104,7 +1375,9 @@ pub fn run_pty_session_with_options(
 
 /// Convenience wrapper: launch an arbitrary command in a PTY session.
 pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
-    if cmd.is_empty() { return Ok(()); }
+    if cmd.is_empty() {
+        return Ok(());
+    }
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     run_pty_session(terminal, program, &args)
@@ -1172,13 +1445,17 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
         })?;
 
         // Check if child exited
-        if !session.is_alive() { return Ok(PtyLoopOutcome::ProcessExited); }
+        if !session.is_alive() {
+            return Ok(PtyLoopOutcome::ProcessExited);
+        }
 
         // Input
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
                 debug_log_key(key.code, key.modifiers, key.kind);
-                if key.kind == KeyEventKind::Release { continue; }
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
 
                 if !matches!(tilde_state, TildeChordState::None)
                     && !matches!(key.code, KeyCode::Char('~') | KeyCode::Char('1'..='9'))
@@ -1215,9 +1492,11 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
 #[cfg(test)]
 mod tests {
     use super::{
-        DecSpecialGraphics, key_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char,
+        key_to_bytes, mouse_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char,
+        DecSpecialGraphics,
     };
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+    use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
     #[test]
     fn app_cursor_arrows_use_ss3_sequences() {
@@ -1275,7 +1554,12 @@ mod tests {
         let bytes = d.process(b"\x1b(0lq\x1b[5bk\x1b(B");
         let mut p = vt100::Parser::new(4, 40, 0);
         p.process(&bytes);
-        let line = p.screen().rows(0, 20).next().unwrap_or_default().to_string();
+        let line = p
+            .screen()
+            .rows(0, 20)
+            .next()
+            .unwrap_or_default()
+            .to_string();
         assert!(
             line.contains("+------+") || line.contains("┌──────┐"),
             "translated line was: {line:?}"
@@ -1302,5 +1586,32 @@ mod tests {
         p.process(b"1+2");
         let s = p.screen();
         assert_eq!(smooth_ascii_border_char(s, 0, 1, '+'), '+');
+    }
+
+    #[test]
+    fn mouse_release_uses_release_code_in_sgr() {
+        let bytes = mouse_to_bytes(
+            MouseEventKind::Up(MouseButton::Left),
+            KeyModifiers::NONE,
+            10,
+            5,
+            MouseProtocolMode::PressRelease,
+            MouseProtocolEncoding::Sgr,
+        )
+        .expect("mouse bytes");
+        assert_eq!(String::from_utf8_lossy(&bytes), "\u{1b}[<3;10;5m");
+    }
+
+    #[test]
+    fn mouse_events_are_suppressed_when_mode_is_none() {
+        let bytes = mouse_to_bytes(
+            MouseEventKind::Down(MouseButton::Left),
+            KeyModifiers::NONE,
+            1,
+            1,
+            MouseProtocolMode::None,
+            MouseProtocolEncoding::Sgr,
+        );
+        assert!(bytes.is_none());
     }
 }
