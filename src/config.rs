@@ -123,18 +123,12 @@ pub fn load_settings() -> Settings {
         let f = user_dir(&u).join("settings.json");
         if f.exists() {
             let mut s: Settings = load_json(&f);
-            if s.hide_builtin_apps_in_menus {
-                s.builtin_menu_visibility.nuke_codes = false;
-                s.hide_builtin_apps_in_menus = false;
-            }
+            apply_legacy_settings_migrations(&mut s);
             return s;
         }
     }
     let mut s: Settings = load_json(&global_settings_file());
-    if s.hide_builtin_apps_in_menus {
-        s.builtin_menu_visibility.nuke_codes = false;
-        s.hide_builtin_apps_in_menus = false;
-    }
+    apply_legacy_settings_migrations(&mut s);
     s
 }
 pub fn save_settings(d: &Settings) {
@@ -312,6 +306,20 @@ pub struct DesktopFileManagerSettings {
     pub text_open_mode: FileManagerTextOpenMode,
     #[serde(default)]
     pub open_with_by_extension: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub open_with_default_by_extension: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DesktopSessionSettings {
+    #[serde(default)]
+    pub reopen_last_file_manager: bool,
+    #[serde(default)]
+    pub file_manager_tabs: Vec<String>,
+    #[serde(default)]
+    pub active_file_manager_tab: usize,
+    #[serde(default)]
+    pub recent_folders: Vec<String>,
 }
 
 const fn default_file_manager_dirs_first() -> bool {
@@ -332,6 +340,7 @@ impl Default for DesktopFileManagerSettings {
             directories_first: true,
             text_open_mode: FileManagerTextOpenMode::Viewer,
             open_with_by_extension: BTreeMap::new(),
+            open_with_default_by_extension: BTreeMap::new(),
         }
     }
 }
@@ -509,6 +518,8 @@ pub struct Settings {
     #[serde(default)]
     pub desktop_file_manager: DesktopFileManagerSettings,
     #[serde(default)]
+    pub desktop_session: DesktopSessionSettings,
+    #[serde(default)]
     pub desktop_icon_positions: DesktopIconPositionsSettings,
     #[serde(default)]
     pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
@@ -538,9 +549,17 @@ impl Default for Settings {
             desktop_icon_style: DesktopIconStyle::Win95,
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
+            desktop_session: DesktopSessionSettings::default(),
             desktop_icon_positions: DesktopIconPositionsSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
         }
+    }
+}
+
+fn apply_legacy_settings_migrations(settings: &mut Settings) {
+    if settings.hide_builtin_apps_in_menus {
+        settings.builtin_menu_visibility.nuke_codes = false;
+        settings.hide_builtin_apps_in_menus = false;
     }
 }
 
@@ -600,6 +619,39 @@ pub fn update_settings<F: FnOnce(&mut Settings)>(f: F) {
 pub fn persist_settings() {
     let s = get_settings();
     save_settings(&s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_hide_builtin_apps_flag_migrates_to_visibility() {
+        let mut settings = Settings::default();
+        settings.hide_builtin_apps_in_menus = true;
+        settings.builtin_menu_visibility.nuke_codes = true;
+
+        apply_legacy_settings_migrations(&mut settings);
+
+        assert!(!settings.hide_builtin_apps_in_menus);
+        assert!(!settings.builtin_menu_visibility.nuke_codes);
+    }
+
+    #[test]
+    fn desktop_file_manager_new_default_open_with_field_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let fm = value
+            .get_mut("desktop_file_manager")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("desktop_file_manager object");
+        fm.remove("open_with_default_by_extension");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert!(decoded
+            .desktop_file_manager
+            .open_with_default_by_extension
+            .is_empty());
+    }
 }
 
 // ── Themes ────────────────────────────────────────────────────────────────────

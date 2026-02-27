@@ -40,6 +40,12 @@ Skip preflight checks:
 cargo run --release -- --no-preflight
 ```
 
+Release validation:
+
+```bash
+make release-check
+```
+
 ## 3. Dependencies
 
 Startup preflight checks:
@@ -307,6 +313,8 @@ Desktop top menu categories:
 
 - My Computer opens File Manager.
 - Trash icon opens Trash in File Manager.
+- Desktop mode can reopen the last file manager tab set from the previous session.
+- Recent folders are saved and exposed from the desktop File menu.
 - Document category windows include a Back action that closes that category window.
 
 ## 15. Settings (Terminal Mode)
@@ -315,15 +323,20 @@ Path: Main Menu -> Settings
 
 Entries:
 
-- About
-- Theme
+- General
+  - Sound [toggle]
+  - Bootup [toggle]
+  - Default Open Mode [toggle]
+- Appearance
+  - Theme
+  - CLI Display
 - Default Apps
-- CLI
+- Connections
+  - hidden when the platform disables connections support
+  - Bluetooth is hidden when required tooling is missing
 - Edit Menus
 - User Management (admin)
-- Default Open Mode [toggle]
-- Bootup [toggle]
-- Sound [toggle]
+- About
 
 ## 16. Settings (Desktop GUI)
 
@@ -331,10 +344,12 @@ Path: Desktop Start -> System -> Settings
 
 Home panels:
 
-- Appearance
 - General
+- Appearance
 - Default Apps
-- CLI Display
+- Connections
+  - hidden when the platform disables connections support
+  - Bluetooth is hidden when required tooling is missing
 - CLI Profiles
 - Edit Menus
 - User Management (admin)
@@ -343,6 +358,7 @@ Home panels:
 Notable appearance controls:
 
 - Theme chooser
+- CLI Display
 - Desktop cursor toggle
 - Desktop icon style:
   - DOS
@@ -465,6 +481,12 @@ Fallback:
 - Check `Settings -> Sound` is ON.
 - Confirm platform audio tool availability.
 - Optionally install `playsound` from Program Installer.
+
+### 20.5 Connections menu is missing or reduced
+
+- On macOS, the entire Connections feature may be hidden when the current implementation is unsupported.
+- Bluetooth entries are hidden when `blueutil` is not installed or available.
+- This is intentional; unsupported actions are removed from menus instead of failing after selection.
 
 ## 21. AI Assistance Disclaimer
 

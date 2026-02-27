@@ -19,11 +19,5 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Format check
-        run: cargo fmt --check
-
-      - name: Build check
-        run: cargo check
-
-      - name: Smoke tests
-        run: cargo test
+      - name: Release check
+        run: ./scripts/release-check.sh

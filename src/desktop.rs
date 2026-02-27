@@ -226,6 +226,7 @@ const FILE_MANAGER_TREE_GAP: u16 = 1;
 const FILE_MANAGER_ENTRY_MIN_WIDTH: u16 = 16;
 const FILE_MANAGER_EMPTY_TRASH_BUTTON: &str = "[Empty Trash]";
 const FILE_MANAGER_RECENT_LIMIT: usize = 12;
+const FILE_MANAGER_RECENT_FOLDERS_LIMIT: usize = 10;
 const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
 const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
 
@@ -531,7 +532,6 @@ enum DesktopSettingsHomeItem {
     General,
     DefaultApps,
     Connections,
-    CliDisplay,
     CliProfiles,
     EditMenus,
     UserManagement,
@@ -850,6 +850,7 @@ enum TopMenuAction {
     OpenSelectedFileExternal,
     OpenSelectedFileWith,
     OpenRecentFile(PathBuf, FileManagerOpenRequest),
+    OpenRecentFolder(PathBuf),
     FileManagerCopy,
     FileManagerCut,
     FileManagerPaste,
@@ -954,6 +955,7 @@ struct DesktopState {
     spotlight: SpotlightState,
     file_clipboard: Option<FileManagerClipboardItem>,
     file_recent: Vec<RecentFileEntry>,
+    folder_recent: Vec<PathBuf>,
     file_undo_stack: Vec<FileManagerEditOp>,
     file_redo_stack: Vec<FileManagerEditOp>,
     icon_dragging: Option<IconDragState>,
@@ -989,7 +991,6 @@ const START_SYSTEM: [(&str, StartLaunch); 5] = [
     ("Settings", StartLaunch::Settings),
     ("Connections", StartLaunch::Connections),
 ];
-const START_SYSTEM_VIS_ROWS: [Option<usize>; 5] = [Some(0), Some(1), Some(2), Some(3), Some(4)];
 const TOP_SPOTLIGHT_ICON: &str = "⌕";
 
 fn root_leaf_for_idx(idx: usize) -> Option<StartProgramsLeaf> {
@@ -1028,13 +1029,19 @@ fn open_start_panel_for_root(state: &mut StartState) {
     state.open_submenu = root_submenu_for_idx(state.selected_root);
 }
 
-fn submenu_items_system() -> &'static [(&'static str, StartLaunch)] {
-    &START_SYSTEM
+fn submenu_items_system() -> Vec<(&'static str, StartLaunch)> {
+    START_SYSTEM
+        .iter()
+        .copied()
+        .filter(|(_, launch)| {
+            !matches!(launch, StartLaunch::Connections) || !macos_connections_disabled()
+        })
+        .collect()
 }
 
 fn submenu_items_len(sub: StartSubmenu) -> usize {
     match sub {
-        StartSubmenu::System => START_SYSTEM.len(),
+        StartSubmenu::System => submenu_items_system().len(),
     }
 }
 
@@ -1050,9 +1057,9 @@ fn submenu_selected_idx_mut(state: &mut StartState, sub: StartSubmenu) -> &mut u
     }
 }
 
-fn submenu_visual_rows(sub: StartSubmenu) -> &'static [Option<usize>] {
+fn submenu_visual_rows(sub: StartSubmenu) -> Vec<Option<usize>> {
     match sub {
-        StartSubmenu::System => &START_SYSTEM_VIS_ROWS,
+        StartSubmenu::System => (0..submenu_items_system().len()).map(Some).collect(),
     }
 }
 
@@ -1093,7 +1100,10 @@ fn clamp_idx(idx: &mut usize, len: usize) {
 
 fn normalize_start_selection(state: &mut StartState) {
     clamp_idx(&mut state.selected_root, START_ROOT_ITEMS.len());
-    clamp_idx(&mut state.selected_system, START_SYSTEM.len());
+    clamp_idx(
+        &mut state.selected_system,
+        submenu_items_len(StartSubmenu::System),
+    );
     clamp_idx(&mut state.selected_leaf_apps, state.app_items.len());
     clamp_idx(&mut state.selected_leaf_docs, state.document_items.len());
     clamp_idx(&mut state.selected_leaf_network, state.network_items.len());
@@ -1605,28 +1615,31 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             }
             items
         }
-        DesktopHubKind::Connections => vec![
-            DesktopHubItem {
+        DesktopHubKind::Connections => {
+            let mut items = vec![DesktopHubItem {
                 label: "Network".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::ConnectionsNetworkMenu),
                 enabled: true,
-            },
-            DesktopHubItem {
-                label: "Bluetooth".to_string(),
-                action: DesktopHubItemAction::OpenConnectionsKind(ConnectionKind::Bluetooth),
-                enabled: true,
-            },
-            DesktopHubItem {
+            }];
+            if !macos_blueutil_missing() {
+                items.push(DesktopHubItem {
+                    label: "Bluetooth".to_string(),
+                    action: DesktopHubItemAction::OpenConnectionsKind(ConnectionKind::Bluetooth),
+                    enabled: true,
+                });
+            }
+            items.push(DesktopHubItem {
                 label: String::new(),
                 action: DesktopHubItemAction::None,
                 enabled: false,
-            },
-            DesktopHubItem {
+            });
+            items.push(DesktopHubItem {
                 label: "Open Network Apps Menu".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::Network),
                 enabled: true,
-            },
-        ],
+            });
+            items
+        }
         DesktopHubKind::ConnectionsNetworkMenu => {
             let mut items = Vec::new();
             for group in network_menu_groups() {
@@ -2798,6 +2811,7 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
             .map(|p| (p.x, p.y)),
         ..DesktopState::default()
     };
+    restore_desktop_session_state(&mut state);
     let mut needs_redraw = true;
     let mut last_draw = Instant::now();
     let mut last_motion_event = Instant::now() - Duration::from_secs(1);
@@ -2833,6 +2847,7 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
                     if let Some(exit) =
                         handle_key(terminal, current_user, &mut state, key.code, key.modifiers)?
                     {
+                        persist_desktop_session_state(&state);
                         terminate_all_pty_windows(&mut state);
                         return Ok(exit);
                     }
@@ -2907,6 +2922,7 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
                         continue;
                     }
                     if let Some(exit) = handle_mouse(terminal, current_user, &mut state, mouse)? {
+                        persist_desktop_session_state(&state);
                         terminate_all_pty_windows(&mut state);
                         return Ok(exit);
                     }
@@ -3167,9 +3183,13 @@ fn handle_key(
                     }
                 } else if let Some(sub) = state.start.open_submenu {
                     let items = submenu_items_system();
-                    let idx =
-                        submenu_selected_idx(&state.start, sub).min(items.len().saturating_sub(1));
-                    StartAction::Launch(items[idx].1)
+                    if items.is_empty() {
+                        StartAction::None
+                    } else {
+                        let idx = submenu_selected_idx(&state.start, sub)
+                            .min(items.len().saturating_sub(1));
+                        StartAction::Launch(items[idx].1)
+                    }
                 } else if root_has_expandable_panel(state.start.selected_root) {
                     open_start_panel_for_root(&mut state.start);
                     state.start.hover_candidate = None;
@@ -4724,6 +4744,15 @@ fn run_top_menu_action(
                 open_file_request_and_track(terminal, state, &path, request)?;
             }
         }
+        TopMenuAction::OpenRecentFolder(path) => {
+            if !path.is_dir() {
+                flash_message(terminal, "Recent folder no longer exists.", 1100)?;
+                state.folder_recent.retain(|entry| entry != &path);
+            } else {
+                open_file_manager_window_at_path(state, path.clone());
+                record_recent_folder_open(state, &path);
+            }
+        }
         TopMenuAction::FileManagerCopy
         | TopMenuAction::FileManagerCut
         | TopMenuAction::FileManagerPaste
@@ -5556,6 +5585,16 @@ fn open_with_history_for_extension(ext_key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn open_with_default_for_extension(ext_key: &str) -> Option<String> {
+    let settings = get_settings();
+    settings
+        .desktop_file_manager
+        .open_with_default_by_extension
+        .get(ext_key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn record_open_with_command(ext_key: &str, command: &str) {
     let normalized = command.trim();
     if normalized.is_empty() {
@@ -5570,6 +5609,140 @@ fn record_open_with_command(ext_key: &str, command: &str) {
         push_open_with_history(history, normalized);
     });
     persist_settings();
+}
+
+fn set_open_with_default_command(ext_key: &str, command: Option<&str>) {
+    update_settings(|s| {
+        set_open_with_default_in_settings(&mut s.desktop_file_manager, ext_key, command);
+    });
+    persist_settings();
+}
+
+fn set_open_with_default_in_settings(
+    fm: &mut DesktopFileManagerSettings,
+    ext_key: &str,
+    command: Option<&str>,
+) {
+    match command.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(normalized) => {
+            {
+                let history = fm
+                    .open_with_by_extension
+                    .entry(ext_key.to_string())
+                    .or_default();
+                push_open_with_history(history, normalized);
+            }
+            fm.open_with_default_by_extension
+                .insert(ext_key.to_string(), normalized.to_string());
+        }
+        None => {
+            fm.open_with_default_by_extension.remove(ext_key);
+        }
+    }
+}
+
+fn replace_open_with_command(ext_key: &str, old_command: &str, new_command: &str) {
+    let old_normalized = old_command.trim();
+    let new_normalized = new_command.trim();
+    if old_normalized.is_empty() || new_normalized.is_empty() {
+        return;
+    }
+
+    update_settings(|s| {
+        replace_open_with_command_in_settings(
+            &mut s.desktop_file_manager,
+            ext_key,
+            old_normalized,
+            new_normalized,
+        );
+    });
+    persist_settings();
+}
+
+fn replace_open_with_command_in_settings(
+    fm: &mut DesktopFileManagerSettings,
+    ext_key: &str,
+    old_normalized: &str,
+    new_normalized: &str,
+) {
+    let was_default = fm
+        .open_with_default_by_extension
+        .get(ext_key)
+        .is_some_and(|current| current.trim() == old_normalized);
+
+    let remove_bucket = {
+        let history = fm
+            .open_with_by_extension
+            .entry(ext_key.to_string())
+            .or_default();
+        history.retain(|entry| entry.trim() != old_normalized);
+        push_open_with_history(history, new_normalized);
+        history.is_empty()
+    };
+    if remove_bucket {
+        fm.open_with_by_extension.remove(ext_key);
+    }
+
+    if was_default {
+        fm.open_with_default_by_extension
+            .insert(ext_key.to_string(), new_normalized.to_string());
+    }
+}
+
+fn remove_open_with_command(ext_key: &str, command: &str) {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return;
+    }
+
+    update_settings(|s| {
+        remove_open_with_command_in_settings(&mut s.desktop_file_manager, ext_key, normalized);
+    });
+    persist_settings();
+}
+
+fn remove_open_with_command_in_settings(
+    fm: &mut DesktopFileManagerSettings,
+    ext_key: &str,
+    normalized: &str,
+) {
+    let mut remove_bucket = false;
+    if let Some(history) = fm.open_with_by_extension.get_mut(ext_key) {
+        history.retain(|entry| entry.trim() != normalized);
+        remove_bucket = history.is_empty();
+    }
+    if remove_bucket {
+        fm.open_with_by_extension.remove(ext_key);
+    }
+    if fm
+        .open_with_default_by_extension
+        .get(ext_key)
+        .is_some_and(|current| current.trim() == normalized)
+    {
+        fm.open_with_default_by_extension.remove(ext_key);
+    }
+}
+
+fn launch_open_with_command(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    path: &Path,
+    command_line: &str,
+) -> Result<()> {
+    let normalized = command_line.trim();
+    let Some(mut cmd) = parse_custom_command_line(normalized) else {
+        return Err(anyhow!("Invalid command line: {normalized}"));
+    };
+    let program = cmd.first().cloned().unwrap_or_default();
+    cmd.push(path.display().to_string());
+    let title = format!("{} - {}", command_title(&cmd[0]), path_display_name(path));
+    open_pty_window_named(terminal, state, &cmd, Some(title.as_str())).map_err(|err| {
+        if !program.is_empty() && !command_exists(&program) {
+            anyhow!("Command `{program}` was not found in PATH.")
+        } else {
+            anyhow!("Could not start `{normalized}`: {err}")
+        }
+    })
 }
 
 fn record_recent_file_open(state: &mut DesktopState, path: &Path, request: FileManagerOpenRequest) {
@@ -5588,6 +5761,147 @@ fn record_recent_file_open(state: &mut DesktopState, path: &Path, request: FileM
     if state.file_recent.len() > FILE_MANAGER_RECENT_LIMIT {
         state.file_recent.truncate(FILE_MANAGER_RECENT_LIMIT);
     }
+}
+
+fn normalize_existing_dir_path(path: &Path) -> Option<PathBuf> {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    normalized.is_dir().then_some(normalized)
+}
+
+fn push_recent_folder_front(recent: &mut Vec<PathBuf>, path: &Path) {
+    let Some(normalized) = normalize_existing_dir_path(path) else {
+        return;
+    };
+    recent.retain(|entry| entry != &normalized);
+    recent.insert(0, normalized);
+    if recent.len() > FILE_MANAGER_RECENT_FOLDERS_LIMIT {
+        recent.truncate(FILE_MANAGER_RECENT_FOLDERS_LIMIT);
+    }
+}
+
+fn record_recent_folder_open(state: &mut DesktopState, path: &Path) {
+    push_recent_folder_front(&mut state.folder_recent, path);
+}
+
+fn file_manager_window_state(state: &DesktopState) -> Option<&FileManagerState> {
+    state.windows.iter().find_map(|win| match &win.kind {
+        WindowKind::FileManager(fm) => Some(fm),
+        _ => None,
+    })
+}
+
+fn apply_file_manager_session(fm: &mut FileManagerState, tabs: Vec<PathBuf>, active_tab: usize) {
+    if tabs.is_empty() {
+        return;
+    }
+    let active_tab = active_tab.min(tabs.len().saturating_sub(1));
+    fm.tabs = tabs;
+    fm.active_tab = active_tab;
+    fm.cwd = fm.tabs[active_tab].clone();
+    fm.selected = 0;
+    fm.scroll = 0;
+    fm.tree_focus = false;
+    fm.search_query.clear();
+    fm.search_mode = false;
+    fm.refresh();
+}
+
+fn restore_desktop_session_state(state: &mut DesktopState) {
+    let session = get_settings().desktop_session;
+    state.folder_recent = session
+        .recent_folders
+        .iter()
+        .filter_map(|path| normalize_existing_dir_path(Path::new(path)))
+        .take(FILE_MANAGER_RECENT_FOLDERS_LIMIT)
+        .collect();
+    if !session.reopen_last_file_manager {
+        return;
+    }
+
+    let mut tabs = Vec::new();
+    let mut seen = HashSet::new();
+    for path in &session.file_manager_tabs {
+        let Some(normalized) = normalize_existing_dir_path(Path::new(path)) else {
+            continue;
+        };
+        if seen.insert(normalized.clone()) {
+            tabs.push(normalized);
+        }
+    }
+    if tabs.is_empty() {
+        return;
+    }
+
+    open_file_manager_window(state);
+    if let Some(fm) = focused_file_manager_mut(state) {
+        apply_file_manager_session(fm, tabs, session.active_file_manager_tab);
+    }
+    if let Some(path) = focused_file_manager_cwd(state) {
+        record_recent_folder_open(state, &path);
+    }
+}
+
+fn collect_recent_folders_for_persistence(state: &DesktopState) -> Vec<String> {
+    let mut recent = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(fm) = file_manager_window_state(state) {
+        if let Some(path) = normalize_existing_dir_path(&fm.cwd) {
+            let label = path.display().to_string();
+            if seen.insert(label.clone()) {
+                recent.push(label);
+            }
+        }
+        for tab in &fm.tabs {
+            if let Some(path) = normalize_existing_dir_path(tab) {
+                let label = path.display().to_string();
+                if seen.insert(label.clone()) {
+                    recent.push(label);
+                }
+            }
+        }
+    }
+    for path in &state.folder_recent {
+        if let Some(path) = normalize_existing_dir_path(path) {
+            let label = path.display().to_string();
+            if seen.insert(label.clone()) {
+                recent.push(label);
+            }
+        }
+    }
+    recent.truncate(FILE_MANAGER_RECENT_FOLDERS_LIMIT);
+    recent
+}
+
+fn persist_desktop_session_state(state: &DesktopState) {
+    let (reopen_last_file_manager, file_manager_tabs, active_file_manager_tab) =
+        if let Some(fm) = file_manager_window_state(state) {
+            let tabs: Vec<String> = fm
+                .tabs
+                .iter()
+                .filter_map(|tab| normalize_existing_dir_path(tab))
+                .map(|tab| tab.display().to_string())
+                .collect();
+            if tabs.is_empty() {
+                (false, Vec::new(), 0)
+            } else {
+                (
+                    true,
+                    tabs,
+                    fm.active_tab.min(fm.tabs.len().saturating_sub(1)),
+                )
+            }
+        } else {
+            (false, Vec::new(), 0)
+        };
+    let recent_folders = collect_recent_folders_for_persistence(state);
+
+    update_settings(|settings| {
+        settings.desktop_session.reopen_last_file_manager = reopen_last_file_manager;
+        settings.desktop_session.file_manager_tabs = file_manager_tabs;
+        settings.desktop_session.active_file_manager_tab = active_file_manager_tab;
+        settings.desktop_session.recent_folders = recent_folders;
+    });
+    persist_settings();
 }
 
 fn open_file_request_and_track(
@@ -6002,6 +6316,18 @@ fn file_manager_open_selected_with(
     terminal: &mut Term,
     state: &mut DesktopState,
 ) -> Result<String> {
+    #[derive(Clone)]
+    enum OpenWithMenuAction {
+        Use(String),
+        SetDefault(String),
+        ClearDefault,
+        Edit(String),
+        Remove(String),
+        NewCommand(bool),
+        Back,
+        Separator,
+    }
+
     let Some(entry) = focused_editable_file_manager_entry(state) else {
         return Err(anyhow!("Select a file first."));
     };
@@ -6011,49 +6337,176 @@ fn file_manager_open_selected_with(
 
     let ext_key = open_with_extension_key(&entry.path);
     let ext_label = open_with_extension_label(&ext_key);
-    let saved = open_with_history_for_extension(&ext_key);
-    let mut selected_command: Option<String> = None;
-    let mut rows: Vec<String> = saved.iter().map(|c| format!("Use: {c}")).collect();
-    if !rows.is_empty() {
-        rows.push("---".to_string());
-    }
-    rows.push("New Command...".to_string());
-    rows.push("Back".to_string());
-    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-    let title = format!("Open With — {ext_label}");
-    run_with_mouse_capture_paused(terminal, |t| {
-        match run_menu_compact(t, &title, &refs, Some("Choose command for this extension"))? {
-            MenuResult::Back => {}
-            MenuResult::Selected(sel) if sel == "Back" => {}
-            MenuResult::Selected(sel) if sel == "New Command..." => {
-                selected_command = input_prompt(t, "Open with command:")?;
+
+    loop {
+        let saved = open_with_history_for_extension(&ext_key);
+        let current_default = open_with_default_for_extension(&ext_key);
+        let title = format!("Open With — {ext_label}");
+        let subtitle = current_default
+            .as_ref()
+            .map(|cmd| format!("Always use: {cmd}"))
+            .unwrap_or_else(|| "Choose command for this extension".to_string());
+
+        let mut items: Vec<(String, OpenWithMenuAction)> = Vec::new();
+        for command in &saved {
+            let is_default = current_default.as_deref() == Some(command.as_str());
+            let use_label = if is_default {
+                format!("Use: {command} [default]")
+            } else {
+                format!("Use: {command}")
+            };
+            items.push((use_label, OpenWithMenuAction::Use(command.clone())));
+            items.push((
+                if is_default {
+                    format!("Stop Always Using: {command}")
+                } else {
+                    format!("Always Use: {command}")
+                },
+                if is_default {
+                    OpenWithMenuAction::ClearDefault
+                } else {
+                    OpenWithMenuAction::SetDefault(command.clone())
+                },
+            ));
+            items.push((
+                format!("Edit Saved: {command}"),
+                OpenWithMenuAction::Edit(command.clone()),
+            ));
+            items.push((
+                format!("Remove Saved: {command}"),
+                OpenWithMenuAction::Remove(command.clone()),
+            ));
+        }
+        if !saved.is_empty() {
+            items.push(("---".to_string(), OpenWithMenuAction::Separator));
+        }
+        items.push((
+            "New Command...".to_string(),
+            OpenWithMenuAction::NewCommand(false),
+        ));
+        items.push((
+            format!("New Command + Always Use for {ext_label}"),
+            OpenWithMenuAction::NewCommand(true),
+        ));
+        if current_default.is_some() {
+            items.push((
+                "Clear Always Use".to_string(),
+                OpenWithMenuAction::ClearDefault,
+            ));
+        }
+        items.push(("Back".to_string(), OpenWithMenuAction::Back));
+
+        let refs: Vec<&str> = items.iter().map(|(label, _)| label.as_str()).collect();
+        let mut chosen_label: Option<String> = None;
+        run_with_mouse_capture_paused(terminal, |t| {
+            match run_menu_compact(t, &title, &refs, Some(subtitle.as_str()))? {
+                MenuResult::Back => {}
+                MenuResult::Selected(sel) => chosen_label = Some(sel),
             }
-            MenuResult::Selected(sel) => {
-                if let Some(cmd) = sel.strip_prefix("Use: ") {
-                    selected_command = Some(cmd.to_string());
+            Ok(())
+        })?;
+
+        let Some(chosen_label) = chosen_label else {
+            return Ok("Open With canceled.".to_string());
+        };
+        let Some((_, action)) = items.into_iter().find(|(label, _)| *label == chosen_label) else {
+            return Ok("Open With canceled.".to_string());
+        };
+
+        match action {
+            OpenWithMenuAction::Use(command_line) => {
+                launch_open_with_command(terminal, state, &entry.path, &command_line)?;
+                record_open_with_command(&ext_key, &command_line);
+                record_recent_file_open(state, &entry.path, FileManagerOpenRequest::External);
+                return Ok(format!("Opened {} in PTY", entry.name));
+            }
+            OpenWithMenuAction::SetDefault(command_line) => {
+                set_open_with_default_command(&ext_key, Some(command_line.as_str()));
+                flash_message(
+                    terminal,
+                    &format!("Now always using {} for {}.", command_line, ext_label),
+                    950,
+                )?;
+            }
+            OpenWithMenuAction::ClearDefault => {
+                set_open_with_default_command(&ext_key, None);
+                flash_message(
+                    terminal,
+                    &format!("Cleared always-use command for {}.", ext_label),
+                    950,
+                )?;
+            }
+            OpenWithMenuAction::Edit(previous) => {
+                let prompt = format!("Edit command for {ext_label}:");
+                let mut edited: Option<String> = None;
+                run_with_mouse_capture_paused(terminal, |t| {
+                    edited = input_prompt(t, &prompt)?;
+                    Ok(())
+                })?;
+                let Some(edited) = edited else {
+                    continue;
+                };
+                let edited = edited.trim().to_string();
+                if edited.is_empty() {
+                    flash_message(terminal, "Edited command cannot be empty.", 1000)?;
+                    continue;
                 }
+                if parse_custom_command_line(&edited).is_none() {
+                    flash_message(terminal, "Error: invalid command line", 1200)?;
+                    continue;
+                }
+                replace_open_with_command(&ext_key, &previous, &edited);
+                flash_message(
+                    terminal,
+                    &format!("Updated saved command for {}.", ext_label),
+                    950,
+                )?;
+            }
+            OpenWithMenuAction::Remove(command_line) => {
+                remove_open_with_command(&ext_key, &command_line);
+                flash_message(
+                    terminal,
+                    &format!("Removed saved command for {}.", ext_label),
+                    950,
+                )?;
+            }
+            OpenWithMenuAction::NewCommand(make_default) => {
+                let mut raw: Option<String> = None;
+                run_with_mouse_capture_paused(terminal, |t| {
+                    raw = input_prompt(t, "Open with command:")?;
+                    Ok(())
+                })?;
+                let Some(raw) = raw else {
+                    continue;
+                };
+                let command_line = raw.trim().to_string();
+                if command_line.is_empty() {
+                    continue;
+                }
+                if parse_custom_command_line(&command_line).is_none() {
+                    flash_message(terminal, "Error: invalid command line", 1200)?;
+                    continue;
+                }
+                launch_open_with_command(terminal, state, &entry.path, &command_line)?;
+                record_open_with_command(&ext_key, &command_line);
+                if make_default {
+                    set_open_with_default_command(&ext_key, Some(command_line.as_str()));
+                }
+                record_recent_file_open(state, &entry.path, FileManagerOpenRequest::External);
+                return Ok(if make_default {
+                    format!(
+                        "Opened {} in PTY and saved default for {}.",
+                        entry.name, ext_label
+                    )
+                } else {
+                    format!("Opened {} in PTY", entry.name)
+                });
+            }
+            OpenWithMenuAction::Back | OpenWithMenuAction::Separator => {
+                return Ok("Open With canceled.".to_string());
             }
         }
-        Ok(())
-    })?;
-
-    let Some(raw) = selected_command else {
-        return Ok("Open With canceled.".to_string());
-    };
-    let command_line = raw.trim().to_string();
-    if command_line.is_empty() {
-        return Ok("Open With canceled.".to_string());
     }
-    let Some(mut cmd) = parse_custom_command_line(command_line.as_str()) else {
-        return Err(anyhow!("Invalid command line."));
-    };
-    cmd.push(entry.path.display().to_string());
-    let title = format!("{} - {}", command_title(&cmd[0]), entry.name);
-    open_pty_window_named(terminal, state, &cmd, Some(title.as_str()))
-        .map_err(|err| anyhow!("Launch failed: {err}"))?;
-    record_open_with_command(&ext_key, &command_line);
-    record_recent_file_open(state, &entry.path, FileManagerOpenRequest::External);
-    Ok(format!("Opened {} in PTY", entry.name))
 }
 
 fn file_manager_paste_clipboard(state: &mut DesktopState) -> Result<String> {
@@ -6303,6 +6756,19 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                         });
                     }
                 }
+            }
+            if !state.folder_recent.is_empty() {
+                items.push(top_menu_separator_item());
+                for recent in state.folder_recent.iter().take(6) {
+                    items.push(TopMenuItem {
+                        label: format!("Recent Folder: {}", path_display_name(recent)),
+                        shortcut: None,
+                        action: TopMenuAction::OpenRecentFolder(recent.clone()),
+                        enabled: recent.is_dir(),
+                    });
+                }
+            }
+            if !items.is_empty() {
                 items.push(top_menu_separator_item());
             }
             items.push(TopMenuItem {
@@ -7779,7 +8245,8 @@ fn draw_desktop_hub_window(
 }
 
 fn file_manager_settings_rows() -> Vec<String> {
-    let s = get_settings().desktop_file_manager;
+    let settings = get_settings();
+    let s = settings.desktop_file_manager;
     vec![
         format!(
             "Show Hidden Files: {} [toggle]",
@@ -7812,6 +8279,14 @@ fn file_manager_settings_rows() -> Vec<String> {
             match s.text_open_mode {
                 FileManagerTextOpenMode::Editor => "Editor",
                 FileManagerTextOpenMode::Viewer => "Viewer",
+            }
+        ),
+        format!(
+            "Restore Last Session: {} [toggle]",
+            if settings.desktop_session.reopen_last_file_manager {
+                "ON"
+            } else {
+                "OFF"
             }
         ),
         "Back".to_string(),
@@ -7848,14 +8323,15 @@ fn draw_file_manager_settings_window(
 
 fn desktop_settings_home_items(state: &DesktopSettingsState) -> Vec<DesktopSettingsHomeItem> {
     let mut items = vec![
-        DesktopSettingsHomeItem::Appearance,
         DesktopSettingsHomeItem::General,
+        DesktopSettingsHomeItem::Appearance,
         DesktopSettingsHomeItem::DefaultApps,
-        DesktopSettingsHomeItem::Connections,
-        DesktopSettingsHomeItem::CliDisplay,
-        DesktopSettingsHomeItem::CliProfiles,
-        DesktopSettingsHomeItem::EditMenus,
     ];
+    if !macos_connections_disabled() {
+        items.push(DesktopSettingsHomeItem::Connections);
+    }
+    items.push(DesktopSettingsHomeItem::CliProfiles);
+    items.push(DesktopSettingsHomeItem::EditMenus);
     if state.is_admin {
         items.push(DesktopSettingsHomeItem::UserManagement);
     }
@@ -7870,7 +8346,6 @@ fn desktop_settings_home_label(item: DesktopSettingsHomeItem) -> &'static str {
         DesktopSettingsHomeItem::General => "General",
         DesktopSettingsHomeItem::DefaultApps => "Default Apps",
         DesktopSettingsHomeItem::Connections => "Connections",
-        DesktopSettingsHomeItem::CliDisplay => "CLI Display",
         DesktopSettingsHomeItem::CliProfiles => "CLI Profiles",
         DesktopSettingsHomeItem::EditMenus => "Edit Menus",
         DesktopSettingsHomeItem::UserManagement => "User Management",
@@ -7885,7 +8360,6 @@ fn desktop_settings_home_icon(item: DesktopSettingsHomeItem) -> &'static str {
         DesktopSettingsHomeItem::General => "[*]",
         DesktopSettingsHomeItem::DefaultApps => "[D]",
         DesktopSettingsHomeItem::Connections => "[C]",
-        DesktopSettingsHomeItem::CliDisplay => "[#]",
         DesktopSettingsHomeItem::CliProfiles => "[=]",
         DesktopSettingsHomeItem::EditMenus => "[M]",
         DesktopSettingsHomeItem::UserManagement => "[U]",
@@ -8213,12 +8687,21 @@ fn desktop_default_app_select_rows(slot: DefaultAppSlot) -> Vec<String> {
     rows
 }
 
+fn desktop_connection_targets() -> Vec<ConnectionKind> {
+    let mut targets = vec![ConnectionKind::Network];
+    if !macos_blueutil_missing() {
+        targets.push(ConnectionKind::Bluetooth);
+    }
+    targets
+}
+
 fn desktop_connections_rows() -> Vec<String> {
-    vec![
-        "Network".to_string(),
-        "Bluetooth".to_string(),
-        "Back".to_string(),
-    ]
+    let mut rows: Vec<String> = desktop_connection_targets()
+        .into_iter()
+        .map(|kind| connection_kind_label(kind).to_string())
+        .collect();
+    rows.push("Back".to_string());
+    rows
 }
 
 fn desktop_connections_kind_rows(kind: ConnectionKind) -> Vec<String> {
@@ -8596,6 +9079,7 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
                 "Desktop Icons: {} [choose]",
                 desktop_icon_style_label(s.desktop_icon_style)
             ),
+            "CLI Display".to_string(),
             "Wallpapers".to_string(),
             "Back".to_string(),
         ],
@@ -9176,12 +9660,13 @@ fn draw_start_menu(f: &mut ratatui::Frame, size: Rect, state: &DesktopState) {
         let inner_sub_w = sub.width.saturating_sub(2) as usize;
         let mut sub_lines = Vec::new();
         let rows = submenu_visual_rows(submenu);
+        let items = submenu_items_system();
         let selected = submenu_selected_idx(&state.start, submenu);
         for row in rows {
             match row {
                 Some(i) => {
-                    let (label, _) = submenu_items_system()[*i];
-                    let style = if *i == selected {
+                    let (label, _) = items[i];
+                    let style = if i == selected {
                         sel_style()
                     } else {
                         normal_style()
@@ -9999,18 +10484,26 @@ fn open_file_manager_window(state: &mut DesktopState) {
     });
 }
 
-fn open_trash_in_file_manager(state: &mut DesktopState) {
-    let trash = file_manager_trash_dir();
-    let _ = std::fs::create_dir_all(&trash);
+fn open_file_manager_window_at_path(state: &mut DesktopState, path: PathBuf) {
+    let Some(path) = normalize_existing_dir_path(&path) else {
+        return;
+    };
     open_file_manager_window(state);
     if let Some(fm) = focused_file_manager_mut(state) {
-        fm.set_cwd(trash);
+        fm.set_cwd(path.clone());
         fm.selected = 0;
         fm.scroll = 0;
         fm.tree_focus = false;
         fm.search_mode = false;
         fm.refresh();
     }
+    record_recent_folder_open(state, &path);
+}
+
+fn open_trash_in_file_manager(state: &mut DesktopState) {
+    let trash = file_manager_trash_dir();
+    let _ = std::fs::create_dir_all(&trash);
+    open_file_manager_window_at_path(state, trash);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -11332,7 +11825,15 @@ fn handle_file_manager_settings_key(
                 persist_settings();
                 return (true, false);
             }
-            6 => return (false, true),
+            6 => {
+                update_settings(|s| {
+                    s.desktop_session.reopen_last_file_manager =
+                        !s.desktop_session.reopen_last_file_manager;
+                });
+                persist_settings();
+                return (true, false);
+            }
+            7 => return (false, true),
             _ => {}
         },
         _ => {}
@@ -11360,12 +11861,19 @@ fn open_focused_file_manager_selection(
 
 fn handle_file_open_request(
     terminal: &mut Term,
-    _state: &mut DesktopState,
+    state: &mut DesktopState,
     path: &Path,
     request: FileManagerOpenRequest,
 ) -> Result<()> {
     match request {
         FileManagerOpenRequest::Builtin => {
+            if path.is_file() {
+                let ext_key = open_with_extension_key(path);
+                if let Some(command_line) = open_with_default_for_extension(&ext_key) {
+                    launch_open_with_command(terminal, state, path, &command_line)?;
+                    return Ok(());
+                }
+            }
             let open_mode = get_settings().desktop_file_manager.text_open_mode;
             run_with_mouse_capture_paused(terminal, |t| match open_mode {
                 FileManagerTextOpenMode::Editor => documents::edit_text_file(t, path),
@@ -11532,7 +12040,7 @@ fn desktop_settings_profile_default_for_target(
 fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
     match &state.panel {
         DesktopSettingsPanel::Home => desktop_settings_home_items(state).len(),
-        DesktopSettingsPanel::Appearance => 5,
+        DesktopSettingsPanel::Appearance => 6,
         DesktopSettingsPanel::DefaultApps => desktop_default_apps_rows().len(),
         DesktopSettingsPanel::DefaultAppSelect(slot) => {
             desktop_default_app_select_rows(*slot).len()
@@ -11796,11 +12304,6 @@ fn handle_desktop_settings_activate(
                     state.selected = 0;
                     DesktopSettingsAction::None
                 }
-                DesktopSettingsHomeItem::CliDisplay => {
-                    state.panel = DesktopSettingsPanel::CliDisplay;
-                    state.selected = 0;
-                    DesktopSettingsAction::None
-                }
                 DesktopSettingsHomeItem::CliProfiles => {
                     state.panel = DesktopSettingsPanel::ProfileList;
                     state.selected = 0;
@@ -11842,6 +12345,11 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
             3 => {
+                state.panel = DesktopSettingsPanel::CliDisplay;
+                state.selected = 0;
+                DesktopSettingsAction::None
+            }
+            4 => {
                 state.panel = DesktopSettingsPanel::Wallpapers;
                 state.selected = 0;
                 DesktopSettingsAction::None
@@ -11897,16 +12405,9 @@ fn handle_desktop_settings_activate(
         }
         DesktopSettingsPanel::Connections => match state.selected {
             _ if macos_connections_disabled() => DesktopSettingsAction::ShowConnectionsDisabledHint,
-            0 => {
-                state.panel = DesktopSettingsPanel::ConnectionsKind(ConnectionKind::Network);
-                state.selected = 0;
-                DesktopSettingsAction::None
-            }
-            1 => {
-                if macos_blueutil_missing() {
-                    return DesktopSettingsAction::ShowBluetoothInstallerHint;
-                }
-                state.panel = DesktopSettingsPanel::ConnectionsKind(ConnectionKind::Bluetooth);
+            idx if idx < desktop_connection_targets().len() => {
+                let kind = desktop_connection_targets()[idx];
+                state.panel = DesktopSettingsPanel::ConnectionsKind(kind);
                 state.selected = 0;
                 DesktopSettingsAction::None
             }
@@ -12287,10 +12788,10 @@ fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSett
         }
         DesktopSettingsPanel::ConnectionsKind(kind) => {
             state.panel = DesktopSettingsPanel::Connections;
-            state.selected = match kind {
-                ConnectionKind::Network => 0,
-                ConnectionKind::Bluetooth => 1,
-            };
+            state.selected = desktop_connection_targets()
+                .iter()
+                .position(|candidate| *candidate == kind)
+                .unwrap_or(0);
             state.hovered = None;
             DesktopSettingsAction::None
         }
@@ -12312,9 +12813,15 @@ fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSett
             state.hovered = None;
             DesktopSettingsAction::None
         }
+        DesktopSettingsPanel::CliDisplay => {
+            state.panel = DesktopSettingsPanel::Appearance;
+            state.selected = 3;
+            state.hovered = None;
+            DesktopSettingsAction::None
+        }
         DesktopSettingsPanel::Wallpapers => {
             state.panel = DesktopSettingsPanel::Appearance;
-            state.selected = 0;
+            state.selected = 4;
             state.hovered = None;
             DesktopSettingsAction::None
         }
@@ -13636,5 +14143,189 @@ mod tests {
             "(no extension)".to_string()
         );
         assert_eq!(open_with_extension_label("md"), ".md".to_string());
+    }
+
+    #[test]
+    fn open_with_default_settings_track_and_replace_default() {
+        let mut fm = DesktopFileManagerSettings::default();
+
+        set_open_with_default_in_settings(&mut fm, "txt", Some("code"));
+        assert_eq!(
+            fm.open_with_default_by_extension.get("txt"),
+            Some(&"code".to_string())
+        );
+        assert_eq!(
+            fm.open_with_by_extension.get("txt"),
+            Some(&vec!["code".to_string()])
+        );
+
+        replace_open_with_command_in_settings(&mut fm, "txt", "code", "zed");
+        assert_eq!(
+            fm.open_with_default_by_extension.get("txt"),
+            Some(&"zed".to_string())
+        );
+        assert_eq!(
+            fm.open_with_by_extension.get("txt"),
+            Some(&vec!["zed".to_string()])
+        );
+    }
+
+    #[test]
+    fn removing_open_with_default_clears_default_mapping() {
+        let mut fm = DesktopFileManagerSettings::default();
+        set_open_with_default_in_settings(&mut fm, "md", Some("helix"));
+        push_open_with_history(
+            fm.open_with_by_extension
+                .entry("md".to_string())
+                .or_default(),
+            "code",
+        );
+
+        remove_open_with_command_in_settings(&mut fm, "md", "helix");
+        assert!(fm.open_with_default_by_extension.get("md").is_none());
+        assert_eq!(
+            fm.open_with_by_extension.get("md"),
+            Some(&vec!["code".to_string()])
+        );
+    }
+
+    #[test]
+    fn desktop_connections_rows_follow_available_targets() {
+        let rows = desktop_connections_rows();
+        let mut expected = vec!["Network".to_string()];
+        if !macos_blueutil_missing() {
+            expected.push("Bluetooth".to_string());
+        }
+        expected.push("Back".to_string());
+        assert_eq!(rows, expected);
+    }
+
+    #[test]
+    fn desktop_settings_home_hides_disabled_connections_tile() {
+        let state = DesktopSettingsState::default();
+        let items = desktop_settings_home_items(&state);
+        let has_connections = items.contains(&DesktopSettingsHomeItem::Connections);
+        assert_eq!(has_connections, !macos_connections_disabled());
+    }
+
+    #[test]
+    fn appearance_can_open_cli_display_and_back_returns_to_appearance() {
+        let mut state = DesktopSettingsState::default();
+        state.panel = DesktopSettingsPanel::Appearance;
+        state.selected = 3;
+
+        let action = handle_desktop_settings_activate(&mut state, false);
+        assert!(matches!(action, DesktopSettingsAction::None));
+        assert!(matches!(state.panel, DesktopSettingsPanel::CliDisplay));
+        assert_eq!(state.selected, 0);
+
+        let action = handle_desktop_settings_back(&mut state);
+        assert!(matches!(action, DesktopSettingsAction::None));
+        assert!(matches!(state.panel, DesktopSettingsPanel::Appearance));
+        assert_eq!(state.selected, 3);
+    }
+
+    #[test]
+    fn start_system_items_hide_connections_when_platform_disables_them() {
+        let items = submenu_items_system();
+        let has_connections = items
+            .iter()
+            .any(|(label, launch)| *label == "Connections" && *launch == StartLaunch::Connections);
+        assert_eq!(has_connections, !macos_connections_disabled());
+    }
+
+    #[test]
+    fn recent_folder_list_dedupes_and_caps() {
+        let base = test_temp_dir("recent-folders");
+        let mut state = DesktopState::default();
+
+        for idx in 0..(FILE_MANAGER_RECENT_FOLDERS_LIMIT + 3) {
+            let path = base.join(format!("dir{idx}"));
+            std::fs::create_dir_all(&path).expect("create recent folder");
+            record_recent_folder_open(&mut state, &path);
+        }
+        assert_eq!(state.folder_recent.len(), FILE_MANAGER_RECENT_FOLDERS_LIMIT);
+
+        let duplicate = base.join("dir3");
+        record_recent_folder_open(&mut state, &duplicate);
+        let duplicate_norm = std::fs::canonicalize(&duplicate).expect("canonical duplicate dir");
+        assert_eq!(state.folder_recent[0], duplicate_norm);
+        let dup_count = state
+            .folder_recent
+            .iter()
+            .filter(|item| **item == duplicate_norm)
+            .count();
+        assert_eq!(dup_count, 1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn apply_file_manager_session_restores_tabs_and_active_folder() {
+        let base = test_temp_dir("fm-session");
+        let first = base.join("one");
+        let second = base.join("two");
+        std::fs::create_dir_all(&first).expect("create first folder");
+        std::fs::create_dir_all(&second).expect("create second folder");
+
+        let mut fm = FileManagerState::new();
+        apply_file_manager_session(&mut fm, vec![first.clone(), second.clone()], 1);
+
+        assert_eq!(fm.tabs, vec![first, second.clone()]);
+        assert_eq!(fm.active_tab, 1);
+        assert_eq!(fm.cwd, second);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn collect_recent_folders_for_persistence_prefers_active_file_manager_paths() {
+        let base = test_temp_dir("desktop-session");
+        let first = base.join("one");
+        let second = base.join("two");
+        let third = base.join("three");
+        std::fs::create_dir_all(&first).expect("create first folder");
+        std::fs::create_dir_all(&second).expect("create second folder");
+        std::fs::create_dir_all(&third).expect("create third folder");
+
+        let mut state = DesktopState {
+            next_id: 2,
+            folder_recent: vec![third.clone()],
+            windows: vec![DesktopWindow {
+                id: 1,
+                title: "My Computer".to_string(),
+                rect: WinRect {
+                    x: 0,
+                    y: 0,
+                    w: 40,
+                    h: 20,
+                },
+                restore_rect: None,
+                minimized: false,
+                maximized: false,
+                kind: WindowKind::FileManager(FileManagerState::new()),
+            }],
+            ..DesktopState::default()
+        };
+        let fm = match &mut state.windows[0].kind {
+            WindowKind::FileManager(fm) => fm,
+            _ => unreachable!("expected file manager"),
+        };
+        apply_file_manager_session(fm, vec![first.clone(), second.clone()], 1);
+
+        let first = std::fs::canonicalize(&first).expect("canonical first folder");
+        let second = std::fs::canonicalize(&second).expect("canonical second folder");
+        let third = std::fs::canonicalize(&third).expect("canonical third folder");
+        let recent = collect_recent_folders_for_persistence(&state);
+        assert_eq!(
+            recent,
+            vec![
+                second.display().to_string(),
+                first.display().to_string(),
+                third.display().to_string(),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

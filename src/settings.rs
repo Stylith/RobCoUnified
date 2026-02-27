@@ -711,27 +711,31 @@ pub fn connections_menu(terminal: &mut Term) -> Result<()> {
         return Ok(());
     }
     loop {
-        match run_menu(
-            terminal,
-            "Connections",
-            &["Network", "Bluetooth", "---", "Back"],
-            None,
-        )? {
+        let (rows, subtitle) = terminal_connections_menu_rows();
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        match run_menu(terminal, "Connections", &refs, subtitle)? {
             MenuResult::Back => break,
             MenuResult::Selected(sel) => match sel.as_str() {
                 "Network" => connections_network_menu(terminal)?,
-                "Bluetooth" => {
-                    if macos_blueutil_missing() {
-                        flash_message(terminal, bluetooth_installer_hint(), 1500)?;
-                        continue;
-                    }
-                    connections_kind_menu(terminal, ConnectionKind::Bluetooth, None)?
-                }
+                "Bluetooth" => connections_kind_menu(terminal, ConnectionKind::Bluetooth, None)?,
                 _ => break,
             },
         }
     }
     Ok(())
+}
+
+fn terminal_connections_menu_rows() -> (Vec<String>, Option<&'static str>) {
+    let mut rows = vec!["Network".to_string()];
+    let subtitle = if macos_blueutil_missing() {
+        Some(bluetooth_installer_hint())
+    } else {
+        rows.push("Bluetooth".to_string());
+        None
+    };
+    rows.push("---".to_string());
+    rows.push("Back".to_string());
+    (rows, subtitle)
 }
 
 pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> Result<()> {
@@ -745,6 +749,13 @@ pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> R
 fn settings_general_menu(terminal: &mut Term) -> Result<()> {
     loop {
         let s = get_settings();
+        let open_mode_label = format!(
+            "Default Open Mode: {} [toggle]",
+            match s.default_open_mode {
+                OpenMode::Terminal => "Terminal",
+                OpenMode::Desktop => "Desktop",
+            }
+        );
         let sound_label = if s.sound {
             "Sound: ON  [toggle]"
         } else {
@@ -755,18 +766,11 @@ fn settings_general_menu(terminal: &mut Term) -> Result<()> {
         } else {
             "Bootup: OFF [toggle]"
         };
-        let open_mode_label = format!(
-            "Default Open Mode: {} [toggle]",
-            match s.default_open_mode {
-                OpenMode::Terminal => "Terminal",
-                OpenMode::Desktop => "Desktop",
-            }
-        );
 
         let rows = [
-            open_mode_label.clone(),
-            bootup_label.to_string(),
             sound_label.to_string(),
+            bootup_label.to_string(),
+            open_mode_label.clone(),
             "---".to_string(),
             "Back".to_string(),
         ];
@@ -802,12 +806,8 @@ fn settings_general_menu(terminal: &mut Term) -> Result<()> {
 
 fn settings_appearance_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        match run_menu(
-            terminal,
-            "Settings — Appearance",
-            &["Theme", "CLI Display", "---", "Back"],
-            None,
-        )? {
+        let choices = terminal_appearance_menu_choices();
+        match run_menu(terminal, "Settings — Appearance", &choices, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(sel) => match sel.as_str() {
                 "Theme" => theme_menu(terminal)?,
@@ -819,19 +819,17 @@ fn settings_appearance_menu(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+fn terminal_appearance_menu_choices() -> [&'static str; 4] {
+    ["Theme", "CLI Display", "---", "Back"]
+}
+
 pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
     use crate::apps::edit_menus_menu;
 
     let admin = is_admin(current_user);
 
     loop {
-        let mut choices = vec![
-            "General",
-            "Appearance",
-            "Default Apps",
-            "Connections",
-            "Edit Menus",
-        ];
+        let mut choices = terminal_settings_root_choices(admin);
         if admin {
             choices.push("User Management");
         }
@@ -852,4 +850,44 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn terminal_settings_root_choices(_admin: bool) -> Vec<&'static str> {
+    let mut choices = vec!["General", "Appearance", "Default Apps", "Edit Menus"];
+    if !macos_connections_disabled() {
+        choices.push("Connections");
+    }
+    choices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_appearance_menu_keeps_cli_display_under_appearance() {
+        assert_eq!(
+            terminal_appearance_menu_choices(),
+            ["Theme", "CLI Display", "---", "Back"]
+        );
+    }
+
+    #[test]
+    fn terminal_settings_root_choices_hide_connections_when_disabled() {
+        let choices = terminal_settings_root_choices(false);
+        let has_connections = choices.contains(&"Connections");
+        assert_eq!(has_connections, !macos_connections_disabled());
+    }
+
+    #[test]
+    fn terminal_connections_menu_rows_hide_bluetooth_when_unavailable() {
+        let (rows, subtitle) = terminal_connections_menu_rows();
+        let has_bluetooth = rows.iter().any(|row| row == "Bluetooth");
+        assert_eq!(has_bluetooth, !macos_blueutil_missing());
+        if macos_blueutil_missing() {
+            assert_eq!(subtitle, Some(bluetooth_installer_hint()));
+        } else {
+            assert!(subtitle.is_none());
+        }
+    }
 }

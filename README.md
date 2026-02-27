@@ -70,6 +70,18 @@ Release run:
 cargo run --release
 ```
 
+Release validation:
+
+```bash
+make release-check
+```
+
+Direct script:
+
+```bash
+./scripts/release-check.sh
+```
+
 Skip preflight checks:
 
 ```bash
@@ -90,25 +102,53 @@ New users (including the first admin) are prompted once after login to set Defau
 Terminal Settings includes:
 
 - About
-- Theme
+- General
+  - Sound
+  - Bootup
+  - Default Open Mode
+- Appearance
+  - Theme
+  - CLI Display
 - Default Apps
-- CLI
 - Edit Menus
+- Connections
+  - hidden on platforms where connections are disabled
+  - Bluetooth is hidden when required platform tooling is missing
 - User Management (admin)
-- Default Open Mode
-- Bootup toggle
-- Sound toggle
+- About
 
 Desktop Settings includes panels for:
 
-- Appearance
 - General
+- Appearance
+  - Theme
+  - Desktop Cursor
+  - Desktop Icons
+  - CLI Display
+  - Wallpapers
 - Default Apps
-- CLI Display
 - CLI Profiles
 - Edit Menus
+- Connections
+  - hidden on platforms where connections are disabled
+  - Bluetooth is hidden when required platform tooling is missing
 - User Management (admin)
 - About
+
+Desktop file manager state persists lightly between sessions:
+
+- the last open file manager tab set is restored on next desktop launch
+- recent folders are saved and shown in the desktop File menu
+
+## Platform Notes
+
+- macOS:
+  - Connections features may be disabled entirely when the current implementation is unsupported.
+  - Bluetooth menus require `blueutil`; when it is missing, Bluetooth entries are hidden.
+- Linux:
+  - Connections features use platform shell tools where available.
+- Windows:
+  - Core app behavior works, but some shell/tool integrations may differ from Unix-like systems.
 
 ## Data Layout
 
