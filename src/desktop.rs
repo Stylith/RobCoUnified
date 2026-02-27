@@ -2366,6 +2366,16 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserToggleAdmin),
                     enabled: true,
                 },
+                DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: "Back to Settings".to_string(),
+                    action: DesktopHubItemAction::CloseFocusedWindow,
+                    enabled: true,
+                },
             ]
         }
         DesktopHubKind::UserCreate => vec![
@@ -2423,7 +2433,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             },
             DesktopHubItem {
                 label: "Back to User Management".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
             },
         ],
@@ -2458,7 +2468,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             });
             items.push(DesktopHubItem {
                 label: "Back to User Management".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
             });
             items
@@ -2481,8 +2491,8 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                         enabled: true,
                     },
                     DesktopHubItem {
-                        label: "Back".to_string(),
-                        action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserResetPassword),
+                        label: "Back to User List".to_string(),
+                        action: DesktopHubItemAction::CloseFocusedWindow,
                         enabled: true,
                     },
                 ]
@@ -2512,7 +2522,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 });
                 items.push(DesktopHubItem {
                     label: "Back to User Management".to_string(),
-                    action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                    action: DesktopHubItemAction::CloseFocusedWindow,
                     enabled: true,
                 });
                 items
@@ -2544,7 +2554,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             });
             items.push(DesktopHubItem {
                 label: "Back to User Management".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
             });
             items
@@ -2584,7 +2594,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             });
             items.push(DesktopHubItem {
                 label: "Back".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserChangeAuthUsers),
+                action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
             });
             items
@@ -2620,7 +2630,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             });
             items.push(DesktopHubItem {
                 label: "Back to User Management".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserManagement),
+                action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
             });
             items
@@ -14327,5 +14337,55 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn user_reset_password_detail_back_closes_child_window() {
+        let hub = DesktopHubState {
+            kind: DesktopHubKind::UserResetPassword,
+            selected: 0,
+            scroll: 0,
+            context_path: None,
+            context_text: Some("alice".to_string()),
+            input: String::new(),
+            input2: String::new(),
+            mode_idx: 0,
+            flag: false,
+            input_mode: false,
+            cached_rows: Vec::new(),
+        };
+
+        let items = desktop_hub_items(&hub, "ignored");
+        let back = items.last().expect("back row");
+        assert_eq!(back.label, "Back to User List");
+        assert!(matches!(
+            back.action,
+            DesktopHubItemAction::CloseFocusedWindow
+        ));
+    }
+
+    #[test]
+    fn user_delete_back_closes_child_window() {
+        let hub = DesktopHubState {
+            kind: DesktopHubKind::UserDelete,
+            selected: 0,
+            scroll: 0,
+            context_path: None,
+            context_text: None,
+            input: String::new(),
+            input2: String::new(),
+            mode_idx: 0,
+            flag: false,
+            input_mode: false,
+            cached_rows: Vec::new(),
+        };
+
+        let items = desktop_hub_items(&hub, "ignored");
+        let back = items.last().expect("back row");
+        assert_eq!(back.label, "Back to User Management");
+        assert!(matches!(
+            back.action,
+            DesktopHubItemAction::CloseFocusedWindow
+        ));
     }
 }

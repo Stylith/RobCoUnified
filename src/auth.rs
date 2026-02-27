@@ -203,6 +203,7 @@ pub fn user_management_menu(terminal: &mut Term, current_user: &str) -> Result<(
         match result {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                "Back" => break,
                 "Create User" => create_user_dialog(terminal)?,
                 "Delete User" => delete_user_dialog(terminal, current_user)?,
                 "Reset Password" => reset_password_dialog(terminal)?,
@@ -226,7 +227,9 @@ fn create_user_dialog(terminal: &mut Term) -> Result<()> {
         return Ok(());
     }
 
-    let auth_method = choose_auth_method(terminal)?;
+    let Some(auth_method) = choose_auth_method(terminal)? else {
+        return Ok(());
+    };
 
     let password_hash = match auth_method {
         AuthMethod::Password => loop {
@@ -329,7 +332,9 @@ fn change_auth_method_dialog(terminal: &mut Term) -> Result<()> {
         _ => return Ok(()),
     };
 
-    let new_method = choose_auth_method(terminal)?;
+    let Some(new_method) = choose_auth_method(terminal)? else {
+        return Ok(());
+    };
 
     let new_hash = match new_method {
         AuthMethod::Password => loop {
@@ -363,7 +368,19 @@ fn change_auth_method_dialog(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
-fn choose_auth_method(terminal: &mut Term) -> Result<AuthMethod> {
+fn auth_method_choice_from_label(label: &str) -> Option<AuthMethod> {
+    if label.starts_with("Password") {
+        Some(AuthMethod::Password)
+    } else if label.starts_with("No Password") {
+        Some(AuthMethod::NoPassword)
+    } else if label.starts_with("Hacking") {
+        Some(AuthMethod::HackingMinigame)
+    } else {
+        None
+    }
+}
+
+fn choose_auth_method(terminal: &mut Term) -> Result<Option<AuthMethod>> {
     let result = run_menu(
         terminal,
         "Choose Authentication Method",
@@ -378,10 +395,8 @@ fn choose_auth_method(terminal: &mut Term) -> Result<AuthMethod> {
     )?;
 
     Ok(match result {
-        MenuResult::Selected(s) if s.starts_with("Password") => AuthMethod::Password,
-        MenuResult::Selected(s) if s.starts_with("No Password") => AuthMethod::NoPassword,
-        MenuResult::Selected(s) if s.starts_with("Hacking") => AuthMethod::HackingMinigame,
-        _ => AuthMethod::Password,
+        MenuResult::Selected(s) => auth_method_choice_from_label(&s),
+        MenuResult::Back => None,
     })
 }
 
@@ -403,4 +418,30 @@ fn toggle_admin_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_method_choice_maps_known_labels() {
+        assert_eq!(
+            auth_method_choice_from_label("Password             — classic password login"),
+            Some(AuthMethod::Password)
+        );
+        assert_eq!(
+            auth_method_choice_from_label("No Password          — log in without a password"),
+            Some(AuthMethod::NoPassword)
+        );
+        assert_eq!(
+            auth_method_choice_from_label("Hacking Minigame     — must hack in to log in"),
+            Some(AuthMethod::HackingMinigame)
+        );
+    }
+
+    #[test]
+    fn auth_method_choice_rejects_back() {
+        assert_eq!(auth_method_choice_from_label("Back"), None);
+    }
 }
