@@ -16,6 +16,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NativeShellSnapshot {
@@ -49,7 +50,6 @@ struct LoginState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginScreenMode {
     SelectUser,
-    Password,
 }
 
 #[derive(Debug)]
@@ -90,6 +90,55 @@ enum SettingsChoiceKind {
 struct SettingsChoiceOverlay {
     kind: SettingsChoiceKind,
     selected: usize,
+}
+
+#[derive(Debug, Clone)]
+enum FlashAction {
+    ExitApp,
+    FinishLogout,
+    FinishLogin {
+        username: String,
+        user: UserRecord,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct TerminalFlash {
+    message: String,
+    until: Instant,
+    action: FlashAction,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalPromptKind {
+    Input,
+    Password,
+    Confirm,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalPromptAction {
+    LoginPassword,
+    Noop,
+}
+
+#[derive(Debug, Clone)]
+struct TerminalPrompt {
+    kind: TerminalPromptKind,
+    title: String,
+    prompt: String,
+    buffer: String,
+    confirm_yes: bool,
+    action: TerminalPromptAction,
+}
+
+#[derive(Debug, Clone)]
+enum LoginMenuRow {
+    User(String),
+    Separator,
+    Exit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +242,7 @@ fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
 }
 
 fn retro_footer_height() -> f32 {
-    36.0
+    26.0
 }
 
 fn try_load_font_bytes() -> Option<Vec<u8>> {
@@ -284,6 +333,8 @@ pub struct RobcoNativeApp {
     terminal_settings_idx: usize,
     terminal_browser_idx: usize,
     terminal_settings_choice: Option<SettingsChoiceOverlay>,
+    terminal_prompt: Option<TerminalPrompt>,
+    terminal_flash: Option<TerminalFlash>,
     shell_status: String,
 }
 
@@ -317,6 +368,8 @@ impl Default for RobcoNativeApp {
             terminal_settings_idx: 0,
             terminal_browser_idx: 0,
             terminal_settings_choice: None,
+            terminal_prompt: None,
+            terminal_flash: None,
             shell_status: String::new(),
         }
     }
@@ -354,6 +407,8 @@ impl RobcoNativeApp {
         self.terminal_settings_idx = 0;
         self.terminal_browser_idx = 0;
         self.terminal_settings_choice = None;
+        self.terminal_prompt = None;
+        self.terminal_flash = None;
         self.shell_status.clear();
     }
 
@@ -369,6 +424,17 @@ impl RobcoNativeApp {
         }
     }
 
+    fn queue_login(&mut self, username: String, user: UserRecord) {
+        self.login.password.clear();
+        self.login.error.clear();
+        self.terminal_prompt = None;
+        self.queue_terminal_flash(
+            "Logging in...",
+            700,
+            FlashAction::FinishLogin { username, user },
+        );
+    }
+
     fn do_login(&mut self) {
         self.login.error.clear();
         let username = self.login.selected_username.trim().to_string();
@@ -377,10 +443,7 @@ impl RobcoNativeApp {
             return;
         }
         match authenticate(&username, &self.login.password) {
-            Ok(user) => {
-                self.login.password.clear();
-                self.restore_for_user(&username, &user);
-            }
+            Ok(user) => self.queue_login(username, user),
             Err(err) => self.login.error = err.to_string(),
         }
     }
@@ -388,45 +451,35 @@ impl RobcoNativeApp {
     fn login_usernames(&self) -> Vec<String> {
         let mut usernames: Vec<String> = load_users().keys().cloned().collect();
         usernames.sort();
-        usernames.push("Exit".to_string());
         usernames
     }
 
-    fn activate_login_selection(&mut self) {
-        self.login.error.clear();
-        let usernames = self.login_usernames();
-        let idx = self.login.selected_idx.min(usernames.len().saturating_sub(1));
-        let Some(selected) = usernames.get(idx).cloned() else {
-            return;
-        };
-        if selected == "Exit" {
-            std::process::exit(0);
-        }
-
-        let db = load_users();
-        let Some(record) = db.get(&selected).cloned() else {
-            self.login.error = "Unknown user.".to_string();
-            return;
-        };
-        self.login.selected_username = selected.clone();
-        match record.auth_method {
-            crate::core::auth::AuthMethod::NoPassword => match authenticate(&selected, "") {
-                Ok(user) => self.restore_for_user(&selected, &user),
-                Err(err) => self.login.error = err.to_string(),
-            },
-            crate::core::auth::AuthMethod::Password => {
-                self.login.password.clear();
-                self.login_mode = LoginScreenMode::Password;
-            }
-            crate::core::auth::AuthMethod::HackingMinigame => {
-                self.login.error =
-                    "Hacking login is not implemented in the native rewrite yet.".to_string();
-            }
-        }
+    fn login_menu_rows(&self) -> Vec<LoginMenuRow> {
+        let mut rows: Vec<LoginMenuRow> = self
+            .login_usernames()
+            .into_iter()
+            .map(LoginMenuRow::User)
+            .collect();
+        rows.push(LoginMenuRow::Separator);
+        rows.push(LoginMenuRow::Exit);
+        rows
     }
 
-    fn logout(&mut self) {
+    fn queue_terminal_flash(&mut self, message: impl Into<String>, ms: u64, action: FlashAction) {
+        self.terminal_flash = Some(TerminalFlash {
+            message: message.into(),
+            until: Instant::now() + Duration::from_millis(ms),
+            action,
+        });
+    }
+
+    fn begin_logout(&mut self) {
         self.persist_snapshot();
+        self.terminal_prompt = None;
+        self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
+    }
+
+    fn finish_logout(&mut self) {
         crate::config::reload_settings();
         self.session = None;
         self.login_mode = LoginScreenMode::SelectUser;
@@ -442,7 +495,58 @@ impl RobcoNativeApp {
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_settings_choice = None;
+        self.terminal_prompt = None;
+        self.terminal_flash = None;
         self.shell_status.clear();
+    }
+
+    fn open_password_prompt(&mut self, title: impl Into<String>, prompt: impl Into<String>) {
+        self.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Password,
+            title: title.into(),
+            prompt: prompt.into(),
+            buffer: String::new(),
+            confirm_yes: true,
+            action: TerminalPromptAction::LoginPassword,
+        });
+    }
+
+    fn activate_login_selection(&mut self) {
+        self.login.error.clear();
+        let usernames = self.login_usernames();
+        let idx = self.login.selected_idx.min(usernames.len());
+        if idx == usernames.len() {
+            self.queue_terminal_flash("Exiting...", 800, FlashAction::ExitApp);
+            return;
+        }
+        let Some(selected) = usernames.get(idx).cloned() else {
+            return;
+        };
+
+        let db = load_users();
+        let Some(record) = db.get(&selected).cloned() else {
+            self.login.error = "Unknown user.".to_string();
+            return;
+        };
+        self.login.selected_username = selected.clone();
+        match record.auth_method {
+            crate::core::auth::AuthMethod::NoPassword => match authenticate(&selected, "") {
+                Ok(user) => self.queue_login(selected, user),
+                Err(err) => self.login.error = err.to_string(),
+            },
+            crate::core::auth::AuthMethod::Password => {
+                self.login.password.clear();
+                self.login_mode = LoginScreenMode::SelectUser;
+                self.open_password_prompt(
+                    "Password Prompt",
+                    format!("Password for {}", self.login.selected_username),
+                );
+            }
+            crate::core::auth::AuthMethod::HackingMinigame => {
+                self.login.error =
+                    "Hacking login is not implemented in the native rewrite yet.".to_string();
+            }
+        }
     }
 
     fn open_path_in_editor(&mut self, path: PathBuf) {
@@ -540,7 +644,7 @@ impl RobcoNativeApp {
                 self.terminal_settings_idx = 0;
                 self.shell_status.clear();
             }
-            MainMenuAction::Logout => self.logout(),
+            MainMenuAction::Logout => self.begin_logout(),
         }
     }
 
@@ -723,43 +827,118 @@ impl RobcoNativeApp {
         format!("[{}]", chars.into_iter().collect::<String>())
     }
 
-    fn draw_login(&mut self, ctx: &Context) {
-        let usernames = self.login_usernames();
-        match self.login_mode {
-            LoginScreenMode::SelectUser => {
-                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                    self.login.selected_idx = self.login.selected_idx.saturating_sub(1);
-                }
-                if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                    self.login.selected_idx =
-                        (self.login.selected_idx + 1).min(usernames.len().saturating_sub(1));
-                }
-                if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    self.activate_login_selection();
-                }
-            }
-            LoginScreenMode::Password => {
+    fn handle_terminal_prompt_input(&mut self, ctx: &Context) {
+        let Some(mut prompt) = self.terminal_prompt.clone() else {
+            return;
+        };
+        match prompt.kind {
+            TerminalPromptKind::Input | TerminalPromptKind::Password => {
                 if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-                    self.login_mode = LoginScreenMode::SelectUser;
+                    self.terminal_prompt = None;
                     self.login.password.clear();
                     self.login.error.clear();
+                    return;
                 }
                 if ctx.input(|i| i.key_pressed(Key::Backspace)) {
-                    self.login.password.pop();
+                    prompt.buffer.pop();
                 }
                 let events = ctx.input(|i| i.events.clone());
                 for event in events {
                     if let egui::Event::Text(text) = event {
                         for ch in text.chars() {
                             if !ch.is_control() {
-                                self.login.password.push(ch);
+                                prompt.buffer.push(ch);
                             }
                         }
                     }
                 }
                 if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    self.do_login();
+                    match prompt.action {
+                        TerminalPromptAction::LoginPassword => {
+                            self.login.password = prompt.buffer.clone();
+                            self.do_login();
+                            if self.session.is_none() && self.terminal_flash.is_none() {
+                                prompt.buffer.clear();
+                                self.terminal_prompt = Some(prompt);
+                            }
+                            return;
+                        }
+                        TerminalPromptAction::Noop => {
+                            self.terminal_prompt = None;
+                            return;
+                        }
+                    }
                 }
+            }
+            TerminalPromptKind::Confirm => {
+                if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+                    self.terminal_prompt = None;
+                    return;
+                }
+                if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
+                    prompt.confirm_yes = true;
+                }
+                if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
+                    prompt.confirm_yes = false;
+                }
+                if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                    self.terminal_prompt = None;
+                    return;
+                }
+            }
+        }
+        self.terminal_prompt = Some(prompt);
+    }
+
+    fn draw_terminal_prompt_overlay(&self, ui: &mut egui::Ui, screen: &RetroScreen) {
+        let Some(prompt) = &self.terminal_prompt else {
+            return;
+        };
+        let palette = current_palette();
+        let painter = ui.painter_at(screen.rect);
+        screen.boxed_panel(&painter, &palette, 23, 12, 46, 8);
+        screen.text(&painter, 26, 13, &prompt.title, palette.fg);
+        screen.text(&painter, 26, 15, &prompt.prompt, palette.fg);
+        match prompt.kind {
+            TerminalPromptKind::Input => {
+                let line = format!("> {}_", prompt.buffer);
+                screen.text(&painter, 26, 17, &line, palette.fg);
+                screen.text(&painter, 26, 19, "Enter apply | Esc/Tab cancel", palette.dim);
+            }
+            TerminalPromptKind::Password => {
+                let masked = format!("> {}_", "*".repeat(prompt.buffer.chars().count()));
+                screen.text(&painter, 26, 17, &masked, palette.fg);
+                screen.text(
+                    &painter,
+                    26,
+                    19,
+                    "Enter log in | Esc/Tab back | Backspace delete",
+                    palette.dim,
+                );
+            }
+            TerminalPromptKind::Confirm => {
+                let yes = if prompt.confirm_yes { "[Yes]" } else { " Yes " };
+                let no = if prompt.confirm_yes { " No " } else { "[No]" };
+                screen.text(&painter, 26, 17, &format!("{yes}   {no}"), palette.fg);
+                screen.text(&painter, 26, 19, "Left/Right choose | Enter apply", palette.dim);
+            }
+        }
+    }
+
+    fn draw_login(&mut self, ctx: &Context) {
+        let rows = self.login_menu_rows();
+        if self.terminal_prompt.is_some() {
+            self.handle_terminal_prompt_input(ctx);
+        } else if self.login_mode == LoginScreenMode::SelectUser {
+            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                self.login.selected_idx = self.login.selected_idx.saturating_sub(1);
+            }
+            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                self.login.selected_idx =
+                    (self.login.selected_idx + 1).min(rows.len().saturating_sub(2));
+            }
+            if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                self.activate_login_selection();
             }
         }
 
@@ -782,40 +961,69 @@ impl RobcoNativeApp {
             }
 
             let mut row = TERMINAL_MENU_START_ROW;
-            for (idx, user) in usernames.iter().enumerate() {
-                let selected = self.login_mode == LoginScreenMode::SelectUser && idx == self.login.selected_idx;
-                let text = if selected {
-                    format!("  > {user}")
-                } else {
-                    format!("    {user}")
-                };
-                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
-                if response.clicked() {
-                    self.login.selected_idx = idx;
-                    self.activate_login_selection();
+            let mut selectable_idx = 0usize;
+            for entry in &rows {
+                match entry {
+                    LoginMenuRow::Separator => {
+                        screen.text(
+                            &painter,
+                            TERMINAL_CONTENT_COL + 4,
+                            row,
+                            "---",
+                            palette.dim,
+                        );
+                    }
+                    LoginMenuRow::User(user) => {
+                        let selected = self.login_mode == LoginScreenMode::SelectUser
+                            && selectable_idx == self.login.selected_idx;
+                        let text = if selected {
+                            format!("  > {user}")
+                        } else {
+                            format!("    {user}")
+                        };
+                        let response = screen.selectable_row(
+                            ui,
+                            &painter,
+                            &palette,
+                            TERMINAL_CONTENT_COL,
+                            row,
+                            &text,
+                            selected,
+                        );
+                        if response.clicked() {
+                            self.login.selected_idx = selectable_idx;
+                            self.activate_login_selection();
+                        }
+                        selectable_idx += 1;
+                    }
+                    LoginMenuRow::Exit => {
+                        let selected = self.login_mode == LoginScreenMode::SelectUser
+                            && selectable_idx == self.login.selected_idx;
+                        let text = if selected {
+                            "  > Exit".to_string()
+                        } else {
+                            "    Exit".to_string()
+                        };
+                        let response = screen.selectable_row(
+                            ui,
+                            &painter,
+                            &palette,
+                            TERMINAL_CONTENT_COL,
+                            row,
+                            &text,
+                            selected,
+                        );
+                        if response.clicked() {
+                            self.login.selected_idx = selectable_idx;
+                            self.activate_login_selection();
+                        }
+                        selectable_idx += 1;
+                    }
                 }
                 row += 1;
             }
 
-            if self.login_mode == LoginScreenMode::Password {
-                screen.boxed_panel(&painter, &palette, 26, 13, 48, 8);
-                screen.text(
-                    &painter,
-                    29,
-                    15,
-                    &format!("Password for {}", self.login.selected_username),
-                    palette.fg,
-                );
-                let masked = format!("{}_", "*".repeat(self.login.password.chars().count()));
-                screen.text(&painter, 29, 17, &masked, palette.fg);
-                screen.text(
-                    &painter,
-                    29,
-                    19,
-                    "Enter log in | Esc/Tab back | Backspace delete",
-                    palette.dim,
-                );
-            }
+            self.draw_terminal_prompt_overlay(ui, &screen);
         });
     }
 
@@ -853,7 +1061,7 @@ impl RobcoNativeApp {
                     self.terminal_mode.open = true;
                 }
                 if ui.button("Log Out").clicked() {
-                    self.logout();
+                    self.begin_logout();
                 }
             });
         });
@@ -960,6 +1168,13 @@ impl RobcoNativeApp {
             let mut selectable_idx = 0usize;
             for entry in MAIN_MENU_ENTRIES {
                 if entry.action.is_none() {
+                    screen.text(
+                        &painter,
+                        TERMINAL_CONTENT_COL + 4,
+                        visible_row,
+                        entry.label,
+                        palette.dim,
+                    );
                     visible_row += 1;
                     continue;
                 }
@@ -1658,6 +1873,29 @@ impl RobcoNativeApp {
             });
         self.terminal_mode.open = open;
     }
+
+    fn draw_terminal_flash(&self, ctx: &Context, message: &str) {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
+            .show(ctx, |ui| {
+                let palette = current_palette();
+                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
+                let painter = ui.painter_at(screen.rect);
+                screen.paint_bg(&painter, palette.bg);
+                for (idx, line) in HEADER_LINES.iter().enumerate() {
+                    screen.centered_text(
+                        &painter,
+                        TERMINAL_HEADER_START_ROW + idx,
+                        line,
+                        palette.fg,
+                        true,
+                    );
+                }
+                screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+                screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
+                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, message, palette.fg);
+            });
+    }
 }
 
 impl eframe::App for RobcoNativeApp {
@@ -1671,6 +1909,27 @@ impl eframe::App for RobcoNativeApp {
 
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         apply_native_appearance(ctx);
+
+        if let Some(flash) = &self.terminal_flash {
+            if Instant::now() >= flash.until {
+                let action = flash.action.clone();
+                self.terminal_flash = None;
+                match action {
+                    FlashAction::ExitApp => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    FlashAction::FinishLogout => self.finish_logout(),
+                    FlashAction::FinishLogin { username, user } => {
+                        self.restore_for_user(&username, &user);
+                    }
+                }
+            } else {
+                ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
+                self.draw_terminal_flash(ctx, &flash.message);
+                self.draw_terminal_footer(ctx);
+                return;
+            }
+        }
 
         if self.session.is_none() {
             self.draw_login(ctx);

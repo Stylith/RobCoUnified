@@ -109,6 +109,27 @@ impl RetroScreen {
         text.chars().take(max_chars).collect()
     }
 
+    fn paint_text(
+        &self,
+        painter: &Painter,
+        pos: Pos2,
+        align: Align2,
+        text: &str,
+        color: Color32,
+        faux_bold: bool,
+    ) {
+        painter.text(pos, align, text, self.font.clone(), color);
+        if faux_bold {
+            painter.text(
+                Pos2::new(pos.x + 0.7, pos.y),
+                align,
+                text,
+                self.font.clone(),
+                color,
+            );
+        }
+    }
+
     pub fn paint_bg(&self, painter: &Painter, color: Color32) {
         painter.rect_filled(self.rect, 0.0, color);
     }
@@ -119,7 +140,7 @@ impl RetroScreen {
             self.rect.left() + col as f32 * self.cell.x,
             self.rect.top() + row as f32 * self.cell.y,
         );
-        painter.text(pos, Align2::LEFT_TOP, clipped, self.font.clone(), color);
+        self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
     }
 
     pub fn underlined_text(
@@ -135,7 +156,7 @@ impl RetroScreen {
             self.rect.left() + col as f32 * self.cell.x,
             self.rect.top() + row as f32 * self.cell.y,
         );
-        painter.text(pos, Align2::LEFT_TOP, &clipped, self.font.clone(), color);
+        self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
         let width = clipped.chars().count() as f32 * self.cell.x;
         if width > 0.0 {
             let y = pos.y + self.cell.y - 2.0;
@@ -152,11 +173,11 @@ impl RetroScreen {
         row: usize,
         text: &str,
         color: Color32,
-        _strong: bool,
+        strong: bool,
     ) {
         let clipped = self.clip_text(1, text);
         let pos = Pos2::new(self.rect.center().x, self.rect.top() + row as f32 * self.cell.y);
-        painter.text(pos, Align2::CENTER_TOP, clipped, self.font.clone(), color);
+        self.paint_text(painter, pos, Align2::CENTER_TOP, &clipped, color, strong);
     }
 
     pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
@@ -189,12 +210,13 @@ impl RetroScreen {
         if selected {
             painter.rect_filled(rect, 0.0, palette.selected_bg);
         }
-        painter.text(
+        self.paint_text(
+            painter,
             rect.left_top(),
             Align2::LEFT_TOP,
-            clipped,
-            self.font.clone(),
+            &clipped,
             if selected { palette.selected_fg } else { palette.fg },
+            selected,
         );
         ui.interact(rect, ui.id().with(("retro_row", row, col, text)), Sense::click())
     }
@@ -209,28 +231,44 @@ impl RetroScreen {
     ) {
         let rect = self.rect;
         painter.rect_filled(rect, 0.0, palette.selected_bg);
+        let footer_font = FontId::monospace(self.font.size + 0.4);
         let left_pos = Pos2::new(rect.left() + 4.0, rect.top());
         let center_pos = Pos2::new(rect.center().x, rect.top());
         let right_pos = Pos2::new(rect.right() - 4.0, rect.top());
+        painter.text(left_pos, Align2::LEFT_TOP, left, footer_font.clone(), palette.selected_fg);
         painter.text(
-            left_pos,
+            Pos2::new(left_pos.x + 0.7, left_pos.y),
             Align2::LEFT_TOP,
             left,
-            self.font.clone(),
+            footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             center_pos,
             Align2::CENTER_TOP,
             center,
-            self.font.clone(),
+            footer_font.clone(),
+            palette.selected_fg,
+        );
+        painter.text(
+            Pos2::new(center_pos.x + 0.7, center_pos.y),
+            Align2::CENTER_TOP,
+            center,
+            footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             right_pos,
             Align2::RIGHT_TOP,
             right,
-            self.font.clone(),
+            footer_font.clone(),
+            palette.selected_fg,
+        );
+        painter.text(
+            Pos2::new(right_pos.x + 0.7, right_pos.y),
+            Align2::RIGHT_TOP,
+            right,
+            footer_font,
             palette.selected_fg,
         );
     }

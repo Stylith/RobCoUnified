@@ -426,7 +426,7 @@ pub fn run_menu(
                 .iter()
                 .map(|&choice| {
                     if choice == "---" {
-                        return Line::from(Span::styled("", dim_style()));
+                        return Line::from(Span::styled("---", dim_style()));
                     }
                     let selected = selectable.get(idx).copied() == Some(choice);
                     if selected {
