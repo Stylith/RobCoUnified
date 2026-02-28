@@ -1,14 +1,15 @@
 use super::menu::TerminalScreen;
-use super::retro_ui::{current_palette, RetroScreen};
+use super::retro_ui::{current_palette, RetroPalette, RetroScreen};
 use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_NATIVE_PTY_COLS: usize = 80;
 const MAX_NATIVE_PTY_ROWS: usize = 25;
+const PERF_ALPHA: f32 = 0.18;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LineConnections {
@@ -22,6 +23,63 @@ pub struct NativePtyState {
     pub title: String,
     pub return_screen: TerminalScreen,
     pub session: PtySession,
+    prev_plain_lines: Vec<String>,
+    prev_plain_cursor: Option<(u16, u16)>,
+    perf: PtyPerfStats,
+    show_perf_overlay: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DirtyStats {
+    changed_rows: usize,
+    changed_cells: usize,
+    total_rows: usize,
+    total_cells: usize,
+}
+
+impl DirtyStats {
+    fn changed_pct(self) -> f32 {
+        if self.total_cells == 0 {
+            0.0
+        } else {
+            (self.changed_cells as f32 / self.total_cells as f32) * 100.0
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PtyPerfStats {
+    frame_avg_ms: f32,
+    input_avg_ms: f32,
+    snapshot_avg_ms: f32,
+    draw_avg_ms: f32,
+    frames: u64,
+    last_dirty: DirtyStats,
+}
+
+impl PtyPerfStats {
+    fn push_sample(
+        &mut self,
+        frame_ms: f32,
+        input_ms: f32,
+        snapshot_ms: f32,
+        draw_ms: f32,
+        dirty: DirtyStats,
+    ) {
+        self.frame_avg_ms = ewma(self.frame_avg_ms, frame_ms, self.frames);
+        self.input_avg_ms = ewma(self.input_avg_ms, input_ms, self.frames);
+        self.snapshot_avg_ms = ewma(self.snapshot_avg_ms, snapshot_ms, self.frames);
+        self.draw_avg_ms = ewma(self.draw_avg_ms, draw_ms, self.frames);
+        self.frames = self.frames.saturating_add(1);
+        self.last_dirty = dirty;
+    }
+}
+
+fn ewma(current: f32, sample: f32, frames: u64) -> f32 {
+    if frames == 0 {
+        return sample;
+    }
+    current + PERF_ALPHA * (sample - current)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +125,10 @@ pub fn spawn_embedded_pty_with_options(
         title: title.to_string(),
         return_screen,
         session,
+        prev_plain_lines: Vec::new(),
+        prev_plain_cursor: None,
+        perf: PtyPerfStats::default(),
+        show_perf_overlay: false,
     })
 }
 
@@ -89,12 +151,18 @@ pub fn draw_embedded_pty(
     if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
     }
+    if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
+        state.show_perf_overlay = !state.show_perf_overlay;
+    }
+    let frame_started = Instant::now();
 
     let pty_cols = cols.min(MAX_NATIVE_PTY_COLS).max(1) as u16;
     // Keep one terminal row as safety padding above the global footer/status bar.
     let pty_rows = rows.saturating_sub(1).min(MAX_NATIVE_PTY_ROWS).max(1) as u16;
+    let input_started = Instant::now();
     state.session.resize(pty_cols, pty_rows);
     let input_activity = handle_pty_input(ctx, &mut state.session);
+    let input_ms = input_started.elapsed().as_secs_f32() * 1000.0;
     // Prefer output-driven repaints, but keep a regular repaint cadence so
     // animated apps (e.g. cmatrix) keep moving even when activity detection
     // is temporarily quiet.
@@ -102,7 +170,12 @@ pub fn draw_embedded_pty(
     if input_activity || output_activity {
         ctx.request_repaint();
     }
-    ctx.request_repaint_after(Duration::from_millis(16));
+    let tick_ms = if input_activity || output_activity {
+        8
+    } else {
+        33
+    };
+    ctx.request_repaint_after(Duration::from_millis(tick_ms));
 
     if !state.session.is_alive() {
         return PtyScreenEvent::ProcessExited;
@@ -111,6 +184,13 @@ pub fn draw_embedded_pty(
         crate::config::get_settings().cli_acs_mode,
         crate::config::CliAcsMode::Unicode
     );
+    let mut snapshot_ms = 0.0f32;
+    let mut draw_ms = 0.0f32;
+    let mut dirty_stats = DirtyStats {
+        total_rows: pty_rows as usize,
+        total_cells: pty_rows as usize * pty_cols as usize,
+        ..DirtyStats::default()
+    };
 
     egui::CentralPanel::default()
         .frame(
@@ -119,14 +199,17 @@ pub fn draw_embedded_pty(
                 .inner_margin(0.0),
         )
         .show(ctx, |ui| {
+            let draw_started = Instant::now();
             let palette = current_palette();
             let (screen, response) = RetroScreen::new(ui, pty_cols as usize, pty_rows as usize);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
 
             let plain_fast = state.session.prefers_plain_render();
             let plain_snapshot = if plain_fast {
-                Some(state.session.snapshot_plain(pty_cols, pty_rows))
+                let started = Instant::now();
+                let snap = state.session.snapshot_plain(pty_cols, pty_rows);
+                snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+                Some(snap)
             } else {
                 None
             };
@@ -143,6 +226,16 @@ pub fn draw_embedded_pty(
 
             if plain_fast {
                 let snap = plain_snapshot.as_ref().expect("plain snapshot present");
+                dirty_stats = diff_plain_snapshot(
+                    &state.prev_plain_lines,
+                    &snap.lines,
+                    state.prev_plain_cursor,
+                    (snap.cursor_row, snap.cursor_col),
+                    pty_cols as usize,
+                    pty_rows as usize,
+                );
+                state.prev_plain_lines = snap.lines.clone();
+                state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
                 let smoothed_lines =
                     if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
                         let mut lines = snap.lines.clone();
@@ -189,7 +282,13 @@ pub fn draw_embedded_pty(
                     );
                 }
             } else {
+                let started = Instant::now();
                 let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+                snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+                dirty_stats.changed_rows = dirty_stats.total_rows;
+                dirty_stats.changed_cells = dirty_stats.total_cells;
+                state.prev_plain_lines.clear();
+                state.prev_plain_cursor = None;
                 for (row_idx, row) in snapshot.cells.iter().enumerate() {
                     for (col_idx, cell) in row.iter().enumerate() {
                         let mut cell_to_draw = *cell;
@@ -263,7 +362,25 @@ pub fn draw_embedded_pty(
                     }
                 }
             }
+            draw_ms = draw_started.elapsed().as_secs_f32() * 1000.0;
+            if state.show_perf_overlay {
+                draw_perf_overlay(
+                    &screen,
+                    &content_painter,
+                    &palette,
+                    &state.perf,
+                    dirty_stats,
+                    input_activity,
+                    output_activity,
+                    plain_fast,
+                );
+            }
         });
+
+    let frame_ms = frame_started.elapsed().as_secs_f32() * 1000.0;
+    state
+        .perf
+        .push_sample(frame_ms, input_ms, snapshot_ms, draw_ms, dirty_stats);
 
     PtyScreenEvent::None
 }
@@ -836,6 +953,113 @@ fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyMo
         _ => return None,
     };
     Some((code, mods))
+}
+
+fn diff_plain_snapshot(
+    prev_lines: &[String],
+    next_lines: &[String],
+    prev_cursor: Option<(u16, u16)>,
+    next_cursor: (u16, u16),
+    cols: usize,
+    rows: usize,
+) -> DirtyStats {
+    let mut changed_rows = vec![false; rows];
+    let mut changed_cells = 0usize;
+    for row in 0..rows {
+        let prev = prev_lines.get(row).map(String::as_str).unwrap_or("");
+        let next = next_lines.get(row).map(String::as_str).unwrap_or("");
+        let row_changed_cells = diff_plain_row_cells(prev, next, cols);
+        if row_changed_cells > 0 {
+            changed_rows[row] = true;
+            changed_cells = changed_cells.saturating_add(row_changed_cells);
+        }
+    }
+    if prev_cursor != Some(next_cursor) {
+        if let Some((r, _)) = prev_cursor {
+            let r = r as usize;
+            if r < rows {
+                changed_rows[r] = true;
+                changed_cells = changed_cells.saturating_add(1);
+            }
+        }
+        let r = next_cursor.0 as usize;
+        if r < rows {
+            changed_rows[r] = true;
+            changed_cells = changed_cells.saturating_add(1);
+        }
+    }
+    DirtyStats {
+        changed_rows: changed_rows.into_iter().filter(|changed| *changed).count(),
+        changed_cells: changed_cells.min(rows.saturating_mul(cols)),
+        total_rows: rows,
+        total_cells: rows.saturating_mul(cols),
+    }
+}
+
+fn diff_plain_row_cells(prev: &str, next: &str, cols: usize) -> usize {
+    let mut changed = 0usize;
+    let mut prev_chars = prev.chars();
+    let mut next_chars = next.chars();
+    for _ in 0..cols {
+        if prev_chars.next().unwrap_or(' ') != next_chars.next().unwrap_or(' ') {
+            changed = changed.saturating_add(1);
+        }
+    }
+    changed
+}
+
+fn draw_perf_overlay(
+    screen: &RetroScreen,
+    painter: &egui::Painter,
+    palette: &RetroPalette,
+    perf: &PtyPerfStats,
+    dirty: DirtyStats,
+    input_activity: bool,
+    output_activity: bool,
+    plain_fast: bool,
+) {
+    let cell = screen.row_rect(0, 0, 1);
+    let top_left = Pos2::new(cell.left() + 4.0, cell.top() + 4.0);
+    let overlay_rect = Rect::from_min_size(
+        top_left,
+        egui::vec2(cell.width() * 58.0, (cell.height() * 4.0).max(44.0)),
+    );
+    painter.rect_filled(overlay_rect, 2.0, Color32::from_black_alpha(210));
+    let lines = [
+        format!(
+            "PTY PERF [{}]  (Ctrl+Shift+P)",
+            if plain_fast { "plain" } else { "styled" }
+        ),
+        format!(
+            "avg frame {:>5.1}ms  draw {:>5.1}ms  snap {:>5.1}ms  input {:>4.1}ms",
+            perf.frame_avg_ms, perf.draw_avg_ms, perf.snapshot_avg_ms, perf.input_avg_ms
+        ),
+        format!(
+            "dirty {:>5.1}%  cells {}/{}  rows {}/{}",
+            dirty.changed_pct(),
+            dirty.changed_cells,
+            dirty.total_cells,
+            dirty.changed_rows,
+            dirty.total_rows
+        ),
+        format!(
+            "activity in:{} out:{}  samples:{}",
+            if input_activity { "Y" } else { "N" },
+            if output_activity { "Y" } else { "N" },
+            perf.frames
+        ),
+    ];
+    let mut y = top_left.y + 2.0;
+    for line in lines {
+        painter.text(
+            Pos2::new(top_left.x + 6.0, y),
+            Align2::LEFT_TOP,
+            line,
+            screen.font().clone(),
+            palette.fg,
+        );
+        y += cell.height();
+    }
 }
 
 fn smooth_ascii_borders_in_plain_lines(lines: &mut [String]) {
