@@ -191,9 +191,9 @@ pub fn draw_embedded_pty(
     }
     let frame_started = Instant::now();
 
-    let pty_cols = cols.min(MAX_NATIVE_PTY_COLS).max(1) as u16;
+    let pty_cols = cols.clamp(1, MAX_NATIVE_PTY_COLS) as u16;
     // Keep one terminal row as safety padding above the global footer/status bar.
-    let pty_rows = rows.saturating_sub(1).min(MAX_NATIVE_PTY_ROWS).max(1) as u16;
+    let pty_rows = rows.saturating_sub(1).clamp(1, MAX_NATIVE_PTY_ROWS) as u16;
     let input_started = Instant::now();
     state.session.resize(pty_cols, pty_rows);
     let input_activity = handle_pty_input(ctx, &mut state.session);

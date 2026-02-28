@@ -127,7 +127,7 @@ pub fn draw_terminal_prompt_overlay(
     screen.text(&painter, 26, 15, &prompt.prompt, palette.fg);
     match prompt.kind {
         TerminalPromptKind::Input => {
-            let line = format!("> {}_", prompt.buffer);
+            let line = format!("> {}", prompt.buffer);
             screen.text(&painter, 26, 17, &line, palette.fg);
             screen.text(
                 &painter,
@@ -138,7 +138,7 @@ pub fn draw_terminal_prompt_overlay(
             );
         }
         TerminalPromptKind::Password => {
-            let masked = format!("> {}_", "*".repeat(prompt.buffer.chars().count()));
+            let masked = format!("> {}", "*".repeat(prompt.buffer.chars().count()));
             screen.text(&painter, 26, 17, &masked, palette.fg);
             screen.text(
                 &painter,

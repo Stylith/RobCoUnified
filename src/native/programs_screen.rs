@@ -64,7 +64,7 @@ pub fn resolve_program_command(
         return Err(format!("Unknown program '{name}'."));
     };
     let argv = json_to_cmd(value);
-    if argv.first().is_none() {
+    if argv.is_empty() {
         return Err("Error: empty command.".to_string());
     }
     Ok(argv)

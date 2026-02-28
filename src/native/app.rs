@@ -221,7 +221,7 @@ fn configure_native_fonts(ctx: &Context) {
     if let Some(bytes) = try_load_font_bytes() {
         fonts
             .font_data
-            .insert("retro".into(), FontData::from_owned(bytes).into());
+            .insert("retro".into(), FontData::from_owned(bytes));
         fonts
             .families
             .entry(FontFamily::Monospace)

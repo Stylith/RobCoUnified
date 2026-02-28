@@ -34,7 +34,7 @@ fn shell_command_for_tui() -> String {
 fn launch_plan_for_command(command: String, display: String) -> TerminalLaunchPlan {
     #[cfg(target_os = "macos")]
     {
-        return TerminalLaunchPlan {
+        TerminalLaunchPlan {
             program: "osascript".to_string(),
             args: vec![
                 "-e".to_string(),
@@ -44,11 +44,11 @@ fn launch_plan_for_command(command: String, display: String) -> TerminalLaunchPl
                 ),
             ],
             display,
-        };
+        }
     }
     #[cfg(target_os = "windows")]
     {
-        return TerminalLaunchPlan {
+        TerminalLaunchPlan {
             program: "cmd".to_string(),
             args: vec![
                 "/C".to_string(),
@@ -58,7 +58,7 @@ fn launch_plan_for_command(command: String, display: String) -> TerminalLaunchPl
                 command,
             ],
             display,
-        };
+        }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {

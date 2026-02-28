@@ -167,13 +167,13 @@ impl RetroScreen {
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
         // Force underline width to character-cell geometry so it stays stable
         // across fonts/scales and does not overshoot subtitle text.
-        let width = clipped.chars().count() as f32 * self.cell.x;
+        let width = clipped.trim_end_matches(' ').chars().count() as f32 * self.cell.x;
         if width > 0.0 {
             let row_bottom = self.row_top(row) + self.cell.y - 1.0;
             let y = (pos.y + self.font.size + 1.0).min(row_bottom);
             painter.line_segment(
                 [Pos2::new(pos.x, y), Pos2::new(pos.x + width, y)],
-                Stroke::new(1.0, color),
+                Stroke::new(2.0, color),
             );
         }
     }
