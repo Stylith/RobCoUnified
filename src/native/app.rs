@@ -568,13 +568,17 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
+        let mut options = crate::pty::PtyLaunchOptions::default();
+        options
+            .env
+            .push(("ROBCOS_PTY_RENDER".into(), "plain".into()));
         match spawn_embedded_pty_with_options(
             title,
             cmd,
             return_screen,
             TERMINAL_SCREEN_COLS as u16,
             TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
-            crate::pty::PtyLaunchOptions::default(),
+            options,
         ) {
             Ok(state) => {
                 self.terminal_pty = Some(state);
@@ -609,6 +613,7 @@ impl RobcoNativeApp {
                 ("PS1".into(), "> ".into()),
                 ("PROMPT".into(), "> ".into()),
                 ("ZDOTDIR".into(), "/dev/null".into()),
+                ("ROBCOS_PTY_RENDER".into(), "plain".into()),
             ],
             top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
         };

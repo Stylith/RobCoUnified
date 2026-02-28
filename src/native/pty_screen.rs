@@ -7,6 +7,9 @@ use ratatui::style::Color;
 use std::path::Path;
 use std::time::Duration;
 
+const MAX_NATIVE_PTY_COLS: usize = 80;
+const MAX_NATIVE_PTY_ROWS: usize = 25;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LineConnections {
     up: bool,
@@ -87,9 +90,9 @@ pub fn draw_embedded_pty(
         return PtyScreenEvent::CloseRequested;
     }
 
-    let pty_cols = cols.max(1) as u16;
+    let pty_cols = cols.min(MAX_NATIVE_PTY_COLS).max(1) as u16;
     // Keep one terminal row as safety padding above the global footer/status bar.
-    let pty_rows = rows.saturating_sub(1).max(1) as u16;
+    let pty_rows = rows.saturating_sub(1).min(MAX_NATIVE_PTY_ROWS).max(1) as u16;
     state.session.resize(pty_cols, pty_rows);
     let input_activity = handle_pty_input(ctx, &mut state.session);
     // Prefer output-driven repaints, but keep a regular repaint cadence so
@@ -117,7 +120,7 @@ pub fn draw_embedded_pty(
         )
         .show(ctx, |ui| {
             let palette = current_palette();
-            let (screen, response) = RetroScreen::new(ui, cols, rows);
+            let (screen, response) = RetroScreen::new(ui, pty_cols as usize, pty_rows as usize);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
 
@@ -127,13 +130,7 @@ pub fn draw_embedded_pty(
             } else {
                 None
             };
-            let content_rect = Rect::from_min_max(
-                screen.row_rect(0, 0, 1).min,
-                Pos2::new(
-                    screen.rect.right(),
-                    screen.row_rect(0, pty_rows as usize, 1).min.y,
-                ),
-            );
+            let content_rect = screen.rect;
             handle_pty_mouse(
                 ui.ctx(),
                 &response,
