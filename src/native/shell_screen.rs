@@ -34,10 +34,8 @@ pub fn draw_login_screen(
         }
     }
 
-    let mut activated = false;
-    if prompt.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-        activated = true;
-    }
+    let enter_pressed = prompt.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+    let mut activated = enter_pressed;
 
     egui::CentralPanel::default()
         .frame(
@@ -96,7 +94,7 @@ pub fn draw_login_screen(
                             &text,
                             selected,
                         );
-                        if response.clicked() {
+                        if !enter_pressed && !activated && response.clicked() {
                             *selected_idx = selectable_idx;
                             activated = true;
                         }
@@ -118,7 +116,7 @@ pub fn draw_login_screen(
                             &text,
                             selected,
                         );
-                        if response.clicked() {
+                        if !enter_pressed && !activated && response.clicked() {
                             *selected_idx = selectable_idx;
                             activated = true;
                         }
@@ -160,8 +158,9 @@ pub fn draw_main_menu_screen(
         *selected_idx = (*selected_idx + 1).min(selectable_menu_count() - 1);
     }
 
+    let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
     let mut activated = None;
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if enter_pressed {
         activated = entry_for_selectable_idx(*selected_idx).action;
     }
 
@@ -213,7 +212,7 @@ pub fn draw_main_menu_screen(
                     &text,
                     selected,
                 );
-                if response.clicked() {
+                if !enter_pressed && activated.is_none() && response.clicked() {
                     *selected_idx = selectable_idx;
                     activated = entry.action;
                 }

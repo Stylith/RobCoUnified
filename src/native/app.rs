@@ -438,9 +438,16 @@ impl RobcoNativeApp {
     }
 
     fn begin_logout(&mut self) {
+        if let Some(flash) = self.terminal_flash.as_ref() {
+            if matches!(&flash.action, FlashAction::FinishLogout) {
+                return;
+            }
+        }
         self.persist_snapshot();
         self.terminal_prompt = None;
         self.terminal_pty = None;
+        self.terminal_screen = TerminalScreen::MainMenu;
+        self.desktop_mode_open = false;
         self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
     }
 

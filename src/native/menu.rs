@@ -171,8 +171,9 @@ pub fn draw_terminal_menu_screen(
         *selected_idx = (*selected_idx + 1).min(selectable_rows.len().saturating_sub(1));
     }
 
+    let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
     let mut activated = None;
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if enter_pressed {
         activated = selectable_rows.get(*selected_idx).copied();
     }
 
@@ -218,7 +219,7 @@ pub fn draw_terminal_menu_screen(
                     &text,
                     selected,
                 );
-                if response.clicked() {
+                if !enter_pressed && activated.is_none() && response.clicked() {
                     if let Some(sel_idx) = selectable_rows.iter().position(|raw| *raw == idx) {
                         *selected_idx = sel_idx;
                     }

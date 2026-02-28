@@ -39,6 +39,12 @@ winres        = "0.1"
 default = []
 sound   = []          # enable via: cargo build --features sound
 
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 opt-level     = 3
 lto           = true
