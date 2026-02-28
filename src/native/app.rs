@@ -81,6 +81,19 @@ struct TerminalModeWindow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsChoiceKind {
+    Theme,
+    InterfaceSize,
+    DefaultOpenMode,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SettingsChoiceOverlay {
+    kind: SettingsChoiceKind,
+    selected: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TerminalScreen {
     MainMenu,
     Applications,
@@ -256,6 +269,7 @@ pub struct RobcoNativeApp {
     terminal_documents_idx: usize,
     terminal_settings_idx: usize,
     terminal_browser_idx: usize,
+    terminal_settings_choice: Option<SettingsChoiceOverlay>,
     shell_status: String,
 }
 
@@ -288,6 +302,7 @@ impl Default for RobcoNativeApp {
             terminal_documents_idx: 0,
             terminal_settings_idx: 0,
             terminal_browser_idx: 0,
+            terminal_settings_choice: None,
             shell_status: String::new(),
         }
     }
@@ -323,6 +338,7 @@ impl RobcoNativeApp {
         self.terminal_documents_idx = 0;
         self.terminal_settings_idx = 0;
         self.terminal_browser_idx = 0;
+        self.terminal_settings_choice = None;
         self.shell_status.clear();
     }
 
@@ -409,6 +425,7 @@ impl RobcoNativeApp {
         self.terminal_mode.open = false;
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
+        self.terminal_settings_choice = None;
         self.shell_status.clear();
     }
 
@@ -518,38 +535,61 @@ impl RobcoNativeApp {
         items
     }
 
-    fn cycle_theme(&mut self, forward: bool) {
-        let names: Vec<&str> = THEMES.iter().map(|(n, _)| *n).collect();
-        let current = names
-            .iter()
-            .position(|name| *name == self.settings.draft.theme)
-            .unwrap_or(0);
-        let next = if forward {
-            (current + 1) % names.len()
-        } else {
-            current.checked_sub(1).unwrap_or(names.len().saturating_sub(1))
-        };
-        self.settings.draft.theme = names[next].to_string();
-    }
-
-    fn cycle_native_ui_scale(&mut self, forward: bool) {
-        let current = self.settings.draft.native_ui_scale;
-        let idx = NATIVE_UI_SCALE_OPTIONS
-            .iter()
-            .position(|v| (*v - current).abs() < 0.001)
-            .unwrap_or(1);
-        let next = if forward {
-            (idx + 1) % NATIVE_UI_SCALE_OPTIONS.len()
-        } else {
-            idx.checked_sub(1)
-                .unwrap_or(NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1))
-        };
-        self.settings.draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[next];
-    }
-
     fn persist_native_settings(&mut self) {
         save_settings(self.settings.draft.clone());
         self.shell_status = "Settings saved.".to_string();
+    }
+
+    fn open_settings_choice(&mut self, kind: SettingsChoiceKind) {
+        let selected = match kind {
+            SettingsChoiceKind::Theme => THEMES
+                .iter()
+                .position(|(name, _)| *name == self.settings.draft.theme)
+                .unwrap_or(0),
+            SettingsChoiceKind::InterfaceSize => NATIVE_UI_SCALE_OPTIONS
+                .iter()
+                .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
+                .unwrap_or(1),
+            SettingsChoiceKind::DefaultOpenMode => match self.settings.draft.default_open_mode {
+                OpenMode::Terminal => 0,
+                OpenMode::Desktop => 1,
+            },
+        };
+        self.terminal_settings_choice = Some(SettingsChoiceOverlay { kind, selected });
+    }
+
+    fn settings_choice_items(&self, kind: SettingsChoiceKind) -> Vec<String> {
+        match kind {
+            SettingsChoiceKind::Theme => THEMES.iter().map(|(name, _)| (*name).to_string()).collect(),
+            SettingsChoiceKind::InterfaceSize => NATIVE_UI_SCALE_OPTIONS
+                .iter()
+                .map(|value| format!("{}%", (*value * 100.0).round() as i32))
+                .collect(),
+            SettingsChoiceKind::DefaultOpenMode => vec!["Terminal".to_string(), "Desktop".to_string()],
+        }
+    }
+
+    fn apply_settings_choice(&mut self, kind: SettingsChoiceKind, selected: usize) {
+        match kind {
+            SettingsChoiceKind::Theme => {
+                if let Some((name, _)) = THEMES.get(selected) {
+                    self.settings.draft.theme = (*name).to_string();
+                }
+            }
+            SettingsChoiceKind::InterfaceSize => {
+                if let Some(value) = NATIVE_UI_SCALE_OPTIONS.get(selected) {
+                    self.settings.draft.native_ui_scale = *value;
+                }
+            }
+            SettingsChoiceKind::DefaultOpenMode => {
+                self.settings.draft.default_open_mode = if selected == 0 {
+                    OpenMode::Terminal
+                } else {
+                    OpenMode::Desktop
+                };
+            }
+        }
+        self.persist_native_settings();
     }
 
     fn terminal_settings_rows(&self) -> Vec<String> {
@@ -570,13 +610,13 @@ impl RobcoNativeApp {
                     "OFF"
                 }
             ),
-            format!("Theme: {} [cycle]", self.settings.draft.theme),
+            format!("Theme: {} [choose]", self.settings.draft.theme),
             format!(
-                "Interface Size: {}% [cycle]",
+                "Interface Size: {}% [choose]",
                 (self.settings.draft.native_ui_scale * 100.0).round() as i32
             ),
             format!(
-                "Default Open Mode: {} [cycle]",
+                "Default Open Mode: {} [choose]",
                 match self.settings.draft.default_open_mode {
                     OpenMode::Terminal => "Terminal",
                     OpenMode::Desktop => "Desktop",
@@ -627,6 +667,10 @@ impl RobcoNativeApp {
     }
 
     fn handle_terminal_back(&mut self) {
+        if self.terminal_settings_choice.is_some() {
+            self.terminal_settings_choice = None;
+            return;
+        }
         match self.terminal_screen {
             TerminalScreen::MainMenu => {}
             TerminalScreen::Applications
@@ -640,6 +684,73 @@ impl RobcoNativeApp {
                 self.shell_status.clear();
             }
         }
+    }
+
+    fn draw_settings_choice_overlay(&mut self, ctx: &Context) {
+        let Some(mut overlay) = self.terminal_settings_choice else {
+            return;
+        };
+        let items = self.settings_choice_items(overlay.kind);
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            overlay.selected = overlay.selected.saturating_sub(1);
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            overlay.selected = (overlay.selected + 1).min(items.len().saturating_sub(1));
+        }
+        if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+            self.terminal_settings_choice = None;
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            self.apply_settings_choice(overlay.kind, overlay.selected);
+            self.terminal_settings_choice = None;
+            return;
+        }
+        let title = match overlay.kind {
+            SettingsChoiceKind::Theme => "Select Theme",
+            SettingsChoiceKind::InterfaceSize => "Select Interface Size",
+            SettingsChoiceKind::DefaultOpenMode => "Select Default Open Mode",
+        };
+        egui::Area::new(Id::new("native_settings_choice_overlay"))
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let width = 420.0;
+                let height = 220.0;
+                let (screen, _) = RetroScreen::new_sized(ui, 44, (items.len() + 6).max(8), egui::vec2(width, height));
+                let palette = current_palette();
+                let painter = ui.painter_at(screen.rect);
+                screen.paint_bg(&painter, palette.bg);
+                screen.boxed_panel(&painter, &palette, 0, 0, 44, (items.len() + 6).max(8));
+                screen.text(&painter, 2, 1, title, palette.fg);
+                for (idx, item) in items.iter().enumerate() {
+                    let selected = idx == overlay.selected;
+                    let text = if selected {
+                        format!("> {item}")
+                    } else {
+                        format!("  {item}")
+                    };
+                    let response = screen.selectable_row(
+                        ui,
+                        &painter,
+                        &palette,
+                        2,
+                        3 + idx,
+                        &text,
+                        selected,
+                    );
+                    if response.hovered() {
+                        overlay.selected = idx;
+                    }
+                    if response.clicked() {
+                        self.apply_settings_choice(overlay.kind, idx);
+                        self.terminal_settings_choice = None;
+                        return;
+                    }
+                }
+                screen.text(&painter, 2, items.len() + 4, "Enter apply | Esc close", palette.dim);
+                self.terminal_settings_choice = Some(overlay);
+            });
     }
 
     fn draw_login(&mut self, ctx: &Context) {
@@ -1093,9 +1204,21 @@ impl RobcoNativeApp {
     fn draw_terminal_settings(&mut self, ctx: &Context) {
         let items = self.terminal_settings_rows();
         let mut selected = self.terminal_settings_idx.min(items.len().saturating_sub(1));
-        let activated =
-            self.draw_terminal_menu_screen(ctx, "Settings", Some("Native terminal-style settings"), &items, &mut selected);
+        let activated = if self.terminal_settings_choice.is_some() {
+            None
+        } else {
+            self.draw_terminal_menu_screen(
+                ctx,
+                "Settings",
+                Some("Native terminal-style settings"),
+                &items,
+                &mut selected,
+            )
+        };
         self.terminal_settings_idx = selected;
+        if self.terminal_settings_choice.is_some() {
+            self.draw_settings_choice_overlay(ctx);
+        }
         if let Some(idx) = activated {
             match idx {
                 0 => {
@@ -1111,21 +1234,9 @@ impl RobcoNativeApp {
                         !self.settings.draft.show_navigation_hints;
                     self.persist_native_settings();
                 }
-                3 => {
-                    self.cycle_theme(true);
-                    self.persist_native_settings();
-                }
-                4 => {
-                    self.cycle_native_ui_scale(true);
-                    self.persist_native_settings();
-                }
-                5 => {
-                    self.settings.draft.default_open_mode = match self.settings.draft.default_open_mode {
-                        OpenMode::Terminal => OpenMode::Desktop,
-                        OpenMode::Desktop => OpenMode::Terminal,
-                    };
-                    self.persist_native_settings();
-                }
+                3 => self.open_settings_choice(SettingsChoiceKind::Theme),
+                4 => self.open_settings_choice(SettingsChoiceKind::InterfaceSize),
+                5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
                 6 => {
                     self.terminal_screen = TerminalScreen::MainMenu;
                     self.shell_status.clear();

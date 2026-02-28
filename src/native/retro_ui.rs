@@ -1,4 +1,4 @@
-use crate::config::current_theme_color;
+use crate::config::{current_theme_color, get_settings};
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui,
     Vec2,
@@ -76,15 +76,25 @@ pub struct RetroScreen {
 impl RetroScreen {
     pub fn new(ui: &mut Ui, cols: usize, rows: usize) -> (Self, Response) {
         let desired = ui.available_size();
+        Self::new_sized(ui, cols, rows, desired)
+    }
+
+    pub fn new_sized(
+        ui: &mut Ui,
+        cols: usize,
+        rows: usize,
+        desired: Vec2,
+    ) -> (Self, Response) {
         let (rect, response) = ui.allocate_exact_size(desired, Sense::hover());
         let cell_w = (rect.width() / cols.max(1) as f32).floor().max(8.0);
         let cell_h = (rect.height() / rows.max(1) as f32).floor().max(12.0);
+        let scale = get_settings().native_ui_scale.clamp(0.75, 1.75);
         (
             Self {
                 rect,
                 cols,
                 cell: egui::vec2(cell_w, cell_h),
-                font: FontId::monospace((cell_h - 2.0).max(10.0)),
+                font: FontId::monospace(((cell_h - 2.0).max(10.0) * scale).max(10.0)),
             },
             response,
         )
