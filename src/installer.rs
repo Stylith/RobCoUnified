@@ -6,7 +6,10 @@ use crate::config::{
     get_current_user, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
 };
 use crate::launcher::with_suspended;
-use crate::ui::{box_message, confirm, flash_message, input_prompt, run_menu, MenuResult, Term};
+use crate::ui::{
+    box_message, confirm, flash_message, input_prompt, is_back_menu_label, run_menu, MenuResult,
+    Term,
+};
 
 // ── Package manager detection ─────────────────────────────────────────────────
 
@@ -348,6 +351,7 @@ pub fn appstore_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "Search" => search_menu(terminal, pm)?,
                 "Installed Apps" => installed_menu(terminal, pm)?,
                 "Install Audio Runtime (playsound)" => install_playsound_runtime(terminal)?,
@@ -525,6 +529,7 @@ fn pkg_action_menu(
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "Update" => {
                     if let Some(pm) = pm {
                         if !has_internet() {
@@ -563,7 +568,7 @@ fn pkg_action_menu(
                         None,
                     )?;
                     if let MenuResult::Selected(m) = menu_choice {
-                        if m != "Back" {
+                        if !is_back_menu_label(&m) {
                             let display =
                                 input_prompt(terminal, &format!("Display name for '{pkg}':"))?
                                     .unwrap_or_else(|| pkg.to_string());

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::config::{current_theme_color, HEADER_LINES};
+use crate::config::{current_theme_color, get_settings, HEADER_LINES};
 use crate::status::render_status_bar;
 
 pub type Term = Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
@@ -348,6 +348,19 @@ pub enum MenuResult {
     Back,
 }
 
+pub fn is_back_menu_label(label: &str) -> bool {
+    let label = label.trim();
+    label == "Back" || label.starts_with("Back ")
+}
+
+fn navigation_hints_enabled() -> bool {
+    get_settings().show_navigation_hints
+}
+
+fn menu_navigation_hint() -> &'static str {
+    "Enter select | Tab back | Arrows move"
+}
+
 pub fn run_menu(
     terminal: &mut Term,
     title: &str,
@@ -373,6 +386,7 @@ pub fn run_menu(
                         Constraint::Length(0)
                     },
                     Constraint::Min(1),
+                    Constraint::Length(1),
                     Constraint::Length(1),
                 ])
                 .split(size);
@@ -400,6 +414,14 @@ pub fn run_menu(
                 );
             }
 
+            if navigation_hints_enabled() {
+                f.render_widget(
+                    Paragraph::new(Span::styled(menu_navigation_hint(), dim_style()))
+                        .alignment(Alignment::Left),
+                    pad_horizontal(chunks[6]),
+                );
+            }
+
             let lines: Vec<Line> = choices
                 .iter()
                 .map(|&choice| {
@@ -415,7 +437,7 @@ pub fn run_menu(
                 })
                 .collect();
             f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
-            render_status_bar(f, chunks[6]);
+            render_status_bar(f, chunks[7]);
         })?;
 
         if event::poll(Duration::from_millis(25))? {
@@ -479,6 +501,7 @@ pub fn run_menu_compact(
         .collect();
     let mut selected_idx = 0usize;
     let mut scroll = 0usize;
+    let show_hints = navigation_hints_enabled();
 
     loop {
         let selected_row = selectable_rows
@@ -549,7 +572,8 @@ pub fn run_menu_compact(
                 list_y = list_y.saturating_add(1);
             }
 
-            let list_h = inner.y + inner.height - list_y;
+            let footer_h = if show_hints { 1 } else { 0 };
+            let list_h = inner.y + inner.height - list_y - footer_h;
             let visible = list_h.max(1) as usize;
             let max_scroll = choices.len().saturating_sub(visible);
             let mut start = scroll.min(max_scroll);
@@ -587,6 +611,22 @@ pub fn run_menu_compact(
                     height: list_h,
                 },
             );
+
+            if show_hints && inner.height > 0 {
+                let hint_text: String = menu_navigation_hint()
+                    .chars()
+                    .take(inner.width as usize)
+                    .collect();
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(hint_text, dim_style()))),
+                    Rect {
+                        x: inner.x,
+                        y: inner.y + inner.height.saturating_sub(1),
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
+            }
         })?;
 
         if event::poll(Duration::from_millis(25))? {
@@ -954,6 +994,14 @@ pub fn box_message(terminal: &mut Term, message: &str, ms: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn back_menu_label_helper_matches_expected_rows() {
+        assert!(is_back_menu_label("Back"));
+        assert!(is_back_menu_label("Back to Settings"));
+        assert!(!is_back_menu_label("Background"));
+        assert!(!is_back_menu_label("Go Back"));
+    }
 
     #[test]
     fn maps_modified_digits_to_session_indexes() {

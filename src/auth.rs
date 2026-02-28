@@ -4,9 +4,13 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::{base_dir, load_json, mark_default_apps_prompt_pending, save_json, users_dir};
+use crate::config::{
+    base_dir, cycle_hacking_difficulty, get_settings, hacking_difficulty_label, load_json,
+    mark_default_apps_prompt_pending, persist_settings, save_json, update_settings, users_dir,
+};
 use crate::ui::{
-    confirm, flash_message, input_prompt, password_prompt, run_menu, MenuResult, Term,
+    confirm, flash_message, input_prompt, is_back_menu_label, password_prompt, run_menu,
+    MenuResult, Term,
 };
 
 // ── Auth method ───────────────────────────────────────────────────────────────
@@ -203,7 +207,7 @@ pub fn user_management_menu(terminal: &mut Term, current_user: &str) -> Result<(
         match result {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Back" => break,
+                s if is_back_menu_label(s) => break,
                 "Create User" => create_user_dialog(terminal)?,
                 "Delete User" => delete_user_dialog(terminal, current_user)?,
                 "Reset Password" => reset_password_dialog(terminal)?,
@@ -273,7 +277,7 @@ fn delete_user_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
     if let MenuResult::Selected(u) = result {
         if u == current_user {
             flash_message(terminal, "Cannot delete yourself.", 800)?;
-        } else if u != "Back" && confirm(terminal, &format!("Delete user '{u}'?"))? {
+        } else if !is_back_menu_label(&u) && confirm(terminal, &format!("Delete user '{u}'?"))? {
             let mut db = load_users();
             db.remove(&u);
             save_users(&db);
@@ -290,7 +294,7 @@ fn reset_password_dialog(terminal: &mut Term) -> Result<()> {
     opts_str.push("Back".to_string());
     let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     if let MenuResult::Selected(u) = run_menu(terminal, "Reset Password", &opts, None)? {
-        if u != "Back" {
+        if !is_back_menu_label(&u) {
             let pw = match password_prompt(terminal, &format!("New password for '{u}':"))? {
                 Some(p) if !p.is_empty() => p,
                 _ => return Ok(()),
@@ -328,7 +332,7 @@ fn change_auth_method_dialog(terminal: &mut Term) -> Result<()> {
         &user_refs,
         None,
     )? {
-        MenuResult::Selected(u) if u != "Back" => u,
+        MenuResult::Selected(u) if !is_back_menu_label(&u) => u,
         _ => return Ok(()),
     };
 
@@ -380,6 +384,36 @@ fn auth_method_choice_from_label(label: &str) -> Option<AuthMethod> {
     }
 }
 
+fn choose_hacking_difficulty(terminal: &mut Term) -> Result<bool> {
+    loop {
+        let current = get_settings().hacking_difficulty;
+        let rows = vec![
+            format!("Difficulty: {} [cycle]", hacking_difficulty_label(current)),
+            "Apply".to_string(),
+            "---".to_string(),
+            "Back".to_string(),
+        ];
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        match run_menu(
+            terminal,
+            "Hacking Difficulty",
+            &refs,
+            Some("Only used for Hacking Minigame authentication."),
+        )? {
+            MenuResult::Back => return Ok(false),
+            MenuResult::Selected(sel) if sel == rows[0] => {
+                update_settings(|s| {
+                    s.hacking_difficulty = cycle_hacking_difficulty(s.hacking_difficulty, true);
+                });
+                persist_settings();
+            }
+            MenuResult::Selected(sel) if sel == "Apply" => return Ok(true),
+            MenuResult::Selected(sel) if is_back_menu_label(&sel) => return Ok(false),
+            _ => {}
+        }
+    }
+}
+
 fn choose_auth_method(terminal: &mut Term) -> Result<Option<AuthMethod>> {
     let result = run_menu(
         terminal,
@@ -395,7 +429,18 @@ fn choose_auth_method(terminal: &mut Term) -> Result<Option<AuthMethod>> {
     )?;
 
     Ok(match result {
-        MenuResult::Selected(s) => auth_method_choice_from_label(&s),
+        MenuResult::Selected(s) => {
+            let Some(method) = auth_method_choice_from_label(&s) else {
+                return Ok(None);
+            };
+            if matches!(method, AuthMethod::HackingMinigame)
+                && !choose_hacking_difficulty(terminal)?
+            {
+                None
+            } else {
+                Some(method)
+            }
+        }
         MenuResult::Back => None,
     })
 }
@@ -407,7 +452,7 @@ fn toggle_admin_dialog(terminal: &mut Term, current_user: &str) -> Result<()> {
     opts_str.push("Back".to_string());
     let opts: Vec<&str> = opts_str.iter().map(String::as_str).collect();
     if let MenuResult::Selected(u) = run_menu(terminal, "Toggle Admin", &opts, None)? {
-        if u != "Back" {
+        if !is_back_menu_label(&u) {
             let mut db = load_users();
             if let Some(r) = db.get_mut(&u) {
                 r.is_admin = !r.is_admin;
@@ -443,5 +488,6 @@ mod tests {
     #[test]
     fn auth_method_choice_rejects_back() {
         assert_eq!(auth_method_choice_from_label("Back"), None);
+        assert!(is_back_menu_label("Back"));
     }
 }

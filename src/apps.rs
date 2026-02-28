@@ -6,7 +6,9 @@ use crate::config::{
     save_networks, update_settings,
 };
 use crate::launcher::{json_to_cmd, launch_in_pty};
-use crate::ui::{confirm, flash_message, input_prompt, run_menu, MenuResult, Term};
+use crate::ui::{
+    confirm, flash_message, input_prompt, is_back_menu_label, run_menu, MenuResult, Term,
+};
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 
@@ -195,6 +197,7 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 l if l == nuke_codes_label => {
                     update_settings(|cfg| {
                         cfg.builtin_menu_visibility.nuke_codes =
@@ -221,6 +224,7 @@ pub fn edit_games_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "Add Game" => add_entry(terminal, "Game", load_games, save_games)?,
                 "Delete Game" => delete_entry(terminal, "Game", load_games, save_games)?,
                 _ => break,
@@ -240,6 +244,7 @@ pub fn edit_network_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "Add Network" => {
                     add_entry(terminal, "Network Program", load_networks, save_networks)?
                 }
@@ -271,6 +276,7 @@ pub fn edit_menus_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "Edit Applications" => edit_apps_menu(terminal)?,
                 "Edit Documents" => edit_documents_menu(terminal)?,
                 "Edit Network" => edit_network_menu(terminal)?,

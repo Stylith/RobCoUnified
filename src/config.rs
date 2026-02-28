@@ -477,6 +477,41 @@ fn default_true() -> bool {
     true
 }
 
+fn default_navigation_hints() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum HackingDifficulty {
+    Easy,
+    #[default]
+    Normal,
+    Hard,
+}
+
+fn default_hacking_difficulty() -> HackingDifficulty {
+    HackingDifficulty::Normal
+}
+
+pub fn hacking_difficulty_label(difficulty: HackingDifficulty) -> &'static str {
+    match difficulty {
+        HackingDifficulty::Easy => "Easy",
+        HackingDifficulty::Normal => "Normal",
+        HackingDifficulty::Hard => "Hard",
+    }
+}
+
+pub fn cycle_hacking_difficulty(current: HackingDifficulty, forward: bool) -> HackingDifficulty {
+    match (current, forward) {
+        (HackingDifficulty::Easy, true) => HackingDifficulty::Normal,
+        (HackingDifficulty::Normal, true) => HackingDifficulty::Hard,
+        (HackingDifficulty::Hard, true) => HackingDifficulty::Easy,
+        (HackingDifficulty::Easy, false) => HackingDifficulty::Hard,
+        (HackingDifficulty::Normal, false) => HackingDifficulty::Easy,
+        (HackingDifficulty::Hard, false) => HackingDifficulty::Normal,
+    }
+}
+
 impl Default for BuiltinMenuVisibilitySettings {
     fn default() -> Self {
         Self { nuke_codes: true }
@@ -496,6 +531,10 @@ pub struct Settings {
     pub cli_acs_mode: CliAcsMode,
     #[serde(default)]
     pub default_open_mode: OpenMode,
+    #[serde(default = "default_navigation_hints")]
+    pub show_navigation_hints: bool,
+    #[serde(default = "default_hacking_difficulty")]
+    pub hacking_difficulty: HackingDifficulty,
     #[serde(default)]
     // Legacy field migrated into `builtin_menu_visibility`.
     pub hide_builtin_apps_in_menus: bool,
@@ -539,6 +578,8 @@ impl Default for Settings {
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
+            show_navigation_hints: default_navigation_hints(),
+            hacking_difficulty: default_hacking_difficulty(),
             hide_builtin_apps_in_menus: false,
             builtin_menu_visibility: BuiltinMenuVisibilitySettings::default(),
             default_apps: DefaultAppsSettings::default(),
@@ -651,6 +692,26 @@ mod tests {
             .desktop_file_manager
             .open_with_default_by_extension
             .is_empty());
+    }
+
+    #[test]
+    fn show_navigation_hints_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("show_navigation_hints");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert!(decoded.show_navigation_hints);
+    }
+
+    #[test]
+    fn hacking_difficulty_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("hacking_difficulty");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert_eq!(decoded.hacking_difficulty, HackingDifficulty::Normal);
     }
 }
 

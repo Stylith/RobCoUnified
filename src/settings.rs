@@ -29,8 +29,8 @@ use crate::default_apps::{
 };
 use crate::status::render_status_bar;
 use crate::ui::{
-    dim_style, flash_message, input_prompt, normal_style, pad_horizontal, render_header,
-    render_separator, run_menu, MenuResult, Term,
+    dim_style, flash_message, input_prompt, is_back_menu_label, normal_style, pad_horizontal,
+    render_header, render_separator, run_menu, MenuResult, Term,
 };
 
 // ── System info ────────────────────────────────────────────────────────────────
@@ -716,6 +716,7 @@ pub fn connections_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Connections", &refs, subtitle)? {
             MenuResult::Back => break,
             MenuResult::Selected(sel) => match sel.as_str() {
+                sel if is_back_menu_label(sel) => break,
                 "Network" => connections_network_menu(terminal)?,
                 "Bluetooth" => connections_kind_menu(terminal, ConnectionKind::Bluetooth, None)?,
                 _ => break,
@@ -746,41 +747,50 @@ pub fn prompt_default_apps_first_login(terminal: &mut Term, username: &str) -> R
     default_apps_menu(terminal)
 }
 
+fn settings_general_rows() -> Vec<String> {
+    let s = get_settings();
+    let open_mode_label = format!(
+        "Default Open Mode: {} [toggle]",
+        match s.default_open_mode {
+            OpenMode::Terminal => "Terminal",
+            OpenMode::Desktop => "Desktop",
+        }
+    );
+    let sound_label = if s.sound {
+        "Sound: ON  [toggle]"
+    } else {
+        "Sound: OFF [toggle]"
+    };
+    let bootup_label = if s.bootup {
+        "Bootup: ON [toggle]"
+    } else {
+        "Bootup: OFF [toggle]"
+    };
+    let nav_hints_label = if s.show_navigation_hints {
+        "Navigation Hints: ON [toggle]"
+    } else {
+        "Navigation Hints: OFF [toggle]"
+    };
+    vec![
+        sound_label.to_string(),
+        bootup_label.to_string(),
+        nav_hints_label.to_string(),
+        open_mode_label,
+        "---".to_string(),
+        "Back".to_string(),
+    ]
+}
+
 fn settings_general_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        let s = get_settings();
-        let open_mode_label = format!(
-            "Default Open Mode: {} [toggle]",
-            match s.default_open_mode {
-                OpenMode::Terminal => "Terminal",
-                OpenMode::Desktop => "Desktop",
-            }
-        );
-        let sound_label = if s.sound {
-            "Sound: ON  [toggle]"
-        } else {
-            "Sound: OFF [toggle]"
-        };
-        let bootup_label = if s.bootup {
-            "Bootup: ON [toggle]"
-        } else {
-            "Bootup: OFF [toggle]"
-        };
-
-        let rows = [
-            sound_label.to_string(),
-            bootup_label.to_string(),
-            open_mode_label.clone(),
-            "---".to_string(),
-            "Back".to_string(),
-        ];
+        let rows = settings_general_rows();
         let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
 
         match run_menu(terminal, "Settings — General", &refs, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(sel) if sel == "Back" => break,
             MenuResult::Selected(sel) => match sel.as_str() {
-                l if l == open_mode_label => {
+                l if l == rows[3] => {
                     update_settings(|s| {
                         s.default_open_mode = match s.default_open_mode {
                             OpenMode::Terminal => OpenMode::Desktop,
@@ -789,12 +799,16 @@ fn settings_general_menu(terminal: &mut Term) -> Result<()> {
                     });
                     persist_settings();
                 }
-                l if l == sound_label => {
+                l if l == rows[0] => {
                     update_settings(|s| s.sound = !s.sound);
                     persist_settings();
                 }
-                l if l == bootup_label => {
+                l if l == rows[1] => {
                     update_settings(|s| s.bootup = !s.bootup);
+                    persist_settings();
+                }
+                l if l == rows[2] => {
+                    update_settings(|s| s.show_navigation_hints = !s.show_navigation_hints);
                     persist_settings();
                 }
                 _ => {}
@@ -810,6 +824,7 @@ fn settings_appearance_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Settings — Appearance", &choices, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(sel) => match sel.as_str() {
+                sel if is_back_menu_label(sel) => break,
                 "Theme" => theme_menu(terminal)?,
                 "CLI Display" => cli_menu(terminal)?,
                 _ => break,
@@ -838,6 +853,7 @@ pub fn settings_menu(terminal: &mut Term, current_user: &str) -> Result<()> {
         match run_menu(terminal, "Settings", &choices, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
+                s if is_back_menu_label(s) => break,
                 "General" => settings_general_menu(terminal)?,
                 "Appearance" => settings_appearance_menu(terminal)?,
                 "About" => about_screen(terminal)?,
@@ -889,5 +905,29 @@ mod tests {
         } else {
             assert!(subtitle.is_none());
         }
+    }
+
+    #[test]
+    fn terminal_appearance_menu_back_row_is_recognized() {
+        let back = terminal_appearance_menu_choices()
+            .last()
+            .copied()
+            .expect("back row");
+        assert!(is_back_menu_label(back));
+    }
+
+    #[test]
+    fn terminal_connections_menu_back_row_is_recognized() {
+        let (rows, _) = terminal_connections_menu_rows();
+        let back = rows.last().expect("back row");
+        assert!(is_back_menu_label(back));
+    }
+
+    #[test]
+    fn terminal_general_menu_does_not_include_hacking_difficulty() {
+        let rows = settings_general_rows();
+        assert!(!rows
+            .iter()
+            .any(|row| row.starts_with("Hacking Difficulty: ")));
     }
 }

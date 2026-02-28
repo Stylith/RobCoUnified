@@ -19,12 +19,12 @@ use std::time::{Duration, Instant};
 
 use crate::auth::{hash_password, is_admin, load_users, save_users, AuthMethod};
 use crate::config::{
-    get_current_user, get_settings, load_apps, load_categories, load_games, load_networks,
-    mark_default_apps_prompt_pending, persist_settings, save_apps, save_categories, save_games,
-    save_networks, update_settings, CliAcsMode, CliColorMode, ConnectionKind, DesktopCliProfiles,
-    DesktopFileManagerSettings, DesktopIconPosition, DesktopIconStyle, DesktopPtyProfileSettings,
-    FileManagerSortMode, FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode,
-    THEMES,
+    cycle_hacking_difficulty, get_current_user, get_settings, hacking_difficulty_label, load_apps,
+    load_categories, load_games, load_networks, mark_default_apps_prompt_pending, persist_settings,
+    save_apps, save_categories, save_games, save_networks, update_settings, CliAcsMode,
+    CliColorMode, ConnectionKind, DesktopCliProfiles, DesktopFileManagerSettings,
+    DesktopIconPosition, DesktopIconStyle, DesktopPtyProfileSettings, FileManagerSortMode,
+    FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode, THEMES,
 };
 use crate::connections::{
     bluetooth_installer_hint, choose_discovered_connection, connect_connection,
@@ -42,8 +42,8 @@ use crate::default_apps::{
 use crate::documents;
 use crate::launcher::{json_to_cmd, with_suspended};
 use crate::ui::{
-    dim_style, flash_message, input_prompt, normal_style, run_menu_compact, sel_style,
-    session_switch_scope, title_style, MenuResult, Term,
+    dim_style, flash_message, input_prompt, is_back_menu_label, normal_style, run_menu_compact,
+    sel_style, session_switch_scope, title_style, MenuResult, Term,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -666,6 +666,7 @@ enum DesktopHubItemAction {
         username: String,
         method: crate::auth::AuthMethod,
     },
+    CycleHackingDifficulty,
     ToggleUserAdmin(String),
     InstallAudioRuntime,
     InstallBluetoothRuntime,
@@ -802,6 +803,7 @@ struct TopMenuState {
     open: Option<TopMenuKind>,
     hover_label: Option<TopMenuKind>,
     hover_item: Option<usize>,
+    hover_candidate: Option<(TopMenuKind, Instant)>,
 }
 
 impl Default for TopMenuState {
@@ -810,6 +812,7 @@ impl Default for TopMenuState {
             open: None,
             hover_label: None,
             hover_item: None,
+            hover_candidate: None,
         }
     }
 }
@@ -2378,65 +2381,79 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 },
             ]
         }
-        DesktopHubKind::UserCreate => vec![
-            DesktopHubItem {
-                label: format!(
-                    "Username: {}{}",
-                    hub.input,
-                    if hub.input_mode && hub.selected == 0 {
-                        "_"
-                    } else {
-                        ""
-                    }
-                ),
-                action: DesktopHubItemAction::None,
-                enabled: false,
-            },
-            DesktopHubItem {
-                label: format!(
-                    "Auth Method: {}",
-                    match hub.mode_idx {
-                        1 => "No Password",
-                        2 => "Hacking Minigame",
-                        _ => "Password",
-                    }
-                ),
-                action: DesktopHubItemAction::None,
-                enabled: true,
-            },
-            DesktopHubItem {
-                label: format!(
-                    "Password: {}{}",
-                    if hub.mode_idx == 0 {
-                        "*".repeat(hub.input2.chars().count())
-                    } else {
-                        "(not used)".to_string()
-                    },
-                    if hub.mode_idx == 0 && hub.input_mode && hub.selected == 2 {
-                        "_"
-                    } else {
-                        ""
-                    }
-                ),
-                action: DesktopHubItemAction::None,
-                enabled: false,
-            },
-            DesktopHubItem {
+        DesktopHubKind::UserCreate => {
+            let mut items = vec![
+                DesktopHubItem {
+                    label: format!(
+                        "Username: {}{}",
+                        hub.input,
+                        if hub.input_mode && hub.selected == 0 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Auth Method: {}",
+                        match hub.mode_idx {
+                            1 => "No Password",
+                            2 => "Hacking Minigame",
+                            _ => "Password",
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: true,
+                },
+            ];
+            if hub.mode_idx == 2 {
+                items.push(DesktopHubItem {
+                    label: format!(
+                        "Hacking Difficulty: {} [cycle]",
+                        hacking_difficulty_label(get_settings().hacking_difficulty)
+                    ),
+                    action: DesktopHubItemAction::CycleHackingDifficulty,
+                    enabled: true,
+                });
+            } else {
+                items.push(DesktopHubItem {
+                    label: format!(
+                        "Password: {}{}",
+                        if hub.mode_idx == 0 {
+                            "*".repeat(hub.input2.chars().count())
+                        } else {
+                            "(not used)".to_string()
+                        },
+                        if hub.mode_idx == 0 && hub.input_mode && hub.selected == 2 {
+                            "_"
+                        } else {
+                            ""
+                        }
+                    ),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items.push(DesktopHubItem {
                 label: format!("Admin: {}", if hub.flag { "ON" } else { "OFF" }),
                 action: DesktopHubItemAction::None,
                 enabled: true,
-            },
-            DesktopHubItem {
+            });
+            items.push(DesktopHubItem {
                 label: "Create User".to_string(),
                 action: DesktopHubItemAction::CreateUserSubmit,
                 enabled: true,
-            },
-            DesktopHubItem {
+            });
+            items.push(DesktopHubItem {
                 label: "Back to User Management".to_string(),
                 action: DesktopHubItemAction::CloseFocusedWindow,
                 enabled: true,
-            },
-        ],
+            });
+            items
+        }
         DesktopHubKind::UserDelete => {
             let mut items = Vec::new();
             let db = load_users();
@@ -2561,7 +2578,24 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         }
         DesktopHubKind::UserChangeAuthMethod => {
             let username = hub.context_text.clone().unwrap_or_default();
-            let mut items = vec![
+            let current_method = load_users().get(&username).map(|r| r.auth_method.clone());
+            let mut items = Vec::new();
+            if matches!(current_method, Some(AuthMethod::HackingMinigame)) {
+                items.push(DesktopHubItem {
+                    label: format!(
+                        "Hacking Difficulty: {} [cycle]",
+                        hacking_difficulty_label(get_settings().hacking_difficulty)
+                    ),
+                    action: DesktopHubItemAction::CycleHackingDifficulty,
+                    enabled: !username.is_empty(),
+                });
+                items.push(DesktopHubItem {
+                    label: String::new(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            }
+            items.extend([
                 DesktopHubItem {
                     label: "Password".to_string(),
                     action: DesktopHubItemAction::SetUserAuth {
@@ -2586,7 +2620,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     },
                     enabled: !username.is_empty(),
                 },
-            ];
+            ]);
             items.push(DesktopHubItem {
                 label: String::new(),
                 action: DesktopHubItemAction::None,
@@ -2661,6 +2695,7 @@ fn close_top_menu(state: &mut DesktopState) {
     state.top_menu.open = None;
     state.top_menu.hover_label = None;
     state.top_menu.hover_item = None;
+    state.top_menu.hover_candidate = None;
 }
 
 fn is_hover_target_open(state: &StartState, target: StartHoverTarget) -> bool {
@@ -2685,6 +2720,7 @@ fn apply_hover_target(state: &mut StartState, target: StartHoverTarget) {
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 const START_HOVER_DELAY: Duration = Duration::from_millis(170);
+const TOP_MENU_HOVER_DELAY: Duration = Duration::from_millis(110);
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const TITLE_MIN_BUTTON: &str = "[-]";
 const TITLE_MAX_BUTTON: &str = "[+]";
@@ -2758,6 +2794,22 @@ fn queue_start_hover(state: &mut StartState, target: StartHoverTarget) {
     }
 }
 
+fn queue_top_menu_hover(state: &mut TopMenuState, target: TopMenuKind) {
+    if state.open == Some(target) {
+        state.hover_candidate = None;
+        return;
+    }
+    match state.hover_candidate {
+        Some((existing, at)) if existing == target => {
+            if at.elapsed() >= TOP_MENU_HOVER_DELAY {
+                state.open = Some(target);
+                state.hover_candidate = None;
+            }
+        }
+        _ => state.hover_candidate = Some((target, Instant::now())),
+    }
+}
+
 fn advance_start_hover(state: &mut DesktopState) -> bool {
     if !state.start.open {
         state.start.hover_candidate = None;
@@ -2771,6 +2823,20 @@ fn advance_start_hover(state: &mut DesktopState) -> bool {
         }
     }
     false
+}
+
+fn advance_top_menu_hover(state: &mut DesktopState) -> bool {
+    let Some((target, at)) = state.top_menu.hover_candidate else {
+        return false;
+    };
+    if state.top_menu.open.is_none() || at.elapsed() < TOP_MENU_HOVER_DELAY {
+        return false;
+    }
+    state.top_menu.open = Some(target);
+    let items = top_menu_items(state, target);
+    state.top_menu.hover_item = first_enabled_menu_item(&items);
+    state.top_menu.hover_candidate = None;
+    true
 }
 
 fn has_visible_pty_window(state: &DesktopState) -> bool {
@@ -2830,6 +2896,9 @@ fn run_desktop_loop(terminal: &mut Term, current_user: &str) -> Result<DesktopEx
     loop {
         reap_closed_pty_windows(&mut state);
         if advance_start_hover(&mut state) {
+            needs_redraw = true;
+        }
+        if advance_top_menu_hover(&mut state) {
             needs_redraw = true;
         }
 
@@ -3060,6 +3129,7 @@ fn handle_key(
                 let next_kind = order[next_idx];
                 state.top_menu.open = Some(next_kind);
                 state.top_menu.hover_label = Some(next_kind);
+                state.top_menu.hover_candidate = None;
                 let items = top_menu_items(state, next_kind);
                 state.top_menu.hover_item = first_enabled_menu_item(&items);
             }
@@ -3486,6 +3556,16 @@ fn handle_key(
                             if hub.mode_idx != 0 {
                                 hub.input2.clear();
                             }
+                        } else if matches!(hub.kind, DesktopHubKind::UserCreate)
+                            && !hub.input_mode
+                            && hub.mode_idx == 2
+                            && hub.selected == 2
+                        {
+                            update_settings(|s| {
+                                s.hacking_difficulty =
+                                    cycle_hacking_difficulty(s.hacking_difficulty, false);
+                            });
+                            persist_settings();
                         }
                     }
                     KeyCode::Right => {
@@ -3497,6 +3577,16 @@ fn handle_key(
                             if hub.mode_idx != 0 {
                                 hub.input2.clear();
                             }
+                        } else if matches!(hub.kind, DesktopHubKind::UserCreate)
+                            && !hub.input_mode
+                            && hub.mode_idx == 2
+                            && hub.selected == 2
+                        {
+                            update_settings(|s| {
+                                s.hacking_difficulty =
+                                    cycle_hacking_difficulty(s.hacking_difficulty, true);
+                            });
+                            persist_settings();
                         }
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => match hub.kind {
@@ -3505,13 +3595,19 @@ fn handle_key(
                             hub_action = Some(DesktopHubItemAction::RunInstallerSearch);
                         }
                         DesktopHubKind::UserCreate => {
-                            if matches!(hub.selected, 0 | 2) {
+                            if hub.selected == 0 || (hub.selected == 2 && hub.mode_idx == 0) {
                                 hub.input_mode = !hub.input_mode;
                             } else if hub.selected == 1 {
                                 hub.mode_idx = (hub.mode_idx + 1) % 3;
                                 if hub.mode_idx != 0 {
                                     hub.input2.clear();
                                 }
+                            } else if hub.selected == 2 && hub.mode_idx == 2 {
+                                update_settings(|s| {
+                                    s.hacking_difficulty =
+                                        cycle_hacking_difficulty(s.hacking_difficulty, true);
+                                });
+                                persist_settings();
                             } else if hub.selected == 3 {
                                 hub.flag = !hub.flag;
                             } else if let Some(item) = items.get(hub.selected) {
@@ -3533,6 +3629,10 @@ fn handle_key(
                     KeyCode::Backspace => {
                         if hub.input_mode && desktop_hub_input_slot(hub).is_some() {
                             desktop_hub_pop_char(hub);
+                        } else if let Some(action) =
+                            selected_desktop_hub_back_action(&items, hub.selected)
+                        {
+                            hub_action = Some(action);
                         }
                     }
                     KeyCode::Char(c) => {
@@ -3546,18 +3646,14 @@ fn handle_key(
                         }
                     }
                     KeyCode::Tab => {
-                        if matches!(
-                            hub.kind,
-                            DesktopHubKind::InstallerSearch
-                                | DesktopHubKind::EditApps
-                                | DesktopHubKind::EditGames
-                                | DesktopHubKind::EditNetwork
-                                | DesktopHubKind::EditDocuments
-                                | DesktopHubKind::UserCreate
-                                | DesktopHubKind::UserResetPassword
-                        ) && desktop_hub_input_slot(hub).is_some()
+                        if hub.input_mode && desktop_hub_input_slot(hub).is_some() {
+                            hub.input_mode = false;
+                        } else if let Some(action) =
+                            selected_desktop_hub_back_action(&items, hub.selected)
                         {
-                            hub.input_mode = !hub.input_mode;
+                            hub_action = Some(action);
+                        } else {
+                            close_focused = true;
                         }
                     }
                     _ => {}
@@ -3723,44 +3819,26 @@ fn handle_mouse(
     ) {
         let spotlight_hit = top_status_spotlight_rect(top)
             .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
-        let label_hit = hit_top_menu_label(top, state, mouse.column, mouse.row);
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && state.top_menu.open.is_none()
         {
-            state.top_menu.hover_label = label_hit;
-            if label_hit.is_none() {
+            state.top_menu.hover_label = hit_top_menu_label(top, state, mouse.column, mouse.row);
+            if state.top_menu.hover_label.is_none() {
                 state.top_menu.hover_item = None;
             }
         }
         if matches!(mouse.kind, MouseEventKind::Moved) {
-            state.top_menu.hover_label = label_hit;
-            if let Some(open_kind) = state.top_menu.open {
-                if let Some(label_kind) = label_hit {
-                    if label_kind != open_kind {
-                        state.top_menu.open = Some(label_kind);
-                        let items = top_menu_items(state, label_kind);
-                        state.top_menu.hover_item = first_enabled_menu_item(&items);
-                    } else {
-                        state.top_menu.hover_item = None;
-                    }
-                } else {
-                    state.top_menu.hover_item =
-                        hit_top_menu_item(top, state, open_kind, mouse.column, mouse.row);
-                }
-            } else {
-                state.top_menu.hover_item = None;
-            }
-
+            update_top_menu_hover_state(top, state, mouse.column, mouse.row);
             let over_dropdown = state
                 .top_menu
                 .open
                 .and_then(|kind| top_menu_dropdown_rect(top, state, kind))
                 .is_some_and(|rect| point_in_rect(mouse.column, mouse.row, rect));
-            if label_hit.is_some() || over_dropdown {
+            if state.top_menu.open.is_some()
+                || state.top_menu.hover_label.is_some()
+                || over_dropdown
+            {
                 return Ok(None);
-            }
-            if state.top_menu.open.is_some() {
-                close_top_menu(state);
             }
         } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             if spotlight_hit {
@@ -3769,13 +3847,14 @@ fn handle_mouse(
                 spotlight_open(state);
                 return Ok(None);
             }
-            if let Some(kind) = label_hit {
+            if let Some(kind) = hit_top_menu_label(top, state, mouse.column, mouse.row) {
                 if state.top_menu.open == Some(kind) {
                     close_top_menu(state);
                 } else {
                     close_start_menu(&mut state.start);
                     state.top_menu.open = Some(kind);
                     state.top_menu.hover_label = Some(kind);
+                    state.top_menu.hover_candidate = None;
                     let items = top_menu_items(state, kind);
                     state.top_menu.hover_item = first_enabled_menu_item(&items);
                 }
@@ -4391,6 +4470,29 @@ fn top_menu_dropdown_rect(area: Rect, state: &DesktopState, kind: TopMenuKind) -
         width,
         height: (items.len() as u16).saturating_add(2),
     })
+}
+
+fn update_top_menu_hover_state(area: Rect, state: &mut DesktopState, x: u16, y: u16) {
+    let label_hit = hit_top_menu_label(area, state, x, y);
+    state.top_menu.hover_label = label_hit;
+
+    if let Some(open_kind) = state.top_menu.open {
+        if let Some(label_kind) = label_hit {
+            if label_kind != open_kind {
+                queue_top_menu_hover(&mut state.top_menu, label_kind);
+                state.top_menu.hover_item = None;
+            } else {
+                state.top_menu.hover_candidate = None;
+                state.top_menu.hover_item = None;
+            }
+        } else {
+            state.top_menu.hover_candidate = None;
+            state.top_menu.hover_item = hit_top_menu_item(area, state, open_kind, x, y);
+        }
+    } else {
+        state.top_menu.hover_candidate = None;
+        state.top_menu.hover_item = None;
+    }
 }
 
 fn hit_top_menu_label(area: Rect, state: &DesktopState, x: u16, y: u16) -> Option<TopMenuKind> {
@@ -8149,6 +8251,34 @@ fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn desktop_navigation_hints_enabled() -> bool {
+    get_settings().show_navigation_hints
+}
+
+fn desktop_hub_hint_text() -> &'static str {
+    "Enter open | Tab back | Mouse wheel scroll"
+}
+
+fn desktop_settings_hint_text() -> &'static str {
+    "Enter select | Tab back | Arrows move"
+}
+
+fn file_manager_settings_hint_text() -> &'static str {
+    "Enter toggle | Tab back | Arrows move"
+}
+
+fn desktop_hint_footer_rect(content: Rect) -> Option<Rect> {
+    if !desktop_navigation_hints_enabled() || content.width == 0 || content.height == 0 {
+        return None;
+    }
+    Some(Rect {
+        x: content.x,
+        y: content.y + content.height.saturating_sub(1),
+        width: content.width,
+        height: 1,
+    })
+}
+
 fn centered_text(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -8199,23 +8329,17 @@ fn draw_desktop_hub_window(
     }
 
     let subtitle = desktop_hub_subtitle(hub);
-    let hint = "Enter open | Esc close | Mouse wheel scroll";
-    let mut header = Vec::new();
-    header.push(Line::from(Span::styled(
+    let header = vec![Line::from(Span::styled(
         truncate_with_ellipsis(&subtitle, content.width as usize),
         dim_style(),
-    )));
-    header.push(Line::from(Span::styled(
-        truncate_with_ellipsis(hint, content.width as usize),
-        if focused { normal_style() } else { dim_style() },
-    )));
+    ))];
     f.render_widget(
         Paragraph::new(header),
         Rect {
             x: content.x,
             y: content.y,
             width: content.width,
-            height: content.height.min(2),
+            height: content.height.min(1),
         },
     );
 
@@ -8252,6 +8376,16 @@ fn draw_desktop_hub_window(
         lines.push(Line::from(""));
     }
     f.render_widget(Paragraph::new(lines), list);
+
+    if let Some(footer) = desktop_hint_footer_rect(content) {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate_with_ellipsis(desktop_hub_hint_text(), footer.width as usize),
+                if focused { dim_style() } else { dim_style() },
+            ))),
+            footer,
+        );
+    }
 }
 
 fn file_manager_settings_rows() -> Vec<String> {
@@ -8319,6 +8453,13 @@ fn draw_file_manager_settings_window(
         return;
     }
     let rows = file_manager_settings_rows();
+    let footer = desktop_hint_footer_rect(inner);
+    let list_rect = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height.saturating_sub(u16::from(footer.is_some())),
+    };
     let mut lines = Vec::new();
     for (idx, row) in rows.iter().enumerate() {
         let style = if focused && settings.selected == idx {
@@ -8328,7 +8469,16 @@ fn draw_file_manager_settings_window(
         };
         lines.push(Line::from(Span::styled(row.as_str(), style)));
     }
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(Paragraph::new(lines), list_rect);
+    if let Some(footer) = footer {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate_with_ellipsis(file_manager_settings_hint_text(), footer.width as usize),
+                if focused { dim_style() } else { dim_style() },
+            ))),
+            footer,
+        );
+    }
 }
 
 fn desktop_settings_home_items(state: &DesktopSettingsState) -> Vec<DesktopSettingsHomeItem> {
@@ -9103,6 +9253,10 @@ fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
             format!("Sound: {} [toggle]", if s.sound { "ON" } else { "OFF" }),
             format!("Bootup: {} [toggle]", if s.bootup { "ON" } else { "OFF" }),
             format!(
+                "Navigation Hints: {} [toggle]",
+                if s.show_navigation_hints { "ON" } else { "OFF" }
+            ),
+            format!(
                 "Default Open Mode: {} [toggle]",
                 match s.default_open_mode {
                     OpenMode::Terminal => "Terminal",
@@ -9297,6 +9451,17 @@ fn draw_desktop_settings_window(
     if content.width < 8 || content.height < 6 {
         return;
     }
+    let footer = if matches!(&settings.panel, DesktopSettingsPanel::WallpaperPaste) {
+        None
+    } else {
+        desktop_hint_footer_rect(content)
+    };
+    let body = Rect {
+        x: content.x,
+        y: content.y,
+        width: content.width,
+        height: content.height.saturating_sub(u16::from(footer.is_some())),
+    };
 
     let header = match &settings.panel {
         DesktopSettingsPanel::Home => "Settings",
@@ -9329,16 +9494,16 @@ fn draw_desktop_settings_window(
             title_style(),
         ))),
         Rect {
-            x: content.x,
-            y: content.y,
-            width: content.width,
+            x: body.x,
+            y: body.y,
+            width: body.width,
             height: 1,
         },
     );
 
     if matches!(&settings.panel, DesktopSettingsPanel::Home) {
         let home_items = desktop_settings_home_items(settings);
-        let tiles = desktop_settings_home_tiles(content, home_items.len());
+        let tiles = desktop_settings_home_tiles(body, home_items.len());
         for (idx, tile) in tiles.into_iter().enumerate() {
             let item = home_items[idx];
             let icon_style = normal_style();
@@ -9373,6 +9538,15 @@ fn draw_desktop_settings_window(
                 },
             );
         }
+        if let Some(footer) = footer {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    truncate_with_ellipsis(desktop_settings_hint_text(), footer.width as usize),
+                    dim_style(),
+                ))),
+                footer,
+            );
+        }
         return;
     }
 
@@ -9388,9 +9562,9 @@ fn draw_desktop_settings_window(
                 normal_style(),
             ))),
             Rect {
-                x: content.x + 1,
-                y: content.y + 1,
-                width: content.width.saturating_sub(2),
+                x: body.x + 1,
+                y: body.y + 1,
+                width: body.width.saturating_sub(2),
                 height: 1,
             },
         );
@@ -9398,18 +9572,18 @@ fn draw_desktop_settings_window(
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(instruction, dim_style()))),
             Rect {
-                x: content.x + 1,
-                y: content.y + 2,
-                width: content.width.saturating_sub(2),
+                x: body.x + 1,
+                y: body.y + 2,
+                width: body.width.saturating_sub(2),
                 height: 1,
             },
         );
 
         let box_area = Rect {
-            x: content.x + 1,
-            y: content.y + 4,
-            width: content.width.saturating_sub(2),
-            height: content.height.saturating_sub(5),
+            x: body.x + 1,
+            y: body.y + 4,
+            width: body.width.saturating_sub(2),
+            height: body.height.saturating_sub(5),
         };
         if box_area.width >= 4 && box_area.height >= 3 {
             f.render_widget(
@@ -9455,9 +9629,9 @@ fn draw_desktop_settings_window(
             f.render_widget(
                 Paragraph::new(Line::from(Span::styled(format!(" ! {err}"), dim_style()))),
                 Rect {
-                    x: content.x,
-                    y: content.y + 2,
-                    width: content.width,
+                    x: body.x,
+                    y: body.y + 2,
+                    width: body.width,
                     height: 1,
                 },
             );
@@ -9468,27 +9642,27 @@ fn draw_desktop_settings_window(
             f.render_widget(
                 Paragraph::new(Line::from(Span::styled(format!(" ! {err}"), dim_style()))),
                 Rect {
-                    x: content.x,
-                    y: content.y + 2,
-                    width: content.width,
+                    x: body.x,
+                    y: body.y + 2,
+                    width: body.width,
                     height: 1,
                 },
             );
         }
     }
 
-    let list_y = content.y + desktop_settings_list_offset(settings);
-    let list_h = content
+    let list_y = body.y + desktop_settings_list_offset(settings);
+    let list_h = body
         .height
         .saturating_sub(desktop_settings_list_offset(settings));
-    let list_x = content.x + 1;
-    let list_w = content.width.saturating_sub(1);
+    let list_x = body.x + 1;
+    let list_w = body.width.saturating_sub(1);
     let show_preview = matches!(
         settings.panel,
         DesktopSettingsPanel::Wallpapers
             | DesktopSettingsPanel::WallpaperSize
             | DesktopSettingsPanel::WallpaperChoose
-    ) && content.width >= 70
+    ) && body.width >= 70
         && list_h >= 8;
 
     let (rows_area, preview_area) = if show_preview {
@@ -9596,6 +9770,16 @@ fn draw_desktop_settings_window(
                 }
             }
         }
+    }
+
+    if let Some(footer) = footer {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate_with_ellipsis(desktop_settings_hint_text(), footer.width as usize),
+                dim_style(),
+            ))),
+            footer,
+        );
     }
 }
 
@@ -10062,10 +10246,17 @@ fn handle_window_content_mouse(
                     width: area.width.saturating_sub(2),
                     height: area.height.saturating_sub(2),
                 };
-                if !point_in_rect(mouse.column, mouse.row, content) {
+                let footer = desktop_hint_footer_rect(content);
+                let list = Rect {
+                    x: content.x,
+                    y: content.y,
+                    width: content.width,
+                    height: content.height.saturating_sub(u16::from(footer.is_some())),
+                };
+                if !point_in_rect(mouse.column, mouse.row, list) {
                     return Ok(());
                 }
-                let row = mouse.row.saturating_sub(content.y) as usize;
+                let row = mouse.row.saturating_sub(list.y) as usize;
                 if row >= file_manager_settings_rows().len() {
                     return Ok(());
                 }
@@ -10207,11 +10398,15 @@ fn desktop_hub_content_rect(area: Rect) -> Rect {
 
 fn desktop_hub_list_rect(area: Rect) -> Rect {
     let content = desktop_hub_content_rect(area);
+    let header_rows = 1;
+    let footer_rows = u16::from(desktop_navigation_hints_enabled());
     Rect {
         x: content.x,
-        y: content.y.saturating_add(2),
+        y: content.y.saturating_add(header_rows),
         width: content.width,
-        height: content.height.saturating_sub(2),
+        height: content
+            .height
+            .saturating_sub(header_rows.saturating_add(footer_rows)),
     }
 }
 
@@ -10285,6 +10480,21 @@ fn desktop_hub_input_slot(hub: &DesktopHubState) -> Option<u8> {
             Some(1)
         }
         _ => None,
+    }
+}
+
+fn selected_desktop_hub_back_action(
+    items: &[DesktopHubItem],
+    selected: usize,
+) -> Option<DesktopHubItemAction> {
+    let item = items.get(selected)?;
+    if !item.enabled {
+        return None;
+    }
+    if is_back_menu_label(&item.label) {
+        Some(item.action.clone())
+    } else {
+        None
     }
 }
 
@@ -11565,6 +11775,12 @@ fn run_desktop_hub_action(
                 flash_message(terminal, "User not found.", 900)?;
             }
         }
+        DesktopHubItemAction::CycleHackingDifficulty => {
+            update_settings(|s| {
+                s.hacking_difficulty = cycle_hacking_difficulty(s.hacking_difficulty, true);
+            });
+            persist_settings();
+        }
         DesktopHubItemAction::ToggleUserAdmin(username) => {
             if !is_admin(current_user) {
                 flash_message(terminal, "Access denied. Admin only.", 1000)?;
@@ -11754,7 +11970,9 @@ fn handle_file_manager_settings_key(
     match code {
         KeyCode::Up => settings.selected = settings.selected.saturating_sub(1),
         KeyCode::Down => settings.selected = (settings.selected + 1).min(max),
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => return (false, true),
+        KeyCode::Esc | KeyCode::Tab | KeyCode::Char('q') | KeyCode::Char('Q') => {
+            return (false, true);
+        }
         KeyCode::Left => {
             if settings.selected == 3 {
                 update_settings(|s| {
@@ -12060,7 +12278,7 @@ fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
         DesktopSettingsPanel::ConnectionsSaved(kind) => desktop_connections_saved_rows(*kind).len(),
         DesktopSettingsPanel::ThemeSelect => desktop_theme_rows().len(),
         DesktopSettingsPanel::IconStyle => desktop_icon_style_rows().len(),
-        DesktopSettingsPanel::General => 4,
+        DesktopSettingsPanel::General => 5,
         DesktopSettingsPanel::CliDisplay => 4,
         DesktopSettingsPanel::Wallpapers => desktop_wallpaper_rows().len(),
         DesktopSettingsPanel::WallpaperSize => wallpaper_size_rows().len(),
@@ -12531,6 +12749,11 @@ fn handle_desktop_settings_activate(
                 DesktopSettingsAction::None
             }
             2 => {
+                update_settings(|s| s.show_navigation_hints = !s.show_navigation_hints);
+                persist_settings();
+                DesktopSettingsAction::None
+            }
+            3 => {
                 desktop_settings_apply_open_mode_toggle();
                 DesktopSettingsAction::None
             }
@@ -12982,7 +13205,9 @@ fn handle_desktop_settings_key(
     }
 
     match code {
-        KeyCode::Esc | KeyCode::Backspace => return handle_desktop_settings_back(state),
+        KeyCode::Esc | KeyCode::Tab | KeyCode::Backspace => {
+            return handle_desktop_settings_back(state);
+        }
         KeyCode::Up => {
             if matches!(&state.panel, DesktopSettingsPanel::Home) {
                 let cols = if desktop_settings_home_items(state).len() >= 6 {
@@ -13014,7 +13239,7 @@ fn handle_desktop_settings_key(
             DesktopSettingsPanel::Appearance if state.selected == 1 => {
                 desktop_settings_toggle_desktop_cursor()
             }
-            DesktopSettingsPanel::General if state.selected == 2 => {
+            DesktopSettingsPanel::General if state.selected == 3 => {
                 desktop_settings_apply_open_mode_toggle()
             }
             DesktopSettingsPanel::CliDisplay if state.selected == 1 => {
@@ -13044,7 +13269,7 @@ fn handle_desktop_settings_key(
             DesktopSettingsPanel::Appearance if state.selected == 1 => {
                 desktop_settings_toggle_desktop_cursor()
             }
-            DesktopSettingsPanel::General if state.selected == 2 => {
+            DesktopSettingsPanel::General if state.selected == 3 => {
                 desktop_settings_apply_open_mode_toggle()
             }
             DesktopSettingsPanel::CliDisplay if state.selected == 1 => {
@@ -13107,14 +13332,6 @@ fn handle_desktop_settings_key(
         KeyCode::Enter | KeyCode::Char(' ') => {
             return handle_desktop_settings_activate(state, false);
         }
-        KeyCode::Tab => {
-            let max = desktop_settings_row_count(state).saturating_sub(1);
-            state.selected = if max == 0 {
-                0
-            } else {
-                (state.selected + 1) % (max + 1)
-            };
-        }
         KeyCode::Char('q') => return handle_desktop_settings_back(state),
         _ => {}
     }
@@ -13143,13 +13360,23 @@ fn handle_desktop_settings_mouse(
             width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
+        let footer = if matches!(&state.panel, DesktopSettingsPanel::WallpaperPaste) {
+            None
+        } else {
+            desktop_hint_footer_rect(content)
+        };
+        let body = Rect {
+            x: content.x,
+            y: content.y,
+            width: content.width,
+            height: content.height.saturating_sub(u16::from(footer.is_some())),
+        };
         if !point_in_rect(mouse.column, mouse.row, content) {
             state.hovered = None;
             return DesktopSettingsAction::None;
         }
         if matches!(&state.panel, DesktopSettingsPanel::Home) {
-            let tiles =
-                desktop_settings_home_tiles(content, desktop_settings_home_items(state).len());
+            let tiles = desktop_settings_home_tiles(body, desktop_settings_home_items(state).len());
             state.hovered = tiles.iter().enumerate().find_map(|(idx, tile)| {
                 if point_in_rect(
                     mouse.column,
@@ -13164,9 +13391,9 @@ fn handle_desktop_settings_mouse(
             return DesktopSettingsAction::None;
         }
 
-        let list_y = content.y + desktop_settings_list_offset(state);
-        let list_w = content.width.saturating_sub(1);
-        let list_x = content.x + 1;
+        let list_y = body.y + desktop_settings_list_offset(state);
+        let list_w = body.width.saturating_sub(1);
+        let list_x = body.x + 1;
         let max_list_x = if uses_preview {
             list_x + (((list_w as u32) * 48 / 100) as u16).max(18)
         } else {
@@ -13181,10 +13408,9 @@ fn handle_desktop_settings_mouse(
             return DesktopSettingsAction::None;
         }
         let row = (mouse.row - list_y) as usize;
-        let visible_rows = content
-            .height
-            .saturating_sub(desktop_settings_list_offset(state))
-            as usize;
+        let visible_rows =
+            body.height
+                .saturating_sub(desktop_settings_list_offset(state)) as usize;
         let start_row = desktop_settings_list_scroll_start(state, visible_rows);
         let idx = start_row + row;
         if idx >= desktop_settings_row_count(state) {
@@ -13205,6 +13431,17 @@ fn handle_desktop_settings_mouse(
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
+    let footer = if matches!(&state.panel, DesktopSettingsPanel::WallpaperPaste) {
+        None
+    } else {
+        desktop_hint_footer_rect(content)
+    };
+    let body = Rect {
+        x: content.x,
+        y: content.y,
+        width: content.width,
+        height: content.height.saturating_sub(u16::from(footer.is_some())),
+    };
     if !point_in_rect(mouse.column, mouse.row, content) {
         state.hovered = None;
         return DesktopSettingsAction::None;
@@ -13212,7 +13449,7 @@ fn handle_desktop_settings_mouse(
 
     if matches!(&state.panel, DesktopSettingsPanel::Home) {
         for (idx, tile) in
-            desktop_settings_home_tiles(content, desktop_settings_home_items(state).len())
+            desktop_settings_home_tiles(body, desktop_settings_home_items(state).len())
                 .into_iter()
                 .enumerate()
         {
@@ -13224,9 +13461,9 @@ fn handle_desktop_settings_mouse(
         return DesktopSettingsAction::None;
     }
 
-    let list_y = content.y + desktop_settings_list_offset(state);
-    let list_w = content.width.saturating_sub(1);
-    let list_x = content.x + 1;
+    let list_y = body.y + desktop_settings_list_offset(state);
+    let list_w = body.width.saturating_sub(1);
+    let list_x = body.x + 1;
     let max_list_x = if uses_preview {
         list_x + (((list_w as u32) * 48 / 100) as u16).max(18)
     } else {
@@ -13239,7 +13476,7 @@ fn handle_desktop_settings_mouse(
         return DesktopSettingsAction::None;
     }
     let row = (mouse.row - list_y) as usize;
-    let visible_rows = content
+    let visible_rows = body
         .height
         .saturating_sub(desktop_settings_list_offset(state)) as usize;
     let start_row = desktop_settings_list_scroll_start(state, visible_rows);
@@ -14387,5 +14624,148 @@ mod tests {
             back.action,
             DesktopHubItemAction::CloseFocusedWindow
         ));
+    }
+
+    #[test]
+    fn selected_desktop_hub_back_action_detects_back_rows() {
+        let items = vec![
+            DesktopHubItem {
+                label: "Back to User Management".to_string(),
+                action: DesktopHubItemAction::CloseFocusedWindow,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Create User".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::UserCreate),
+                enabled: true,
+            },
+        ];
+
+        assert!(matches!(
+            selected_desktop_hub_back_action(&items, 0),
+            Some(DesktopHubItemAction::CloseFocusedWindow)
+        ));
+        assert!(selected_desktop_hub_back_action(&items, 1).is_none());
+    }
+
+    #[test]
+    fn file_manager_settings_tab_closes_window() {
+        let mut state = FileManagerSettingsState { selected: 0 };
+        assert_eq!(
+            handle_file_manager_settings_key(&mut state, KeyCode::Tab, KeyModifiers::NONE),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn desktop_settings_tab_acts_as_back() {
+        let mut state = DesktopSettingsState::default();
+        state.panel = DesktopSettingsPanel::Appearance;
+        state.selected = 2;
+
+        let action = handle_desktop_settings_key(&mut state, KeyCode::Tab, KeyModifiers::NONE);
+        assert!(matches!(action, DesktopSettingsAction::None));
+        assert!(matches!(state.panel, DesktopSettingsPanel::Home));
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn desktop_general_rows_exclude_hacking_difficulty() {
+        let mut state = DesktopSettingsState::default();
+        state.panel = DesktopSettingsPanel::General;
+        let rows = desktop_settings_rows(&state);
+        assert!(rows.iter().any(|row| row.starts_with("Navigation Hints: ")));
+        assert!(!rows
+            .iter()
+            .any(|row| row.starts_with("Hacking Difficulty: ")));
+    }
+
+    #[test]
+    fn user_create_rows_show_hacking_difficulty_only_for_hacking_auth() {
+        let mut hub = DesktopHubState {
+            kind: DesktopHubKind::UserCreate,
+            selected: 0,
+            scroll: 0,
+            context_path: None,
+            context_text: None,
+            input: String::new(),
+            input2: String::new(),
+            mode_idx: 0,
+            flag: false,
+            input_mode: false,
+            cached_rows: Vec::new(),
+        };
+
+        let password_rows = desktop_hub_items(&hub, "ignored");
+        assert!(password_rows
+            .iter()
+            .any(|row| row.label.starts_with("Password: ")));
+        assert!(!password_rows
+            .iter()
+            .any(|row| row.label.starts_with("Hacking Difficulty: ")));
+
+        hub.mode_idx = 2;
+        let hacking_rows = desktop_hub_items(&hub, "ignored");
+        assert!(hacking_rows
+            .iter()
+            .any(|row| row.label.starts_with("Hacking Difficulty: ")));
+    }
+
+    #[test]
+    fn top_menu_hover_outside_keeps_menu_open() {
+        let top = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 1,
+        };
+        let mut state = DesktopState::default();
+        state.top_menu.open = Some(TopMenuKind::File);
+        state.top_menu.hover_item = Some(0);
+
+        update_top_menu_hover_state(top, &mut state, 90, 10);
+
+        assert_eq!(state.top_menu.open, Some(TopMenuKind::File));
+        assert_eq!(state.top_menu.hover_label, None);
+        assert_eq!(state.top_menu.hover_item, None);
+    }
+
+    #[test]
+    fn top_menu_hover_can_switch_open_label() {
+        let top = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 1,
+        };
+        let mut state = DesktopState::default();
+        state.top_menu.open = Some(TopMenuKind::File);
+
+        let labels = top_menu_labels(top, &state);
+        let view = labels
+            .iter()
+            .find(|label| label.kind == TopMenuKind::View)
+            .expect("view label");
+
+        update_top_menu_hover_state(top, &mut state, view.rect.x, view.rect.y);
+
+        assert_eq!(state.top_menu.open, Some(TopMenuKind::File));
+        assert_eq!(state.top_menu.hover_label, Some(TopMenuKind::View));
+        assert_eq!(
+            state.top_menu.hover_candidate.map(|(kind, _)| kind),
+            Some(TopMenuKind::View)
+        );
+    }
+
+    #[test]
+    fn top_menu_hover_delay_can_open_queued_label() {
+        let mut state = DesktopState::default();
+        state.top_menu.open = Some(TopMenuKind::File);
+        state.top_menu.hover_candidate =
+            Some((TopMenuKind::View, Instant::now() - TOP_MENU_HOVER_DELAY));
+
+        assert!(advance_top_menu_hover(&mut state));
+        assert_eq!(state.top_menu.open, Some(TopMenuKind::View));
+        assert!(state.top_menu.hover_item.is_some());
     }
 }
