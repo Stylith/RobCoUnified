@@ -65,6 +65,8 @@ enum StartLaunch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopHubKind {
     Applications,
+    TextEditorMenu,
+    TextEditorDocuments,
     Documents,
     DocumentCategory,
     Logs,
@@ -99,6 +101,7 @@ enum StartAction {
     Launch(StartLaunch),
     LaunchCommand { title: String, cmd: Vec<String> },
     LaunchNukeCodes,
+    OpenTextEditorApp,
     OpenDocumentLogs,
     OpenDocumentCategory { name: String, path: PathBuf },
     ReturnToTerminal,
@@ -707,6 +710,7 @@ enum DesktopHubItemAction {
     },
     LaunchNukeCodes,
     LaunchTextEditor,
+    OpenTextEditorDocument(PathBuf),
     OpenHub(DesktopHubKind),
     OpenHubWithPath {
         kind: DesktopHubKind,
@@ -1280,7 +1284,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
     if text_editor_visible {
         app_items.push(StartLeafItem {
             label: BUILTIN_TEXT_EDITOR_APP.to_string(),
-            action: StartAction::OpenDocumentLogs,
+            action: StartAction::OpenTextEditorApp,
         });
     }
     for key in sorted_json_keys(&apps) {
@@ -1325,6 +1329,8 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
     match kind {
         DesktopHubKind::Applications => "Applications",
+        DesktopHubKind::TextEditorMenu => "Text Editor",
+        DesktopHubKind::TextEditorDocuments => "Open Document",
         DesktopHubKind::Documents => "Documents",
         DesktopHubKind::DocumentCategory => "Documents",
         DesktopHubKind::Logs => "Logs",
@@ -1357,6 +1363,8 @@ fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
 fn desktop_hub_subtitle(hub: &DesktopHubState) -> String {
     match hub.kind {
         DesktopHubKind::Applications => "Terminal-mode applications".to_string(),
+        DesktopHubKind::TextEditorMenu => "New or open a document".to_string(),
+        DesktopHubKind::TextEditorDocuments => "Select a document to open".to_string(),
         DesktopHubKind::Documents => "Document categories".to_string(),
         DesktopHubKind::DocumentCategory => hub
             .context_path
@@ -1574,6 +1582,62 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             }
             items
         }
+        DesktopHubKind::TextEditorMenu => vec![
+            DesktopHubItem {
+                label: "New Document".to_string(),
+                action: DesktopHubItemAction::CreateLog,
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: "Open Document".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorDocuments),
+                enabled: true,
+            },
+            DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            },
+            DesktopHubItem {
+                label: "Back to Applications".to_string(),
+                action: DesktopHubItemAction::CloseFocusedWindow,
+                enabled: true,
+            },
+        ],
+        DesktopHubKind::TextEditorDocuments => {
+            let docs = desktop_log_files();
+            let mut items = Vec::new();
+            if docs.is_empty() {
+                items.push(DesktopHubItem {
+                    label: "(No documents found)".to_string(),
+                    action: DesktopHubItemAction::None,
+                    enabled: false,
+                });
+            } else {
+                for path in docs {
+                    let label = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string());
+                    items.push(DesktopHubItem {
+                        label,
+                        action: DesktopHubItemAction::OpenTextEditorDocument(path),
+                        enabled: true,
+                    });
+                }
+            }
+            items.push(DesktopHubItem {
+                label: String::new(),
+                action: DesktopHubItemAction::None,
+                enabled: false,
+            });
+            items.push(DesktopHubItem {
+                label: "Back to Text Editor".to_string(),
+                action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorMenu),
+                enabled: true,
+            });
+            items
+        }
         DesktopHubKind::Documents => {
             let categories = load_categories();
             let mut items = vec![DesktopHubItem {
@@ -1655,7 +1719,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         }
         DesktopHubKind::Logs => {
             let mut items = vec![DesktopHubItem {
-                label: "Create New Log".to_string(),
+                label: "New Log".to_string(),
                 action: DesktopHubItemAction::CreateLog,
                 enabled: true,
             }];
@@ -4337,6 +4401,10 @@ fn run_start_action(
             ) {
                 flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
             }
+            Ok(None)
+        }
+        StartAction::OpenTextEditorApp => {
+            open_desktop_hub_window(state, DesktopHubKind::TextEditorMenu);
             Ok(None)
         }
         StartAction::OpenDocumentLogs => {
@@ -12211,7 +12279,12 @@ fn run_desktop_hub_action(
             }
         }
         DesktopHubItemAction::LaunchTextEditor => {
-            open_desktop_hub_window(state, DesktopHubKind::Logs);
+            open_desktop_hub_window(state, DesktopHubKind::TextEditorMenu);
+        }
+        DesktopHubItemAction::OpenTextEditorDocument(path) => {
+            if let Err(err) = open_desktop_text_editor_window(terminal, state, path, false) {
+                flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+            }
         }
         DesktopHubItemAction::OpenHub(kind) => open_desktop_hub_window(state, kind),
         DesktopHubItemAction::OpenHubWithPath { kind, title, path } => {
@@ -12915,6 +12988,7 @@ fn run_desktop_hub_action(
                     flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
                 } else {
                     refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+                    refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
                 }
             }
         }
@@ -12952,6 +13026,7 @@ fn run_desktop_hub_action(
                 flash_message(terminal, "Delete failed.", 1000)?;
             }
             open_desktop_hub_window(state, DesktopHubKind::Logs);
+            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
         }
     }
     Ok(())
@@ -15875,6 +15950,37 @@ mod tests {
         assert_eq!(
             has_text_editor,
             get_settings().builtin_menu_visibility.text_editor
+        );
+    }
+
+    #[test]
+    fn text_editor_hub_rows_do_not_reference_logs() {
+        let hub = DesktopHubState {
+            kind: DesktopHubKind::TextEditorMenu,
+            selected: 0,
+            scroll: 0,
+            context_path: None,
+            context_text: None,
+            input: String::new(),
+            input2: String::new(),
+            mode_idx: 0,
+            flag: false,
+            input_mode: false,
+            cached_rows: Vec::new(),
+        };
+
+        let labels: Vec<String> = desktop_hub_items(&hub, "ignored")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "New Document".to_string(),
+                "Open Document".to_string(),
+                String::new(),
+                "Back to Applications".to_string()
+            ]
         );
     }
 

@@ -381,10 +381,10 @@ pub fn new_text_document(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
-pub fn journal_view(terminal: &mut Term) -> Result<()> {
+fn saved_document_paths() -> Result<Vec<PathBuf>> {
     let dir = journal_dir();
     if !dir.exists() {
-        return flash_message(terminal, "Error: saved documents folder not found.", 800);
+        anyhow::bail!("saved documents folder not found");
     }
     let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir)?
         .flatten()
@@ -392,9 +392,49 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
         .map(|e| e.path())
         .collect();
     if logs.is_empty() {
-        return flash_message(terminal, "Error: No saved documents found.", 800);
+        anyhow::bail!("no saved documents found");
     }
     logs.sort_by(|a, b| b.cmp(a)); // newest first
+    Ok(logs)
+}
+
+fn pick_saved_document(terminal: &mut Term, title: &str) -> Result<Option<PathBuf>> {
+    let logs = match saved_document_paths() {
+        Ok(paths) => paths,
+        Err(_) => {
+            flash_message(terminal, "Error: No saved documents found.", 800)?;
+            return Ok(None);
+        }
+    };
+    let dir = journal_dir();
+    loop {
+        let mut keys: Vec<String> = logs
+            .iter()
+            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+            .collect();
+        keys.push("Back".to_string());
+        let opts: Vec<&str> = keys.iter().map(String::as_str).collect();
+
+        let sel = match run_menu(terminal, title, &opts, None)? {
+            MenuResult::Back => return Ok(None),
+            MenuResult::Selected(s) if s == "Back" => return Ok(None),
+            MenuResult::Selected(s) => s,
+        };
+
+        let path = dir.join(format!("{sel}.txt"));
+        if !path.exists() {
+            continue;
+        }
+        return Ok(Some(path));
+    }
+}
+
+pub fn journal_view(terminal: &mut Term) -> Result<()> {
+    let mut logs = match saved_document_paths() {
+        Ok(paths) => paths,
+        Err(_) => return flash_message(terminal, "Error: No entries found.", 800),
+    };
+    let dir = journal_dir();
 
     loop {
         let mut keys: Vec<String> = logs
@@ -404,7 +444,7 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
         keys.push("Back".to_string());
         let opts: Vec<&str> = keys.iter().map(String::as_str).collect();
 
-        let sel = match run_menu(terminal, "Saved Documents", &opts, None)? {
+        let sel = match run_menu(terminal, "View Logs", &opts, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) => s,
@@ -447,17 +487,40 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+pub fn text_editor_menu(terminal: &mut Term) -> Result<()> {
+    loop {
+        match run_menu(
+            terminal,
+            "Text Editor",
+            &["New Document", "Open Document", "---", "Back"],
+            None,
+        )? {
+            MenuResult::Back => break,
+            MenuResult::Selected(s) => match s.as_str() {
+                "New Document" => new_text_document(terminal)?,
+                "Open Document" => {
+                    if let Some(path) = pick_saved_document(terminal, "Open Document")? {
+                        edit_text_file(terminal, &path)?;
+                    }
+                }
+                _ => break,
+            },
+        }
+    }
+    Ok(())
+}
+
 pub fn logs_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
             terminal,
             "Logs",
-            &["Create New Log", "View Logs", "---", "Back"],
+            &["New Log", "View Logs", "---", "Back"],
             None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Create New Log" => new_text_document(terminal)?,
+                "New Log" => new_text_document(terminal)?,
                 "View Logs" => journal_view(terminal)?,
                 _ => break,
             },

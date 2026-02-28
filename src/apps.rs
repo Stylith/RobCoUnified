@@ -115,7 +115,7 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
                 }
             }
             MenuResult::Selected(s) if s == BUILTIN_TEXT_EDITOR_APP => {
-                crate::documents::logs_menu(terminal)?;
+                crate::documents::text_editor_menu(terminal)?;
                 if crate::session::has_switch_request() {
                     break;
                 }
