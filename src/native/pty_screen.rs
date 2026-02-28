@@ -87,16 +87,17 @@ pub fn draw_embedded_pty(
     }
 
     let pty_cols = cols.max(1) as u16;
-    let pty_rows = rows.max(1) as u16;
+    // Keep one terminal row as safety padding above the global footer/status bar.
+    let pty_rows = rows.saturating_sub(1).max(1) as u16;
     state.session.resize(pty_cols, pty_rows);
     handle_pty_input(ctx, &mut state.session);
-    // Prefer output-driven repaints for lower idle usage, with a slow fallback
-    // tick so cursor blink / misc updates still refresh when output is quiet.
+    // Prefer output-driven repaints, but keep a regular repaint cadence so
+    // animated apps (e.g. cmatrix) keep moving even when activity detection
+    // is temporarily quiet.
     if state.session.take_output_activity() {
         ctx.request_repaint();
-    } else {
-        ctx.request_repaint_after(Duration::from_millis(120));
     }
+    ctx.request_repaint_after(Duration::from_millis(33));
 
     if !state.session.is_alive() {
         return PtyScreenEvent::ProcessExited;
@@ -122,8 +123,8 @@ pub fn draw_embedded_pty(
             let content_rect = Rect::from_min_max(
                 screen.row_rect(0, 0, 1).min,
                 Pos2::new(
-                    screen.row_rect(cols, 0, 1).min.x,
-                    screen.row_rect(0, rows, 1).min.y,
+                    screen.row_rect(pty_cols as usize, 0, 1).min.x,
+                    screen.row_rect(0, pty_rows as usize, 1).min.y,
                 ),
             );
             handle_pty_mouse(
@@ -134,6 +135,7 @@ pub fn draw_embedded_pty(
                 pty_rows,
                 &mut state.session,
             );
+            let content_painter = painter.with_clip_rect(content_rect);
 
             for (row_idx, row) in snapshot.cells.iter().enumerate() {
                 for (col_idx, cell) in row.iter().enumerate() {
@@ -158,7 +160,7 @@ pub fn draw_embedded_pty(
                     };
                     draw_cell(
                         &screen,
-                        &painter,
+                        &content_painter,
                         col_idx,
                         row_idx,
                         &cell_to_draw,
@@ -188,9 +190,9 @@ pub fn draw_embedded_pty(
                 let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
                 let fill = cursor_fg;
                 let text_color = cursor_bg;
-                painter.rect_filled(cursor_rect, 0.0, fill);
+                content_painter.rect_filled(cursor_rect, 0.0, fill);
                 if cell.ch != ' ' {
-                    painter.text(
+                    content_painter.text(
                         cursor_rect.left_top(),
                         Align2::LEFT_TOP,
                         cell.ch.to_string(),
@@ -198,7 +200,7 @@ pub fn draw_embedded_pty(
                         text_color,
                     );
                 } else {
-                    painter.text(
+                    content_painter.text(
                         cursor_rect.left_top(),
                         Align2::LEFT_TOP,
                         "_",

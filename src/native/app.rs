@@ -569,7 +569,13 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
-        match spawn_embedded_pty(title, cmd, return_screen, 86, 20) {
+        match spawn_embedded_pty(
+            title,
+            cmd,
+            return_screen,
+            TERMINAL_SCREEN_COLS as u16,
+            TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
+        ) {
             Ok(state) => {
                 self.terminal_pty = Some(state);
                 self.terminal_screen = TerminalScreen::PtyApp;
@@ -610,8 +616,8 @@ impl RobcoNativeApp {
             "ROBCO MAINTENANCE TERMLINK",
             &cmd,
             TerminalScreen::MainMenu,
-            86,
-            20,
+            TERMINAL_SCREEN_COLS as u16,
+            TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
             options,
         ) {
             Ok(state) => {
