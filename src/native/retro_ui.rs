@@ -88,16 +88,25 @@ impl RetroScreen {
         let (rect, response) = ui.allocate_exact_size(desired, Sense::hover());
         let cell_w = (rect.width() / cols.max(1) as f32).floor().max(8.0);
         let cell_h = (rect.height() / rows.max(1) as f32).floor().max(12.0);
-        let scale = get_settings().native_ui_scale.clamp(0.75, 1.75);
+        let scale = get_settings().native_ui_scale.clamp(0.75, 2.6);
+        // Keep the retro font inside the fixed cell grid so larger UI sizes do not
+        // cause menu labels to overflow into adjacent cells.
+        let height_font = ((cell_h - 2.0).max(10.0) * scale).max(10.0);
+        let width_limited_font = ((cell_w - 1.0).max(7.0) / 0.50).max(10.0);
         (
             Self {
                 rect,
                 cols,
                 cell: egui::vec2(cell_w, cell_h),
-                font: FontId::monospace(((cell_h - 2.0).max(10.0) * scale).max(10.0)),
+                font: FontId::monospace(height_font.min(width_limited_font)),
             },
             response,
         )
+    }
+
+    fn clip_text(&self, col: usize, text: &str) -> String {
+        let max_chars = self.cols.saturating_sub(col);
+        text.chars().take(max_chars).collect()
     }
 
     pub fn paint_bg(&self, painter: &Painter, color: Color32) {
@@ -105,11 +114,36 @@ impl RetroScreen {
     }
 
     pub fn text(&self, painter: &Painter, col: usize, row: usize, text: &str, color: Color32) {
+        let clipped = self.clip_text(col, text);
         let pos = Pos2::new(
             self.rect.left() + col as f32 * self.cell.x,
             self.rect.top() + row as f32 * self.cell.y,
         );
-        painter.text(pos, Align2::LEFT_TOP, text, self.font.clone(), color);
+        painter.text(pos, Align2::LEFT_TOP, clipped, self.font.clone(), color);
+    }
+
+    pub fn underlined_text(
+        &self,
+        painter: &Painter,
+        col: usize,
+        row: usize,
+        text: &str,
+        color: Color32,
+    ) {
+        let clipped = self.clip_text(col, text);
+        let pos = Pos2::new(
+            self.rect.left() + col as f32 * self.cell.x,
+            self.rect.top() + row as f32 * self.cell.y,
+        );
+        painter.text(pos, Align2::LEFT_TOP, &clipped, self.font.clone(), color);
+        let width = clipped.chars().count() as f32 * self.cell.x;
+        if width > 0.0 {
+            let y = pos.y + self.cell.y - 2.0;
+            painter.line_segment(
+                [Pos2::new(pos.x, y), Pos2::new(pos.x + width, y)],
+                Stroke::new(1.0, color),
+            );
+        }
     }
 
     pub fn centered_text(
@@ -118,19 +152,15 @@ impl RetroScreen {
         row: usize,
         text: &str,
         color: Color32,
-        strong: bool,
+        _strong: bool,
     ) {
-        let font = if strong {
-            FontId::monospace(self.font.size + 1.0)
-        } else {
-            self.font.clone()
-        };
+        let clipped = self.clip_text(1, text);
         let pos = Pos2::new(self.rect.center().x, self.rect.top() + row as f32 * self.cell.y);
-        painter.text(pos, Align2::CENTER_TOP, text, font, color);
+        painter.text(pos, Align2::CENTER_TOP, clipped, self.font.clone(), color);
     }
 
     pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
-        let text = "=".repeat(self.cols.saturating_sub(4));
+        let text = "=".repeat(self.cols.saturating_sub(6));
         self.centered_text(painter, row, &text, palette.dim, false);
     }
 
@@ -154,14 +184,15 @@ impl RetroScreen {
         text: &str,
         selected: bool,
     ) -> Response {
-        let rect = self.row_rect(col, row, text.chars().count());
+        let clipped = self.clip_text(col, text);
+        let rect = self.row_rect(col, row, clipped.chars().count());
         if selected {
             painter.rect_filled(rect, 0.0, palette.selected_bg);
         }
         painter.text(
             rect.left_top(),
             Align2::LEFT_TOP,
-            text,
+            clipped,
             self.font.clone(),
             if selected { palette.selected_fg } else { palette.fg },
         );

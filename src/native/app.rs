@@ -83,7 +83,6 @@ struct TerminalModeWindow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsChoiceKind {
     Theme,
-    InterfaceSize,
     DefaultOpenMode,
 }
 
@@ -166,12 +165,23 @@ const MAIN_MENU_ENTRIES: &[MainMenuEntry] = &[
 
 const DOCUMENT_MENU_ITEMS: &[&str] = &["New Document", "Open Documents", "Back"];
 const STATIC_APP_MENU_ITEMS: &[&str] = &["ROBCO Word Processor"];
+const TERMINAL_SCREEN_COLS: usize = 92;
+const TERMINAL_SCREEN_ROWS: usize = 34;
+const TERMINAL_CONTENT_COL: usize = 3;
+const TERMINAL_HEADER_START_ROW: usize = 0;
+const TERMINAL_SEPARATOR_TOP_ROW: usize = 3;
+const TERMINAL_TITLE_ROW: usize = 4;
+const TERMINAL_SEPARATOR_BOTTOM_ROW: usize = 5;
+const TERMINAL_SUBTITLE_ROW: usize = 7;
+const TERMINAL_MENU_START_ROW: usize = 9;
+const TERMINAL_STATUS_ROW: usize = 28;
+const TERMINAL_STATUS_ROW_ALT: usize = 30;
 
 fn selectable_menu_count() -> usize {
     MAIN_MENU_ENTRIES.iter().filter(|entry| entry.action.is_some()).count()
 }
 
-const NATIVE_UI_SCALE_OPTIONS: &[f32] = &[0.85, 1.0, 1.15, 1.3, 1.5];
+const NATIVE_UI_SCALE_OPTIONS: &[f32] = &[0.85, 1.0, 1.2, 1.4, 1.7, 2.0, 2.3, 2.6];
 
 fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
     MAIN_MENU_ENTRIES
@@ -180,6 +190,10 @@ fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
         .filter(|entry| entry.action.is_some())
         .nth(idx)
         .unwrap_or(MAIN_MENU_ENTRIES[0])
+}
+
+fn retro_footer_height() -> f32 {
+    36.0
 }
 
 fn try_load_font_bytes() -> Option<Vec<u8>> {
@@ -234,7 +248,7 @@ fn configure_native_fonts(ctx: &Context) {
 pub fn apply_native_appearance(ctx: &Context) {
     configure_visuals(ctx);
     let mut style = (*ctx.style()).clone();
-    let scale = crate::config::get_settings().native_ui_scale.clamp(0.75, 1.75);
+    let scale = crate::config::get_settings().native_ui_scale.clamp(0.75, 2.6);
     style.text_styles = [
         (
             TextStyle::Heading,
@@ -310,6 +324,7 @@ impl Default for RobcoNativeApp {
 
 impl RobcoNativeApp {
     fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
+        crate::config::reload_settings();
         let snapshot: NativeShellSnapshot = read_shell_snapshot(username);
         self.session = Some(SessionState {
             username: username.to_string(),
@@ -412,6 +427,7 @@ impl RobcoNativeApp {
 
     fn logout(&mut self) {
         self.persist_snapshot();
+        crate::config::reload_settings();
         self.session = None;
         self.login_mode = LoginScreenMode::SelectUser;
         self.login.selected_idx = 0;
@@ -537,6 +553,8 @@ impl RobcoNativeApp {
 
     fn persist_native_settings(&mut self) {
         save_settings(self.settings.draft.clone());
+        crate::config::reload_settings();
+        self.settings.draft = current_settings();
         self.shell_status = "Settings saved.".to_string();
     }
 
@@ -546,10 +564,6 @@ impl RobcoNativeApp {
                 .iter()
                 .position(|(name, _)| *name == self.settings.draft.theme)
                 .unwrap_or(0),
-            SettingsChoiceKind::InterfaceSize => NATIVE_UI_SCALE_OPTIONS
-                .iter()
-                .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
-                .unwrap_or(1),
             SettingsChoiceKind::DefaultOpenMode => match self.settings.draft.default_open_mode {
                 OpenMode::Terminal => 0,
                 OpenMode::Desktop => 1,
@@ -561,10 +575,6 @@ impl RobcoNativeApp {
     fn settings_choice_items(&self, kind: SettingsChoiceKind) -> Vec<String> {
         match kind {
             SettingsChoiceKind::Theme => THEMES.iter().map(|(name, _)| (*name).to_string()).collect(),
-            SettingsChoiceKind::InterfaceSize => NATIVE_UI_SCALE_OPTIONS
-                .iter()
-                .map(|value| format!("{}%", (*value * 100.0).round() as i32))
-                .collect(),
             SettingsChoiceKind::DefaultOpenMode => vec!["Terminal".to_string(), "Desktop".to_string()],
         }
     }
@@ -574,11 +584,6 @@ impl RobcoNativeApp {
             SettingsChoiceKind::Theme => {
                 if let Some((name, _)) = THEMES.get(selected) {
                     self.settings.draft.theme = (*name).to_string();
-                }
-            }
-            SettingsChoiceKind::InterfaceSize => {
-                if let Some(value) = NATIVE_UI_SCALE_OPTIONS.get(selected) {
-                    self.settings.draft.native_ui_scale = *value;
                 }
             }
             SettingsChoiceKind::DefaultOpenMode => {
@@ -612,7 +617,7 @@ impl RobcoNativeApp {
             ),
             format!("Theme: {} [choose]", self.settings.draft.theme),
             format!(
-                "Interface Size: {}% [choose]",
+                "Interface Size: {}% [adjust]",
                 (self.settings.draft.native_ui_scale * 100.0).round() as i32
             ),
             format!(
@@ -686,71 +691,36 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_settings_choice_overlay(&mut self, ctx: &Context) {
-        let Some(mut overlay) = self.terminal_settings_choice else {
-            return;
+    fn step_interface_size(&mut self, delta: isize) {
+        let current_idx = NATIVE_UI_SCALE_OPTIONS
+            .iter()
+            .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
+            .unwrap_or(1);
+        let next_idx = if delta < 0 {
+            current_idx.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current_idx + delta as usize).min(NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1))
         };
-        let items = self.settings_choice_items(overlay.kind);
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            overlay.selected = overlay.selected.saturating_sub(1);
+        if next_idx != current_idx {
+            self.settings.draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[next_idx];
+            self.persist_native_settings();
         }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            overlay.selected = (overlay.selected + 1).min(items.len().saturating_sub(1));
+    }
+
+    fn interface_size_slider_text(&self, width: usize) -> String {
+        let width = width.max(4);
+        let idx = NATIVE_UI_SCALE_OPTIONS
+            .iter()
+            .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
+            .unwrap_or(1);
+        let max = NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1).max(1);
+        let fill = ((idx * (width - 1)) + (max / 2)) / max;
+        let mut chars = vec!['-'; width];
+        for ch in chars.iter_mut().take(fill) {
+            *ch = '=';
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-            self.terminal_settings_choice = None;
-            return;
-        }
-        if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            self.apply_settings_choice(overlay.kind, overlay.selected);
-            self.terminal_settings_choice = None;
-            return;
-        }
-        let title = match overlay.kind {
-            SettingsChoiceKind::Theme => "Select Theme",
-            SettingsChoiceKind::InterfaceSize => "Select Interface Size",
-            SettingsChoiceKind::DefaultOpenMode => "Select Default Open Mode",
-        };
-        egui::Area::new(Id::new("native_settings_choice_overlay"))
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let width = 420.0;
-                let height = 220.0;
-                let (screen, _) = RetroScreen::new_sized(ui, 44, (items.len() + 6).max(8), egui::vec2(width, height));
-                let palette = current_palette();
-                let painter = ui.painter_at(screen.rect);
-                screen.paint_bg(&painter, palette.bg);
-                screen.boxed_panel(&painter, &palette, 0, 0, 44, (items.len() + 6).max(8));
-                screen.text(&painter, 2, 1, title, palette.fg);
-                for (idx, item) in items.iter().enumerate() {
-                    let selected = idx == overlay.selected;
-                    let text = if selected {
-                        format!("> {item}")
-                    } else {
-                        format!("  {item}")
-                    };
-                    let response = screen.selectable_row(
-                        ui,
-                        &painter,
-                        &palette,
-                        2,
-                        3 + idx,
-                        &text,
-                        selected,
-                    );
-                    if response.hovered() {
-                        overlay.selected = idx;
-                    }
-                    if response.clicked() {
-                        self.apply_settings_choice(overlay.kind, idx);
-                        self.terminal_settings_choice = None;
-                        return;
-                    }
-                }
-                screen.text(&painter, 2, items.len() + 4, "Enter apply | Esc close", palette.dim);
-                self.terminal_settings_choice = Some(overlay);
-            });
+        chars[fill.min(width - 1)] = '|';
+        format!("[{}]", chars.into_iter().collect::<String>())
     }
 
     fn draw_login(&mut self, ctx: &Context) {
@@ -797,27 +767,21 @@ impl RobcoNativeApp {
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
             let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
+                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, 4, &palette);
-            screen.centered_text(&painter, 6, "ROBCO TERMLINK - Select User", palette.fg, true);
-            screen.separator(&painter, 8, &palette);
-            screen.text(
-                &painter,
-                3,
-                10,
-                "Welcome. Please select a user.",
-                palette.fg,
-            );
+            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "ROBCO TERMLINK - Select User", palette.fg, true);
+            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
+            screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_SUBTITLE_ROW, "Welcome. Please select a user.", palette.fg);
             if !self.login.error.is_empty() {
-                screen.text(&painter, 4, 31, &self.login.error, Color32::LIGHT_RED);
+                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.login.error, Color32::LIGHT_RED);
             }
 
-            let mut row = 13usize;
+            let mut row = TERMINAL_MENU_START_ROW;
             for (idx, user) in usernames.iter().enumerate() {
                 let selected = self.login_mode == LoginScreenMode::SelectUser && idx == self.login.selected_idx;
                 let text = if selected {
@@ -825,10 +789,7 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {user}")
                 };
-                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
-                if response.hovered() && self.login_mode == LoginScreenMode::SelectUser {
-                    self.login.selected_idx = idx;
-                }
+                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
                 if response.clicked() {
                     self.login.selected_idx = idx;
                     self.activate_login_selection();
@@ -978,24 +939,24 @@ impl RobcoNativeApp {
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
             let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
+                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, 4, &palette);
-            screen.centered_text(&painter, 6, "Main Menu", palette.fg, true);
-            screen.separator(&painter, 8, &palette);
-            screen.text(
+            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Main Menu", palette.fg, true);
+            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
+            screen.underlined_text(
                 &painter,
-                3,
-                10,
+                TERMINAL_CONTENT_COL,
+                TERMINAL_SUBTITLE_ROW,
                 &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
                 palette.fg,
             );
 
-            let mut visible_row = 13usize;
+            let mut visible_row = TERMINAL_MENU_START_ROW;
             let mut selectable_idx = 0usize;
             for entry in MAIN_MENU_ENTRIES {
                 if entry.action.is_none() {
@@ -1009,10 +970,15 @@ impl RobcoNativeApp {
                     format!("    {}", entry.label)
                 };
                 let response =
-                    screen.selectable_row(ui, &painter, &palette, 4, visible_row, &text, selected);
-                if response.hovered() {
-                    self.main_menu_idx = selectable_idx;
-                }
+                    screen.selectable_row(
+                        ui,
+                        &painter,
+                        &palette,
+                        TERMINAL_CONTENT_COL,
+                        visible_row,
+                        &text,
+                        selected,
+                    );
                 if response.clicked() {
                     self.main_menu_idx = selectable_idx;
                     if let Some(action) = entry.action {
@@ -1024,7 +990,7 @@ impl RobcoNativeApp {
             }
 
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 31, &self.shell_status, palette.dim);
+                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.shell_status, palette.dim);
             }
         });
     }
@@ -1053,19 +1019,19 @@ impl RobcoNativeApp {
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
             let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
+                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, 4, &palette);
-            screen.centered_text(&painter, 6, title, palette.fg, true);
-            screen.separator(&painter, 8, &palette);
+            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+            screen.centered_text(&painter, TERMINAL_TITLE_ROW, title, palette.fg, true);
+            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
             if let Some(sub) = subtitle {
-                screen.text(&painter, 3, 10, sub, palette.fg);
+                screen.underlined_text(&painter, TERMINAL_CONTENT_COL, TERMINAL_SUBTITLE_ROW, sub, palette.fg);
             }
-            let mut row = 13usize;
+            let mut row = TERMINAL_MENU_START_ROW;
             for (idx, item) in items.iter().enumerate() {
                 let selected = idx == *selected_idx;
                 let text = if selected {
@@ -1073,10 +1039,7 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {item}")
                 };
-                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
-                if response.hovered() {
-                    *selected_idx = idx;
-                }
+                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
                 if response.clicked() {
                     *selected_idx = idx;
                     activated = Some(idx);
@@ -1084,7 +1047,7 @@ impl RobcoNativeApp {
                 row += 1;
             }
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 31, &self.shell_status, palette.dim);
+                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.shell_status, palette.dim);
             }
         });
 
@@ -1153,23 +1116,23 @@ impl RobcoNativeApp {
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
             let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
+                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, 4, &palette);
-            screen.centered_text(&painter, 6, "Open Documents", palette.fg, true);
-            screen.separator(&painter, 8, &palette);
-            screen.text(
+            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Open Documents", palette.fg, true);
+            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
+            screen.underlined_text(
                 &painter,
-                3,
-                10,
+                TERMINAL_CONTENT_COL,
+                TERMINAL_SUBTITLE_ROW,
                 &self.file_manager.cwd.display().to_string(),
                 palette.fg,
             );
-            let mut row = 13usize;
+            let mut row = TERMINAL_MENU_START_ROW;
             for (idx, (label, path)) in rows.iter().enumerate() {
                 let selected = idx == self.terminal_browser_idx;
                 let text = if selected {
@@ -1177,10 +1140,7 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {label}")
                 };
-                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
-                if response.hovered() {
-                    self.terminal_browser_idx = idx;
-                }
+                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
                 if response.clicked() {
                     self.terminal_browser_idx = idx;
                     if idx == 0 {
@@ -1194,56 +1154,220 @@ impl RobcoNativeApp {
                 row += 1;
             }
             let hint = "Enter open | Tab back | Up/Down move";
-            screen.text(&painter, 4, 31, hint, palette.dim);
+            screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, hint, palette.dim);
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 33, &self.shell_status, palette.dim);
+                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW_ALT, &self.shell_status, palette.dim);
             }
         });
     }
 
     fn draw_terminal_settings(&mut self, ctx: &Context) {
         let items = self.terminal_settings_rows();
-        let mut selected = self.terminal_settings_idx.min(items.len().saturating_sub(1));
-        let activated = if self.terminal_settings_choice.is_some() {
-            None
+        self.terminal_settings_idx = self
+            .terminal_settings_idx
+            .min(items.len().saturating_sub(1));
+
+        if let Some(mut overlay) = self.terminal_settings_choice {
+            let choice_items = self.settings_choice_items(overlay.kind);
+            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                overlay.selected = overlay.selected.saturating_sub(1);
+            }
+            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                overlay.selected = (overlay.selected + 1).min(choice_items.len().saturating_sub(1));
+            }
+            if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+                self.terminal_settings_choice = None;
+            } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                self.apply_settings_choice(overlay.kind, overlay.selected);
+                self.terminal_settings_choice = None;
+            } else {
+                self.terminal_settings_choice = Some(overlay);
+            }
         } else {
-            self.draw_terminal_menu_screen(
-                ctx,
-                "Settings",
-                Some("Native terminal-style settings"),
-                &items,
-                &mut selected,
-            )
-        };
-        self.terminal_settings_idx = selected;
-        if self.terminal_settings_choice.is_some() {
-            self.draw_settings_choice_overlay(ctx);
-        }
-        if let Some(idx) = activated {
-            match idx {
-                0 => {
-                    self.settings.draft.sound = !self.settings.draft.sound;
-                    self.persist_native_settings();
+            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                self.terminal_settings_idx = self.terminal_settings_idx.saturating_sub(1);
+            }
+            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                self.terminal_settings_idx =
+                    (self.terminal_settings_idx + 1).min(items.len().saturating_sub(1));
+            }
+            if self.terminal_settings_idx == 4 {
+                if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
+                    self.step_interface_size(-1);
                 }
-                1 => {
-                    self.settings.draft.bootup = !self.settings.draft.bootup;
-                    self.persist_native_settings();
+                if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
+                    self.step_interface_size(1);
                 }
-                2 => {
-                    self.settings.draft.show_navigation_hints =
-                        !self.settings.draft.show_navigation_hints;
-                    self.persist_native_settings();
+            }
+            if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                match self.terminal_settings_idx {
+                    0 => {
+                        self.settings.draft.sound = !self.settings.draft.sound;
+                        self.persist_native_settings();
+                    }
+                    1 => {
+                        self.settings.draft.bootup = !self.settings.draft.bootup;
+                        self.persist_native_settings();
+                    }
+                    2 => {
+                        self.settings.draft.show_navigation_hints =
+                            !self.settings.draft.show_navigation_hints;
+                        self.persist_native_settings();
+                    }
+                    3 => self.open_settings_choice(SettingsChoiceKind::Theme),
+                    4 => {}
+                    5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
+                    6 => {
+                        self.terminal_screen = TerminalScreen::MainMenu;
+                        self.shell_status.clear();
+                    }
+                    _ => {}
                 }
-                3 => self.open_settings_choice(SettingsChoiceKind::Theme),
-                4 => self.open_settings_choice(SettingsChoiceKind::InterfaceSize),
-                5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
-                6 => {
-                    self.terminal_screen = TerminalScreen::MainMenu;
-                    self.shell_status.clear();
-                }
-                _ => {}
             }
         }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
+            .show(ctx, |ui| {
+                let palette = current_palette();
+                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
+                let painter = ui.painter_at(screen.rect);
+                screen.paint_bg(&painter, palette.bg);
+                for (idx, line) in HEADER_LINES.iter().enumerate() {
+                    screen.centered_text(
+                        &painter,
+                        TERMINAL_HEADER_START_ROW + idx,
+                        line,
+                        palette.fg,
+                        true,
+                    );
+                }
+                screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
+                screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Settings", palette.fg, true);
+                screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
+                screen.underlined_text(
+                    &painter,
+                    TERMINAL_CONTENT_COL,
+                    TERMINAL_SUBTITLE_ROW,
+                    "Native terminal-style settings",
+                    palette.fg,
+                );
+
+                let choice_items = self
+                    .terminal_settings_choice
+                    .map(|overlay| self.settings_choice_items(overlay.kind));
+                let mut row = TERMINAL_MENU_START_ROW;
+                for (idx, item) in items.iter().enumerate() {
+                    let selected = idx == self.terminal_settings_idx;
+                    let text = if selected {
+                        format!("  > {item}")
+                    } else {
+                        format!("    {item}")
+                    };
+                    let response = screen.selectable_row(
+                        ui,
+                        &painter,
+                        &palette,
+                        TERMINAL_CONTENT_COL,
+                        row,
+                        &text,
+                        selected,
+                    );
+                    if response.clicked() {
+                        self.terminal_settings_idx = idx;
+                        if self.terminal_settings_choice.is_some() {
+                            self.terminal_settings_choice = None;
+                        } else {
+                            match idx {
+                                0 => {
+                                    self.settings.draft.sound = !self.settings.draft.sound;
+                                    self.persist_native_settings();
+                                }
+                                1 => {
+                                    self.settings.draft.bootup = !self.settings.draft.bootup;
+                                    self.persist_native_settings();
+                                }
+                                2 => {
+                                    self.settings.draft.show_navigation_hints =
+                                        !self.settings.draft.show_navigation_hints;
+                                    self.persist_native_settings();
+                                }
+                                3 => self.open_settings_choice(SettingsChoiceKind::Theme),
+                                4 => {}
+                                5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
+                                6 => {
+                                    self.terminal_screen = TerminalScreen::MainMenu;
+                                    self.shell_status.clear();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    row += 1;
+
+                    if selected {
+                        if let (Some(overlay), Some(choice_items)) =
+                            (self.terminal_settings_choice, choice_items.as_ref())
+                        {
+                            for (choice_idx, choice) in choice_items.iter().enumerate() {
+                                let choice_selected = choice_idx == overlay.selected;
+                                let choice_text = if choice_selected {
+                                    format!("      > {choice}")
+                                } else {
+                                    format!("        {choice}")
+                                };
+                                let response = screen.selectable_row(
+                                    ui,
+                                    &painter,
+                                    &palette,
+                                    TERMINAL_CONTENT_COL,
+                                    row,
+                                    &choice_text,
+                                    choice_selected,
+                                );
+                                if response.clicked() {
+                                    self.terminal_settings_choice = None;
+                                    self.apply_settings_choice(overlay.kind, choice_idx);
+                                    return;
+                                }
+                                row += 1;
+                            }
+                            screen.text(
+                                &painter,
+                                TERMINAL_CONTENT_COL + 4,
+                                row,
+                                "Enter apply | Esc/Tab close",
+                                palette.dim,
+                            );
+                            row += 1;
+                        }
+                        if idx == 4 {
+                            let slider = format!(
+                                "        {}  Left/Right adjust",
+                                self.interface_size_slider_text(18)
+                            );
+                            screen.text(
+                                &painter,
+                                TERMINAL_CONTENT_COL,
+                                row,
+                                &slider,
+                                palette.dim,
+                            );
+                            row += 1;
+                        }
+                    }
+                }
+
+                if !self.shell_status.is_empty() {
+                    screen.text(
+                        &painter,
+                        TERMINAL_CONTENT_COL,
+                        TERMINAL_STATUS_ROW,
+                        &self.shell_status,
+                        palette.dim,
+                    );
+                }
+            });
     }
 
     fn draw_terminal_footer(&self, ctx: &Context) {
@@ -1261,12 +1385,12 @@ impl RobcoNativeApp {
         };
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
-            .exact_height(28.0)
+            .exact_height(retro_footer_height())
             .show_separator_line(false)
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
                 let palette = current_palette();
-                let (screen, _) = RetroScreen::new(ui, 100, 1);
+                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, 1);
                 let painter = ui.painter_at(screen.rect);
                 screen.footer_bar(&painter, &palette, &left, &center, "44%");
             });
