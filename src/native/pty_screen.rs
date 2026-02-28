@@ -226,16 +226,18 @@ pub fn draw_embedded_pty(
 
             if plain_fast {
                 let snap = plain_snapshot.as_ref().expect("plain snapshot present");
-                dirty_stats = diff_plain_snapshot(
-                    &state.prev_plain_lines,
-                    &snap.lines,
-                    state.prev_plain_cursor,
-                    (snap.cursor_row, snap.cursor_col),
-                    pty_cols as usize,
-                    pty_rows as usize,
-                );
-                state.prev_plain_lines = snap.lines.clone();
-                state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
+                if state.show_perf_overlay {
+                    dirty_stats = diff_plain_snapshot(
+                        &state.prev_plain_lines,
+                        &snap.lines,
+                        state.prev_plain_cursor,
+                        (snap.cursor_row, snap.cursor_col),
+                        pty_cols as usize,
+                        pty_rows as usize,
+                    );
+                    state.prev_plain_lines = snap.lines.clone();
+                    state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
+                }
                 let smoothed_lines =
                     if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
                         let mut lines = snap.lines.clone();
@@ -285,10 +287,12 @@ pub fn draw_embedded_pty(
                 let started = Instant::now();
                 let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
                 snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
-                dirty_stats.changed_rows = dirty_stats.total_rows;
-                dirty_stats.changed_cells = dirty_stats.total_cells;
-                state.prev_plain_lines.clear();
-                state.prev_plain_cursor = None;
+                if state.show_perf_overlay {
+                    dirty_stats.changed_rows = dirty_stats.total_rows;
+                    dirty_stats.changed_cells = dirty_stats.total_cells;
+                    state.prev_plain_lines.clear();
+                    state.prev_plain_cursor = None;
+                }
                 for (row_idx, row) in snapshot.cells.iter().enumerate() {
                     for (col_idx, cell) in row.iter().enumerate() {
                         let mut cell_to_draw = *cell;
