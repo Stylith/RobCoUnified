@@ -126,10 +126,6 @@ pub fn draw_embedded_pty(
             } else {
                 None
             };
-            let plain_has_borders = plain_snapshot
-                .as_ref()
-                .map(|snap| snap.lines.iter().any(|line| line_has_border_glyphs(line)))
-                .unwrap_or(false);
             let content_rect = Rect::from_min_max(
                 screen.row_rect(0, 0, 1).min,
                 Pos2::new(
@@ -147,9 +143,13 @@ pub fn draw_embedded_pty(
             );
             let content_painter = painter.with_clip_rect(content_rect);
 
-            if plain_fast && !plain_has_borders {
+            if plain_fast {
                 let snap = plain_snapshot.as_ref().expect("plain snapshot present");
-                for (row_idx, line) in snap.lines.iter().enumerate() {
+                let mut lines = snap.lines.clone();
+                if smooth_borders {
+                    smooth_ascii_borders_in_plain_lines(&mut lines);
+                }
+                for (row_idx, line) in lines.iter().enumerate() {
                     if !line.is_empty() {
                         content_painter.text(
                             screen.row_rect(0, row_idx, 1).left_top(),
@@ -163,8 +163,7 @@ pub fn draw_embedded_pty(
                 let row = snap.cursor_row as usize;
                 let col = snap.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
-                let ch = snap
-                    .lines
+                let ch = lines
                     .get(row)
                     .and_then(|line| line.chars().nth(col))
                     .unwrap_or(' ');
@@ -831,36 +830,55 @@ fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyMo
     Some((code, mods))
 }
 
-fn line_has_border_glyphs(line: &str) -> bool {
-    line.chars().any(|ch| {
-        matches!(
-            ch,
-            '-' | '|'
-                | '+'
-                | '─'
-                | '│'
-                | '┌'
-                | '┐'
-                | '└'
-                | '┘'
-                | '├'
-                | '┤'
-                | '┬'
-                | '┴'
-                | '┼'
-                | '═'
-                | '║'
-                | '╔'
-                | '╗'
-                | '╚'
-                | '╝'
-                | '╠'
-                | '╣'
-                | '╦'
-                | '╩'
-                | '╬'
-        )
-    })
+fn smooth_ascii_borders_in_plain_lines(lines: &mut [String]) {
+    let max_cols = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    if max_cols == 0 || lines.is_empty() {
+        return;
+    }
+    let mut grid: Vec<Vec<char>> = lines
+        .iter()
+        .map(|line| {
+            let mut row: Vec<char> = line.chars().collect();
+            row.resize(max_cols, ' ');
+            row
+        })
+        .collect();
+    let source = grid.clone();
+    for row in 0..source.len() {
+        for col in 0..max_cols {
+            let ch = source[row][col];
+            if !matches!(ch, '+' | '-' | '|') {
+                continue;
+            }
+            let left = if col > 0 { source[row][col - 1] } else { ' ' };
+            let right = if col + 1 < max_cols {
+                source[row][col + 1]
+            } else {
+                ' '
+            };
+            let up = if row > 0 { source[row - 1][col] } else { ' ' };
+            let down = if row + 1 < source.len() {
+                source[row + 1][col]
+            } else {
+                ' '
+            };
+            let conn = LineConnections {
+                up: line_connections(up).down,
+                down: line_connections(down).up,
+                left: line_connections(left).right,
+                right: line_connections(right).left,
+            };
+            grid[row][col] = map_connections_to_unicode(conn).unwrap_or(ch);
+        }
+    }
+    for (row_idx, line) in lines.iter_mut().enumerate() {
+        let len = line.chars().count();
+        *line = grid[row_idx].iter().take(len).collect();
+    }
 }
 
 fn spawn_with_fallback(
