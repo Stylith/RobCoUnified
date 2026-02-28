@@ -197,7 +197,6 @@ impl Editor {
             match code {
                 KeyCode::Char('s') | KeyCode::Char('S') => return EditorAction::Save,
                 KeyCode::Char('a') | KeyCode::Char('A') => return EditorAction::SaveAs,
-                KeyCode::Char('r') | KeyCode::Char('R') => return EditorAction::Rename,
                 KeyCode::Char('f') | KeyCode::Char('F') => return EditorAction::Search,
                 KeyCode::Char('g') | KeyCode::Char('G') => return EditorAction::FindNext,
                 KeyCode::Char('q') | KeyCode::Char('Q') => return EditorAction::ForceClose,
@@ -293,49 +292,10 @@ enum EditorAction {
     None,
     Save,
     SaveAs,
-    Rename,
     Search,
     FindNext,
     RequestClose,
     ForceClose,
-}
-
-fn resolve_editor_target_path(current_path: &Path, raw: &str) -> Option<PathBuf> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut out = PathBuf::from(trimmed);
-    if !out.is_absolute() {
-        let parent = current_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        out = parent.join(out);
-    }
-    if out.extension().is_none() {
-        out.set_extension("txt");
-    }
-    Some(out)
-}
-
-fn prompt_editor_target(
-    terminal: &mut Term,
-    current_path: &Path,
-    label: &str,
-) -> Result<Option<PathBuf>> {
-    let seed = current_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("document.txt");
-    let prompt = format!("{label} (blank cancels, default {seed}):");
-    let Some(raw) = input_prompt(terminal, &prompt)? else {
-        return Ok(None);
-    };
-    Ok(resolve_editor_target_path(
-        current_path,
-        if raw.trim().is_empty() { seed } else { &raw },
-    ))
 }
 
 fn prompt_editor_search(terminal: &mut Term, current: &str) -> Result<Option<String>> {
@@ -827,7 +787,7 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str, path: PathBuf) ->
             f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
 
             let hint = Paragraph::new(
-                "Ctrl+S save | Ctrl+A save as | Ctrl+R rename | Ctrl+F find | Ctrl+G next | Ctrl+Q discard | Tab close",
+                "Ctrl+S save | Ctrl+A save as | Ctrl+F find | Ctrl+G next | Ctrl+Q discard | Tab close",
             )
                 .style(dim_style());
             f.render_widget(hint, pad_horizontal(chunks[6]));
@@ -865,28 +825,6 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str, path: PathBuf) ->
                             ed.path = path;
                             save_editor(&mut ed)?;
                             flash_message(terminal, &format!("Saved as {}.", ed.file_name()), 900)?;
-                        }
-                    }
-                    EditorAction::Rename => {
-                        if let Some(target) = prompt_editor_target(terminal, &ed.path, "Rename")? {
-                            if target != ed.path {
-                                if target.exists() {
-                                    flash_message(terminal, "Target already exists.", 1000)?;
-                                } else {
-                                    if ed.path.exists() {
-                                        if let Some(parent) = target.parent() {
-                                            let _ = std::fs::create_dir_all(parent);
-                                        }
-                                        std::fs::rename(&ed.path, &target)?;
-                                    }
-                                    ed.path = target;
-                                    flash_message(
-                                        terminal,
-                                        &format!("Renamed to {}.", ed.file_name()),
-                                        900,
-                                    )?;
-                                }
-                            }
                         }
                     }
                     EditorAction::Search => {
@@ -956,7 +894,7 @@ pub fn edit_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
             return Ok(());
         }
     };
-    run_editor(terminal, "Text Editor", &text, path.to_path_buf())
+    run_editor(terminal, "ROBCO Word Processor", &text, path.to_path_buf())
 }
 
 // ── Journal ───────────────────────────────────────────────────────────────────
@@ -973,8 +911,14 @@ fn log_dir() -> PathBuf {
     }
 }
 
-fn text_editor_dir() -> PathBuf {
-    let base = std::path::PathBuf::from("text_editor_documents");
+pub(crate) fn system_documents_dir() -> PathBuf {
+    dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
+        .unwrap_or_else(|| PathBuf::from("Documents"))
+}
+
+pub fn text_editor_dir() -> PathBuf {
+    let base = system_documents_dir().join("ROBCO Word Processor");
     if let Some(u) = get_current_user() {
         let d = base.join(&u);
         let _ = std::fs::create_dir_all(&d);
@@ -1062,7 +1006,7 @@ pub fn new_text_document(terminal: &mut Term) -> Result<()> {
     } else {
         String::new()
     };
-    run_editor(terminal, "Text Editor", &existing, path)
+    run_editor(terminal, "ROBCO Word Processor", &existing, path)
 }
 
 fn new_log(terminal: &mut Term) -> Result<()> {
@@ -1186,7 +1130,7 @@ pub fn text_editor_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
             terminal,
-            "Text Editor",
+            "ROBCO Word Processor",
             &["New Document", "Open Document", "---", "Back"],
             None,
         )? {
@@ -1348,8 +1292,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        log_dir, normalize_editor_file_name, normalize_new_text_document_name,
-        resolve_editor_target_path, text_editor_dir, Editor, EditorAction, TerminalSaveAsState,
+        log_dir, normalize_editor_file_name, normalize_new_text_document_name, text_editor_dir,
+        Editor, EditorAction, TerminalSaveAsState,
     };
 
     #[test]
@@ -1382,6 +1326,15 @@ mod tests {
     }
 
     #[test]
+    fn text_editor_uses_system_documents_subfolder() {
+        let dir = text_editor_dir();
+        assert!(dir.components().any(|component| {
+            component.as_os_str() == std::ffi::OsStr::new("ROBCO Word Processor")
+        }));
+        assert!(dir.starts_with(crate::documents::system_documents_dir()));
+    }
+
+    #[test]
     fn terminal_editor_ctrl_shortcuts_map_to_expected_actions() {
         let mut editor = Editor::new("", PathBuf::from("note.txt"));
         assert_eq!(
@@ -1391,10 +1344,6 @@ mod tests {
         assert_eq!(
             editor.key(KeyCode::Char('a'), KeyModifiers::CONTROL, 10, 40),
             EditorAction::SaveAs
-        );
-        assert_eq!(
-            editor.key(KeyCode::Char('r'), KeyModifiers::CONTROL, 10, 40),
-            EditorAction::Rename
         );
         assert_eq!(
             editor.key(KeyCode::Char('f'), KeyModifiers::CONTROL, 10, 40),
@@ -1407,14 +1356,6 @@ mod tests {
         assert_eq!(
             editor.key(KeyCode::Char('q'), KeyModifiers::CONTROL, 10, 40),
             EditorAction::ForceClose
-        );
-    }
-
-    #[test]
-    fn editor_target_path_defaults_to_txt_extension() {
-        assert_eq!(
-            resolve_editor_target_path(Path::new("text_editor_documents/note.txt"), "draft"),
-            Some(PathBuf::from("text_editor_documents/draft.txt"))
         );
     }
 

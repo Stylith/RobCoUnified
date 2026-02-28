@@ -11,7 +11,7 @@ use crate::ui::{
 };
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
-const BUILTIN_TEXT_EDITOR_APP: &str = "Text Editor";
+const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
@@ -197,9 +197,9 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
             "Nuke Codes in Applications: HIDDEN [toggle]"
         };
         let text_editor_label = if get_settings().builtin_menu_visibility.text_editor {
-            "Text Editor in Applications: VISIBLE [toggle]"
+            "ROBCO Word Processor in Applications: VISIBLE [toggle]"
         } else {
-            "Text Editor in Applications: HIDDEN [toggle]"
+            "ROBCO Word Processor in Applications: HIDDEN [toggle]"
         };
         match run_menu(
             terminal,

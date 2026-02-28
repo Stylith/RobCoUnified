@@ -246,7 +246,7 @@ const FILE_MANAGER_RECENT_LIMIT: usize = 12;
 const FILE_MANAGER_RECENT_FOLDERS_LIMIT: usize = 10;
 const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
 const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
-const BUILTIN_TEXT_EDITOR_APP: &str = "Text Editor";
+const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 
 impl FileManagerState {
     fn save_as_state(&self) -> Option<(&str, bool, u64)> {
@@ -685,7 +685,6 @@ enum DesktopTextEditorDialog {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopTextEditorInputKind {
-    Rename,
     Search,
 }
 
@@ -750,14 +749,6 @@ impl DesktopTextEditorState {
         }
         self.row = self.row.min(self.lines.len().saturating_sub(1));
         self.col = self.col.min(self.line_len(self.row));
-    }
-
-    fn dialog_input_seed(&self) -> String {
-        self.path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("document.txt")
-            .to_string()
     }
 }
 
@@ -887,7 +878,6 @@ enum DesktopTextEditorAction {
     Save,
     SaveAndClose,
     SaveAs,
-    Rename,
     Close,
     ForceClose,
     FindNext,
@@ -1062,7 +1052,6 @@ enum TopMenuAction {
     FileManagerRedo,
     TextEditorSave,
     TextEditorSaveAs,
-    TextEditorRename,
     TextEditorFind,
     TextEditorFindNext,
     TextEditorDiscard,
@@ -1415,7 +1404,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
     match kind {
         DesktopHubKind::Applications => "Applications",
-        DesktopHubKind::TextEditorMenu => "Text Editor",
+        DesktopHubKind::TextEditorMenu => "ROBCO Word Processor",
         DesktopHubKind::TextEditorDocuments => "Open Document",
         DesktopHubKind::Documents => "Documents",
         DesktopHubKind::DocumentCategory => "Documents",
@@ -1532,15 +1521,7 @@ fn desktop_journal_dir() -> PathBuf {
 }
 
 fn desktop_text_editor_dir() -> PathBuf {
-    let base = PathBuf::from("text_editor_documents");
-    if let Some(user) = get_current_user() {
-        let dir = base.join(&user);
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    } else {
-        let _ = std::fs::create_dir_all(&base);
-        base
-    }
+    documents::text_editor_dir()
 }
 
 fn desktop_log_files() -> Vec<PathBuf> {
@@ -1733,7 +1714,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 enabled: false,
             });
             items.push(DesktopHubItem {
-                label: "Back to Text Editor".to_string(),
+                label: "Back to ROBCO Word Processor".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorMenu),
                 enabled: true,
             });
@@ -2414,7 +2395,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 },
                 DesktopHubItem {
                     label: format!(
-                        "Text Editor in Applications: {} [toggle]",
+                        "ROBCO Word Processor in Applications: {} [toggle]",
                         if get_settings().builtin_menu_visibility.text_editor {
                             "VISIBLE"
                         } else {
@@ -3707,8 +3688,9 @@ fn handle_key(
                                     Some(FileManagerSaveAsAction::Cancel(focused_id));
                             }
                             KeyCode::Enter => {
-                                file_manager_save_as_action =
-                                    Some(FileManagerSaveAsAction::Save(focused_id));
+                                if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                                    *input_mode = false;
+                                }
                             }
                             KeyCode::Tab | KeyCode::BackTab => {
                                 if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
@@ -5051,7 +5033,10 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
             "File Manager Settings".to_string(),
             "file_manager_settings".to_string(),
         ),
-        WindowKind::TextEditor(_) => ("Text Editor".to_string(), "text_editor".to_string()),
+        WindowKind::TextEditor(_) => (
+            "ROBCO Word Processor".to_string(),
+            "text_editor".to_string(),
+        ),
     };
     let mut keys = manual_key_aliases(&key);
     let title_key = slugify_manual_key(&win.title);
@@ -5309,16 +5294,6 @@ fn run_top_menu_action(
             let close = run_desktop_text_editor_action(terminal, state, window_id, editor_action)?;
             if close {
                 close_window_by_id(state, window_id);
-            }
-        }
-        TopMenuAction::TextEditorRename => {
-            if let Some(editor) = focused_text_editor_mut(state) {
-                if !editor.read_only {
-                    editor.dialog = Some(DesktopTextEditorDialog::Input {
-                        kind: DesktopTextEditorInputKind::Rename,
-                        value: editor.dialog_input_seed(),
-                    });
-                }
             }
         }
         TopMenuAction::TextEditorFind => {
@@ -6189,7 +6164,7 @@ fn open_text_editor_save_as_window(
                 fm.mode = FileManagerMode::SaveAs {
                     editor_window_id,
                     file_name,
-                    input_mode: true,
+                    input_mode: false,
                 };
                 fm.refresh();
             }
@@ -6207,7 +6182,7 @@ fn open_text_editor_save_as_window(
     fm.mode = FileManagerMode::SaveAs {
         editor_window_id,
         file_name,
-        input_mode: true,
+        input_mode: false,
     };
     fm.refresh();
 
@@ -7475,7 +7450,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
                 Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
                 Some(WindowKind::TextEditor(_)) => {
-                    "Ctrl+S Save | Ctrl+A Save As | Ctrl+R Rename | Ctrl+F Find | Ctrl+G Next | Tab Close"
+                    "Ctrl+S Save | Ctrl+A Save As | Ctrl+F Find | Ctrl+G Next | Tab Close"
                 }
                 Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
                 None => "",
@@ -7589,12 +7564,6 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                         label: "Save As...".to_string(),
                         shortcut: Some("Ctrl+A".to_string()),
                         action: TopMenuAction::TextEditorSaveAs,
-                        enabled: !editor.read_only,
-                    });
-                    items.push(TopMenuItem {
-                        label: "Rename".to_string(),
-                        shortcut: Some("Ctrl+R".to_string()),
-                        action: TopMenuAction::TextEditorRename,
                         enabled: !editor.read_only,
                     });
                 }
@@ -8451,7 +8420,7 @@ fn draw_desktop_text_editor_window(
         let hint = if editor.read_only {
             "Arrows move | Ctrl+F search | Ctrl+G next | Tab close"
         } else {
-            "Ctrl+S save | Ctrl+A save as | Ctrl+R rename | Ctrl+F search | Ctrl+G next | Tab close"
+            "Ctrl+S save | Ctrl+A save as | Ctrl+F search | Ctrl+G next | Tab close"
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(hint, dim_style()))),
@@ -8488,11 +8457,9 @@ fn draw_desktop_text_editor_window(
             }
             DesktopTextEditorDialog::Input { kind, value } => {
                 let title = match kind {
-                    DesktopTextEditorInputKind::Rename => "Rename Document",
                     DesktopTextEditorInputKind::Search => "Find",
                 };
                 let prompt = match kind {
-                    DesktopTextEditorInputKind::Rename => "New file name:",
                     DesktopTextEditorInputKind::Search => "Search text:",
                 };
                 let lines = vec![
@@ -8737,7 +8704,7 @@ fn draw_file_manager_window(
             }
             f.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    "Tree/Entries choose folder | Tab filename | Enter save",
+                    "Tree/Entries choose folder | Tab filename | Ctrl+S save | Click [Save]",
                     dim_style(),
                 ))),
                 hint_rect,
@@ -12182,26 +12149,6 @@ fn desktop_text_editor_find_next(editor: &mut DesktopTextEditorState, body: Rect
     desktop_text_editor_jump_to_match(editor, body, next);
 }
 
-fn normalize_text_editor_target_path(current_path: &Path, raw: &str) -> Option<PathBuf> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut target = PathBuf::from(trimmed);
-    if !target.is_absolute() {
-        let parent = current_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        target = parent.join(target);
-    }
-    if target.extension().is_none() {
-        target.set_extension("txt");
-    }
-    target.file_name()?;
-    Some(target)
-}
-
 fn normalize_text_editor_file_name(raw: &str, default_name: &str) -> Option<String> {
     let trimmed = raw.trim();
     let candidate = if trimmed.is_empty() {
@@ -12262,7 +12209,6 @@ fn handle_desktop_text_editor_key(
                 }
                 KeyCode::Enter => {
                     let action = match kind {
-                        DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
                         DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
                     };
                     return action;
@@ -12303,15 +12249,6 @@ fn handle_desktop_text_editor_key(
             }
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 return DesktopTextEditorAction::ForceClose;
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                if !editor.read_only {
-                    editor.dialog = Some(DesktopTextEditorDialog::Input {
-                        kind: DesktopTextEditorInputKind::Rename,
-                        value: editor.dialog_input_seed(),
-                    });
-                }
-                return DesktopTextEditorAction::None;
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 editor.dialog = Some(DesktopTextEditorDialog::Input {
@@ -12448,7 +12385,7 @@ fn open_desktop_text_editor_window(
             win.title = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("Text Editor")
+                .unwrap_or("ROBCO Word Processor")
                 .to_string();
             if let WindowKind::TextEditor(editor) = &mut win.kind {
                 editor.read_only &= read_only;
@@ -12491,7 +12428,7 @@ fn open_desktop_text_editor_window(
         title: path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("Text Editor")
+            .unwrap_or("ROBCO Word Processor")
             .to_string(),
         rect,
         restore_rect: None,
@@ -12551,47 +12488,6 @@ fn run_desktop_text_editor_action(
                 })
                 .unwrap_or_else(desktop_text_editor_dir);
             open_text_editor_save_as_window(state, window_id, base_dir, current_name);
-            Ok(false)
-        }
-        DesktopTextEditorAction::Rename => {
-            let mut msg = None;
-            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
-                if let WindowKind::TextEditor(editor) = &mut win.kind {
-                    let Some(DesktopTextEditorDialog::Input { kind, value }) =
-                        editor.dialog.clone()
-                    else {
-                        return Ok(false);
-                    };
-                    let Some(target) = normalize_text_editor_target_path(&editor.path, &value)
-                    else {
-                        flash_message(terminal, "Invalid file name.", 1000)?;
-                        return Ok(false);
-                    };
-                    if !matches!(kind, DesktopTextEditorInputKind::Rename) {
-                        return Ok(false);
-                    }
-                    if target != editor.path {
-                        if target.exists() {
-                            flash_message(terminal, "Target already exists.", 1000)?;
-                            return Ok(false);
-                        }
-                        if let Some(parent) = target.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        std::fs::rename(&editor.path, &target)?;
-                    }
-                    editor.path = target.clone();
-                    win.title = editor.file_name();
-                    editor.dialog = None;
-                    msg = Some(format!("Renamed to {}.", editor.file_name()));
-                }
-            }
-            refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
-            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
-            refresh_all_file_manager_windows(state);
-            if let Some(message) = msg {
-                flash_message(terminal, &message, 900)?;
-            }
             Ok(false)
         }
         DesktopTextEditorAction::FindNext => {
@@ -16053,7 +15949,6 @@ fn desktop_text_editor_dialog_mouse_action(
                 if point_in_rect(x, y, rect) {
                     return if idx == 0 {
                         DesktopTextEditorDialogMouseAction::Action(match kind {
-                            DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
                             DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
                         })
                     } else {
@@ -17062,7 +16957,7 @@ mod tests {
             .collect();
         assert!(file_labels.contains(&"Save".to_string()));
         assert!(file_labels.contains(&"Save As...".to_string()));
-        assert!(file_labels.contains(&"Rename".to_string()));
+        assert!(!file_labels.contains(&"Rename".to_string()));
 
         let edit_labels: Vec<String> = top_menu_items(&state, TopMenuKind::Edit)
             .into_iter()
@@ -17088,6 +16983,36 @@ mod tests {
         assert!(state.windows.iter().any(|win| {
             win.title == "Open Document"
                 && matches!(&win.kind, WindowKind::FileManager(fm) if fm.cwd == doc_dir)
+        }));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn save_as_picker_starts_in_folder_browser_mode() {
+        let base = test_temp_dir("text-editor-save-as-picker");
+        let doc_dir = base.join("docs");
+        std::fs::create_dir_all(&doc_dir).expect("create docs");
+        let doc_dir = std::fs::canonicalize(&doc_dir).expect("canonicalize docs");
+
+        let mut state = DesktopState::default();
+        open_text_editor_save_as_window(&mut state, 7, doc_dir.clone(), "note.txt".to_string());
+
+        assert!(state.windows.iter().any(|win| {
+            win.title == "Save Document As"
+                && matches!(
+                    &win.kind,
+                    WindowKind::FileManager(fm)
+                        if fm.cwd == doc_dir
+                            && matches!(
+                                fm.mode,
+                                FileManagerMode::SaveAs {
+                                    editor_window_id: 7,
+                                    ref file_name,
+                                    input_mode: false,
+                                } if file_name == "note.txt"
+                            )
+                )
         }));
 
         let _ = std::fs::remove_dir_all(&base);
