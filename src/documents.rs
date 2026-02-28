@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::Local;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     text::{Line, Span},
@@ -15,7 +15,7 @@ use crate::launcher::launch_argv;
 use crate::status::render_status_bar;
 use crate::ui::{
     confirm, dim_style, flash_message, input_prompt, normal_style, pad_horizontal, pager,
-    render_header, render_separator, run_menu, title_style, MenuResult, Term,
+    render_header, render_separator, run_menu, sel_style, title_style, MenuResult, Term,
 };
 
 // ── Document scanning ─────────────────────────────────────────────────────────
@@ -74,10 +74,17 @@ struct Editor {
     lines: Vec<String>,
     row: usize,
     col: usize,
+    scroll_y: usize,
+    scroll_x: usize,
+    dirty: bool,
+    path: PathBuf,
+    search_query: String,
+    search_matches: Vec<(usize, usize)>,
+    search_index: usize,
 }
 
 impl Editor {
-    fn new(text: &str) -> Self {
+    fn new(text: &str, path: PathBuf) -> Self {
         let lines: Vec<String> = if text.is_empty() {
             vec![String::new()]
         } else {
@@ -87,6 +94,13 @@ impl Editor {
             lines,
             row: 0,
             col: 0,
+            scroll_y: 0,
+            scroll_x: 0,
+            dirty: false,
+            path,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_index: 0,
         }
     }
 
@@ -94,16 +108,117 @@ impl Editor {
         self.lines.join("\n")
     }
 
-    fn key(&mut self, code: KeyCode) -> EditorAction {
+    fn line_len(&self, row: usize) -> usize {
+        self.lines.get(row).map(|line| line.len()).unwrap_or(0)
+    }
+
+    fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("document.txt")
+            .to_string()
+    }
+
+    fn ensure_visible(&mut self, visible_rows: usize, visible_cols: usize) {
+        if visible_rows == 0 || visible_cols == 0 {
+            self.scroll_y = 0;
+            self.scroll_x = 0;
+            return;
+        }
+        if self.row < self.scroll_y {
+            self.scroll_y = self.row;
+        } else if self.row >= self.scroll_y.saturating_add(visible_rows) {
+            self.scroll_y = self.row.saturating_sub(visible_rows.saturating_sub(1));
+        }
+        let max_scroll = self.lines.len().saturating_sub(visible_rows);
+        self.scroll_y = self.scroll_y.min(max_scroll);
+        if self.col < self.scroll_x {
+            self.scroll_x = self.col;
+        } else if self.col >= self.scroll_x.saturating_add(visible_cols) {
+            self.scroll_x = self.col.saturating_sub(visible_cols.saturating_sub(1));
+        }
+    }
+
+    fn move_vertical(&mut self, delta: isize) {
+        if delta < 0 {
+            self.row = self.row.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.row = (self.row + delta as usize).min(self.lines.len().saturating_sub(1));
+        }
+        self.col = self.col.min(self.line_len(self.row));
+    }
+
+    fn refresh_search(&mut self) {
+        let query = self.search_query.to_ascii_lowercase();
+        self.search_matches.clear();
+        self.search_index = 0;
+        if query.is_empty() {
+            return;
+        }
+        for (row, line) in self.lines.iter().enumerate() {
+            let lower = line.to_ascii_lowercase();
+            let mut start = 0;
+            while let Some(idx) = lower[start..].find(&query) {
+                self.search_matches.push((row, start + idx));
+                start += idx + query.len().max(1);
+                if start >= lower.len() {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn jump_to_match(&mut self, idx: usize, visible_rows: usize, visible_cols: usize) {
+        if let Some((row, col)) = self.search_matches.get(idx).copied() {
+            self.search_index = idx;
+            self.row = row;
+            self.col = col;
+            self.ensure_visible(visible_rows, visible_cols);
+        }
+    }
+
+    fn find_next(&mut self, visible_rows: usize, visible_cols: usize) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let next = (self.search_index + 1) % self.search_matches.len();
+        self.jump_to_match(next, visible_rows, visible_cols);
+    }
+
+    fn key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        visible_rows: usize,
+        visible_cols: usize,
+    ) -> EditorAction {
+        if modifiers.contains(KeyModifiers::CONTROL) {
+            match code {
+                KeyCode::Char('s') | KeyCode::Char('S') => return EditorAction::Save,
+                KeyCode::Char('a') | KeyCode::Char('A') => return EditorAction::SaveAs,
+                KeyCode::Char('r') | KeyCode::Char('R') => return EditorAction::Rename,
+                KeyCode::Char('f') | KeyCode::Char('F') => return EditorAction::Search,
+                KeyCode::Char('g') | KeyCode::Char('G') => return EditorAction::FindNext,
+                KeyCode::Char('q') | KeyCode::Char('Q') => return EditorAction::ForceClose,
+                KeyCode::Home => {
+                    self.scroll_x = 0;
+                    return EditorAction::None;
+                }
+                _ => {}
+            }
+        }
+
         match code {
-            KeyCode::Char('\x17') | KeyCode::F(2) => return EditorAction::Save,
-            KeyCode::Char('\x18') | KeyCode::Esc => return EditorAction::Cancel,
+            KeyCode::Esc | KeyCode::Tab => return EditorAction::RequestClose,
             KeyCode::Enter => {
                 let rest = self.lines[self.row][self.col..].to_string();
                 self.lines[self.row].truncate(self.col);
                 self.row += 1;
                 self.lines.insert(self.row, rest);
                 self.col = 0;
+                self.dirty = true;
+                self.refresh_search();
             }
             KeyCode::Backspace => {
                 if self.col > 0 {
@@ -115,49 +230,164 @@ impl Editor {
                     self.col = self.lines[self.row].len();
                     self.lines[self.row].push_str(&cur);
                 }
+                self.dirty = true;
+                self.refresh_search();
             }
             KeyCode::Up => {
-                if self.row > 0 {
-                    self.row -= 1;
-                    self.col = self.col.min(self.lines[self.row].len());
-                }
+                self.move_vertical(-1);
             }
             KeyCode::Down => {
-                if self.row < self.lines.len() - 1 {
-                    self.row += 1;
-                    self.col = self.col.min(self.lines[self.row].len());
-                }
+                self.move_vertical(1);
+            }
+            KeyCode::PageUp => {
+                let step = visible_rows.max(1) as isize;
+                self.move_vertical(-step);
+            }
+            KeyCode::PageDown => {
+                let step = visible_rows.max(1) as isize;
+                self.move_vertical(step);
+            }
+            KeyCode::Home => {
+                self.col = 0;
+            }
+            KeyCode::End => {
+                self.col = self.line_len(self.row);
             }
             KeyCode::Left => {
                 if self.col > 0 {
                     self.col -= 1;
+                } else if self.row > 0 {
+                    self.row -= 1;
+                    self.col = self.line_len(self.row);
                 }
             }
             KeyCode::Right => {
-                let max = self.lines[self.row].len();
+                let max = self.line_len(self.row);
                 if self.col < max {
                     self.col += 1;
+                } else if self.row + 1 < self.lines.len() {
+                    self.row += 1;
+                    self.col = 0;
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT)
+                    && !modifiers.contains(KeyModifiers::SUPER)
+                    && (c as u32) >= 32 =>
+            {
                 self.lines[self.row].insert(self.col, c);
                 self.col += 1;
+                self.dirty = true;
+                self.refresh_search();
             }
             _ => {}
         }
+        self.ensure_visible(visible_rows, visible_cols);
         EditorAction::None
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum EditorAction {
     None,
     Save,
+    SaveAs,
+    Rename,
+    Search,
+    FindNext,
+    RequestClose,
+    ForceClose,
+}
+
+fn resolve_editor_target_path(current_path: &Path, raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = PathBuf::from(trimmed);
+    if !out.is_absolute() {
+        let parent = current_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        out = parent.join(out);
+    }
+    if out.extension().is_none() {
+        out.set_extension("txt");
+    }
+    Some(out)
+}
+
+fn prompt_editor_target(
+    terminal: &mut Term,
+    current_path: &Path,
+    label: &str,
+) -> Result<Option<PathBuf>> {
+    let seed = current_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document.txt");
+    let prompt = format!("{label} (blank cancels, default {seed}):");
+    let Some(raw) = input_prompt(terminal, &prompt)? else {
+        return Ok(None);
+    };
+    Ok(resolve_editor_target_path(
+        current_path,
+        if raw.trim().is_empty() { seed } else { &raw },
+    ))
+}
+
+fn prompt_editor_search(terminal: &mut Term, current: &str) -> Result<Option<String>> {
+    let prompt = if current.trim().is_empty() {
+        "Find (blank cancels):".to_string()
+    } else {
+        format!("Find (blank keeps {current}):")
+    };
+    let Some(raw) = input_prompt(terminal, &prompt)? else {
+        return Ok(None);
+    };
+    let next = if raw.trim().is_empty() {
+        current.to_string()
+    } else {
+        raw
+    };
+    if next.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(next))
+}
+
+enum EditorCloseDecision {
+    Save,
+    Discard,
     Cancel,
 }
 
-fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<String>> {
-    let mut ed = Editor::new(initial);
+fn prompt_editor_close(terminal: &mut Term, file_name: &str) -> Result<EditorCloseDecision> {
+    match run_menu(
+        terminal,
+        "Unsaved Changes",
+        &["Save", "Discard", "Cancel"],
+        Some(&format!("Save changes to {file_name}?")),
+    )? {
+        MenuResult::Selected(s) if s == "Save" => Ok(EditorCloseDecision::Save),
+        MenuResult::Selected(s) if s == "Discard" => Ok(EditorCloseDecision::Discard),
+        _ => Ok(EditorCloseDecision::Cancel),
+    }
+}
+
+fn save_editor(editor: &mut Editor) -> Result<String> {
+    if let Some(parent) = editor.path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&editor.path, editor.text())?;
+    editor.dirty = false;
+    Ok(format!("Saved {}.", editor.file_name()))
+}
+
+fn run_editor(terminal: &mut Term, title: &str, initial: &str, path: PathBuf) -> Result<()> {
+    let mut ed = Editor::new(initial, path);
 
     loop {
         terminal.draw(|f| {
@@ -169,6 +399,7 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
                     Constraint::Length(1),
                     Constraint::Length(1),
                     Constraint::Length(1),
+                    Constraint::Length(3),
                     Constraint::Min(1),
                     Constraint::Length(1),
                     Constraint::Length(1),
@@ -184,16 +415,80 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
             f.render_widget(tp, pad_horizontal(chunks[2]));
             crate::ui::render_separator(f, chunks[3]);
 
+            let path_line = format!(
+                "{}{}",
+                ed.path.display(),
+                if ed.dirty { " *" } else { "" }
+            );
+            let status_line = format!("Ln {} Col {}", ed.row + 1, ed.col + 1);
+            let search_line = if ed.search_query.is_empty() {
+                "Search: Ctrl+F".to_string()
+            } else if ed.search_matches.is_empty() {
+                format!("Search: {} (0 matches)", ed.search_query)
+            } else {
+                format!(
+                    "Search: {} ({}/{})",
+                    ed.search_query,
+                    ed.search_index + 1,
+                    ed.search_matches.len()
+                )
+            };
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        path_line,
+                        normal_style(),
+                    )),
+                    Line::from(Span::styled(status_line, dim_style())),
+                    Line::from(Span::styled(
+                        search_line,
+                        if ed.search_query.is_empty() {
+                            dim_style()
+                        } else {
+                            normal_style()
+                        },
+                    )),
+                ]),
+                pad_horizontal(chunks[4]),
+            );
+
+            let visible_rows = chunks[5].height as usize;
+            let gutter = ed.lines.len().max(1).to_string().len() + 2;
+            let body_width = chunks[5].width.saturating_sub(2) as usize;
+            let visible_cols = body_width.saturating_sub(gutter).max(1);
+            ed.ensure_visible(visible_rows, visible_cols);
             let lines: Vec<Line> = ed
                 .lines
                 .iter()
-                .map(|l| Line::from(Span::styled(l.as_str(), normal_style())))
+                .enumerate()
+                .skip(ed.scroll_y)
+                .take(visible_rows)
+                .map(|(idx, l)| {
+                    let prefix = format!("{:>width$} ", idx + 1, width = gutter.saturating_sub(1));
+                    let mut visible: String = l.chars().skip(ed.scroll_x).take(visible_cols).collect();
+                    if idx == ed.row {
+                        let cursor_idx = ed.col.saturating_sub(ed.scroll_x).min(visible_cols);
+                        if cursor_idx >= visible.chars().count() {
+                            visible.push('_');
+                        } else {
+                            let mut chars: Vec<char> = visible.chars().collect();
+                            chars.insert(cursor_idx, '_');
+                            visible = chars.into_iter().take(visible_cols).collect();
+                        }
+                    }
+                    let text = format!("{prefix}{visible}");
+                    let style = if idx == ed.row { sel_style() } else { normal_style() };
+                    Line::from(Span::styled(text, style))
+                })
                 .collect();
-            f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[4]));
+            f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
 
-            let hint = Paragraph::new("Ctrl+W = save   Ctrl+X / Esc = cancel").style(dim_style());
-            f.render_widget(hint, pad_horizontal(chunks[5]));
-            render_status_bar(f, chunks[6]);
+            let hint = Paragraph::new(
+                "Ctrl+S save | Ctrl+A save as | Ctrl+R rename | Ctrl+F find | Ctrl+G next | Ctrl+Q discard | Tab close",
+            )
+                .style(dim_style());
+            f.render_widget(hint, pad_horizontal(chunks[6]));
+            render_status_bar(f, chunks[7]);
         })?;
 
         if event::poll(Duration::from_millis(50))? {
@@ -201,34 +496,90 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str) -> Result<Option<
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                // Map Ctrl+W and Ctrl+X
                 // Session switch cancels the edit
                 if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
                     if crate::session::has_switch_request() {
-                        return Ok(None);
+                        return Ok(());
                     }
                     continue;
                 }
-                let code = match key.code {
-                    KeyCode::Char('w')
-                        if key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                    {
-                        KeyCode::Char('\x17') // Ctrl+W
+                let (visible_rows, visible_cols) = terminal
+                    .size()
+                    .map(|size| {
+                        (
+                            size.height.saturating_sub(10) as usize,
+                            size.width.saturating_sub(6) as usize,
+                        )
+                    })
+                    .unwrap_or((1, 20));
+                match ed.key(key.code, key.modifiers, visible_rows, visible_cols) {
+                    EditorAction::Save => {
+                        let msg = save_editor(&mut ed)?;
+                        flash_message(terminal, &msg, 900)?;
                     }
-                    KeyCode::Char('x')
-                        if key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                    {
-                        KeyCode::Char('\x18') // Ctrl+X
+                    EditorAction::SaveAs => {
+                        if let Some(path) = prompt_editor_target(terminal, &ed.path, "Save As")? {
+                            ed.path = path;
+                            save_editor(&mut ed)?;
+                            flash_message(terminal, &format!("Saved as {}.", ed.file_name()), 900)?;
+                        }
                     }
-                    other => other,
-                };
-                match ed.key(code) {
-                    EditorAction::Save => return Ok(Some(ed.text())),
-                    EditorAction::Cancel => return Ok(None),
+                    EditorAction::Rename => {
+                        if let Some(target) = prompt_editor_target(terminal, &ed.path, "Rename")? {
+                            if target != ed.path {
+                                if target.exists() {
+                                    flash_message(terminal, "Target already exists.", 1000)?;
+                                } else {
+                                    if ed.path.exists() {
+                                        if let Some(parent) = target.parent() {
+                                            let _ = std::fs::create_dir_all(parent);
+                                        }
+                                        std::fs::rename(&ed.path, &target)?;
+                                    }
+                                    ed.path = target;
+                                    flash_message(
+                                        terminal,
+                                        &format!("Renamed to {}.", ed.file_name()),
+                                        900,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    EditorAction::Search => {
+                        if let Some(query) = prompt_editor_search(terminal, &ed.search_query)? {
+                            ed.search_query = query;
+                            ed.refresh_search();
+                            if ed.search_matches.is_empty() {
+                                flash_message(terminal, "No matches found.", 900)?;
+                            } else {
+                                ed.jump_to_match(0, visible_rows, visible_cols);
+                            }
+                        }
+                    }
+                    EditorAction::FindNext => {
+                        if ed.search_matches.is_empty() {
+                            flash_message(terminal, "No matches found.", 900)?;
+                        } else {
+                            ed.find_next(visible_rows, visible_cols);
+                        }
+                    }
+                    EditorAction::RequestClose => {
+                        if ed.dirty {
+                            match prompt_editor_close(terminal, &ed.file_name())? {
+                                EditorCloseDecision::Save => {
+                                    let msg = save_editor(&mut ed)?;
+                                    flash_message(terminal, &msg, 900)?;
+                                    return Ok(());
+                                }
+                                EditorCloseDecision::Discard => return Ok(()),
+                                EditorCloseDecision::Cancel => {}
+                            }
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    EditorAction::ForceClose => return Ok(()),
                     EditorAction::None => {}
                 }
             }
@@ -255,11 +606,6 @@ pub fn view_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
 }
 
 pub fn edit_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
-    let title = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| format!("Edit: {n}"))
-        .unwrap_or_else(|| "Edit File".to_string());
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(_) => {
@@ -267,20 +613,25 @@ pub fn edit_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
             return Ok(());
         }
     };
-    if let Some(new_text) = run_editor(terminal, &title, &text)? {
-        if std::fs::write(path, new_text).is_ok() {
-            flash_message(terminal, "Saved.", 800)?;
-        } else {
-            flash_message(terminal, "Could not save file", 1000)?;
-        }
-    }
-    Ok(())
+    run_editor(terminal, "Text Editor", &text, path.to_path_buf())
 }
 
 // ── Journal ───────────────────────────────────────────────────────────────────
 
-fn journal_dir() -> PathBuf {
+fn log_dir() -> PathBuf {
     let base = std::path::PathBuf::from("journal_entries");
+    if let Some(u) = get_current_user() {
+        let d = base.join(&u);
+        let _ = std::fs::create_dir_all(&d);
+        d
+    } else {
+        let _ = std::fs::create_dir_all(&base);
+        base
+    }
+}
+
+fn text_editor_dir() -> PathBuf {
+    let base = std::path::PathBuf::from("text_editor_documents");
     if let Some(u) = get_current_user() {
         let d = base.join(&u);
         let _ = std::fs::create_dir_all(&d);
@@ -345,18 +696,18 @@ fn prompt_new_text_document_path_in_dir(
 }
 
 pub fn prompt_new_text_document_path(terminal: &mut Term) -> Result<Option<PathBuf>> {
-    prompt_new_text_document_path_in_dir(terminal, &journal_dir())
+    prompt_new_text_document_path_in_dir(terminal, &text_editor_dir())
+}
+
+pub fn prompt_new_log_path(terminal: &mut Term) -> Result<Option<PathBuf>> {
+    prompt_new_text_document_path_in_dir(terminal, &log_dir())
 }
 
 pub fn new_text_document(terminal: &mut Term) -> Result<()> {
-    let dir = journal_dir();
+    let dir = text_editor_dir();
     let Some(path) = prompt_new_text_document_path_in_dir(terminal, &dir)? else {
         return Ok(());
     };
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("document.txt");
     let existing = if path.exists() {
         match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -368,21 +719,23 @@ pub fn new_text_document(terminal: &mut Term) -> Result<()> {
     } else {
         String::new()
     };
-    let title = if path.exists() {
-        format!("Edit: {file_name}")
-    } else {
-        format!("New: {file_name}")
-    };
-
-    if let Some(text) = run_editor(terminal, &title, &existing)? {
-        std::fs::write(&path, text)?;
-        flash_message(terminal, &format!("Saved {file_name}."), 900)?;
-    }
-    Ok(())
+    run_editor(terminal, "Text Editor", &existing, path)
 }
 
-fn saved_document_paths() -> Result<Vec<PathBuf>> {
-    let dir = journal_dir();
+fn new_log(terminal: &mut Term) -> Result<()> {
+    let dir = log_dir();
+    let Some(path) = prompt_new_text_document_path_in_dir(terminal, &dir)? else {
+        return Ok(());
+    };
+    let existing = if path.exists() {
+        std::fs::read_to_string(&path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    run_editor(terminal, "Log Editor", &existing, path)
+}
+
+fn saved_document_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     if !dir.exists() {
         anyhow::bail!("saved documents folder not found");
     }
@@ -398,15 +751,14 @@ fn saved_document_paths() -> Result<Vec<PathBuf>> {
     Ok(logs)
 }
 
-fn pick_saved_document(terminal: &mut Term, title: &str) -> Result<Option<PathBuf>> {
-    let logs = match saved_document_paths() {
+fn pick_saved_document(terminal: &mut Term, title: &str, dir: &Path) -> Result<Option<PathBuf>> {
+    let logs = match saved_document_paths(dir) {
         Ok(paths) => paths,
         Err(_) => {
             flash_message(terminal, "Error: No saved documents found.", 800)?;
             return Ok(None);
         }
     };
-    let dir = journal_dir();
     loop {
         let mut keys: Vec<String> = logs
             .iter()
@@ -430,11 +782,11 @@ fn pick_saved_document(terminal: &mut Term, title: &str) -> Result<Option<PathBu
 }
 
 pub fn journal_view(terminal: &mut Term) -> Result<()> {
-    let mut logs = match saved_document_paths() {
+    let dir = log_dir();
+    let mut logs = match saved_document_paths(&dir) {
         Ok(paths) => paths,
         Err(_) => return flash_message(terminal, "Error: No entries found.", 800),
     };
-    let dir = journal_dir();
 
     loop {
         let mut keys: Vec<String> = logs
@@ -499,7 +851,9 @@ pub fn text_editor_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) => match s.as_str() {
                 "New Document" => new_text_document(terminal)?,
                 "Open Document" => {
-                    if let Some(path) = pick_saved_document(terminal, "Open Document")? {
+                    if let Some(path) =
+                        pick_saved_document(terminal, "Open Document", &text_editor_dir())?
+                    {
                         edit_text_file(terminal, &path)?;
                     }
                 }
@@ -520,7 +874,7 @@ pub fn logs_menu(terminal: &mut Term) -> Result<()> {
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "New Log" => new_text_document(terminal)?,
+                "New Log" => new_log(terminal)?,
                 "View Logs" => journal_view(terminal)?,
                 _ => break,
             },
@@ -647,7 +1001,13 @@ pub fn documents_menu(terminal: &mut Term) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_new_text_document_name;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        log_dir, normalize_new_text_document_name, resolve_editor_target_path, text_editor_dir,
+        Editor, EditorAction,
+    };
 
     #[test]
     fn new_text_document_name_uses_default_txt_extension() {
@@ -671,5 +1031,58 @@ mod tests {
             normalize_new_text_document_name(" ../Field Report 01 ", "default"),
             Some("Field_Report_01.txt".to_string())
         );
+    }
+
+    #[test]
+    fn logs_and_text_editor_use_different_base_folders() {
+        assert_ne!(log_dir(), text_editor_dir());
+    }
+
+    #[test]
+    fn terminal_editor_ctrl_shortcuts_map_to_expected_actions() {
+        let mut editor = Editor::new("", PathBuf::from("note.txt"));
+        assert_eq!(
+            editor.key(KeyCode::Char('s'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::Save
+        );
+        assert_eq!(
+            editor.key(KeyCode::Char('a'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::SaveAs
+        );
+        assert_eq!(
+            editor.key(KeyCode::Char('r'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::Rename
+        );
+        assert_eq!(
+            editor.key(KeyCode::Char('f'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::Search
+        );
+        assert_eq!(
+            editor.key(KeyCode::Char('g'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::FindNext
+        );
+        assert_eq!(
+            editor.key(KeyCode::Char('q'), KeyModifiers::CONTROL, 10, 40),
+            EditorAction::ForceClose
+        );
+    }
+
+    #[test]
+    fn editor_target_path_defaults_to_txt_extension() {
+        assert_eq!(
+            resolve_editor_target_path(Path::new("text_editor_documents/note.txt"), "draft"),
+            Some(PathBuf::from("text_editor_documents/draft.txt"))
+        );
+    }
+
+    #[test]
+    fn terminal_editor_search_tracks_all_matches() {
+        let mut editor = Editor::new("alpha beta alpha", PathBuf::from("note.txt"));
+        editor.search_query = "alpha".to_string();
+        editor.refresh_search();
+        assert_eq!(editor.search_matches, vec![(0, 0), (0, 11)]);
+        editor.jump_to_match(0, 5, 8);
+        editor.find_next(5, 8);
+        assert_eq!((editor.row, editor.col), (0, 11));
     }
 }

@@ -612,7 +612,6 @@ enum DesktopTextEditorDialog {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopTextEditorInputKind {
-    SaveAs,
     Rename,
     Search,
 }
@@ -769,6 +768,7 @@ enum DesktopHubItemAction {
     InstallAudioRuntime,
     InstallBluetoothRuntime,
     CreateLog,
+    CreateTextDocument,
     OpenLogEntry(PathBuf),
     ViewLog(PathBuf),
     EditLog(PathBuf),
@@ -980,6 +980,12 @@ enum TopMenuAction {
     FileManagerDelete,
     FileManagerUndo,
     FileManagerRedo,
+    TextEditorSave,
+    TextEditorSaveAs,
+    TextEditorRename,
+    TextEditorFind,
+    TextEditorFindNext,
+    TextEditorDiscard,
     ShowFileProperties,
     EmptyTrash,
     CloseFocusedWindow,
@@ -1445,6 +1451,18 @@ fn desktop_journal_dir() -> PathBuf {
     }
 }
 
+fn desktop_text_editor_dir() -> PathBuf {
+    let base = PathBuf::from("text_editor_documents");
+    if let Some(user) = get_current_user() {
+        let dir = base.join(&user);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    } else {
+        let _ = std::fs::create_dir_all(&base);
+        base
+    }
+}
+
 fn desktop_log_files() -> Vec<PathBuf> {
     let dir = desktop_journal_dir();
     let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -1456,6 +1474,19 @@ fn desktop_log_files() -> Vec<PathBuf> {
         .collect();
     logs.sort_by(|a, b| b.cmp(a));
     logs
+}
+
+fn desktop_text_editor_files() -> Vec<PathBuf> {
+    let dir = desktop_text_editor_dir();
+    let mut docs: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    docs.sort_by(|a, b| b.cmp(a));
+    docs
 }
 
 fn desktop_doc_label(path: &Path) -> String {
@@ -1585,7 +1616,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::TextEditorMenu => vec![
             DesktopHubItem {
                 label: "New Document".to_string(),
-                action: DesktopHubItemAction::CreateLog,
+                action: DesktopHubItemAction::CreateTextDocument,
                 enabled: true,
             },
             DesktopHubItem {
@@ -1593,19 +1624,9 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorDocuments),
                 enabled: true,
             },
-            DesktopHubItem {
-                label: String::new(),
-                action: DesktopHubItemAction::None,
-                enabled: false,
-            },
-            DesktopHubItem {
-                label: "Back to Applications".to_string(),
-                action: DesktopHubItemAction::CloseFocusedWindow,
-                enabled: true,
-            },
         ],
         DesktopHubKind::TextEditorDocuments => {
-            let docs = desktop_log_files();
+            let docs = desktop_text_editor_files();
             let mut items = Vec::new();
             if docs.is_empty() {
                 items.push(DesktopHubItem {
@@ -5098,6 +5119,43 @@ fn run_top_menu_action(
         | TopMenuAction::FileManagerRedo => {
             run_file_manager_edit_action(terminal, state, action);
         }
+        TopMenuAction::TextEditorSave
+        | TopMenuAction::TextEditorSaveAs
+        | TopMenuAction::TextEditorFindNext
+        | TopMenuAction::TextEditorDiscard => {
+            let Some(window_id) = focused_window_id(state) else {
+                return Ok(());
+            };
+            let editor_action = match action {
+                TopMenuAction::TextEditorSave => DesktopTextEditorAction::Save,
+                TopMenuAction::TextEditorSaveAs => DesktopTextEditorAction::SaveAs,
+                TopMenuAction::TextEditorFindNext => DesktopTextEditorAction::FindNext,
+                TopMenuAction::TextEditorDiscard => DesktopTextEditorAction::ForceClose,
+                _ => DesktopTextEditorAction::None,
+            };
+            let close = run_desktop_text_editor_action(terminal, state, window_id, editor_action)?;
+            if close {
+                close_window_by_id(state, window_id);
+            }
+        }
+        TopMenuAction::TextEditorRename => {
+            if let Some(editor) = focused_text_editor_mut(state) {
+                if !editor.read_only {
+                    editor.dialog = Some(DesktopTextEditorDialog::Input {
+                        kind: DesktopTextEditorInputKind::Rename,
+                        value: editor.dialog_input_seed(),
+                    });
+                }
+            }
+        }
+        TopMenuAction::TextEditorFind => {
+            if let Some(editor) = focused_text_editor_mut(state) {
+                editor.dialog = Some(DesktopTextEditorDialog::Input {
+                    kind: DesktopTextEditorInputKind::Search,
+                    value: editor.search_query.clone(),
+                });
+            }
+        }
         TopMenuAction::ShowFileProperties => {
             open_selected_file_properties_popup(state);
         }
@@ -5846,6 +5904,14 @@ fn focused_window_kind(state: &DesktopState) -> Option<&WindowKind> {
     Some(&state.windows[idx].kind)
 }
 
+fn focused_text_editor_mut(state: &mut DesktopState) -> Option<&mut DesktopTextEditorState> {
+    let idx = focused_visible_window_idx(state)?;
+    match &mut state.windows[idx].kind {
+        WindowKind::TextEditor(editor) => Some(editor),
+        _ => None,
+    }
+}
+
 fn focused_file_manager_selected_entry(state: &DesktopState) -> Option<FileEntry> {
     let idx = focused_visible_window_idx(state)?;
     match &state.windows[idx].kind {
@@ -5880,6 +5946,27 @@ fn focused_file_manager_cwd(state: &DesktopState) -> Option<PathBuf> {
         WindowKind::FileManager(fm) => Some(fm.cwd.clone()),
         _ => None,
     }
+}
+
+fn text_editor_save_dir_from_file_manager(fm: &FileManagerState) -> PathBuf {
+    if let Some(entry) = fm.entries.get(fm.selected) {
+        if entry.is_dir && !is_parent_dir_entry(entry) {
+            return entry.path.clone();
+        }
+    }
+    fm.cwd.clone()
+}
+
+fn desktop_text_editor_save_dir(state: &DesktopState) -> Option<PathBuf> {
+    if let Some(idx) = focused_visible_window_idx(state) {
+        if let WindowKind::FileManager(fm) = &state.windows[idx].kind {
+            return Some(text_editor_save_dir_from_file_manager(fm));
+        }
+    }
+    state.windows.iter().rev().find_map(|win| match &win.kind {
+        WindowKind::FileManager(fm) => Some(text_editor_save_dir_from_file_manager(fm)),
+        _ => None,
+    })
 }
 
 fn open_with_extension_key(path: &Path) -> String {
@@ -6992,7 +7079,9 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 Some(WindowKind::DesktopHub(_)) => "Arrows/Mouse scroll | Enter to open",
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
                 Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
-                Some(WindowKind::TextEditor(_)) => "Ctrl+S Save | Ctrl+Q Discard | Tab Close",
+                Some(WindowKind::TextEditor(_)) => {
+                    "Ctrl+S Save | Ctrl+A Save As | Ctrl+R Rename | Ctrl+F Find | Ctrl+G Next | Tab Close"
+                }
                 Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
                 None => "",
             };
@@ -7025,73 +7114,98 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
         }
         TopMenuKind::File => {
             let mut items = Vec::new();
-            if let Some(WindowKind::FileManager(fm)) = focused_window_kind(state) {
-                let selected = focused_file_manager_selected_entry(state);
-                let has_any = selected.is_some();
-                let has_file = selected.as_ref().is_some_and(|e| !e.is_dir);
-                let has_extra_tabs = fm.tabs.len() > 1;
-                items.push(TopMenuItem {
-                    label: "File Manager Settings".to_string(),
-                    shortcut: None,
-                    action: TopMenuAction::OpenFileManagerSettings,
-                    enabled: true,
-                });
-                items.push(TopMenuItem {
-                    label: "New Tab".to_string(),
-                    shortcut: Some("Ctrl+T".to_string()),
-                    action: TopMenuAction::NewFileManagerTab,
-                    enabled: true,
-                });
-                items.push(TopMenuItem {
-                    label: "Close Tab".to_string(),
-                    shortcut: Some("Ctrl+W".to_string()),
-                    action: TopMenuAction::CloseFileManagerTab,
-                    enabled: has_extra_tabs,
-                });
-                items.push(TopMenuItem {
-                    label: "Next Tab".to_string(),
-                    shortcut: Some("Ctrl+Tab".to_string()),
-                    action: TopMenuAction::NextFileManagerTab,
-                    enabled: has_extra_tabs,
-                });
-                items.push(TopMenuItem {
-                    label: "Previous Tab".to_string(),
-                    shortcut: Some("Ctrl+Shift+Tab".to_string()),
-                    action: TopMenuAction::PrevFileManagerTab,
-                    enabled: has_extra_tabs,
-                });
-                items.push(TopMenuItem {
-                    label: "Open Selected".to_string(),
-                    shortcut: Some("Enter".to_string()),
-                    action: TopMenuAction::OpenSelectedFileBuiltin,
-                    enabled: has_any,
-                });
-                items.push(TopMenuItem {
-                    label: "Open Selected Externally".to_string(),
-                    shortcut: Some("X".to_string()),
-                    action: TopMenuAction::OpenSelectedFileExternal,
-                    enabled: has_file,
-                });
-                items.push(TopMenuItem {
-                    label: "Open With...".to_string(),
-                    shortcut: Some("O".to_string()),
-                    action: TopMenuAction::OpenSelectedFileWith,
-                    enabled: has_file,
-                });
-                if !state.file_recent.is_empty() {
-                    items.push(top_menu_separator_item());
-                    for recent in state.file_recent.iter().take(6) {
-                        items.push(TopMenuItem {
-                            label: format!("Recent: {}", path_display_name(&recent.path)),
-                            shortcut: None,
-                            action: TopMenuAction::OpenRecentFile(
-                                recent.path.clone(),
-                                recent.request,
-                            ),
-                            enabled: recent.path.exists(),
-                        });
+            match focused_window_kind(state) {
+                Some(WindowKind::FileManager(fm)) => {
+                    let selected = focused_file_manager_selected_entry(state);
+                    let has_any = selected.is_some();
+                    let has_file = selected.as_ref().is_some_and(|e| !e.is_dir);
+                    let has_extra_tabs = fm.tabs.len() > 1;
+                    items.push(TopMenuItem {
+                        label: "File Manager Settings".to_string(),
+                        shortcut: None,
+                        action: TopMenuAction::OpenFileManagerSettings,
+                        enabled: true,
+                    });
+                    items.push(TopMenuItem {
+                        label: "New Tab".to_string(),
+                        shortcut: Some("Ctrl+T".to_string()),
+                        action: TopMenuAction::NewFileManagerTab,
+                        enabled: true,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Close Tab".to_string(),
+                        shortcut: Some("Ctrl+W".to_string()),
+                        action: TopMenuAction::CloseFileManagerTab,
+                        enabled: has_extra_tabs,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Next Tab".to_string(),
+                        shortcut: Some("Ctrl+Tab".to_string()),
+                        action: TopMenuAction::NextFileManagerTab,
+                        enabled: has_extra_tabs,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Previous Tab".to_string(),
+                        shortcut: Some("Ctrl+Shift+Tab".to_string()),
+                        action: TopMenuAction::PrevFileManagerTab,
+                        enabled: has_extra_tabs,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Open Selected".to_string(),
+                        shortcut: Some("Enter".to_string()),
+                        action: TopMenuAction::OpenSelectedFileBuiltin,
+                        enabled: has_any,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Open Selected Externally".to_string(),
+                        shortcut: Some("X".to_string()),
+                        action: TopMenuAction::OpenSelectedFileExternal,
+                        enabled: has_file,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Open With...".to_string(),
+                        shortcut: Some("O".to_string()),
+                        action: TopMenuAction::OpenSelectedFileWith,
+                        enabled: has_file,
+                    });
+                    if !state.file_recent.is_empty() {
+                        items.push(top_menu_separator_item());
+                        for recent in state.file_recent.iter().take(6) {
+                            items.push(TopMenuItem {
+                                label: format!("Recent: {}", path_display_name(&recent.path)),
+                                shortcut: None,
+                                action: TopMenuAction::OpenRecentFile(
+                                    recent.path.clone(),
+                                    recent.request,
+                                ),
+                                enabled: recent.path.exists(),
+                            });
+                        }
                     }
                 }
+                Some(WindowKind::TextEditor(editor)) => {
+                    let can_save_as =
+                        !editor.read_only && desktop_text_editor_save_dir(state).is_some();
+                    items.push(TopMenuItem {
+                        label: "Save".to_string(),
+                        shortcut: Some("Ctrl+S".to_string()),
+                        action: TopMenuAction::TextEditorSave,
+                        enabled: !editor.read_only,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Save As...".to_string(),
+                        shortcut: Some("Ctrl+A".to_string()),
+                        action: TopMenuAction::TextEditorSaveAs,
+                        enabled: can_save_as,
+                    });
+                    items.push(TopMenuItem {
+                        label: "Rename".to_string(),
+                        shortcut: Some("Ctrl+R".to_string()),
+                        action: TopMenuAction::TextEditorRename,
+                        enabled: !editor.read_only,
+                    });
+                }
+                _ => {}
             }
             if !state.folder_recent.is_empty() {
                 items.push(top_menu_separator_item());
@@ -7165,89 +7279,110 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
             });
             items
         }
-        TopMenuKind::Edit => {
-            if !matches!(focused_window_kind(state), Some(WindowKind::FileManager(_))) {
-                return vec![TopMenuItem {
-                    label: "No file manager actions".to_string(),
-                    shortcut: None,
-                    action: TopMenuAction::None,
-                    enabled: false,
-                }];
-            }
-            let selected = focused_file_manager_selected_entry(state);
-            let can_edit_selected = selected.as_ref().is_some_and(|e| !is_parent_dir_entry(e));
-            let paste_enabled = state
-                .file_clipboard
-                .as_ref()
-                .is_some_and(|clip| clip.path.exists());
-            let paste_label = if let Some(clip) = &state.file_clipboard {
-                let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
-                    "Move"
+        TopMenuKind::Edit => match focused_window_kind(state) {
+            Some(WindowKind::FileManager(_)) => {
+                let selected = focused_file_manager_selected_entry(state);
+                let can_edit_selected = selected.as_ref().is_some_and(|e| !is_parent_dir_entry(e));
+                let paste_enabled = state
+                    .file_clipboard
+                    .as_ref()
+                    .is_some_and(|clip| clip.path.exists());
+                let paste_label = if let Some(clip) = &state.file_clipboard {
+                    let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
+                        "Move"
+                    } else {
+                        "Paste"
+                    };
+                    format!("{mode} {}", path_display_name(&clip.path))
                 } else {
-                    "Paste"
+                    "Paste".to_string()
                 };
-                format!("{mode} {}", path_display_name(&clip.path))
-            } else {
-                "Paste".to_string()
-            };
-            vec![
+                vec![
+                    TopMenuItem {
+                        label: "Copy".to_string(),
+                        shortcut: Some("Ctrl+C".to_string()),
+                        action: TopMenuAction::FileManagerCopy,
+                        enabled: can_edit_selected,
+                    },
+                    TopMenuItem {
+                        label: "Cut".to_string(),
+                        shortcut: Some("Ctrl+X".to_string()),
+                        action: TopMenuAction::FileManagerCut,
+                        enabled: can_edit_selected,
+                    },
+                    TopMenuItem {
+                        label: paste_label,
+                        shortcut: Some("Ctrl+V".to_string()),
+                        action: TopMenuAction::FileManagerPaste,
+                        enabled: paste_enabled,
+                    },
+                    TopMenuItem {
+                        label: "Duplicate".to_string(),
+                        shortcut: Some("Ctrl+D".to_string()),
+                        action: TopMenuAction::FileManagerDuplicate,
+                        enabled: can_edit_selected,
+                    },
+                    TopMenuItem {
+                        label: "Rename".to_string(),
+                        shortcut: Some("F2".to_string()),
+                        action: TopMenuAction::FileManagerRename,
+                        enabled: can_edit_selected,
+                    },
+                    TopMenuItem {
+                        label: "Move To...".to_string(),
+                        shortcut: Some("Ctrl+Shift+M".to_string()),
+                        action: TopMenuAction::FileManagerMoveTo,
+                        enabled: can_edit_selected,
+                    },
+                    TopMenuItem {
+                        label: "Delete".to_string(),
+                        shortcut: Some("Del".to_string()),
+                        action: TopMenuAction::FileManagerDelete,
+                        enabled: can_edit_selected,
+                    },
+                    top_menu_separator_item(),
+                    TopMenuItem {
+                        label: "Undo".to_string(),
+                        shortcut: Some("Ctrl+Z".to_string()),
+                        action: TopMenuAction::FileManagerUndo,
+                        enabled: !state.file_undo_stack.is_empty(),
+                    },
+                    TopMenuItem {
+                        label: "Redo".to_string(),
+                        shortcut: Some("Ctrl+Y".to_string()),
+                        action: TopMenuAction::FileManagerRedo,
+                        enabled: !state.file_redo_stack.is_empty(),
+                    },
+                ]
+            }
+            Some(WindowKind::TextEditor(editor)) => vec![
                 TopMenuItem {
-                    label: "Copy".to_string(),
-                    shortcut: Some("Ctrl+C".to_string()),
-                    action: TopMenuAction::FileManagerCopy,
-                    enabled: can_edit_selected,
+                    label: "Find...".to_string(),
+                    shortcut: Some("Ctrl+F".to_string()),
+                    action: TopMenuAction::TextEditorFind,
+                    enabled: true,
                 },
                 TopMenuItem {
-                    label: "Cut".to_string(),
-                    shortcut: Some("Ctrl+X".to_string()),
-                    action: TopMenuAction::FileManagerCut,
-                    enabled: can_edit_selected,
-                },
-                TopMenuItem {
-                    label: paste_label,
-                    shortcut: Some("Ctrl+V".to_string()),
-                    action: TopMenuAction::FileManagerPaste,
-                    enabled: paste_enabled,
-                },
-                TopMenuItem {
-                    label: "Duplicate".to_string(),
-                    shortcut: Some("Ctrl+D".to_string()),
-                    action: TopMenuAction::FileManagerDuplicate,
-                    enabled: can_edit_selected,
-                },
-                TopMenuItem {
-                    label: "Rename".to_string(),
-                    shortcut: Some("F2".to_string()),
-                    action: TopMenuAction::FileManagerRename,
-                    enabled: can_edit_selected,
-                },
-                TopMenuItem {
-                    label: "Move To...".to_string(),
-                    shortcut: Some("Ctrl+Shift+M".to_string()),
-                    action: TopMenuAction::FileManagerMoveTo,
-                    enabled: can_edit_selected,
-                },
-                TopMenuItem {
-                    label: "Delete".to_string(),
-                    shortcut: Some("Del".to_string()),
-                    action: TopMenuAction::FileManagerDelete,
-                    enabled: can_edit_selected,
+                    label: "Find Next".to_string(),
+                    shortcut: Some("Ctrl+G".to_string()),
+                    action: TopMenuAction::TextEditorFindNext,
+                    enabled: !editor.search_query.trim().is_empty(),
                 },
                 top_menu_separator_item(),
                 TopMenuItem {
-                    label: "Undo".to_string(),
-                    shortcut: Some("Ctrl+Z".to_string()),
-                    action: TopMenuAction::FileManagerUndo,
-                    enabled: !state.file_undo_stack.is_empty(),
+                    label: "Discard and Close".to_string(),
+                    shortcut: Some("Ctrl+Q".to_string()),
+                    action: TopMenuAction::TextEditorDiscard,
+                    enabled: true,
                 },
-                TopMenuItem {
-                    label: "Redo".to_string(),
-                    shortcut: Some("Ctrl+Y".to_string()),
-                    action: TopMenuAction::FileManagerRedo,
-                    enabled: !state.file_redo_stack.is_empty(),
-                },
-            ]
-        }
+            ],
+            _ => vec![TopMenuItem {
+                label: "No edit actions".to_string(),
+                shortcut: None,
+                action: TopMenuAction::None,
+                enabled: false,
+            }],
+        },
         TopMenuKind::View => {
             let mut items = Vec::new();
             if let Some(WindowKind::FileManager(fm)) = focused_window_kind(state) {
@@ -7908,23 +8043,18 @@ fn draw_desktop_text_editor_window(
             line_no,
             truncate_with_ellipsis(&visible, text_width)
         );
-        let style = if focused && idx == editor.row {
-            sel_style()
-        } else {
-            normal_style()
-        };
         lines.push(Line::from(Span::styled(
             truncate_with_ellipsis(&line_text, body.width as usize),
-            style,
+            normal_style(),
         )));
     }
     f.render_widget(Paragraph::new(lines), body);
 
     if let Some(footer) = desktop_hint_footer_rect(content) {
         let hint = if editor.read_only {
-            "Arrows move | Ctrl+F search | F3 next | Tab close"
+            "Arrows move | Ctrl+F search | Ctrl+G next | Tab close"
         } else {
-            "Ctrl+S save | Ctrl+Shift+S save as | Ctrl+R rename | Ctrl+F search | Tab close"
+            "Ctrl+S save | Ctrl+A save as | Ctrl+R rename | Ctrl+F search | Ctrl+G next | Tab close"
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(hint, dim_style()))),
@@ -7953,7 +8083,7 @@ fn draw_desktop_text_editor_window(
                 .join(" ");
                 let lines = vec![
                     Line::from(Span::styled("Unsaved changes", title_style())),
-                    Line::from("Save before closing this log?"),
+                    Line::from("Save before closing this document?"),
                     Line::from(""),
                     Line::from(Span::styled(buttons, normal_style())),
                 ];
@@ -7961,12 +8091,10 @@ fn draw_desktop_text_editor_window(
             }
             DesktopTextEditorDialog::Input { kind, value } => {
                 let title = match kind {
-                    DesktopTextEditorInputKind::SaveAs => "Save As",
-                    DesktopTextEditorInputKind::Rename => "Rename Log",
+                    DesktopTextEditorInputKind::Rename => "Rename Document",
                     DesktopTextEditorInputKind::Search => "Find",
                 };
                 let prompt = match kind {
-                    DesktopTextEditorInputKind::SaveAs => "File name or path:",
                     DesktopTextEditorInputKind::Rename => "New file name:",
                     DesktopTextEditorInputKind::Search => "Search text:",
                 };
@@ -11397,6 +11525,23 @@ fn normalize_text_editor_target_path(current_path: &Path, raw: &str) -> Option<P
     Some(target)
 }
 
+fn normalize_text_editor_file_name(raw: &str, default_name: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let candidate = if trimmed.is_empty() {
+        default_name.trim()
+    } else {
+        trimmed
+    };
+    if candidate.is_empty() || candidate.contains('/') || candidate.contains('\\') {
+        return None;
+    }
+    let mut out = candidate.to_string();
+    if Path::new(&out).extension().is_none() {
+        out.push_str(".txt");
+    }
+    Some(out)
+}
+
 fn handle_desktop_text_editor_key(
     editor: &mut DesktopTextEditorState,
     body: Rect,
@@ -11440,7 +11585,6 @@ fn handle_desktop_text_editor_key(
                 }
                 KeyCode::Enter => {
                     let action = match kind {
-                        DesktopTextEditorInputKind::SaveAs => DesktopTextEditorAction::SaveAs,
                         DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
                         DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
                     };
@@ -11469,14 +11613,15 @@ fn handle_desktop_text_editor_key(
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 return if editor.read_only {
                     DesktopTextEditorAction::None
-                } else if modifiers.contains(KeyModifiers::SHIFT) {
-                    editor.dialog = Some(DesktopTextEditorDialog::Input {
-                        kind: DesktopTextEditorInputKind::SaveAs,
-                        value: editor.dialog_input_seed(),
-                    });
-                    DesktopTextEditorAction::None
                 } else {
                     DesktopTextEditorAction::Save
+                };
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                return if editor.read_only {
+                    DesktopTextEditorAction::None
+                } else {
+                    DesktopTextEditorAction::SaveAs
                 };
             }
             KeyCode::Char('q') | KeyCode::Char('Q') => {
@@ -11498,6 +11643,9 @@ fn handle_desktop_text_editor_key(
                 });
                 return DesktopTextEditorAction::None;
             }
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                return DesktopTextEditorAction::FindNext;
+            }
             KeyCode::Home => {
                 editor.scroll_x = 0;
                 return DesktopTextEditorAction::None;
@@ -11513,13 +11661,6 @@ fn handle_desktop_text_editor_key(
                 DesktopTextEditorAction::None
             } else {
                 DesktopTextEditorAction::Close
-            }
-        }
-        KeyCode::F(2) => {
-            if editor.read_only {
-                DesktopTextEditorAction::None
-            } else {
-                DesktopTextEditorAction::Save
             }
         }
         KeyCode::Up => {
@@ -11540,7 +11681,6 @@ fn handle_desktop_text_editor_key(
             desktop_text_editor_move_vertical(editor, step, body);
             DesktopTextEditorAction::None
         }
-        KeyCode::F(3) => DesktopTextEditorAction::FindNext,
         KeyCode::Home => {
             editor.col = 0;
             desktop_text_editor_ensure_cursor_visible(editor, body);
@@ -11708,14 +11848,76 @@ fn run_desktop_text_editor_action(
                 }
             }
             refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
             refresh_all_file_manager_windows(state);
             let label = saved_name.unwrap_or_else(|| "document".to_string());
             flash_message(terminal, &format!("Saved {label}."), 900)?;
             Ok(matches!(action, DesktopTextEditorAction::SaveAndClose))
         }
-        DesktopTextEditorAction::SaveAs | DesktopTextEditorAction::Rename => {
+        DesktopTextEditorAction::SaveAs => {
+            let Some(save_dir) = desktop_text_editor_save_dir(state) else {
+                flash_message(
+                    terminal,
+                    "Open File Manager and navigate to a destination folder first.",
+                    1200,
+                )?;
+                return Ok(false);
+            };
+            let current_name = state
+                .windows
+                .iter()
+                .find(|w| w.id == window_id)
+                .and_then(|w| match &w.kind {
+                    WindowKind::TextEditor(editor) => Some(editor.file_name()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "document.txt".to_string());
+            let mut raw = None;
+            let prompt = format!(
+                "Save As in {} (blank keeps {}):",
+                save_dir.display(),
+                current_name
+            );
+            run_with_mouse_capture_paused(terminal, |t| {
+                raw = input_prompt(t, &prompt)?;
+                Ok(())
+            })?;
+            let Some(raw) = raw else {
+                return Ok(false);
+            };
+            let Some(file_name) = normalize_text_editor_file_name(&raw, &current_name) else {
+                flash_message(terminal, "Invalid file name.", 1000)?;
+                return Ok(false);
+            };
+            let target = save_dir.join(file_name);
             let mut msg = None;
-            let mut close = false;
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                if let WindowKind::TextEditor(editor) = &mut win.kind {
+                    if target != editor.path && target.exists() {
+                        flash_message(terminal, "Target already exists.", 1000)?;
+                        return Ok(false);
+                    }
+                    if let Some(parent) = target.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    std::fs::write(&target, editor.text())?;
+                    editor.path = target;
+                    editor.dirty = false;
+                    editor.dialog = None;
+                    win.title = editor.file_name();
+                    msg = Some(format!("Saved as {}.", editor.file_name()));
+                }
+            }
+            refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
+            refresh_all_file_manager_windows(state);
+            if let Some(message) = msg {
+                flash_message(terminal, &message, 900)?;
+            }
+            Ok(false)
+        }
+        DesktopTextEditorAction::Rename => {
+            let mut msg = None;
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
                 if let WindowKind::TextEditor(editor) = &mut win.kind {
                     let Some(DesktopTextEditorDialog::Input { kind, value }) =
@@ -11728,41 +11930,32 @@ fn run_desktop_text_editor_action(
                         flash_message(terminal, "Invalid file name.", 1000)?;
                         return Ok(false);
                     };
-                    if matches!(kind, DesktopTextEditorInputKind::Rename) {
-                        if target != editor.path {
-                            if target.exists() {
-                                flash_message(terminal, "Target already exists.", 1000)?;
-                                return Ok(false);
-                            }
-                            if let Some(parent) = target.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            std::fs::rename(&editor.path, &target)?;
+                    if !matches!(kind, DesktopTextEditorInputKind::Rename) {
+                        return Ok(false);
+                    }
+                    if target != editor.path {
+                        if target.exists() {
+                            flash_message(terminal, "Target already exists.", 1000)?;
+                            return Ok(false);
                         }
-                        editor.path = target.clone();
-                        win.title = editor.file_name();
-                        editor.dialog = None;
-                        msg = Some(format!("Renamed to {}.", editor.file_name()));
-                    } else {
                         if let Some(parent) = target.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
-                        std::fs::write(&target, editor.text())?;
-                        editor.path = target;
-                        editor.dirty = false;
-                        editor.dialog = None;
-                        win.title = editor.file_name();
-                        msg = Some(format!("Saved as {}.", editor.file_name()));
+                        std::fs::rename(&editor.path, &target)?;
                     }
-                    close = false;
+                    editor.path = target.clone();
+                    win.title = editor.file_name();
+                    editor.dialog = None;
+                    msg = Some(format!("Renamed to {}.", editor.file_name()));
                 }
             }
             refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
             refresh_all_file_manager_windows(state);
             if let Some(message) = msg {
                 flash_message(terminal, &message, 900)?;
             }
-            Ok(close)
+            Ok(false)
         }
         DesktopTextEditorAction::FindNext => {
             if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
@@ -12975,7 +13168,7 @@ fn run_desktop_hub_action(
         DesktopHubItemAction::CreateLog => {
             let mut path = None;
             run_with_mouse_capture_paused(terminal, |t| {
-                path = documents::prompt_new_text_document_path(t)?;
+                path = documents::prompt_new_log_path(t)?;
                 Ok(())
             })?;
             if let Some(path) = path {
@@ -12988,6 +13181,25 @@ fn run_desktop_hub_action(
                     flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
                 } else {
                     refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+                    refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
+                }
+            }
+        }
+        DesktopHubItemAction::CreateTextDocument => {
+            let mut path = None;
+            run_with_mouse_capture_paused(terminal, |t| {
+                path = documents::prompt_new_text_document_path(t)?;
+                Ok(())
+            })?;
+            if let Some(path) = path {
+                if !path.exists() {
+                    let _ = std::fs::write(&path, "");
+                }
+                if let Err(err) =
+                    open_desktop_text_editor_window(terminal, state, path.clone(), false)
+                {
+                    flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+                } else {
                     refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
                 }
             }
@@ -15173,7 +15385,6 @@ fn desktop_text_editor_dialog_mouse_action(
                 if point_in_rect(x, y, rect) {
                     return if idx == 0 {
                         DesktopTextEditorDialogMouseAction::Action(match kind {
-                            DesktopTextEditorInputKind::SaveAs => DesktopTextEditorAction::SaveAs,
                             DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
                             DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
                         })
@@ -15975,12 +16186,7 @@ mod tests {
             .collect();
         assert_eq!(
             labels,
-            vec![
-                "New Document".to_string(),
-                "Open Document".to_string(),
-                String::new(),
-                "Back to Applications".to_string()
-            ]
+            vec!["New Document".to_string(), "Open Document".to_string()]
         );
     }
 
@@ -16048,6 +16254,15 @@ mod tests {
             ),
             DesktopTextEditorAction::Save
         ));
+        assert!(matches!(
+            handle_desktop_text_editor_key(
+                &mut editor,
+                body,
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL
+            ),
+            DesktopTextEditorAction::SaveAs
+        ));
     }
 
     #[test]
@@ -16104,6 +16319,86 @@ mod tests {
             handle_desktop_text_editor_key(&mut editor, body, KeyCode::Enter, KeyModifiers::NONE),
             DesktopTextEditorAction::FindNext
         ));
+        editor.dialog = None;
+        editor.search_query = "alpha".to_string();
+        desktop_text_editor_refresh_search(&mut editor);
+        assert!(matches!(
+            handle_desktop_text_editor_key(
+                &mut editor,
+                body,
+                KeyCode::Char('g'),
+                KeyModifiers::CONTROL
+            ),
+            DesktopTextEditorAction::FindNext
+        ));
+    }
+
+    #[test]
+    fn text_editor_top_menus_include_editor_actions() {
+        let base = test_temp_dir("text-editor-top-menu");
+        let doc_dir = base.join("docs");
+        std::fs::create_dir_all(&doc_dir).expect("create docs");
+
+        let mut fm = FileManagerState::new();
+        fm.set_cwd(doc_dir.clone());
+        fm.refresh();
+
+        let state = DesktopState {
+            next_id: 3,
+            windows: vec![
+                DesktopWindow {
+                    id: 1,
+                    title: "My Computer".to_string(),
+                    rect: WinRect {
+                        x: 0,
+                        y: 0,
+                        w: 40,
+                        h: 20,
+                    },
+                    restore_rect: None,
+                    minimized: false,
+                    maximized: false,
+                    kind: WindowKind::FileManager(fm),
+                },
+                DesktopWindow {
+                    id: 2,
+                    title: "note.txt".to_string(),
+                    rect: WinRect {
+                        x: 4,
+                        y: 2,
+                        w: 50,
+                        h: 20,
+                    },
+                    restore_rect: None,
+                    minimized: false,
+                    maximized: false,
+                    kind: WindowKind::TextEditor(DesktopTextEditorState::from_text(
+                        PathBuf::from("note.txt"),
+                        "alpha",
+                        false,
+                    )),
+                },
+            ],
+            ..DesktopState::default()
+        };
+
+        let file_labels: Vec<String> = top_menu_items(&state, TopMenuKind::File)
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(file_labels.contains(&"Save".to_string()));
+        assert!(file_labels.contains(&"Save As...".to_string()));
+        assert!(file_labels.contains(&"Rename".to_string()));
+
+        let edit_labels: Vec<String> = top_menu_items(&state, TopMenuKind::Edit)
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(edit_labels.contains(&"Find...".to_string()));
+        assert!(edit_labels.contains(&"Find Next".to_string()));
+        assert!(edit_labels.contains(&"Discard and Close".to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
