@@ -155,7 +155,10 @@ impl RetroScreen {
             self.rect.top() + row as f32 * self.cell.y,
         );
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
-        let width = clipped.chars().count() as f32 * self.cell.x;
+        let width = painter
+            .layout_no_wrap(clipped.clone(), self.font.clone(), color)
+            .size()
+            .x;
         if width > 0.0 {
             let y = pos.y + self.cell.y - 2.0;
             painter.line_segment(

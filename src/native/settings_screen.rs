@@ -1,6 +1,6 @@
 use super::menu::{SettingsChoiceKind, SettingsChoiceOverlay};
 use super::retro_ui::{current_palette, RetroScreen};
-use crate::config::{OpenMode, Settings, HEADER_LINES, THEMES};
+use crate::config::{CliAcsMode, OpenMode, Settings, HEADER_LINES, THEMES};
 use crate::connections::macos_connections_disabled;
 use eframe::egui::{self, Context};
 
@@ -24,6 +24,7 @@ enum SettingsRowId {
     Bootup,
     NavigationHints,
     Theme,
+    BorderGlyphs,
     InterfaceSize,
     DefaultOpenMode,
     Connections,
@@ -250,6 +251,13 @@ fn handle_settings_activation(
             open_settings_choice(draft, choice_overlay, SettingsChoiceKind::Theme);
             TerminalSettingsEvent::None
         }
+        SettingsRowId::BorderGlyphs => {
+            draft.cli_acs_mode = match draft.cli_acs_mode {
+                CliAcsMode::Ascii => CliAcsMode::Unicode,
+                CliAcsMode::Unicode => CliAcsMode::Ascii,
+            };
+            TerminalSettingsEvent::Persist
+        }
         SettingsRowId::InterfaceSize => TerminalSettingsEvent::None,
         SettingsRowId::DefaultOpenMode => {
             open_settings_choice(draft, choice_overlay, SettingsChoiceKind::DefaultOpenMode);
@@ -336,6 +344,16 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
         ),
         (
             format!(
+                "Border Glyphs: {} [toggle]",
+                match draft.cli_acs_mode {
+                    CliAcsMode::Ascii => "ASCII",
+                    CliAcsMode::Unicode => "Unicode Smooth",
+                }
+            ),
+            SettingsRowId::BorderGlyphs,
+        ),
+        (
+            format!(
                 "Interface Size: {}% [adjust]",
                 (draft.native_ui_scale * 100.0).round() as i32
             ),
@@ -393,6 +411,9 @@ mod tests {
         let user_rows = terminal_settings_rows(&draft, false);
         assert!(user_rows.iter().any(|(label, _)| label == "Edit Menus"));
         assert!(user_rows.iter().any(|(label, _)| label == "Default Apps"));
+        assert!(user_rows
+            .iter()
+            .any(|(label, _)| label.starts_with("Border Glyphs: ")));
         assert!(user_rows.iter().any(|(label, _)| label == "About"));
         assert_eq!(
             user_rows.last().map(|(label, _)| label.as_str()),
@@ -478,5 +499,22 @@ mod tests {
         assert_eq!(draft.native_ui_scale, NATIVE_UI_SCALE_OPTIONS[2]);
         assert!(step_interface_size(&mut draft, -1));
         assert_eq!(draft.native_ui_scale, NATIVE_UI_SCALE_OPTIONS[1]);
+    }
+
+    #[test]
+    fn border_glyphs_row_toggles_acs_mode() {
+        let mut draft = get_settings();
+        let mut overlay = None;
+        let rows = terminal_settings_rows(&draft, false);
+        let idx = rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::BorderGlyphs)
+            .expect("border glyph row");
+        let before = draft.cli_acs_mode;
+        assert!(matches!(
+            handle_settings_activation(&mut draft, idx, &mut overlay, false),
+            TerminalSettingsEvent::Persist
+        ));
+        assert_ne!(draft.cli_acs_mode, before);
     }
 }

@@ -2,9 +2,18 @@ use super::menu::TerminalScreen;
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect};
+use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
 use std::path::Path;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LineConnections {
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+}
 
 pub struct NativePtyState {
     pub title: String,
@@ -61,30 +70,41 @@ pub fn spawn_embedded_pty_with_options(
 pub fn draw_embedded_pty(
     ctx: &Context,
     state: &mut NativePtyState,
-    shell_status: &str,
+    _shell_status: &str,
     cols: usize,
     rows: usize,
-    header_start_row: usize,
-    separator_top_row: usize,
-    title_row: usize,
-    separator_bottom_row: usize,
-    subtitle_row: usize,
-    content_start_row: usize,
-    status_row: usize,
-    content_col: usize,
+    _header_start_row: usize,
+    _separator_top_row: usize,
+    _title_row: usize,
+    _separator_bottom_row: usize,
+    _subtitle_row: usize,
+    _content_start_row: usize,
+    _status_row: usize,
+    _content_col: usize,
 ) -> PtyScreenEvent {
     if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
     }
 
-    let pty_cols = cols.saturating_sub(content_col * 2).max(1) as u16;
-    let pty_rows = status_row.saturating_sub(content_start_row + 1).max(1) as u16;
+    let pty_cols = cols.max(1) as u16;
+    let pty_rows = rows.max(1) as u16;
     state.session.resize(pty_cols, pty_rows);
     handle_pty_input(ctx, &mut state.session);
+    // Prefer output-driven repaints for lower idle usage, with a slow fallback
+    // tick so cursor blink / misc updates still refresh when output is quiet.
+    if state.session.take_output_activity() {
+        ctx.request_repaint();
+    } else {
+        ctx.request_repaint_after(Duration::from_millis(120));
+    }
 
     if !state.session.is_alive() {
         return PtyScreenEvent::ProcessExited;
     }
+    let smooth_borders = matches!(
+        crate::config::get_settings().cli_acs_mode,
+        crate::config::CliAcsMode::Unicode
+    );
 
     egui::CentralPanel::default()
         .frame(
@@ -97,32 +117,13 @@ pub fn draw_embedded_pty(
             let (screen, response) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in crate::config::HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
-            }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(&painter, title_row, &state.title, palette.fg, true);
-            screen.separator(&painter, separator_bottom_row, &palette);
-            screen.underlined_text(
-                &painter,
-                content_col,
-                subtitle_row,
-                "Embedded PTY  Ctrl+Q close",
-                palette.fg,
-            );
 
             let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
             let content_rect = Rect::from_min_max(
-                screen.row_rect(content_col, content_start_row, 1).min,
+                screen.row_rect(0, 0, 1).min,
                 Pos2::new(
-                    screen
-                        .row_rect(content_col + pty_cols as usize, content_start_row, 1)
-                        .min
-                        .x,
-                    screen
-                        .row_rect(content_col, content_start_row + pty_rows as usize, 1)
-                        .min
-                        .y,
+                    screen.row_rect(cols, 0, 1).min.x,
+                    screen.row_rect(0, rows, 1).min.y,
                 ),
             );
             handle_pty_mouse(
@@ -136,19 +137,39 @@ pub fn draw_embedded_pty(
 
             for (row_idx, row) in snapshot.cells.iter().enumerate() {
                 for (col_idx, cell) in row.iter().enumerate() {
+                    let mut cell_to_draw = *cell;
+                    if smooth_borders {
+                        cell_to_draw.ch = smooth_border_char_from_snapshot(
+                            &snapshot.cells,
+                            row_idx,
+                            col_idx,
+                            cell.ch,
+                        );
+                    }
+                    let border_conn = if smooth_borders {
+                        vector_border_connections(
+                            &snapshot.cells,
+                            row_idx,
+                            col_idx,
+                            cell_to_draw.ch,
+                        )
+                    } else {
+                        None
+                    };
                     draw_cell(
                         &screen,
                         &painter,
-                        content_col + col_idx,
-                        content_start_row + row_idx,
-                        cell,
+                        col_idx,
+                        row_idx,
+                        &cell_to_draw,
+                        border_conn,
                     );
                 }
             }
 
             if !snapshot.cursor_hidden {
-                let row = content_start_row + snapshot.cursor_row as usize;
-                let col = content_col + snapshot.cursor_col as usize;
+                let row = snapshot.cursor_row as usize;
+                let col = snapshot.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
                 let cell = snapshot
                     .cells
@@ -186,10 +207,6 @@ pub fn draw_embedded_pty(
                     );
                 }
             }
-
-            if !shell_status.is_empty() {
-                screen.text(&painter, content_col, status_row, shell_status, palette.dim);
-            }
         });
 
     PtyScreenEvent::None
@@ -201,13 +218,16 @@ fn draw_cell(
     col: usize,
     row: usize,
     cell: &PtyStyledCell,
+    border_conn: Option<LineConnections>,
 ) {
     let rect = screen.row_rect(col, row, 1);
     let (fg, bg) = resolve_cell_colors(*cell);
     if bg != Color32::BLACK {
         painter.rect_filled(rect, 0.0, bg);
     }
-    if cell.ch != ' ' {
+    if let Some(conn) = border_conn {
+        draw_vector_border_cell(painter, rect, conn, fg, cell.bold);
+    } else if cell.ch != ' ' {
         let italic_x = if cell.italic { 0.25 } else { 0.0 };
         painter.text(
             Pos2::new(rect.left() + italic_x, rect.top()),
@@ -474,6 +494,218 @@ fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
         std::mem::swap(&mut fg, &mut bg);
     }
     (fg, bg)
+}
+
+fn smooth_border_char_from_snapshot(
+    cells: &[Vec<PtyStyledCell>],
+    row: usize,
+    col: usize,
+    ch: char,
+) -> char {
+    if !is_border_like(ch) {
+        return ch;
+    }
+    let up = snapshot_char(cells, row as isize - 1, col as isize);
+    let down = snapshot_char(cells, row as isize + 1, col as isize);
+    let left = snapshot_char(cells, row as isize, col as isize - 1);
+    let right = snapshot_char(cells, row as isize, col as isize + 1);
+    let conn = LineConnections {
+        up: line_connections(up).down,
+        down: line_connections(down).up,
+        left: line_connections(left).right,
+        right: line_connections(right).left,
+    };
+    map_connections_to_unicode(conn).unwrap_or(ch)
+}
+
+fn vector_border_connections(
+    cells: &[Vec<PtyStyledCell>],
+    row: usize,
+    col: usize,
+    ch: char,
+) -> Option<LineConnections> {
+    let ch = smooth_border_char_from_snapshot(cells, row, col, ch);
+    let conn = line_connections(ch);
+    if conn == LineConnections::default() {
+        return None;
+    }
+    // Avoid treating ordinary punctuation as borders unless it's connected.
+    if matches!(ch, '-' | '|' | '+') {
+        let up = snapshot_char(cells, row as isize - 1, col as isize);
+        let down = snapshot_char(cells, row as isize + 1, col as isize);
+        let left = snapshot_char(cells, row as isize, col as isize - 1);
+        let right = snapshot_char(cells, row as isize, col as isize + 1);
+        let neighbor_conn = LineConnections {
+            up: line_connections(up).down,
+            down: line_connections(down).up,
+            left: line_connections(left).right,
+            right: line_connections(right).left,
+        };
+        if neighbor_conn == LineConnections::default() {
+            return None;
+        }
+    }
+    Some(conn)
+}
+
+fn draw_vector_border_cell(
+    painter: &egui::Painter,
+    rect: Rect,
+    conn: LineConnections,
+    color: Color32,
+    bold: bool,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let overscan = 0.7;
+    let thickness = if bold {
+        (rect.height() * 0.18).clamp(1.5, 3.0)
+    } else {
+        (rect.height() * 0.14).clamp(1.0, 2.2)
+    };
+    let stroke = Stroke::new(thickness, color);
+    if conn.left {
+        painter.line_segment(
+            [Pos2::new(rect.left() - overscan, cy), Pos2::new(cx, cy)],
+            stroke,
+        );
+    }
+    if conn.right {
+        painter.line_segment(
+            [Pos2::new(cx, cy), Pos2::new(rect.right() + overscan, cy)],
+            stroke,
+        );
+    }
+    if conn.up {
+        painter.line_segment(
+            [Pos2::new(cx, rect.top() - overscan), Pos2::new(cx, cy)],
+            stroke,
+        );
+    }
+    if conn.down {
+        painter.line_segment(
+            [Pos2::new(cx, cy), Pos2::new(cx, rect.bottom() + overscan)],
+            stroke,
+        );
+    }
+    // Fill joint center to avoid tiny anti-aliased cracks.
+    painter.circle_filled(Pos2::new(cx, cy), thickness * 0.45, color);
+}
+
+fn snapshot_char(cells: &[Vec<PtyStyledCell>], row: isize, col: isize) -> char {
+    if row < 0 || col < 0 {
+        return ' ';
+    }
+    cells
+        .get(row as usize)
+        .and_then(|r| r.get(col as usize))
+        .map(|c| c.ch)
+        .unwrap_or(' ')
+}
+
+fn is_border_like(ch: char) -> bool {
+    line_connections(ch) != LineConnections::default()
+}
+
+fn line_connections(ch: char) -> LineConnections {
+    match ch {
+        '-' | '─' | '═' => LineConnections {
+            left: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '|' | '│' | '║' => LineConnections {
+            up: true,
+            down: true,
+            ..LineConnections::default()
+        },
+        '+' | '┼' | '╬' => LineConnections {
+            up: true,
+            down: true,
+            left: true,
+            right: true,
+        },
+        '┌' | '╔' | 'Ú' => LineConnections {
+            down: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '┐' | '╗' | '¿' => LineConnections {
+            down: true,
+            left: true,
+            ..LineConnections::default()
+        },
+        '└' | '╚' | 'À' => LineConnections {
+            up: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '┘' | '╝' | 'Ù' => LineConnections {
+            up: true,
+            left: true,
+            ..LineConnections::default()
+        },
+        '├' | '╠' | 'Ã' => LineConnections {
+            up: true,
+            down: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '┤' | '╣' | '´' => LineConnections {
+            up: true,
+            down: true,
+            left: true,
+            ..LineConnections::default()
+        },
+        '┬' | '╦' | 'Â' => LineConnections {
+            down: true,
+            left: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '┴' | '╩' | 'Á' => LineConnections {
+            up: true,
+            left: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        '³' => LineConnections {
+            up: true,
+            down: true,
+            ..LineConnections::default()
+        },
+        'Ä' => LineConnections {
+            left: true,
+            right: true,
+            ..LineConnections::default()
+        },
+        'Å' => LineConnections {
+            up: true,
+            down: true,
+            left: true,
+            right: true,
+        },
+        _ => LineConnections::default(),
+    }
+}
+
+fn map_connections_to_unicode(c: LineConnections) -> Option<char> {
+    Some(match (c.up, c.down, c.left, c.right) {
+        (true, true, true, true) => '┼',
+        (true, true, true, false) => '┤',
+        (true, true, false, true) => '├',
+        (true, false, true, true) => '┴',
+        (false, true, true, true) => '┬',
+        (true, true, false, false) => '│',
+        (false, false, true, true) => '─',
+        (false, true, false, true) => '┌',
+        (false, true, true, false) => '┐',
+        (true, false, false, true) => '└',
+        (true, false, true, false) => '┘',
+        (true, false, false, false) | (false, true, false, false) => '│',
+        (false, false, true, false) | (false, false, false, true) => '─',
+        _ => return None,
+    })
 }
 
 fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyModifiers)> {

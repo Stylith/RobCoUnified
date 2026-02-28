@@ -2461,6 +2461,9 @@ impl RobcoNativeApp {
         if !self.editor.open {
             return;
         }
+        if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
+            self.save_editor();
+        }
         let title = self
             .editor
             .path
@@ -2469,6 +2472,59 @@ impl RobcoNativeApp {
             .and_then(|p| p.to_str())
             .unwrap_or("ROBCO Word Processor")
             .to_string();
+
+        if !self.desktop_mode_open {
+            if ctx.input(|i| {
+                i.key_pressed(Key::Escape)
+                    || i.key_pressed(Key::Tab)
+                    || (i.modifiers.ctrl && i.key_pressed(Key::Q))
+            }) {
+                self.editor.open = false;
+                return;
+            }
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::none()
+                        .fill(current_palette().bg)
+                        .inner_margin(egui::Margin::same(8.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&title).strong());
+                        ui.separator();
+                        if ui.button("New").clicked() {
+                            self.new_document();
+                        }
+                        if ui.button("Save").clicked() {
+                            self.save_editor();
+                        }
+                        if ui.button("Open File Manager").clicked() {
+                            self.file_manager.open = true;
+                        }
+                        if ui.button("Close").clicked() {
+                            self.editor.open = false;
+                        }
+                    });
+                    if let Some(path) = &self.editor.path {
+                        ui.small(path.display().to_string());
+                    }
+                    ui.separator();
+                    let edit = TextEdit::multiline(&mut self.editor.text)
+                        .desired_rows(28)
+                        .lock_focus(true)
+                        .code_editor();
+                    let response = ui.add_sized(ui.available_size(), edit);
+                    if response.changed() {
+                        self.editor.dirty = true;
+                    }
+                    if !self.editor.status.is_empty() {
+                        ui.separator();
+                        ui.small(&self.editor.status);
+                    }
+                });
+            return;
+        }
+
         let mut open = self.editor.open;
         egui::Window::new(title)
             .id(Id::new("native_word_processor"))
@@ -2504,9 +2560,6 @@ impl RobcoNativeApp {
                 }
             });
         self.editor.open = open;
-        if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
-            self.save_editor();
-        }
     }
 
     fn draw_settings(&mut self, ctx: &Context) {
@@ -2715,6 +2768,7 @@ impl eframe::App for RobcoNativeApp {
                 }
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
+                self.draw_terminal_footer(ctx);
                 draw_terminal_flash(
                     ctx,
                     &flash.message,
@@ -2726,7 +2780,6 @@ impl eframe::App for RobcoNativeApp {
                     TERMINAL_STATUS_ROW,
                     TERMINAL_CONTENT_COL,
                 );
-                self.draw_terminal_footer(ctx);
                 return;
             }
         }
@@ -2738,10 +2791,13 @@ impl eframe::App for RobcoNativeApp {
 
         if !self.desktop_mode_open
             && !matches!(self.terminal_screen, TerminalScreen::PtyApp)
+            && !self.editor.open
             && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
         {
             self.handle_terminal_back();
         }
+
+        self.draw_terminal_footer(ctx);
 
         if self.desktop_mode_open {
             self.draw_top_bar(ctx);
@@ -2770,7 +2826,6 @@ impl eframe::App for RobcoNativeApp {
             }
             self.draw_terminal_prompt_overlay_global(ctx);
         }
-        self.draw_terminal_footer(ctx);
         self.draw_file_manager(ctx);
         self.draw_editor(ctx);
         self.draw_settings(ctx);

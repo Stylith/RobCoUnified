@@ -22,6 +22,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -246,17 +247,9 @@ enum AcsGlyphMode {
 
 impl AcsGlyphMode {
     fn from_config() -> Self {
-        match std::env::var("ROBCOS_ACS")
-            .ok()
-            .map(|v| v.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("unicode") | Some("utf8") | Some("utf-8") => Self::Unicode,
-            Some("ascii") | Some("plain") => Self::Ascii,
-            _ => match crate::config::get_settings().cli_acs_mode {
-                crate::config::CliAcsMode::Ascii => Self::Ascii,
-                crate::config::CliAcsMode::Unicode => Self::Unicode,
-            },
+        match crate::config::get_settings().cli_acs_mode {
+            crate::config::CliAcsMode::Ascii => Self::Ascii,
+            crate::config::CliAcsMode::Unicode => Self::Unicode,
         }
     }
 }
@@ -542,6 +535,12 @@ pub struct PtySession {
     top_bar: Option<String>,
     /// Master — kept alive so the PTY stays open; also used for resize
     master: Box<dyn portable_pty::MasterPty + Send>,
+    /// Monotonic counter incremented by reader thread when new PTY output arrives.
+    #[allow(dead_code)]
+    output_epoch: Arc<AtomicU64>,
+    /// Last observed output epoch on UI/render side.
+    #[allow(dead_code)]
+    last_seen_output_epoch: u64,
 }
 
 #[allow(dead_code)]
@@ -596,8 +595,12 @@ impl PtySession {
         for (key, value) in &options.env {
             cmd.env(key, value);
         }
+        let acs_mode = AcsGlyphMode::from_config();
         // Calcurse renders more reliably in Fixedsys/embedded PTY with ASCII ACS.
-        if needs_ncurses_ascii_acs(program) && cmd.get_env("NCURSES_NO_UTF8_ACS").is_none() {
+        if matches!(acs_mode, AcsGlyphMode::Ascii)
+            && needs_ncurses_ascii_acs(program)
+            && cmd.get_env("NCURSES_NO_UTF8_ACS").is_none()
+        {
             cmd.env("NCURSES_NO_UTF8_ACS", "1");
         }
         if cmd.get_env("TERM").is_none() {
@@ -605,7 +608,6 @@ impl PtySession {
         }
         let render_mode = render_mode_for_program(program);
         let color_mode = pty_color_mode();
-        let acs_mode = AcsGlyphMode::from_config();
 
         let child = pair.slave.spawn_command(cmd)?;
         let writer = pair.master.take_writer()?;
@@ -614,6 +616,8 @@ impl PtySession {
         // vt100 parser — shared with reader thread
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let parser_clone = Arc::clone(&parser);
+        let output_epoch = Arc::new(AtomicU64::new(0));
+        let output_epoch_clone = Arc::clone(&output_epoch);
 
         // Reader thread: pump PTY output into the vt100 parser continuously
         std::thread::Builder::new()
@@ -635,6 +639,7 @@ impl PtySession {
                             }
                             if let Ok(mut p) = parser_clone.lock() {
                                 p.process(&bytes);
+                                output_epoch_clone.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                     }
@@ -652,6 +657,8 @@ impl PtySession {
             acs_mode,
             top_bar: options.top_bar.clone(),
             master: pair.master,
+            output_epoch,
+            last_seen_output_epoch: 0,
         })
     }
 
@@ -736,6 +743,18 @@ impl PtySession {
     /// Is the child process still running?
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Returns true if new PTY output arrived since the last check.
+    #[allow(dead_code)]
+    pub fn take_output_activity(&mut self) -> bool {
+        let epoch = self.output_epoch.load(Ordering::Relaxed);
+        if epoch != self.last_seen_output_epoch {
+            self.last_seen_output_epoch = epoch;
+            true
+        } else {
+            false
+        }
     }
 
     /// Snapshot the current screen as plain text for non-ratatui renderers.
