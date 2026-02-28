@@ -377,6 +377,350 @@ fn prompt_editor_close(terminal: &mut Term, file_name: &str) -> Result<EditorClo
     }
 }
 
+#[derive(Clone)]
+struct TerminalSaveAsEntry {
+    label: String,
+    path: PathBuf,
+    is_dir: bool,
+}
+
+struct TerminalSaveAsState {
+    cwd: PathBuf,
+    entries: Vec<TerminalSaveAsEntry>,
+    selected: usize,
+    scroll: usize,
+    file_name: String,
+    input_mode: bool,
+}
+
+impl TerminalSaveAsState {
+    fn new(current_path: &Path) -> Self {
+        let cwd = current_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(text_editor_dir);
+        let file_name = current_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("document.txt")
+            .to_string();
+        let mut state = Self {
+            cwd,
+            entries: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            file_name,
+            input_mode: false,
+        };
+        state.refresh();
+        state
+    }
+
+    fn refresh(&mut self) {
+        self.entries = terminal_save_as_entries(&self.cwd);
+        if self.entries.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+        } else {
+            self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+            self.scroll = self.scroll.min(self.entries.len().saturating_sub(1));
+        }
+    }
+
+    fn parent(&mut self) {
+        if let Some(parent) = self.cwd.parent() {
+            self.cwd = parent.to_path_buf();
+            self.selected = 0;
+            self.scroll = 0;
+            self.refresh();
+        }
+    }
+}
+
+fn terminal_save_as_entries(dir: &Path) -> Vec<TerminalSaveAsEntry> {
+    let mut entries = Vec::new();
+    if let Some(parent) = dir.parent() {
+        entries.push(TerminalSaveAsEntry {
+            label: "../".to_string(),
+            path: parent.to_path_buf(),
+            is_dir: true,
+        });
+    }
+
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(dir) {
+        for item in read_dir.flatten() {
+            let path = item.path();
+            let name = item.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                dirs.push(TerminalSaveAsEntry {
+                    label: format!("{name}/"),
+                    path,
+                    is_dir: true,
+                });
+            } else if path.is_file() {
+                files.push(TerminalSaveAsEntry {
+                    label: name,
+                    path,
+                    is_dir: false,
+                });
+            }
+        }
+    }
+    dirs.sort_by_key(|entry| entry.label.to_ascii_lowercase());
+    files.sort_by_key(|entry| entry.label.to_ascii_lowercase());
+    entries.extend(dirs);
+    entries.extend(files);
+    entries
+}
+
+fn normalize_editor_file_name(raw: &str, default_name: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let candidate = if trimmed.is_empty() {
+        default_name.trim()
+    } else {
+        trimmed
+    };
+    if candidate.is_empty() || candidate.contains('/') || candidate.contains('\\') {
+        return None;
+    }
+    let mut out = candidate.to_string();
+    if Path::new(&out).extension().is_none() {
+        out.push_str(".txt");
+    }
+    Some(out)
+}
+
+fn terminal_save_as_list_visible_rows(terminal: &mut Term) -> usize {
+    terminal
+        .size()
+        .map(|size| size.height.saturating_sub(11) as usize)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn terminal_save_as_ensure_selection_visible(state: &mut TerminalSaveAsState, visible_rows: usize) {
+    if state.entries.is_empty() {
+        state.selected = 0;
+        state.scroll = 0;
+        return;
+    }
+    state.selected = state.selected.min(state.entries.len().saturating_sub(1));
+    if state.selected < state.scroll {
+        state.scroll = state.selected;
+    } else if state.selected >= state.scroll.saturating_add(visible_rows) {
+        state.scroll = state
+            .selected
+            .saturating_sub(visible_rows.saturating_sub(1));
+    }
+    let max_scroll = state.entries.len().saturating_sub(visible_rows);
+    state.scroll = state.scroll.min(max_scroll);
+}
+
+fn run_terminal_save_as_browser(
+    terminal: &mut Term,
+    current_path: &Path,
+) -> Result<Option<PathBuf>> {
+    let mut state = TerminalSaveAsState::new(current_path);
+
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(2),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(size);
+
+            render_header(f, chunks[0]);
+            render_separator(f, chunks[1]);
+            f.render_widget(
+                Paragraph::new("Save Document As")
+                    .alignment(Alignment::Center)
+                    .style(title_style()),
+                pad_horizontal(chunks[2]),
+            );
+            render_separator(f, chunks[3]);
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        format!("Folder: {}", state.cwd.display()),
+                        normal_style(),
+                    )),
+                    Line::from(Span::styled(
+                        if state.input_mode {
+                            format!("File name: {}_", state.file_name)
+                        } else {
+                            format!("File name: {}", state.file_name)
+                        },
+                        if state.input_mode {
+                            sel_style()
+                        } else {
+                            normal_style()
+                        },
+                    )),
+                ]),
+                pad_horizontal(chunks[4]),
+            );
+
+            let visible_rows = chunks[5].height as usize;
+            terminal_save_as_ensure_selection_visible(&mut state, visible_rows);
+            let lines: Vec<Line> = state
+                .entries
+                .iter()
+                .enumerate()
+                .skip(state.scroll)
+                .take(visible_rows)
+                .map(|(idx, entry)| {
+                    let style = if !state.input_mode && idx == state.selected {
+                        sel_style()
+                    } else {
+                        normal_style()
+                    };
+                    Line::from(Span::styled(entry.label.clone(), style))
+                })
+                .collect();
+            f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
+
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Arrows move | Enter open folder/select file | Backspace parent | Tab name | Ctrl+S save | Esc cancel",
+                    dim_style(),
+                ))),
+                pad_horizontal(chunks[6]),
+            );
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Files fill the name bar. Folders change the target location.",
+                    dim_style(),
+                ))),
+                pad_horizontal(chunks[7]),
+            );
+            render_status_bar(f, chunks[8]);
+        })?;
+
+        if !event::poll(Duration::from_millis(50))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        if crate::ui::check_session_switch_pub(key.code, key.modifiers) {
+            if crate::session::has_switch_request() {
+                return Ok(None);
+            }
+            continue;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        {
+            let default_name = current_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("document.txt");
+            let Some(file_name) = normalize_editor_file_name(&state.file_name, default_name) else {
+                flash_message(terminal, "Invalid file name.", 900)?;
+                continue;
+            };
+            return Ok(Some(state.cwd.join(file_name)));
+        }
+
+        if state.input_mode {
+            match key.code {
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Enter => {
+                    let default_name = current_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("document.txt");
+                    let Some(file_name) =
+                        normalize_editor_file_name(&state.file_name, default_name)
+                    else {
+                        flash_message(terminal, "Invalid file name.", 900)?;
+                        continue;
+                    };
+                    return Ok(Some(state.cwd.join(file_name)));
+                }
+                KeyCode::Tab | KeyCode::BackTab => state.input_mode = false,
+                KeyCode::Backspace => {
+                    let _ = state.file_name.pop();
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::ALT)
+                        && !key.modifiers.contains(KeyModifiers::SUPER) =>
+                {
+                    state.file_name.push(c);
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Tab | KeyCode::BackTab => state.input_mode = true,
+            KeyCode::Up => {
+                state.selected = state.selected.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if !state.entries.is_empty() {
+                    state.selected =
+                        (state.selected + 1).min(state.entries.len().saturating_sub(1));
+                }
+            }
+            KeyCode::PageUp => {
+                let step = terminal_save_as_list_visible_rows(terminal);
+                state.selected = state.selected.saturating_sub(step);
+            }
+            KeyCode::PageDown => {
+                let step = terminal_save_as_list_visible_rows(terminal);
+                if !state.entries.is_empty() {
+                    state.selected =
+                        (state.selected + step).min(state.entries.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Home => state.selected = 0,
+            KeyCode::End => {
+                state.selected = state.entries.len().saturating_sub(1);
+            }
+            KeyCode::Backspace => state.parent(),
+            KeyCode::Enter => {
+                if let Some(entry) = state.entries.get(state.selected).cloned() {
+                    if entry.is_dir {
+                        state.cwd = entry.path;
+                        state.selected = 0;
+                        state.scroll = 0;
+                        state.refresh();
+                    } else {
+                        state.file_name = entry
+                            .path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("document.txt")
+                            .to_string();
+                        state.input_mode = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn save_editor(editor: &mut Editor) -> Result<String> {
     if let Some(parent) = editor.path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -477,8 +821,7 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str, path: PathBuf) ->
                         }
                     }
                     let text = format!("{prefix}{visible}");
-                    let style = if idx == ed.row { sel_style() } else { normal_style() };
-                    Line::from(Span::styled(text, style))
+                    Line::from(Span::styled(text, normal_style()))
                 })
                 .collect();
             f.render_widget(Paragraph::new(lines), pad_horizontal(chunks[5]));
@@ -518,7 +861,7 @@ fn run_editor(terminal: &mut Term, title: &str, initial: &str, path: PathBuf) ->
                         flash_message(terminal, &msg, 900)?;
                     }
                     EditorAction::SaveAs => {
-                        if let Some(path) = prompt_editor_target(terminal, &ed.path, "Save As")? {
+                        if let Some(path) = run_terminal_save_as_browser(terminal, &ed.path)? {
                             ed.path = path;
                             save_editor(&mut ed)?;
                             flash_message(terminal, &format!("Saved as {}.", ed.file_name()), 900)?;
@@ -1005,8 +1348,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        log_dir, normalize_new_text_document_name, resolve_editor_target_path, text_editor_dir,
-        Editor, EditorAction,
+        log_dir, normalize_editor_file_name, normalize_new_text_document_name,
+        resolve_editor_target_path, text_editor_dir, Editor, EditorAction, TerminalSaveAsState,
     };
 
     #[test]
@@ -1076,6 +1419,14 @@ mod tests {
     }
 
     #[test]
+    fn editor_file_name_defaults_to_txt_extension() {
+        assert_eq!(
+            normalize_editor_file_name("draft", "document.txt"),
+            Some("draft.txt".to_string())
+        );
+    }
+
+    #[test]
     fn terminal_editor_search_tracks_all_matches() {
         let mut editor = Editor::new("alpha beta alpha", PathBuf::from("note.txt"));
         editor.search_query = "alpha".to_string();
@@ -1084,5 +1435,11 @@ mod tests {
         editor.jump_to_match(0, 5, 8);
         editor.find_next(5, 8);
         assert_eq!((editor.row, editor.col), (0, 11));
+    }
+
+    #[test]
+    fn terminal_save_as_starts_in_browser_mode() {
+        let state = TerminalSaveAsState::new(Path::new("text_editor_documents/note.txt"));
+        assert!(!state.input_mode);
     }
 }

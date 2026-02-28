@@ -169,6 +169,16 @@ struct FileTreeItem {
 }
 
 #[derive(Debug, Clone)]
+enum FileManagerMode {
+    Normal,
+    SaveAs {
+        editor_window_id: u64,
+        file_name: String,
+        input_mode: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
 struct FileManagerState {
     cwd: PathBuf,
     tabs: Vec<PathBuf>,
@@ -176,12 +186,14 @@ struct FileManagerState {
     all_entries: Vec<FileEntry>,
     entries: Vec<FileEntry>,
     selected: usize,
+    selected_paths: HashSet<PathBuf>,
     scroll: usize,
     tree_selected: usize,
     tree_scroll: usize,
     tree_focus: bool,
     search_query: String,
     search_mode: bool,
+    mode: FileManagerMode,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +204,7 @@ struct FileManagerSettingsState {
 #[derive(Debug, Clone, Copy)]
 enum FileManagerOpenRequest {
     Builtin,
+    TextEditor,
     External,
 }
 
@@ -209,7 +222,7 @@ enum FileManagerClipboardMode {
 
 #[derive(Debug, Clone)]
 struct FileManagerClipboardItem {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     mode: FileManagerClipboardMode,
 }
 
@@ -220,6 +233,7 @@ enum FileManagerEditOp {
 }
 
 const FILE_MANAGER_HEADER_ROWS: u16 = 4;
+const FILE_MANAGER_SAVE_AS_FOOTER_ROWS: u16 = 3;
 const FILE_MANAGER_GRID_CELL_WIDTH: u16 = 18;
 const FILE_MANAGER_GRID_CELL_HEIGHT: u16 = 3;
 const FILE_MANAGER_TREE_MIN_WIDTH: u16 = 16;
@@ -235,6 +249,30 @@ const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
 const BUILTIN_TEXT_EDITOR_APP: &str = "Text Editor";
 
 impl FileManagerState {
+    fn save_as_state(&self) -> Option<(&str, bool, u64)> {
+        match &self.mode {
+            FileManagerMode::SaveAs {
+                editor_window_id,
+                file_name,
+                input_mode,
+            } => Some((file_name.as_str(), *input_mode, *editor_window_id)),
+            FileManagerMode::Normal => None,
+        }
+    }
+
+    fn save_as_state_mut(&mut self) -> Option<(&mut String, &mut bool, u64)> {
+        match &mut self.mode {
+            FileManagerMode::SaveAs {
+                editor_window_id,
+                file_name,
+                input_mode,
+            } => Some((file_name, input_mode, *editor_window_id)),
+            FileManagerMode::Normal => None,
+        }
+    }
+}
+
+impl FileManagerState {
     fn new() -> Self {
         let cwd = dirs::home_dir()
             .or_else(|| std::env::current_dir().ok())
@@ -247,12 +285,14 @@ impl FileManagerState {
             all_entries: all_entries.clone(),
             entries: all_entries,
             selected: 0,
+            selected_paths: HashSet::new(),
             scroll: 0,
             tree_selected: 0,
             tree_scroll: 0,
             tree_focus: false,
             search_query: String::new(),
             search_mode: false,
+            mode: FileManagerMode::Normal,
         }
     }
 
@@ -268,6 +308,7 @@ impl FileManagerState {
 
     fn set_cwd(&mut self, path: PathBuf) {
         self.cwd = path;
+        self.selected_paths.clear();
         self.sync_active_tab_path();
     }
 
@@ -278,10 +319,13 @@ impl FileManagerState {
         if self.selected >= self.entries.len() && !self.entries.is_empty() {
             self.selected = self.entries.len() - 1;
         }
+        self.selected_paths
+            .retain(|path| self.entries.iter().any(|entry| &entry.path == path));
         self.scroll = self.scroll.min(self.entries.len().saturating_sub(1));
         if self.entries.is_empty() {
             self.selected = 0;
             self.scroll = 0;
+            self.selected_paths.clear();
         }
         let tree_items = file_manager_tree_items(
             &self.cwd,
@@ -461,6 +505,35 @@ impl FileManagerState {
             self.selected = 0;
             self.scroll = 0;
         }
+    }
+
+    fn toggle_selected_current(&mut self) {
+        let Some(entry) = self.entries.get(self.selected) else {
+            return;
+        };
+        if is_parent_dir_entry(entry) {
+            return;
+        }
+        if !self.selected_paths.insert(entry.path.clone()) {
+            self.selected_paths.remove(&entry.path);
+        }
+    }
+
+    fn select_all_entries(&mut self) {
+        self.selected_paths = self
+            .entries
+            .iter()
+            .filter(|entry| !is_parent_dir_entry(entry))
+            .map(|entry| entry.path.clone())
+            .collect();
+    }
+
+    fn clear_multi_selection(&mut self) {
+        self.selected_paths.clear();
+    }
+
+    fn is_entry_multi_selected(&self, entry: &FileEntry) -> bool {
+        self.selected_paths.contains(&entry.path)
     }
 }
 
@@ -709,6 +782,7 @@ enum DesktopHubItemAction {
     },
     LaunchNukeCodes,
     LaunchTextEditor,
+    OpenTextEditorPicker,
     OpenTextEditorDocument(PathBuf),
     OpenHub(DesktopHubKind),
     OpenHubWithPath {
@@ -824,6 +898,12 @@ enum DesktopTextEditorDialogMouseAction {
     None,
     Action(DesktopTextEditorAction),
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileManagerSaveAsAction {
+    Save(u64),
+    Cancel(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1621,7 +1701,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             },
             DesktopHubItem {
                 label: "Open Document".to_string(),
-                action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorDocuments),
+                action: DesktopHubItemAction::OpenTextEditorPicker,
                 enabled: true,
             },
         ],
@@ -3520,9 +3600,11 @@ fn handle_key(
     if let Some(last_idx) = focused_visible_window_idx(state) {
         let focused_id = state.windows[last_idx].id;
         let focused_area = state.windows[last_idx].rect.to_rect();
+        let focused_title = state.windows[last_idx].title.clone();
         let mut close_focused = false;
         let mut settings_action = DesktopSettingsAction::None;
         let mut text_editor_action = DesktopTextEditorAction::None;
+        let mut file_manager_save_as_action: Option<FileManagerSaveAsAction> = None;
         let mut file_open_request: Option<(PathBuf, FileManagerOpenRequest)> = None;
         let mut refresh_file_managers = false;
         let mut hub_action: Option<DesktopHubItemAction> = None;
@@ -3544,11 +3626,25 @@ fn handle_key(
                 let s = get_settings().desktop_file_manager;
                 let content = file_manager_content_rect(focused_area);
                 let (tree_area, entry_area) =
-                    file_manager_tree_and_entry_rects(content, s.show_tree_panel);
+                    file_manager_tree_and_entry_rects(content, s.show_tree_panel, fm);
+                let save_as_mode = fm.save_as_state().is_some();
+                let save_as_input_mode = fm
+                    .save_as_state()
+                    .map(|(_, input_mode, _)| input_mode)
+                    .unwrap_or(false);
                 if tree_area.is_none() {
                     fm.tree_focus = false;
                 }
                 if modifiers.contains(KeyModifiers::CONTROL) {
+                    if save_as_mode {
+                        match code {
+                            KeyCode::Char('s') | KeyCode::Char('S') => {
+                                file_manager_save_as_action =
+                                    Some(FileManagerSaveAsAction::Save(focused_id));
+                            }
+                            _ => {}
+                        }
+                    }
                     match code {
                         KeyCode::Char('f') | KeyCode::Char('F') => {
                             fm.search_mode = true;
@@ -3583,6 +3679,9 @@ fn handle_key(
                         KeyCode::Char('d') | KeyCode::Char('D') => {
                             top_menu_action = Some(TopMenuAction::FileManagerDuplicate);
                         }
+                        KeyCode::Char('a') | KeyCode::Char('A') if !save_as_mode => {
+                            fm.select_all_entries();
+                        }
                         KeyCode::Char('m') | KeyCode::Char('M')
                             if modifiers.contains(KeyModifiers::SHIFT) =>
                         {
@@ -3601,7 +3700,37 @@ fn handle_key(
                         _ => {}
                     }
                 } else {
-                    if fm.search_mode {
+                    if save_as_input_mode {
+                        match code {
+                            KeyCode::Esc => {
+                                file_manager_save_as_action =
+                                    Some(FileManagerSaveAsAction::Cancel(focused_id));
+                            }
+                            KeyCode::Enter => {
+                                file_manager_save_as_action =
+                                    Some(FileManagerSaveAsAction::Save(focused_id));
+                            }
+                            KeyCode::Tab | KeyCode::BackTab => {
+                                if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                                    *input_mode = false;
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                if let Some((file_name, _, _)) = fm.save_as_state_mut() {
+                                    let _ = file_name.pop();
+                                }
+                            }
+                            KeyCode::Char(c)
+                                if !modifiers.contains(KeyModifiers::ALT)
+                                    && !modifiers.contains(KeyModifiers::SUPER) =>
+                            {
+                                if let Some((file_name, _, _)) = fm.save_as_state_mut() {
+                                    file_name.push(c);
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else if fm.search_mode {
                         match code {
                             KeyCode::Esc | KeyCode::Enter => {
                                 fm.search_mode = false;
@@ -3623,6 +3752,21 @@ fn handle_key(
                                 }
                             }
                             _ => {}
+                        }
+                    } else if save_as_mode && matches!(code, KeyCode::Tab | KeyCode::BackTab) {
+                        if tree_area.is_some() && fm.tree_focus {
+                            fm.tree_focus = false;
+                            if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                                *input_mode = true;
+                            }
+                        } else if tree_area.is_some() && !fm.tree_focus {
+                            fm.tree_focus = true;
+                            file_manager_ensure_tree_selection_visible(
+                                fm,
+                                tree_area.expect("tree area exists"),
+                            );
+                        } else if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                            *input_mode = true;
                         }
                     } else if matches!(code, KeyCode::Tab) && tree_area.is_some() {
                         fm.tree_focus = !fm.tree_focus;
@@ -3710,11 +3854,27 @@ fn handle_key(
                                 }
                             }
                             KeyCode::Enter => {
-                                if modifiers.contains(KeyModifiers::ALT) {
+                                if save_as_mode {
+                                    if let Some(entry) = fm.entries.get(fm.selected).cloned() {
+                                        if entry.is_dir {
+                                            fm.set_cwd(entry.path);
+                                            fm.selected = 0;
+                                            fm.scroll = 0;
+                                            fm.refresh();
+                                        } else if let Some((file_name, input_mode, _)) =
+                                            fm.save_as_state_mut()
+                                        {
+                                            *file_name = entry.name;
+                                            *input_mode = true;
+                                        }
+                                        file_manager_ensure_selection_visible(fm, entry_area);
+                                    }
+                                } else if modifiers.contains(KeyModifiers::ALT) {
                                     top_menu_action = Some(TopMenuAction::ShowFileProperties);
                                 } else {
-                                    file_open_request =
-                                        fm.activate_selected(FileManagerOpenRequest::Builtin);
+                                    file_open_request = fm.activate_selected(
+                                        file_manager_builtin_request_for_window(&focused_title),
+                                    );
                                 }
                             }
                             KeyCode::Char('x') | KeyCode::Char('X') => {
@@ -3723,6 +3883,9 @@ fn handle_key(
                             }
                             KeyCode::Char('o') | KeyCode::Char('O') => {
                                 top_menu_action = Some(TopMenuAction::OpenSelectedFileWith);
+                            }
+                            KeyCode::Char(' ') if !save_as_mode => {
+                                fm.toggle_selected_current();
                             }
                             KeyCode::F(2) => {
                                 top_menu_action = Some(TopMenuAction::FileManagerRename);
@@ -3916,6 +4079,16 @@ fn handle_key(
         if !matches!(text_editor_action, DesktopTextEditorAction::None) {
             close_focused =
                 run_desktop_text_editor_action(terminal, state, focused_id, text_editor_action)?;
+        }
+        if let Some(action) = file_manager_save_as_action {
+            match action {
+                FileManagerSaveAsAction::Save(window_id) => {
+                    commit_text_editor_save_as_from_picker(terminal, state, window_id)?;
+                }
+                FileManagerSaveAsAction::Cancel(window_id) => {
+                    close_text_editor_save_picker_window(state, window_id);
+                }
+            }
         }
         if refresh_file_managers {
             refresh_all_file_manager_windows(state);
@@ -5940,6 +6113,27 @@ fn focused_editable_file_manager_entry(state: &DesktopState) -> Option<FileEntry
     Some(entry)
 }
 
+fn focused_file_manager_selected_entries(state: &DesktopState) -> Vec<FileEntry> {
+    let Some(idx) = focused_visible_window_idx(state) else {
+        return Vec::new();
+    };
+    let WindowKind::FileManager(fm) = &state.windows[idx].kind else {
+        return Vec::new();
+    };
+    let mut entries: Vec<FileEntry> = fm
+        .entries
+        .iter()
+        .filter(|entry| !is_parent_dir_entry(entry) && fm.selected_paths.contains(&entry.path))
+        .cloned()
+        .collect();
+    if entries.is_empty() {
+        if let Some(entry) = focused_editable_file_manager_entry(state) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
 fn focused_file_manager_cwd(state: &DesktopState) -> Option<PathBuf> {
     let idx = focused_visible_window_idx(state)?;
     match &state.windows[idx].kind {
@@ -5957,16 +6151,164 @@ fn text_editor_save_dir_from_file_manager(fm: &FileManagerState) -> PathBuf {
     fm.cwd.clone()
 }
 
-fn desktop_text_editor_save_dir(state: &DesktopState) -> Option<PathBuf> {
-    if let Some(idx) = focused_visible_window_idx(state) {
-        if let WindowKind::FileManager(fm) = &state.windows[idx].kind {
-            return Some(text_editor_save_dir_from_file_manager(fm));
-        }
-    }
-    state.windows.iter().rev().find_map(|win| match &win.kind {
-        WindowKind::FileManager(fm) => Some(text_editor_save_dir_from_file_manager(fm)),
+fn find_text_editor_save_as_picker_window(
+    state: &DesktopState,
+    editor_window_id: u64,
+) -> Option<u64> {
+    state.windows.iter().find_map(|win| match &win.kind {
+        WindowKind::FileManager(fm) => match fm.mode {
+            FileManagerMode::SaveAs {
+                editor_window_id: id,
+                ..
+            } if id == editor_window_id => Some(win.id),
+            _ => None,
+        },
         _ => None,
     })
+}
+
+fn open_text_editor_save_as_window(
+    state: &mut DesktopState,
+    editor_window_id: u64,
+    path: PathBuf,
+    file_name: String,
+) {
+    let Some(path) = normalize_existing_dir_path(&path) else {
+        return;
+    };
+
+    if let Some(id) = find_text_editor_save_as_picker_window(state, editor_window_id) {
+        if let Some(win) = state.windows.iter_mut().find(|w| w.id == id) {
+            win.title = "Save Document As".to_string();
+            if let WindowKind::FileManager(fm) = &mut win.kind {
+                fm.set_cwd(path);
+                fm.selected = 0;
+                fm.scroll = 0;
+                fm.tree_focus = false;
+                fm.search_mode = false;
+                fm.mode = FileManagerMode::SaveAs {
+                    editor_window_id,
+                    file_name,
+                    input_mode: true,
+                };
+                fm.refresh();
+            }
+        }
+        focus_window(state, id);
+        return;
+    }
+
+    let mut fm = FileManagerState::new();
+    fm.set_cwd(path);
+    fm.selected = 0;
+    fm.scroll = 0;
+    fm.tree_focus = false;
+    fm.search_mode = false;
+    fm.mode = FileManagerMode::SaveAs {
+        editor_window_id,
+        file_name,
+        input_mode: true,
+    };
+    fm.refresh();
+
+    let id = state.next_id;
+    state.next_id += 1;
+    state.windows.push(DesktopWindow {
+        id,
+        title: "Save Document As".to_string(),
+        rect: WinRect {
+            x: 10,
+            y: 5,
+            w: 72,
+            h: 22,
+        },
+        restore_rect: None,
+        minimized: false,
+        maximized: false,
+        kind: WindowKind::FileManager(fm),
+    });
+    focus_window(state, id);
+}
+
+fn close_text_editor_save_picker_window(state: &mut DesktopState, picker_window_id: u64) {
+    if state.windows.iter().any(|win| win.id == picker_window_id) {
+        close_window_by_id(state, picker_window_id);
+    }
+}
+
+fn file_manager_builtin_request_for_window(title: &str) -> FileManagerOpenRequest {
+    if title == "Open Document" {
+        FileManagerOpenRequest::TextEditor
+    } else {
+        FileManagerOpenRequest::Builtin
+    }
+}
+
+fn commit_text_editor_save_as_from_picker(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    picker_window_id: u64,
+) -> Result<()> {
+    let (editor_window_id, file_name, save_dir) = state
+        .windows
+        .iter()
+        .find(|win| win.id == picker_window_id)
+        .and_then(|win| match &win.kind {
+            WindowKind::FileManager(fm) => {
+                fm.save_as_state().map(|(file_name, _, editor_window_id)| {
+                    (
+                        editor_window_id,
+                        file_name.to_string(),
+                        text_editor_save_dir_from_file_manager(fm),
+                    )
+                })
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("Save picker no longer exists."))?;
+
+    let current_name = state
+        .windows
+        .iter()
+        .find(|win| win.id == editor_window_id)
+        .and_then(|win| match &win.kind {
+            WindowKind::TextEditor(editor) => Some(editor.file_name()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "document.txt".to_string());
+    let Some(file_name) = normalize_text_editor_file_name(&file_name, &current_name) else {
+        flash_message(terminal, "Invalid file name.", 1000)?;
+        return Ok(());
+    };
+    let target = save_dir.join(file_name);
+
+    let mut saved_name = None;
+    if let Some(win) = state
+        .windows
+        .iter_mut()
+        .find(|win| win.id == editor_window_id)
+    {
+        if let WindowKind::TextEditor(editor) = &mut win.kind {
+            if let Some(parent) = target.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&target, editor.text())?;
+            editor.path = target;
+            editor.dirty = false;
+            editor.dialog = None;
+            win.title = editor.file_name();
+            saved_name = Some(editor.file_name());
+        }
+    }
+
+    close_text_editor_save_picker_window(state, picker_window_id);
+    refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+    refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
+    refresh_all_file_manager_windows(state);
+    if let Some(name) = saved_name {
+        flash_message(terminal, &format!("Saved as {name}."), 900)?;
+    }
+    Ok(())
 }
 
 fn open_with_extension_key(path: &Path) -> String {
@@ -6614,11 +6956,12 @@ fn file_manager_set_clipboard_from_selected(
     state: &mut DesktopState,
     mode: FileManagerClipboardMode,
 ) -> Result<String> {
-    let Some(entry) = focused_editable_file_manager_entry(state) else {
+    let entries = focused_file_manager_selected_entries(state);
+    if entries.is_empty() {
         return Err(anyhow!("Select a file or folder first."));
-    };
+    }
     state.file_clipboard = Some(FileManagerClipboardItem {
-        path: entry.path.clone(),
+        paths: entries.iter().map(|entry| entry.path.clone()).collect(),
         mode,
     });
     let verb = if matches!(mode, FileManagerClipboardMode::Cut) {
@@ -6626,7 +6969,11 @@ fn file_manager_set_clipboard_from_selected(
     } else {
         "Copied"
     };
-    Ok(format!("{verb} {}", entry.name))
+    if entries.len() == 1 {
+        Ok(format!("{verb} {}", entries[0].name))
+    } else {
+        Ok(format!("{verb} {} items", entries.len()))
+    }
 }
 
 fn file_manager_duplicate_selected(state: &mut DesktopState) -> Result<String> {
@@ -6935,71 +7282,119 @@ fn file_manager_paste_clipboard(state: &mut DesktopState) -> Result<String> {
     let Some(clip) = state.file_clipboard.clone() else {
         return Err(anyhow!("Clipboard is empty."));
     };
-    if !clip.path.exists() {
+    if clip.paths.is_empty() {
+        state.file_clipboard = None;
+        return Err(anyhow!("Clipboard is empty."));
+    }
+    if clip.paths.iter().all(|path| !path.exists()) {
         state.file_clipboard = None;
         return Err(anyhow!("Clipboard source no longer exists."));
     }
     let Some(target_dir) = focused_file_manager_cwd(state) else {
         return Err(anyhow!("No focused file manager."));
     };
-    let source_name = path_display_name(&clip.path);
-    let mut dst = target_dir.join(&source_name);
+    let mut changed = 0usize;
+    let mut last_dst = None;
 
     match clip.mode {
         FileManagerClipboardMode::Copy => {
-            if dst.exists() {
-                dst = unique_copy_path_in_dir(&target_dir, &source_name, false);
+            for src in &clip.paths {
+                if !src.exists() {
+                    continue;
+                }
+                let source_name = path_display_name(src);
+                let mut dst = target_dir.join(&source_name);
+                if dst.exists() {
+                    dst = unique_copy_path_in_dir(&target_dir, &source_name, false);
+                }
+                copy_path_recursive(src, &dst)?;
+                record_file_manager_edit_op(
+                    state,
+                    FileManagerEditOp::CopyCreated {
+                        src: src.clone(),
+                        dst: dst.clone(),
+                    },
+                );
+                changed += 1;
+                last_dst = Some(dst);
             }
-            copy_path_recursive(&clip.path, &dst)?;
-            record_file_manager_edit_op(
-                state,
-                FileManagerEditOp::CopyCreated {
-                    src: clip.path.clone(),
-                    dst: dst.clone(),
-                },
-            );
-            Ok(format!("Copied to {}", path_display_name(&dst)))
+            if changed == 0 {
+                return Err(anyhow!("Clipboard source no longer exists."));
+            }
+            if changed == 1 {
+                Ok(format!(
+                    "Copied to {}",
+                    path_display_name(last_dst.as_deref().unwrap_or(target_dir.as_path()))
+                ))
+            } else {
+                Ok(format!("Copied {changed} items"))
+            }
         }
         FileManagerClipboardMode::Cut => {
-            let source_parent = clip.path.parent().map(Path::to_path_buf);
-            if source_parent.as_deref() == Some(target_dir.as_path()) {
-                return Ok("Item is already in this folder.".to_string());
+            for src in &clip.paths {
+                if !src.exists() {
+                    continue;
+                }
+                let source_name = path_display_name(src);
+                let mut dst = target_dir.join(&source_name);
+                let source_parent = src.parent().map(Path::to_path_buf);
+                if source_parent.as_deref() == Some(target_dir.as_path()) {
+                    continue;
+                }
+                if dst.exists() {
+                    dst = unique_path_in_dir(&target_dir, &source_name);
+                }
+                move_path(src, &dst)?;
+                record_file_manager_edit_op(
+                    state,
+                    FileManagerEditOp::Moved {
+                        from: src.clone(),
+                        to: dst.clone(),
+                    },
+                );
+                changed += 1;
+                last_dst = Some(dst);
             }
-            if dst.exists() {
-                dst = unique_path_in_dir(&target_dir, &source_name);
-            }
-            move_path(&clip.path, &dst)?;
-            record_file_manager_edit_op(
-                state,
-                FileManagerEditOp::Moved {
-                    from: clip.path.clone(),
-                    to: dst.clone(),
-                },
-            );
             state.file_clipboard = None;
-            Ok(format!("Moved to {}", path_display_name(&dst)))
+            if changed == 0 {
+                Ok("Items are already in this folder.".to_string())
+            } else if changed == 1 {
+                Ok(format!(
+                    "Moved to {}",
+                    path_display_name(last_dst.as_deref().unwrap_or(target_dir.as_path()))
+                ))
+            } else {
+                Ok(format!("Moved {changed} items"))
+            }
         }
     }
 }
 
 fn file_manager_delete_selected(state: &mut DesktopState) -> Result<String> {
-    let Some(entry) = focused_editable_file_manager_entry(state) else {
+    let entries = focused_file_manager_selected_entries(state);
+    if entries.is_empty() {
         return Err(anyhow!("Select a file or folder first."));
-    };
+    }
     let trash_dir = file_manager_trash_dir();
     std::fs::create_dir_all(&trash_dir)
         .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
-    let name = path_display_name(&entry.path);
-    let trash_target = unique_path_in_dir(&trash_dir, &name);
-    move_path(&entry.path, &trash_target)?;
-    record_file_manager_edit_op(
-        state,
-        FileManagerEditOp::Moved {
-            from: entry.path.clone(),
-            to: trash_target,
-        },
-    );
-    Ok(format!("Moved {} to trash", entry.name))
+    for entry in &entries {
+        let name = path_display_name(&entry.path);
+        let trash_target = unique_path_in_dir(&trash_dir, &name);
+        move_path(&entry.path, &trash_target)?;
+        record_file_manager_edit_op(
+            state,
+            FileManagerEditOp::Moved {
+                from: entry.path.clone(),
+                to: trash_target,
+            },
+        );
+    }
+    if entries.len() == 1 {
+        Ok(format!("Moved {} to trash", entries[0].name))
+    } else {
+        Ok(format!("Moved {} items to trash", entries.len()))
+    }
 }
 
 fn file_manager_undo(state: &mut DesktopState) -> Result<String> {
@@ -7074,7 +7469,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
             };
             let app_hint = match focused_window_kind(state) {
                 Some(WindowKind::FileManager(_)) => {
-                    "Open Enter | External X | Open With O | Rename F2 | Ctrl+T New Tab"
+                    "Enter open | Space multi-select | Ctrl+A select all | O open with"
                 }
                 Some(WindowKind::DesktopHub(_)) => "Arrows/Mouse scroll | Enter to open",
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
@@ -7184,8 +7579,6 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                     }
                 }
                 Some(WindowKind::TextEditor(editor)) => {
-                    let can_save_as =
-                        !editor.read_only && desktop_text_editor_save_dir(state).is_some();
                     items.push(TopMenuItem {
                         label: "Save".to_string(),
                         shortcut: Some("Ctrl+S".to_string()),
@@ -7196,7 +7589,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                         label: "Save As...".to_string(),
                         shortcut: Some("Ctrl+A".to_string()),
                         action: TopMenuAction::TextEditorSaveAs,
-                        enabled: can_save_as,
+                        enabled: !editor.read_only,
                     });
                     items.push(TopMenuItem {
                         label: "Rename".to_string(),
@@ -7281,19 +7674,23 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
         }
         TopMenuKind::Edit => match focused_window_kind(state) {
             Some(WindowKind::FileManager(_)) => {
-                let selected = focused_file_manager_selected_entry(state);
-                let can_edit_selected = selected.as_ref().is_some_and(|e| !is_parent_dir_entry(e));
+                let selected_entries = focused_file_manager_selected_entries(state);
+                let can_edit_selected = !selected_entries.is_empty();
                 let paste_enabled = state
                     .file_clipboard
                     .as_ref()
-                    .is_some_and(|clip| clip.path.exists());
+                    .is_some_and(|clip| clip.paths.iter().any(|path| path.exists()));
                 let paste_label = if let Some(clip) = &state.file_clipboard {
                     let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
                         "Move"
                     } else {
                         "Paste"
                     };
-                    format!("{mode} {}", path_display_name(&clip.path))
+                    if clip.paths.len() == 1 {
+                        format!("{mode} {}", path_display_name(&clip.paths[0]))
+                    } else {
+                        format!("{mode} {} items", clip.paths.len())
+                    }
                 } else {
                     "Paste".to_string()
                 };
@@ -8122,7 +8519,8 @@ fn draw_file_manager_window(
         return;
     }
     let cfg = get_settings().desktop_file_manager;
-    let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, cfg.show_tree_panel);
+    let (tree_area, entry_area) =
+        file_manager_tree_and_entry_rects(content, cfg.show_tree_panel, fm);
 
     let mut header = Vec::new();
     header.push(Line::from(Span::styled(
@@ -8238,6 +8636,8 @@ fn draw_file_manager_window(
                 text = truncate_with_ellipsis(&text, entry_area.width as usize);
                 let style = if focused && start + row == fm.selected {
                     sel_style()
+                } else if fm.is_entry_multi_selected(entry) {
+                    title_style()
                 } else {
                     normal_style()
                 };
@@ -8279,6 +8679,8 @@ fn draw_file_manager_window(
                         FILE_MANAGER_GRID_CELL_HEIGHT.min(entry_area.y + entry_area.height - y);
                     let style = if focused && idx == fm.selected {
                         sel_style()
+                    } else if fm.is_entry_multi_selected(entry) {
+                        title_style()
                     } else {
                         normal_style()
                     };
@@ -8305,6 +8707,43 @@ fn draw_file_manager_window(
             }
         }
     }
+
+    if let Some((file_name, input_mode, _)) = fm.save_as_state() {
+        if let Some((name_rect, button_rects, hint_rect)) =
+            file_manager_save_as_footer_rects(content)
+        {
+            let line = if focused && input_mode {
+                format!("File name: {file_name}_")
+            } else {
+                format!("File name: {file_name}")
+            };
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    truncate_with_ellipsis(&line, name_rect.width as usize),
+                    if focused && input_mode {
+                        sel_style()
+                    } else {
+                        normal_style()
+                    },
+                ))),
+                name_rect,
+            );
+            let buttons = ["[Save]", "[Cancel]"];
+            for (label, rect) in buttons.into_iter().zip(button_rects.into_iter()) {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(label, sel_style()))),
+                    rect,
+                );
+            }
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "Tree/Entries choose folder | Tab filename | Enter save",
+                    dim_style(),
+                ))),
+                hint_rect,
+            );
+        }
+    }
 }
 
 fn file_manager_content_rect(area: Rect) -> Rect {
@@ -8316,17 +8755,31 @@ fn file_manager_content_rect(area: Rect) -> Rect {
     }
 }
 
-fn file_manager_body_rect(content: Rect) -> Rect {
+fn file_manager_footer_rows(fm: &FileManagerState) -> u16 {
+    if matches!(fm.mode, FileManagerMode::SaveAs { .. }) {
+        FILE_MANAGER_SAVE_AS_FOOTER_ROWS
+    } else {
+        0
+    }
+}
+
+fn file_manager_body_rect(content: Rect, fm: &FileManagerState) -> Rect {
     Rect {
         x: content.x,
         y: content.y + FILE_MANAGER_HEADER_ROWS,
         width: content.width,
-        height: content.height.saturating_sub(FILE_MANAGER_HEADER_ROWS),
+        height: content
+            .height
+            .saturating_sub(FILE_MANAGER_HEADER_ROWS + file_manager_footer_rows(fm)),
     }
 }
 
-fn file_manager_tree_and_entry_rects(content: Rect, show_tree_panel: bool) -> (Option<Rect>, Rect) {
-    let body = file_manager_body_rect(content);
+fn file_manager_tree_and_entry_rects(
+    content: Rect,
+    show_tree_panel: bool,
+    fm: &FileManagerState,
+) -> (Option<Rect>, Rect) {
+    let body = file_manager_body_rect(content, fm);
     if !show_tree_panel
         || body.width < FILE_MANAGER_TREE_MIN_TOTAL_WIDTH
         || body.width <= FILE_MANAGER_ENTRY_MIN_WIDTH + FILE_MANAGER_TREE_GAP
@@ -8361,9 +8814,46 @@ fn file_manager_tree_and_entry_rects(content: Rect, show_tree_panel: bool) -> (O
     (Some(tree_rect), entry_rect)
 }
 
-fn file_manager_entry_rect(content: Rect, show_tree_panel: bool) -> Rect {
-    let (_, entry) = file_manager_tree_and_entry_rects(content, show_tree_panel);
+fn file_manager_entry_rect(content: Rect, show_tree_panel: bool, fm: &FileManagerState) -> Rect {
+    let (_, entry) = file_manager_tree_and_entry_rects(content, show_tree_panel, fm);
     entry
+}
+
+fn file_manager_save_as_footer_rects(content: Rect) -> Option<(Rect, [Rect; 2], Rect)> {
+    if content.height <= FILE_MANAGER_HEADER_ROWS + FILE_MANAGER_SAVE_AS_FOOTER_ROWS {
+        return None;
+    }
+    let footer_y = content.y.saturating_add(
+        content
+            .height
+            .saturating_sub(FILE_MANAGER_SAVE_AS_FOOTER_ROWS),
+    );
+    let name_rect = Rect {
+        x: content.x,
+        y: footer_y,
+        width: content.width,
+        height: 1,
+    };
+    let buttons = text_editor_button_rects(
+        Rect {
+            x: content.x,
+            y: footer_y + 1,
+            width: content.width,
+            height: 1,
+        },
+        &["Save", "Cancel"],
+        footer_y + 1,
+    );
+    if buttons.len() < 2 {
+        return None;
+    }
+    let hint_rect = Rect {
+        x: content.x,
+        y: footer_y + 2,
+        width: content.width,
+        height: 1,
+    };
+    Some((name_rect, [buttons[0], buttons[1]], hint_rect))
 }
 
 fn file_manager_empty_trash_button_rect(content: Rect, cwd: &Path) -> Option<Rect> {
@@ -10586,6 +11076,7 @@ fn handle_window_content_mouse(
     let mut settings_window_id = None;
     let mut text_editor_action = DesktopTextEditorAction::None;
     let mut text_editor_window_id = None;
+    let mut file_manager_save_as_action: Option<FileManagerSaveAsAction> = None;
     let mut refresh_file_managers = false;
     let empty_trash_clicked = if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
         if let Some(win) = state.windows.get(idx_last) {
@@ -10682,7 +11173,7 @@ fn handle_window_content_mouse(
                         file_manager_tab_index_at(fm, content.width as usize, rel_x)
                     {
                         let _ = fm.switch_to_tab(tab_idx);
-                        let entry_area = file_manager_entry_rect(content, cfg.show_tree_panel);
+                        let entry_area = file_manager_entry_rect(content, cfg.show_tree_panel, fm);
                         file_manager_ensure_selection_visible(fm, entry_area);
                     }
                     return Ok(());
@@ -10693,8 +11184,30 @@ fn handle_window_content_mouse(
                     return Ok(());
                 }
                 let (tree_area, entry_area) =
-                    file_manager_tree_and_entry_rects(content, cfg.show_tree_panel);
-                if let Some(tree_rect) = tree_area {
+                    file_manager_tree_and_entry_rects(content, cfg.show_tree_panel, fm);
+                let mut footer_action_clicked = false;
+                if let Some((name_rect, button_rects, _)) =
+                    file_manager_save_as_footer_rects(content)
+                {
+                    if point_in_rect(mouse.column, mouse.row, name_rect) {
+                        if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                            *input_mode = true;
+                        }
+                        fm.tree_focus = false;
+                        fm.search_mode = false;
+                        return Ok(());
+                    }
+                    if point_in_rect(mouse.column, mouse.row, button_rects[0]) {
+                        file_manager_save_as_action = Some(FileManagerSaveAsAction::Save(win.id));
+                        footer_action_clicked = true;
+                    } else if point_in_rect(mouse.column, mouse.row, button_rects[1]) {
+                        file_manager_save_as_action = Some(FileManagerSaveAsAction::Cancel(win.id));
+                        footer_action_clicked = true;
+                    }
+                }
+                if footer_action_clicked {
+                    None
+                } else if let Some(tree_rect) = tree_area {
                     if point_in_rect(mouse.column, mouse.row, tree_rect) {
                         let items = file_manager_tree_items(&fm.cwd, cfg.show_hidden_files);
                         let row = (mouse.row - tree_rect.y) as usize;
@@ -10710,64 +11223,159 @@ fn handle_window_content_mouse(
                         fm.tree_selected = idx;
                         fm.tree_focus = true;
                         fm.search_mode = false;
+                        fm.clear_multi_selection();
+                        if let Some((_, input_mode, _)) = fm.save_as_state_mut() {
+                            *input_mode = false;
+                        }
                         let _ = fm.open_selected_tree_path();
                         file_manager_ensure_tree_selection_visible(fm, tree_rect);
                         file_manager_ensure_selection_visible(fm, entry_area);
                         return Ok(());
                     }
-                }
-
-                if !point_in_rect(mouse.column, mouse.row, entry_area) || entry_area.height == 0 {
-                    return Ok(());
-                }
-                let idx = match cfg.view_mode {
-                    FileManagerViewMode::List => {
-                        let row = (mouse.row - entry_area.y) as usize;
-                        let visible_rows = entry_area.height as usize;
-                        if row >= visible_rows {
-                            return Ok(());
-                        }
-                        let start = fm
-                            .scroll
-                            .min(file_manager_list_max_scroll(fm.entries.len(), visible_rows));
-                        let idx = start + row;
-                        if idx >= fm.entries.len() {
-                            return Ok(());
-                        }
-                        idx
+                    if !point_in_rect(mouse.column, mouse.row, entry_area) || entry_area.height == 0
+                    {
+                        return Ok(());
                     }
-                    FileManagerViewMode::Grid => {
-                        let (cols, visible_rows) = file_manager_grid_metrics(entry_area);
-                        if cols == 0 || visible_rows == 0 {
-                            return Ok(());
+                    let idx = match cfg.view_mode {
+                        FileManagerViewMode::List => {
+                            let row = (mouse.row - entry_area.y) as usize;
+                            let visible_rows = entry_area.height as usize;
+                            if row >= visible_rows {
+                                return Ok(());
+                            }
+                            let start = fm
+                                .scroll
+                                .min(file_manager_list_max_scroll(fm.entries.len(), visible_rows));
+                            let idx = start + row;
+                            if idx >= fm.entries.len() {
+                                return Ok(());
+                            }
+                            idx
                         }
-                        let start_row = fm.scroll.min(file_manager_grid_max_scroll(
-                            fm.entries.len(),
-                            cols,
-                            visible_rows,
-                        ));
-                        let cell_width = (entry_area.width / cols as u16).max(1);
-                        let col = ((mouse.column - entry_area.x) / cell_width) as usize;
-                        let row =
-                            ((mouse.row - entry_area.y) / FILE_MANAGER_GRID_CELL_HEIGHT) as usize;
-                        if col >= cols || row >= visible_rows {
-                            return Ok(());
+                        FileManagerViewMode::Grid => {
+                            let (cols, visible_rows) = file_manager_grid_metrics(entry_area);
+                            if cols == 0 || visible_rows == 0 {
+                                return Ok(());
+                            }
+                            let start_row = fm.scroll.min(file_manager_grid_max_scroll(
+                                fm.entries.len(),
+                                cols,
+                                visible_rows,
+                            ));
+                            let cell_width = (entry_area.width / cols as u16).max(1);
+                            let col = ((mouse.column - entry_area.x) / cell_width) as usize;
+                            let row = ((mouse.row - entry_area.y) / FILE_MANAGER_GRID_CELL_HEIGHT)
+                                as usize;
+                            if col >= cols || row >= visible_rows {
+                                return Ok(());
+                            }
+                            let idx = (start_row + row) * cols + col;
+                            if idx >= fm.entries.len() {
+                                return Ok(());
+                            }
+                            idx
                         }
-                        let idx = (start_row + row) * cols + col;
-                        if idx >= fm.entries.len() {
-                            return Ok(());
+                    };
+                    fm.selected = idx;
+                    fm.tree_focus = false;
+                    fm.search_mode = false;
+                    if let Some(entry) = fm.entries.get(idx).cloned() {
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL)
+                            && !fm.save_as_state().is_some()
+                        {
+                            if !is_parent_dir_entry(&entry) {
+                                if !fm.selected_paths.insert(entry.path.clone()) {
+                                    fm.selected_paths.remove(&entry.path);
+                                }
+                            }
+                        } else if !fm.save_as_state().is_some() {
+                            fm.clear_multi_selection();
                         }
-                        idx
+                        if let Some((file_name, input_mode, _)) = fm.save_as_state_mut() {
+                            if !entry.is_dir && !is_parent_dir_entry(&entry) {
+                                *file_name = entry.name;
+                            }
+                            *input_mode = false;
+                        }
                     }
-                };
-                fm.selected = idx;
-                fm.tree_focus = false;
-                fm.search_mode = false;
-                file_manager_ensure_selection_visible(fm, entry_area);
-                Some(ClickTarget::FileEntry {
-                    window_id: win.id,
-                    row: idx,
-                })
+                    file_manager_ensure_selection_visible(fm, entry_area);
+                    Some(ClickTarget::FileEntry {
+                        window_id: win.id,
+                        row: idx,
+                    })
+                } else {
+                    if !point_in_rect(mouse.column, mouse.row, entry_area) || entry_area.height == 0
+                    {
+                        return Ok(());
+                    }
+                    let idx = match cfg.view_mode {
+                        FileManagerViewMode::List => {
+                            let row = (mouse.row - entry_area.y) as usize;
+                            let visible_rows = entry_area.height as usize;
+                            if row >= visible_rows {
+                                return Ok(());
+                            }
+                            let start = fm
+                                .scroll
+                                .min(file_manager_list_max_scroll(fm.entries.len(), visible_rows));
+                            let idx = start + row;
+                            if idx >= fm.entries.len() {
+                                return Ok(());
+                            }
+                            idx
+                        }
+                        FileManagerViewMode::Grid => {
+                            let (cols, visible_rows) = file_manager_grid_metrics(entry_area);
+                            if cols == 0 || visible_rows == 0 {
+                                return Ok(());
+                            }
+                            let start_row = fm.scroll.min(file_manager_grid_max_scroll(
+                                fm.entries.len(),
+                                cols,
+                                visible_rows,
+                            ));
+                            let cell_width = (entry_area.width / cols as u16).max(1);
+                            let col = ((mouse.column - entry_area.x) / cell_width) as usize;
+                            let row = ((mouse.row - entry_area.y) / FILE_MANAGER_GRID_CELL_HEIGHT)
+                                as usize;
+                            if col >= cols || row >= visible_rows {
+                                return Ok(());
+                            }
+                            let idx = (start_row + row) * cols + col;
+                            if idx >= fm.entries.len() {
+                                return Ok(());
+                            }
+                            idx
+                        }
+                    };
+                    fm.selected = idx;
+                    fm.tree_focus = false;
+                    fm.search_mode = false;
+                    if let Some(entry) = fm.entries.get(idx).cloned() {
+                        if mouse.modifiers.contains(KeyModifiers::CONTROL)
+                            && !fm.save_as_state().is_some()
+                        {
+                            if !is_parent_dir_entry(&entry) {
+                                if !fm.selected_paths.insert(entry.path.clone()) {
+                                    fm.selected_paths.remove(&entry.path);
+                                }
+                            }
+                        } else if !fm.save_as_state().is_some() {
+                            fm.clear_multi_selection();
+                        }
+                        if let Some((file_name, input_mode, _)) = fm.save_as_state_mut() {
+                            if !entry.is_dir && !is_parent_dir_entry(&entry) {
+                                *file_name = entry.name;
+                            }
+                            *input_mode = false;
+                        }
+                    }
+                    file_manager_ensure_selection_visible(fm, entry_area);
+                    Some(ClickTarget::FileEntry {
+                        window_id: win.id,
+                        row: idx,
+                    })
+                }
             }
             WindowKind::DesktopHub(hub) => {
                 if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -10848,6 +11456,16 @@ fn handle_window_content_mouse(
             }
         }
     }
+    if let Some(action) = file_manager_save_as_action {
+        match action {
+            FileManagerSaveAsAction::Save(window_id) => {
+                commit_text_editor_save_as_from_picker(terminal, state, window_id)?;
+            }
+            FileManagerSaveAsAction::Cancel(window_id) => {
+                close_text_editor_save_picker_window(state, window_id);
+            }
+        }
+    }
 
     if let Some(id) = close_window_id {
         if state.windows.iter().any(|w| w.id == id) {
@@ -10872,7 +11490,26 @@ fn handle_window_content_mouse(
                 let pending =
                     if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
                         if let WindowKind::FileManager(fm) = &mut win.kind {
-                            fm.activate_selected(FileManagerOpenRequest::Builtin)
+                            if fm.save_as_state().is_some() {
+                                if let Some(entry) = fm.entries.get(fm.selected).cloned() {
+                                    if entry.is_dir {
+                                        fm.set_cwd(entry.path);
+                                        fm.selected = 0;
+                                        fm.scroll = 0;
+                                        fm.refresh();
+                                    } else if let Some((file_name, input_mode, _)) =
+                                        fm.save_as_state_mut()
+                                    {
+                                        *file_name = entry.name;
+                                        *input_mode = true;
+                                    }
+                                }
+                                None
+                            } else {
+                                fm.activate_selected(file_manager_builtin_request_for_window(
+                                    &win.title,
+                                ))
+                            }
                         } else {
                             None
                         }
@@ -11108,10 +11745,11 @@ fn handle_file_manager_scroll_mouse(
             continue;
         }
         match &win.kind {
-            WindowKind::FileManager(_) => {
+            WindowKind::FileManager(fm) => {
                 let content = file_manager_content_rect(win.rect.to_rect());
                 let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-                let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
+                let (tree_area, entry_area) =
+                    file_manager_tree_and_entry_rects(content, show_tree, fm);
                 if tree_area.is_some_and(|tree| point_in_rect(mouse.column, mouse.row, tree)) {
                     fm_target = Some((idx, true));
                     break;
@@ -11157,10 +11795,10 @@ fn handle_file_manager_scroll_mouse(
     if let Some((idx, tree_target)) = fm_target {
         let content = file_manager_content_rect(state.windows[idx].rect.to_rect());
         let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-        let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree);
         let WindowKind::FileManager(fm) = &mut state.windows[idx].kind else {
             return false;
         };
+        let (tree_area, entry_area) = file_manager_tree_and_entry_rects(content, show_tree, fm);
         if tree_target {
             let Some(tree_rect) = tree_area else {
                 return false;
@@ -11317,6 +11955,45 @@ fn open_file_manager_window(state: &mut DesktopState) {
         minimized: false,
         maximized: false,
         kind: WindowKind::FileManager(FileManagerState::new()),
+    });
+}
+
+fn open_named_file_manager_window_at_path(state: &mut DesktopState, title: &str, path: PathBuf) {
+    let Some(path) = normalize_existing_dir_path(&path) else {
+        return;
+    };
+
+    if let Some(id) = state.windows.iter().find_map(|w| match &w.kind {
+        WindowKind::FileManager(fm) if w.title == title && fm.cwd == path => Some(w.id),
+        _ => None,
+    }) {
+        focus_window(state, id);
+        return;
+    }
+
+    let mut fm = FileManagerState::new();
+    fm.set_cwd(path);
+    fm.selected = 0;
+    fm.scroll = 0;
+    fm.tree_focus = false;
+    fm.search_mode = false;
+    fm.refresh();
+
+    let id = state.next_id;
+    state.next_id += 1;
+    state.windows.push(DesktopWindow {
+        id,
+        title: title.to_string(),
+        rect: WinRect {
+            x: 10,
+            y: 5,
+            w: 72,
+            h: 22,
+        },
+        restore_rect: None,
+        minimized: false,
+        maximized: false,
+        kind: WindowKind::FileManager(fm),
     });
 }
 
@@ -11855,14 +12532,6 @@ fn run_desktop_text_editor_action(
             Ok(matches!(action, DesktopTextEditorAction::SaveAndClose))
         }
         DesktopTextEditorAction::SaveAs => {
-            let Some(save_dir) = desktop_text_editor_save_dir(state) else {
-                flash_message(
-                    terminal,
-                    "Open File Manager and navigate to a destination folder first.",
-                    1200,
-                )?;
-                return Ok(false);
-            };
             let current_name = state
                 .windows
                 .iter()
@@ -11872,48 +12541,16 @@ fn run_desktop_text_editor_action(
                     _ => None,
                 })
                 .unwrap_or_else(|| "document.txt".to_string());
-            let mut raw = None;
-            let prompt = format!(
-                "Save As in {} (blank keeps {}):",
-                save_dir.display(),
-                current_name
-            );
-            run_with_mouse_capture_paused(terminal, |t| {
-                raw = input_prompt(t, &prompt)?;
-                Ok(())
-            })?;
-            let Some(raw) = raw else {
-                return Ok(false);
-            };
-            let Some(file_name) = normalize_text_editor_file_name(&raw, &current_name) else {
-                flash_message(terminal, "Invalid file name.", 1000)?;
-                return Ok(false);
-            };
-            let target = save_dir.join(file_name);
-            let mut msg = None;
-            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
-                if let WindowKind::TextEditor(editor) = &mut win.kind {
-                    if target != editor.path && target.exists() {
-                        flash_message(terminal, "Target already exists.", 1000)?;
-                        return Ok(false);
-                    }
-                    if let Some(parent) = target.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    std::fs::write(&target, editor.text())?;
-                    editor.path = target;
-                    editor.dirty = false;
-                    editor.dialog = None;
-                    win.title = editor.file_name();
-                    msg = Some(format!("Saved as {}.", editor.file_name()));
-                }
-            }
-            refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
-            refresh_desktop_hub_windows(state, DesktopHubKind::TextEditorDocuments);
-            refresh_all_file_manager_windows(state);
-            if let Some(message) = msg {
-                flash_message(terminal, &message, 900)?;
-            }
+            let base_dir = state
+                .windows
+                .iter()
+                .find(|w| w.id == window_id)
+                .and_then(|w| match &w.kind {
+                    WindowKind::TextEditor(editor) => editor.path.parent().map(Path::to_path_buf),
+                    _ => None,
+                })
+                .unwrap_or_else(desktop_text_editor_dir);
+            open_text_editor_save_as_window(state, window_id, base_dir, current_name);
             Ok(false)
         }
         DesktopTextEditorAction::Rename => {
@@ -12473,6 +13110,24 @@ fn run_desktop_hub_action(
         }
         DesktopHubItemAction::LaunchTextEditor => {
             open_desktop_hub_window(state, DesktopHubKind::TextEditorMenu);
+        }
+        DesktopHubItemAction::OpenTextEditorPicker => {
+            let hub_to_close = focused_visible_window_idx(state).and_then(|idx| {
+                matches!(&state.windows[idx].kind, WindowKind::DesktopHub(_))
+                    .then_some(state.windows[idx].id)
+            });
+            let picker_root = desktop_text_editor_dir();
+            open_named_file_manager_window_at_path(state, "Open Document", picker_root.clone());
+            if let Some(id) = hub_to_close {
+                if state.windows.iter().any(|w| w.id == id) {
+                    close_window_by_id(state, id);
+                }
+            }
+            flash_message(
+                terminal,
+                &format!("File Manager opened at {}.", picker_root.display()),
+                900,
+            )?;
         }
         DesktopHubItemAction::OpenTextEditorDocument(path) => {
             if let Err(err) = open_desktop_text_editor_window(terminal, state, path, false) {
@@ -13399,6 +14054,12 @@ fn open_focused_file_manager_selection(
     let Some(idx) = focused_visible_window_idx(state) else {
         return Ok(());
     };
+    let request = match request {
+        FileManagerOpenRequest::Builtin => {
+            file_manager_builtin_request_for_window(&state.windows[idx].title)
+        }
+        other => other,
+    };
     let pending = match &mut state.windows[idx].kind {
         WindowKind::FileManager(fm) => fm.activate_selected(request),
         _ => None,
@@ -13431,6 +14092,13 @@ fn handle_file_open_request(
                 path.to_path_buf(),
                 matches!(open_mode, FileManagerTextOpenMode::Viewer),
             ) {
+                flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+            }
+        }
+        FileManagerOpenRequest::TextEditor => {
+            if let Err(err) =
+                open_desktop_text_editor_window(terminal, state, path.to_path_buf(), false)
+            {
                 flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
             }
         }
@@ -16188,6 +16856,12 @@ mod tests {
             labels,
             vec!["New Document".to_string(), "Open Document".to_string()]
         );
+
+        let items = desktop_hub_items(&hub, "ignored");
+        assert!(matches!(
+            items.get(1).map(|item| &item.action),
+            Some(DesktopHubItemAction::OpenTextEditorPicker)
+        ));
     }
 
     #[test]
@@ -16397,6 +17071,65 @@ mod tests {
         assert!(edit_labels.contains(&"Find...".to_string()));
         assert!(edit_labels.contains(&"Find Next".to_string()));
         assert!(edit_labels.contains(&"Discard and Close".to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn named_file_manager_picker_uses_open_document_title() {
+        let base = test_temp_dir("text-editor-picker");
+        let doc_dir = base.join("docs");
+        std::fs::create_dir_all(&doc_dir).expect("create docs");
+        let doc_dir = std::fs::canonicalize(&doc_dir).expect("canonicalize docs");
+
+        let mut state = DesktopState::default();
+        open_named_file_manager_window_at_path(&mut state, "Open Document", doc_dir.clone());
+
+        assert!(state.windows.iter().any(|win| {
+            win.title == "Open Document"
+                && matches!(&win.kind, WindowKind::FileManager(fm) if fm.cwd == doc_dir)
+        }));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn open_document_picker_forces_text_editor_request() {
+        assert!(matches!(
+            file_manager_builtin_request_for_window("Open Document"),
+            FileManagerOpenRequest::TextEditor
+        ));
+        assert!(matches!(
+            file_manager_builtin_request_for_window("My Computer"),
+            FileManagerOpenRequest::Builtin
+        ));
+    }
+
+    #[test]
+    fn file_manager_multiselect_tracks_entries() {
+        let base = test_temp_dir("file-manager-multiselect");
+        let a = base.join("a.txt");
+        let b = base.join("b.txt");
+        std::fs::write(&a, "a").expect("write a");
+        std::fs::write(&b, "b").expect("write b");
+
+        let mut fm = FileManagerState::new();
+        fm.set_cwd(base.clone());
+        fm.refresh();
+        fm.selected = fm
+            .entries
+            .iter()
+            .position(|entry| entry.path == a)
+            .expect("find a");
+        fm.toggle_selected_current();
+        fm.selected = fm
+            .entries
+            .iter()
+            .position(|entry| entry.path == b)
+            .expect("find b");
+        fm.toggle_selected_current();
+
+        assert_eq!(fm.selected_paths.len(), 2);
 
         let _ = std::fs::remove_dir_all(&base);
     }
