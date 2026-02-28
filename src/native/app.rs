@@ -8,7 +8,7 @@ use super::retro_ui::{
 };
 use super::terminal::{launch_plan, launch_terminal_mode};
 use crate::config::{OpenMode, Settings, HEADER_LINES, THEMES};
-use crate::core::auth::{load_users, UserRecord};
+use crate::core::auth::{load_users, save_users, UserRecord};
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
@@ -93,6 +93,17 @@ struct SettingsChoiceOverlay {
 }
 
 #[derive(Debug, Clone)]
+enum UserManagementMode {
+    Root,
+    CreateAuthMethod { username: String },
+    DeleteUser,
+    ResetPassword,
+    ChangeAuthSelectUser,
+    ChangeAuthChoose { username: String },
+    ToggleAdmin,
+}
+
+#[derive(Debug, Clone)]
 enum FlashAction {
     ExitApp,
     FinishLogout,
@@ -118,9 +129,18 @@ enum TerminalPromptKind {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TerminalPromptAction {
     LoginPassword,
+    CreateUsername,
+    CreatePassword { username: String },
+    CreatePasswordConfirm { username: String, first_password: String },
+    ResetPassword { username: String },
+    ResetPasswordConfirm { username: String, first_password: String },
+    ChangeAuthPassword { username: String },
+    ChangeAuthPasswordConfirm { username: String, first_password: String },
+    ConfirmDeleteUser { username: String },
+    ConfirmToggleAdmin { username: String },
     Noop,
 }
 
@@ -148,6 +168,7 @@ enum TerminalScreen {
     Documents,
     DocumentBrowser,
     Settings,
+    UserManagement,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -332,6 +353,8 @@ pub struct RobcoNativeApp {
     terminal_documents_idx: usize,
     terminal_settings_idx: usize,
     terminal_browser_idx: usize,
+    terminal_user_management_idx: usize,
+    terminal_user_management_mode: UserManagementMode,
     terminal_settings_choice: Option<SettingsChoiceOverlay>,
     terminal_prompt: Option<TerminalPrompt>,
     terminal_flash: Option<TerminalFlash>,
@@ -367,6 +390,8 @@ impl Default for RobcoNativeApp {
             terminal_documents_idx: 0,
             terminal_settings_idx: 0,
             terminal_browser_idx: 0,
+            terminal_user_management_idx: 0,
+            terminal_user_management_mode: UserManagementMode::Root,
             terminal_settings_choice: None,
             terminal_prompt: None,
             terminal_flash: None,
@@ -406,6 +431,8 @@ impl RobcoNativeApp {
         self.terminal_documents_idx = 0;
         self.terminal_settings_idx = 0;
         self.terminal_browser_idx = 0;
+        self.terminal_user_management_idx = 0;
+        self.terminal_user_management_mode = UserManagementMode::Root;
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
         self.terminal_flash = None;
@@ -509,6 +536,120 @@ impl RobcoNativeApp {
             confirm_yes: true,
             action: TerminalPromptAction::LoginPassword,
         });
+    }
+
+    fn open_input_prompt(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        action: TerminalPromptAction,
+    ) {
+        self.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Input,
+            title: title.into(),
+            prompt: prompt.into(),
+            buffer: String::new(),
+            confirm_yes: true,
+            action,
+        });
+    }
+
+    fn open_password_prompt_with_action(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        action: TerminalPromptAction,
+    ) {
+        self.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Password,
+            title: title.into(),
+            prompt: prompt.into(),
+            buffer: String::new(),
+            confirm_yes: true,
+            action,
+        });
+    }
+
+    fn open_confirm_prompt(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        action: TerminalPromptAction,
+    ) {
+        self.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Confirm,
+            title: title.into(),
+            prompt: prompt.into(),
+            buffer: String::new(),
+            confirm_yes: true,
+            action,
+        });
+    }
+
+    fn save_user_and_status(&mut self, username: &str, user: UserRecord, status: String) {
+        let mut db = load_users();
+        db.insert(username.to_string(), user);
+        save_users(&db);
+        let _ = std::fs::create_dir_all(crate::config::users_dir().join(username));
+        crate::config::mark_default_apps_prompt_pending(username);
+        self.shell_status = status;
+    }
+
+    fn update_user_record<F: FnOnce(&mut UserRecord)>(&mut self, username: &str, f: F, status: String) {
+        let mut db = load_users();
+        if let Some(record) = db.get_mut(username) {
+            f(record);
+            save_users(&db);
+            self.shell_status = status;
+        } else {
+            self.shell_status = format!("Unknown user '{username}'.");
+        }
+    }
+
+    fn user_management_root_items(&self) -> Vec<String> {
+        vec![
+            "Create User".to_string(),
+            "Delete User".to_string(),
+            "Reset Password".to_string(),
+            "Change Auth Method".to_string(),
+            "Toggle Admin".to_string(),
+            "---".to_string(),
+            "Back".to_string(),
+        ]
+    }
+
+    fn auth_method_items(&self) -> Vec<String> {
+        vec![
+            "Password             — classic password login".to_string(),
+            "No Password          — log in without a password".to_string(),
+            "Hacking Minigame     — must hack in to log in".to_string(),
+            "---".to_string(),
+            "Back".to_string(),
+        ]
+    }
+
+    fn auth_method_from_label(label: &str) -> Option<crate::core::auth::AuthMethod> {
+        if label.starts_with("Password") {
+            Some(crate::core::auth::AuthMethod::Password)
+        } else if label.starts_with("No Password") {
+            Some(crate::core::auth::AuthMethod::NoPassword)
+        } else if label.starts_with("Hacking") {
+            Some(crate::core::auth::AuthMethod::HackingMinigame)
+        } else {
+            None
+        }
+    }
+
+    fn user_list_items(&self, include_current: bool) -> Vec<String> {
+        let current = self.session.as_ref().map(|s| s.username.as_str());
+        let mut users: Vec<String> = load_users()
+            .keys()
+            .filter(|u| include_current || Some(u.as_str()) != current)
+            .cloned()
+            .collect();
+        users.sort();
+        users.push("Back".to_string());
+        users
     }
 
     fn activate_login_selection(&mut self) {
@@ -702,7 +843,7 @@ impl RobcoNativeApp {
     }
 
     fn terminal_settings_rows(&self) -> Vec<String> {
-        vec![
+        let mut rows = vec![
             format!(
                 "Sound: {} [toggle]",
                 if self.settings.draft.sound { "ON" } else { "OFF" }
@@ -731,8 +872,12 @@ impl RobcoNativeApp {
                     OpenMode::Desktop => "Desktop",
                 }
             ),
-            "Back".to_string(),
-        ]
+        ];
+        if self.session.as_ref().is_some_and(|s| s.is_admin) {
+            rows.push("User Management".to_string());
+        }
+        rows.push("Back".to_string());
+        rows
     }
 
     fn open_documents_browser(&mut self) {
@@ -784,7 +929,8 @@ impl RobcoNativeApp {
             TerminalScreen::MainMenu => {}
             TerminalScreen::Applications
             | TerminalScreen::Documents
-            | TerminalScreen::Settings => {
+            | TerminalScreen::Settings
+            | TerminalScreen::UserManagement => {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
             }
@@ -863,7 +1009,151 @@ impl RobcoNativeApp {
                             }
                             return;
                         }
+                        TerminalPromptAction::CreateUsername => {
+                            let username = prompt.buffer.trim().to_string();
+                            if username.is_empty() {
+                                self.shell_status = "Username cannot be empty.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            let db = load_users();
+                            if db.contains_key(&username) {
+                                self.shell_status = "User already exists.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.terminal_user_management_mode =
+                                UserManagementMode::CreateAuthMethod { username };
+                            self.terminal_user_management_idx = 0;
+                            self.terminal_prompt = None;
+                            return;
+                        }
+                        TerminalPromptAction::CreatePassword { username } => {
+                            let first_password = prompt.buffer.clone();
+                            if first_password.is_empty() {
+                                self.shell_status = "Password cannot be empty.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.open_password_prompt_with_action(
+                                "Confirm Password",
+                                format!("Re-enter password for {username}"),
+                                TerminalPromptAction::CreatePasswordConfirm {
+                                    username,
+                                    first_password,
+                                },
+                            );
+                            return;
+                        }
+                        TerminalPromptAction::CreatePasswordConfirm {
+                            username,
+                            first_password,
+                        } => {
+                            if prompt.buffer != first_password {
+                                self.shell_status = "Passwords do not match.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.save_user_and_status(
+                                &username,
+                                UserRecord {
+                                    password_hash: crate::core::auth::hash_password(&first_password),
+                                    is_admin: false,
+                                    auth_method: crate::core::auth::AuthMethod::Password,
+                                },
+                                format!("User '{username}' created."),
+                            );
+                            self.terminal_user_management_mode = UserManagementMode::Root;
+                            self.terminal_user_management_idx = 0;
+                            self.terminal_prompt = None;
+                            return;
+                        }
+                        TerminalPromptAction::ResetPassword { username } => {
+                            let first_password = prompt.buffer.clone();
+                            if first_password.is_empty() {
+                                self.shell_status = "Password cannot be empty.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.open_password_prompt_with_action(
+                                "Confirm Password",
+                                format!("Re-enter password for {username}"),
+                                TerminalPromptAction::ResetPasswordConfirm {
+                                    username,
+                                    first_password,
+                                },
+                            );
+                            return;
+                        }
+                        TerminalPromptAction::ResetPasswordConfirm {
+                            username,
+                            first_password,
+                        } => {
+                            if prompt.buffer != first_password {
+                                self.shell_status = "Passwords do not match.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.update_user_record(
+                                &username,
+                                |record| {
+                                    record.password_hash =
+                                        crate::core::auth::hash_password(&first_password);
+                                    record.auth_method = crate::core::auth::AuthMethod::Password;
+                                },
+                                "Password updated.".to_string(),
+                            );
+                            self.terminal_user_management_mode = UserManagementMode::Root;
+                            self.terminal_user_management_idx = 0;
+                            self.terminal_prompt = None;
+                            return;
+                        }
+                        TerminalPromptAction::ChangeAuthPassword { username } => {
+                            let first_password = prompt.buffer.clone();
+                            if first_password.is_empty() {
+                                self.shell_status = "Password cannot be empty.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.open_password_prompt_with_action(
+                                "Confirm Password",
+                                format!("Re-enter password for {username}"),
+                                TerminalPromptAction::ChangeAuthPasswordConfirm {
+                                    username,
+                                    first_password,
+                                },
+                            );
+                            return;
+                        }
+                        TerminalPromptAction::ChangeAuthPasswordConfirm {
+                            username,
+                            first_password,
+                        } => {
+                            if prompt.buffer != first_password {
+                                self.shell_status = "Passwords do not match.".to_string();
+                                self.terminal_prompt = None;
+                                return;
+                            }
+                            self.update_user_record(
+                                &username,
+                                |record| {
+                                    record.password_hash =
+                                        crate::core::auth::hash_password(&first_password);
+                                    record.auth_method = crate::core::auth::AuthMethod::Password;
+                                },
+                                format!("Auth method updated for '{username}'."),
+                            );
+                            self.terminal_user_management_mode = UserManagementMode::Root;
+                            self.terminal_user_management_idx = 0;
+                            self.terminal_prompt = None;
+                            return;
+                        }
                         TerminalPromptAction::Noop => {
+                            self.terminal_prompt = None;
+                            return;
+                        }
+                        TerminalPromptAction::ConfirmDeleteUser { .. }
+                        | TerminalPromptAction::ConfirmToggleAdmin { .. } => {
                             self.terminal_prompt = None;
                             return;
                         }
@@ -882,6 +1172,29 @@ impl RobcoNativeApp {
                     prompt.confirm_yes = false;
                 }
                 if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                    if prompt.confirm_yes {
+                        match prompt.action {
+                            TerminalPromptAction::ConfirmDeleteUser { username } => {
+                                let mut db = load_users();
+                                db.remove(&username);
+                                save_users(&db);
+                                self.shell_status = format!("User '{username}' deleted.");
+                            }
+                            TerminalPromptAction::ConfirmToggleAdmin { username } => {
+                                let mut db = load_users();
+                                if let Some(record) = db.get_mut(&username) {
+                                    record.is_admin = !record.is_admin;
+                                    let label = if record.is_admin { "granted" } else { "revoked" };
+                                    save_users(&db);
+                                    self.shell_status =
+                                        format!("Admin {label} for '{username}'.");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.terminal_user_management_mode = UserManagementMode::Root;
+                    self.terminal_user_management_idx = 0;
                     self.terminal_prompt = None;
                     return;
                 }
@@ -1218,16 +1531,25 @@ impl RobcoNativeApp {
         items: &[String],
         selected_idx: &mut usize,
     ) -> Option<usize> {
+        let selectable_rows: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
+            .collect();
+        if selectable_rows.is_empty() {
+            return None;
+        }
+        *selected_idx = (*selected_idx).min(selectable_rows.len().saturating_sub(1));
         if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
             *selected_idx = selected_idx.saturating_sub(1);
         }
         if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            *selected_idx = (*selected_idx + 1).min(items.len().saturating_sub(1));
+            *selected_idx = (*selected_idx + 1).min(selectable_rows.len().saturating_sub(1));
         }
 
         let mut activated = None;
         if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            activated = Some(*selected_idx);
+            activated = selectable_rows.get(*selected_idx).copied();
         }
 
         egui::CentralPanel::default()
@@ -1248,7 +1570,18 @@ impl RobcoNativeApp {
             }
             let mut row = TERMINAL_MENU_START_ROW;
             for (idx, item) in items.iter().enumerate() {
-                let selected = idx == *selected_idx;
+                if item == "---" {
+                    screen.text(
+                        &painter,
+                        TERMINAL_CONTENT_COL + 4,
+                        row,
+                        "---",
+                        palette.dim,
+                    );
+                    row += 1;
+                    continue;
+                }
+                let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
                 let text = if selected {
                     format!("  > {item}")
                 } else {
@@ -1256,7 +1589,9 @@ impl RobcoNativeApp {
                 };
                 let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
                 if response.clicked() {
-                    *selected_idx = idx;
+                    if let Some(sel_idx) = selectable_rows.iter().position(|raw| *raw == idx) {
+                        *selected_idx = sel_idx;
+                    }
                     activated = Some(idx);
                 }
                 row += 1;
@@ -1510,7 +1845,13 @@ impl RobcoNativeApp {
                                 3 => self.open_settings_choice(SettingsChoiceKind::Theme),
                                 4 => {}
                                 5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
-                                6 => {
+                                6 if self.session.as_ref().is_some_and(|s| s.is_admin) => {
+                                    self.terminal_screen = TerminalScreen::UserManagement;
+                                    self.terminal_user_management_mode = UserManagementMode::Root;
+                                    self.terminal_user_management_idx = 0;
+                                    self.shell_status.clear();
+                                }
+                                _ if item == "Back" => {
                                     self.terminal_screen = TerminalScreen::MainMenu;
                                     self.shell_status.clear();
                                 }
@@ -1583,6 +1924,222 @@ impl RobcoNativeApp {
                     );
                 }
             });
+    }
+
+    fn draw_terminal_user_management(&mut self, ctx: &Context) {
+        let mode = self.terminal_user_management_mode.clone();
+        let (title, subtitle, items) = match &mode {
+            UserManagementMode::Root => (
+                "User Management",
+                None,
+                self.user_management_root_items(),
+            ),
+            UserManagementMode::CreateAuthMethod { username } => (
+                "Choose Authentication Method",
+                Some(format!("Create user '{username}'")),
+                self.auth_method_items(),
+            ),
+            UserManagementMode::DeleteUser => (
+                "Delete User",
+                None,
+                self.user_list_items(true),
+            ),
+            UserManagementMode::ResetPassword => (
+                "Reset Password",
+                None,
+                self.user_list_items(true),
+            ),
+            UserManagementMode::ChangeAuthSelectUser => (
+                "Change Auth Method — Select User",
+                None,
+                self.user_list_items(true),
+            ),
+            UserManagementMode::ChangeAuthChoose { username } => (
+                "Choose Authentication Method",
+                Some(format!("Change auth for '{username}'")),
+                self.auth_method_items(),
+            ),
+            UserManagementMode::ToggleAdmin => (
+                "Toggle Admin",
+                None,
+                self.user_list_items(false),
+            ),
+        };
+        let mut selected = self
+            .terminal_user_management_idx
+            .min(items.iter().filter(|i| i.as_str() != "---").count().saturating_sub(1));
+        let refs: Vec<String> = items;
+        let activated =
+            self.draw_terminal_menu_screen(ctx, title, subtitle.as_deref(), &refs, &mut selected);
+        self.terminal_user_management_idx = selected;
+        if let Some(idx) = activated {
+            let selected_label = refs[idx].clone();
+            match &mode {
+                UserManagementMode::Root => match selected_label.as_str() {
+                    "Create User" => self.open_input_prompt(
+                        "Create User",
+                        "New username:",
+                        TerminalPromptAction::CreateUsername,
+                    ),
+                    "Delete User" => {
+                        self.terminal_user_management_mode = UserManagementMode::DeleteUser;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    "Reset Password" => {
+                        self.terminal_user_management_mode = UserManagementMode::ResetPassword;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    "Change Auth Method" => {
+                        self.terminal_user_management_mode =
+                            UserManagementMode::ChangeAuthSelectUser;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    "Toggle Admin" => {
+                        self.terminal_user_management_mode = UserManagementMode::ToggleAdmin;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    "Back" => {
+                        self.terminal_screen = TerminalScreen::Settings;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    _ => {}
+                },
+                UserManagementMode::CreateAuthMethod { username } => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    } else if let Some(method) = Self::auth_method_from_label(&selected_label) {
+                        match method {
+                            crate::core::auth::AuthMethod::Password => {
+                                self.open_password_prompt_with_action(
+                                    "Create User",
+                                    format!("Password for {username}"),
+                                    TerminalPromptAction::CreatePassword {
+                                        username: username.clone(),
+                                    },
+                                );
+                            }
+                            crate::core::auth::AuthMethod::NoPassword => {
+                                self.save_user_and_status(
+                                    username,
+                                    UserRecord {
+                                        password_hash: String::new(),
+                                        is_admin: false,
+                                        auth_method: method,
+                                    },
+                                    format!("User '{username}' created."),
+                                );
+                                self.terminal_user_management_mode = UserManagementMode::Root;
+                                self.terminal_user_management_idx = 0;
+                            }
+                            crate::core::auth::AuthMethod::HackingMinigame => {
+                                self.shell_status =
+                                    "Hacking auth user creation is pending native rewrite.".to_string();
+                                self.terminal_user_management_mode = UserManagementMode::Root;
+                                self.terminal_user_management_idx = 0;
+                            }
+                        }
+                    }
+                }
+                UserManagementMode::DeleteUser => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    } else if self
+                        .session
+                        .as_ref()
+                        .is_some_and(|s| s.username == selected_label)
+                    {
+                        self.shell_status = "Cannot delete yourself.".to_string();
+                    } else {
+                        self.open_confirm_prompt(
+                            "Delete User",
+                            format!("Delete user '{selected_label}'?"),
+                            TerminalPromptAction::ConfirmDeleteUser {
+                                username: selected_label,
+                            },
+                        );
+                    }
+                }
+                UserManagementMode::ResetPassword => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    } else {
+                        self.open_password_prompt_with_action(
+                            "Reset Password",
+                            format!("New password for '{selected_label}'"),
+                            TerminalPromptAction::ResetPassword {
+                                username: selected_label,
+                            },
+                        );
+                    }
+                }
+                UserManagementMode::ChangeAuthSelectUser => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    } else {
+                        self.terminal_user_management_mode =
+                            UserManagementMode::ChangeAuthChoose {
+                                username: selected_label,
+                            };
+                        self.terminal_user_management_idx = 0;
+                    }
+                }
+                UserManagementMode::ChangeAuthChoose { username } => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode =
+                            UserManagementMode::ChangeAuthSelectUser;
+                        self.terminal_user_management_idx = 0;
+                    } else if let Some(method) = Self::auth_method_from_label(&selected_label) {
+                        match method {
+                            crate::core::auth::AuthMethod::Password => {
+                                self.open_password_prompt_with_action(
+                                    "Change Auth Method",
+                                    format!("New password for '{username}'"),
+                                    TerminalPromptAction::ChangeAuthPassword {
+                                        username: username.clone(),
+                                    },
+                                );
+                            }
+                            crate::core::auth::AuthMethod::NoPassword => {
+                                self.update_user_record(
+                                    username,
+                                    |record| {
+                                        record.auth_method = crate::core::auth::AuthMethod::NoPassword;
+                                        record.password_hash.clear();
+                                    },
+                                    format!("Auth method updated for '{username}'."),
+                                );
+                                self.terminal_user_management_mode = UserManagementMode::Root;
+                                self.terminal_user_management_idx = 0;
+                            }
+                            crate::core::auth::AuthMethod::HackingMinigame => {
+                                self.shell_status =
+                                    "Hacking auth is pending native rewrite.".to_string();
+                                self.terminal_user_management_mode = UserManagementMode::Root;
+                                self.terminal_user_management_idx = 0;
+                            }
+                        }
+                    }
+                }
+                UserManagementMode::ToggleAdmin => {
+                    if selected_label == "Back" {
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    } else {
+                        self.open_confirm_prompt(
+                            "Toggle Admin",
+                            format!("Toggle admin for '{selected_label}'?"),
+                            TerminalPromptAction::ConfirmToggleAdmin {
+                                username: selected_label,
+                            },
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn draw_terminal_footer(&self, ctx: &Context) {
@@ -1951,6 +2508,7 @@ impl eframe::App for RobcoNativeApp {
                 TerminalScreen::Documents => self.draw_terminal_documents(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
                 TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+                TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
             }
         }
         self.draw_terminal_footer(ctx);
