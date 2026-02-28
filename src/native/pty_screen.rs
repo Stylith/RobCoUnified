@@ -26,6 +26,7 @@ pub struct NativePtyState {
     pub session: PtySession,
     prev_plain_lines: Vec<String>,
     prev_plain_cursor: Option<(u16, u16)>,
+    plain_texture: PlainTextureRenderer,
     plain_row_galleys: Vec<Option<Arc<egui::Galley>>>,
     plain_cache_font_size: f32,
     plain_cache_fg: Color32,
@@ -86,6 +87,32 @@ fn ewma(current: f32, sample: f32, frames: u64) -> f32 {
     current + PERF_ALPHA * (sample - current)
 }
 
+struct PlainTextureRenderer {
+    font: Option<fontdue::Font>,
+    texture: Option<egui::TextureHandle>,
+    image: Option<egui::ColorImage>,
+    cols: usize,
+    rows: usize,
+    cell_w_px: usize,
+    cell_h_px: usize,
+    font_px: f32,
+}
+
+impl Default for PlainTextureRenderer {
+    fn default() -> Self {
+        Self {
+            font: load_plain_texture_font(),
+            texture: None,
+            image: None,
+            cols: 0,
+            rows: 0,
+            cell_w_px: 0,
+            cell_h_px: 0,
+            font_px: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtyScreenEvent {
     None,
@@ -131,6 +158,7 @@ pub fn spawn_embedded_pty_with_options(
         session,
         prev_plain_lines: Vec::new(),
         prev_plain_cursor: None,
+        plain_texture: PlainTextureRenderer::default(),
         plain_row_galleys: Vec::new(),
         plain_cache_font_size: 0.0,
         plain_cache_fg: Color32::TRANSPARENT,
@@ -242,6 +270,8 @@ pub fn draw_embedded_pty(
                         None
                     };
                 let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
+                let dirty_rows =
+                    collect_dirty_rows(&state.prev_plain_lines, lines_ref, pty_rows as usize);
                 if state.show_perf_overlay {
                     dirty_stats = diff_plain_snapshot(
                         &state.prev_plain_lines,
@@ -252,20 +282,31 @@ pub fn draw_embedded_pty(
                         pty_rows as usize,
                     );
                 }
-                ensure_plain_row_galleys(
+                let texture_drawn = render_plain_texture_if_possible(
                     state,
+                    ctx,
                     &content_painter,
-                    screen.font(),
-                    palette.fg,
+                    &screen,
+                    &palette,
                     lines_ref,
+                    dirty_rows.as_slice(),
                 );
-                for (row_idx, galley) in state.plain_row_galleys.iter().enumerate() {
-                    if let Some(galley) = galley {
-                        content_painter.galley(
-                            screen.row_rect(0, row_idx, 1).left_top(),
-                            galley.clone(),
-                            palette.fg,
-                        );
+                if !texture_drawn {
+                    ensure_plain_row_galleys(
+                        state,
+                        &content_painter,
+                        screen.font(),
+                        palette.fg,
+                        lines_ref,
+                    );
+                    for (row_idx, galley) in state.plain_row_galleys.iter().enumerate() {
+                        if let Some(galley) = galley {
+                            content_painter.galley(
+                                screen.row_rect(0, row_idx, 1).left_top(),
+                                galley.clone(),
+                                palette.fg,
+                            );
+                        }
                     }
                 }
                 state.prev_plain_lines = lines_ref.to_vec();
@@ -970,6 +1011,253 @@ fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyMo
         _ => return None,
     };
     Some((code, mods))
+}
+
+fn collect_dirty_rows(prev_lines: &[String], next_lines: &[String], rows: usize) -> Vec<usize> {
+    (0..rows)
+        .filter(|row| {
+            prev_lines.get(*row).map(String::as_str).unwrap_or("")
+                != next_lines.get(*row).map(String::as_str).unwrap_or("")
+        })
+        .collect()
+}
+
+fn render_plain_texture_if_possible(
+    state: &mut NativePtyState,
+    ctx: &Context,
+    painter: &egui::Painter,
+    screen: &RetroScreen,
+    palette: &RetroPalette,
+    lines: &[String],
+    dirty_rows: &[usize],
+) -> bool {
+    if state.plain_texture.font.is_none() {
+        return false;
+    }
+    let cols = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(screen_cols(screen));
+    let rows = lines.len();
+    if rows == 0 {
+        return false;
+    }
+    let cell_rect = screen.row_rect(0, 0, 1);
+    let cell_w = cell_rect.width().round().max(1.0) as usize;
+    let cell_h = cell_rect.height().round().max(1.0) as usize;
+    if cell_w == 0 || cell_h == 0 {
+        return false;
+    }
+    let font_px = (screen.font().size * 0.92).max(8.0);
+    let resized = ensure_plain_texture_surface(
+        &mut state.plain_texture,
+        ctx,
+        cols,
+        rows,
+        cell_w,
+        cell_h,
+        font_px,
+    );
+    let update_rows: Vec<usize> = if resized || state.plain_texture.texture.is_none() {
+        (0..rows).collect()
+    } else {
+        dirty_rows.to_vec()
+    };
+    if !update_rows.is_empty() {
+        let mut missing_font = false;
+        if let Some(image) = state.plain_texture.image.as_mut() {
+            for row in update_rows {
+                clear_texture_row(image, row, cell_h, palette.bg);
+                let line = lines.get(row).map(String::as_str).unwrap_or("");
+                let max_cols = cols.min(line.chars().count());
+                for (col, ch) in line.chars().take(max_cols).enumerate() {
+                    if ch == ' ' {
+                        continue;
+                    }
+                    if !draw_glyph_to_image(
+                        image,
+                        state.plain_texture.font.as_ref().expect("checked"),
+                        ch,
+                        col,
+                        row,
+                        cell_w,
+                        cell_h,
+                        font_px,
+                        palette.fg,
+                    ) {
+                        missing_font = true;
+                    }
+                }
+            }
+        }
+        if missing_font {
+            return false;
+        }
+        if let Some(image) = state.plain_texture.image.as_ref() {
+            if let Some(texture) = state.plain_texture.texture.as_mut() {
+                texture.set(
+                    egui::ImageData::Color(image.clone().into()),
+                    egui::TextureOptions::NEAREST,
+                );
+            } else {
+                state.plain_texture.texture = Some(ctx.load_texture(
+                    "native_pty_plain_texture",
+                    egui::ImageData::Color(image.clone().into()),
+                    egui::TextureOptions::NEAREST,
+                ));
+            }
+        }
+    }
+    let Some(texture) = state.plain_texture.texture.as_ref() else {
+        return false;
+    };
+    painter.image(
+        texture.id(),
+        screen.rect,
+        Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    true
+}
+
+fn ensure_plain_texture_surface(
+    renderer: &mut PlainTextureRenderer,
+    ctx: &Context,
+    cols: usize,
+    rows: usize,
+    cell_w_px: usize,
+    cell_h_px: usize,
+    font_px: f32,
+) -> bool {
+    let needs_resize = renderer.image.is_none()
+        || renderer.cols != cols
+        || renderer.rows != rows
+        || renderer.cell_w_px != cell_w_px
+        || renderer.cell_h_px != cell_h_px
+        || (renderer.font_px - font_px).abs() > f32::EPSILON;
+    if !needs_resize {
+        return false;
+    }
+    renderer.cols = cols;
+    renderer.rows = rows;
+    renderer.cell_w_px = cell_w_px;
+    renderer.cell_h_px = cell_h_px;
+    renderer.font_px = font_px;
+    let size = [
+        cols.saturating_mul(cell_w_px),
+        rows.saturating_mul(cell_h_px),
+    ];
+    renderer.image = Some(egui::ColorImage::new(size, Color32::BLACK));
+    renderer.texture = Some(ctx.load_texture(
+        "native_pty_plain_texture",
+        egui::ImageData::Color(renderer.image.as_ref().expect("set").clone().into()),
+        egui::TextureOptions::NEAREST,
+    ));
+    true
+}
+
+fn clear_texture_row(image: &mut egui::ColorImage, row: usize, cell_h: usize, bg: Color32) {
+    let width = image.size[0];
+    let start_y = row.saturating_mul(cell_h);
+    let end_y = (start_y + cell_h).min(image.size[1]);
+    for y in start_y..end_y {
+        let start = y.saturating_mul(width);
+        let end = start.saturating_add(width).min(image.pixels.len());
+        for px in &mut image.pixels[start..end] {
+            *px = bg;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_glyph_to_image(
+    image: &mut egui::ColorImage,
+    font: &fontdue::Font,
+    ch: char,
+    col: usize,
+    row: usize,
+    cell_w: usize,
+    cell_h: usize,
+    font_px: f32,
+    fg: Color32,
+) -> bool {
+    let (metrics, bitmap) = font.rasterize(ch, font_px);
+    if metrics.width == 0 || metrics.height == 0 {
+        return true;
+    }
+    let glyph_w = metrics.width as i32;
+    let glyph_h = metrics.height as i32;
+    let cell_x = (col.saturating_mul(cell_w)) as i32;
+    let cell_y = (row.saturating_mul(cell_h)) as i32;
+    let x0 = cell_x + ((cell_w as i32 - glyph_w).max(0) / 2);
+    let y0 = cell_y + ((cell_h as i32 - glyph_h).max(0) / 2);
+    let width = image.size[0] as i32;
+    let height = image.size[1] as i32;
+    for gy in 0..glyph_h {
+        for gx in 0..glyph_w {
+            let sx = x0 + gx;
+            let sy = y0 + gy;
+            if sx < 0 || sy < 0 || sx >= width || sy >= height {
+                continue;
+            }
+            let src_alpha = bitmap[(gy as usize) * metrics.width + gx as usize];
+            if src_alpha == 0 {
+                continue;
+            }
+            let idx = (sy as usize) * image.size[0] + sx as usize;
+            let bg = image.pixels[idx];
+            image.pixels[idx] = blend_color(bg, fg, src_alpha);
+        }
+    }
+    true
+}
+
+fn blend_color(bg: Color32, fg: Color32, alpha: u8) -> Color32 {
+    let a = alpha as f32 / 255.0;
+    let inv = 1.0 - a;
+    Color32::from_rgba_unmultiplied(
+        (bg.r() as f32 * inv + fg.r() as f32 * a).round() as u8,
+        (bg.g() as f32 * inv + fg.g() as f32 * a).round() as u8,
+        (bg.b() as f32 * inv + fg.b() as f32 * a).round() as u8,
+        255,
+    )
+}
+
+fn screen_cols(screen: &RetroScreen) -> usize {
+    // Derive a conservative width from the render surface when line data is empty.
+    let cell = screen.row_rect(0, 0, 1);
+    (screen.rect.width() / cell.width().max(1.0))
+        .floor()
+        .max(1.0) as usize
+}
+
+fn load_plain_texture_font() -> Option<fontdue::Font> {
+    let bytes = try_load_retro_font_bytes()?;
+    fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).ok()
+}
+
+fn try_load_retro_font_bytes() -> Option<Vec<u8>> {
+    let mut candidates = vec![
+        std::path::PathBuf::from("assets/fonts/FixedsysExcelsior301-Regular.ttf"),
+        std::path::PathBuf::from("assets/fonts/Sysfixed.ttf"),
+        std::path::PathBuf::from("assets/fonts/sysfixed.ttf"),
+        std::path::PathBuf::from("Sysfixed.ttf"),
+        std::path::PathBuf::from("sysfixed.ttf"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
+        candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
+    }
+    candidates.push(std::path::PathBuf::from("/Library/Fonts/Sysfixed.ttf"));
+    candidates.push(std::path::PathBuf::from("/Library/Fonts/sysfixed.ttf"));
+    candidates.push(std::path::PathBuf::from("/System/Library/Fonts/Monaco.ttf"));
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            return Some(bytes);
+        }
+    }
+    None
 }
 
 fn ensure_plain_row_galleys(
