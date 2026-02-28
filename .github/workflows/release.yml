@@ -67,21 +67,15 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          version="$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = \"([^\"]+)\"/\1/')"
           dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
-          app_dir="$dist_dir/RobCoOS.app"
-          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$app_dir/Contents/MacOS/robcos"
-          chmod +x "$app_dir/Contents/MacOS/robcos"
-          cp assets/icon.icns "$app_dir/Contents/Resources/icon.icns"
-          sed "s/__VERSION__/$version/g" packaging/macos/Info.plist > "$app_dir/Contents/Info.plist"
+          mkdir -p "$dist_dir"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$dist_dir/robcos"
+          chmod +x "$dist_dir/robcos"
           cp README.md LICENSE icon.png "$dist_dir/"
           (
-            cd "$dist_dir"
-            zip -r "../RobCoOS-${{ matrix.asset_name }}.zip" "RobCoOS.app" README.md LICENSE icon.png
+            cd dist
+            zip -r "RobCoOS-${{ matrix.asset_name }}.zip" "RobCoOS-${{ matrix.asset_name }}"
           )
-        env:
-          COPYFILE_DISABLE: 1
 
       - name: Package (Linux)
         if: runner.os == 'Linux'

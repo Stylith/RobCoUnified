@@ -9,7 +9,7 @@ RobCoOS is an application-layer shell experience, not a full standalone operatin
 
 ## Version
 
-`0.3.1`
+`0.3.2`
 
 ## Highlights
 
@@ -63,7 +63,7 @@ cargo build --release
 
 Tagged GitHub releases package platform-specific artifacts:
 
-- macOS: `RobCoOS.app` inside the release zip
+- macOS: CLI binary bundle inside the release zip
 - Linux: x86_64 and aarch64 binaries + `.desktop` entry + icon inside the release zip
 - Windows: `robcos.exe` with embedded application icon inside the release zip
 
