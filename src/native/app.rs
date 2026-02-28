@@ -4,7 +4,7 @@ use super::data::{
 };
 use super::file_manager::{FileManagerAction, NativeFileManagerState};
 use super::retro_ui::{
-    configure_visuals, RetroScreen, RETRO_BG, RETRO_GREEN, RETRO_GREEN_DIM,
+    configure_visuals, current_palette, RetroScreen,
 };
 use super::terminal::{launch_plan, launch_terminal_mode};
 use crate::config::{OpenMode, Settings, HEADER_LINES, THEMES};
@@ -40,9 +40,16 @@ struct SessionState {
 
 #[derive(Debug, Default)]
 struct LoginState {
-    username: String,
+    selected_idx: usize,
+    selected_username: String,
     password: String,
     error: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginScreenMode {
+    SelectUser,
+    Password,
 }
 
 #[derive(Debug)]
@@ -225,6 +232,7 @@ pub fn configure_native_context(ctx: &Context) {
 
 pub struct RobcoNativeApp {
     login: LoginState,
+    login_mode: LoginScreenMode,
     session: Option<SessionState>,
     file_manager: NativeFileManagerState,
     editor: EditorWindow,
@@ -246,6 +254,7 @@ impl Default for RobcoNativeApp {
     fn default() -> Self {
         Self {
             login: LoginState::default(),
+            login_mode: LoginScreenMode::SelectUser,
             session: None,
             file_manager: NativeFileManagerState::new(home_dir_fallback()),
             editor: EditorWindow {
@@ -322,9 +331,9 @@ impl RobcoNativeApp {
 
     fn do_login(&mut self) {
         self.login.error.clear();
-        let username = self.login.username.trim().to_string();
+        let username = self.login.selected_username.trim().to_string();
         if username.is_empty() {
-            self.login.error = "Select or enter a user.".to_string();
+            self.login.error = "Select a user.".to_string();
             return;
         }
         match authenticate(&username, &self.login.password) {
@@ -336,9 +345,52 @@ impl RobcoNativeApp {
         }
     }
 
+    fn login_usernames(&self) -> Vec<String> {
+        let mut usernames: Vec<String> = load_users().keys().cloned().collect();
+        usernames.sort();
+        usernames.push("Exit".to_string());
+        usernames
+    }
+
+    fn activate_login_selection(&mut self) {
+        self.login.error.clear();
+        let usernames = self.login_usernames();
+        let idx = self.login.selected_idx.min(usernames.len().saturating_sub(1));
+        let Some(selected) = usernames.get(idx).cloned() else {
+            return;
+        };
+        if selected == "Exit" {
+            std::process::exit(0);
+        }
+
+        let db = load_users();
+        let Some(record) = db.get(&selected).cloned() else {
+            self.login.error = "Unknown user.".to_string();
+            return;
+        };
+        self.login.selected_username = selected.clone();
+        match record.auth_method {
+            crate::core::auth::AuthMethod::NoPassword => match authenticate(&selected, "") {
+                Ok(user) => self.restore_for_user(&selected, &user),
+                Err(err) => self.login.error = err.to_string(),
+            },
+            crate::core::auth::AuthMethod::Password => {
+                self.login.password.clear();
+                self.login_mode = LoginScreenMode::Password;
+            }
+            crate::core::auth::AuthMethod::HackingMinigame => {
+                self.login.error =
+                    "Hacking login is not implemented in the native rewrite yet.".to_string();
+            }
+        }
+    }
+
     fn logout(&mut self) {
         self.persist_snapshot();
         self.session = None;
+        self.login_mode = LoginScreenMode::SelectUser;
+        self.login.selected_idx = 0;
+        self.login.selected_username.clear();
         self.login.password.clear();
         self.login.error.clear();
         self.file_manager.open = false;
@@ -559,66 +611,107 @@ impl RobcoNativeApp {
     }
 
     fn draw_login(&mut self, ctx: &Context) {
+        let usernames = self.login_usernames();
+        match self.login_mode {
+            LoginScreenMode::SelectUser => {
+                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                    self.login.selected_idx = self.login.selected_idx.saturating_sub(1);
+                }
+                if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                    self.login.selected_idx =
+                        (self.login.selected_idx + 1).min(usernames.len().saturating_sub(1));
+                }
+                if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                    self.activate_login_selection();
+                }
+            }
+            LoginScreenMode::Password => {
+                if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+                    self.login_mode = LoginScreenMode::SelectUser;
+                    self.login.password.clear();
+                    self.login.error.clear();
+                }
+                if ctx.input(|i| i.key_pressed(Key::Backspace)) {
+                    self.login.password.pop();
+                }
+                let events = ctx.input(|i| i.events.clone());
+                for event in events {
+                    if let egui::Event::Text(text) = event {
+                        for ch in text.chars() {
+                            if !ch.is_control() {
+                                self.login.password.push(ch);
+                            }
+                        }
+                    }
+                }
+                if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                    self.do_login();
+                }
+            }
+        }
+
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
+            let palette = current_palette();
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, RETRO_BG);
+            screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
             }
-            screen.separator(&painter, 4);
-            screen.centered_text(&painter, 6, "LOGON", RETRO_GREEN, true);
-            screen.separator(&painter, 8);
-            screen.boxed_panel(&painter, 26, 11, 48, 11);
-            screen.text(&painter, 29, 13, "User", RETRO_GREEN,);
-            screen.text(&painter, 29, 16, "Password", RETRO_GREEN);
-            if !self.login.error.is_empty() {
-                screen.text(&painter, 29, 22, &self.login.error, Color32::LIGHT_RED);
-            }
+            screen.separator(&painter, 4, &palette);
+            screen.centered_text(&painter, 6, "ROBCO TERMLINK - Select User", palette.fg, true);
+            screen.separator(&painter, 8, &palette);
             screen.text(
                 &painter,
-                29,
-                24,
-                "Terminal mode remains a first-class mode.",
-                RETRO_GREEN_DIM,
+                3,
+                10,
+                "Welcome. Please select a user.",
+                palette.fg,
             );
+            if !self.login.error.is_empty() {
+                screen.text(&painter, 4, 31, &self.login.error, Color32::LIGHT_RED);
+            }
 
-            let mut users: Vec<String> = load_users().keys().cloned().collect();
-            users.sort();
-            let user_rect = screen.row_rect(42, 13, 26);
-            let pass_rect = screen.row_rect(42, 16, 26);
-            let button_rect = screen.row_rect(42, 19, 12);
+            let mut row = 13usize;
+            for (idx, user) in usernames.iter().enumerate() {
+                let selected = self.login_mode == LoginScreenMode::SelectUser && idx == self.login.selected_idx;
+                let text = if selected {
+                    format!("  > {user}")
+                } else {
+                    format!("    {user}")
+                };
+                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
+                if response.hovered() && self.login_mode == LoginScreenMode::SelectUser {
+                    self.login.selected_idx = idx;
+                }
+                if response.clicked() {
+                    self.login.selected_idx = idx;
+                    self.activate_login_selection();
+                }
+                row += 1;
+            }
 
-            ui.allocate_ui_at_rect(user_rect, |ui| {
-                egui::ComboBox::from_id_source("native_login_user")
-                    .selected_text(if self.login.username.is_empty() {
-                        "(select user)"
-                    } else {
-                        &self.login.username
-                    })
-                    .show_ui(ui, |ui| {
-                        for user in &users {
-                            ui.selectable_value(&mut self.login.username, user.clone(), user);
-                        }
-                    });
-            });
-            ui.allocate_ui_at_rect(pass_rect, |ui| {
-                let response = ui.add(
-                    TextEdit::singleline(&mut self.login.password)
-                        .password(true)
-                        .hint_text("Password"),
+            if self.login_mode == LoginScreenMode::Password {
+                screen.boxed_panel(&painter, &palette, 26, 13, 48, 8);
+                screen.text(
+                    &painter,
+                    29,
+                    15,
+                    &format!("Password for {}", self.login.selected_username),
+                    palette.fg,
                 );
-                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    self.do_login();
-                }
-            });
-            ui.allocate_ui_at_rect(button_rect, |ui| {
-                if ui.button("Log In").clicked() {
-                    self.do_login();
-                }
-            });
+                let masked = format!("{}_", "*".repeat(self.login.password.chars().count()));
+                screen.text(&painter, 29, 17, &masked, palette.fg);
+                screen.text(
+                    &painter,
+                    29,
+                    19,
+                    "Enter log in | Esc/Tab back | Backspace delete",
+                    palette.dim,
+                );
+            }
         });
     }
 
@@ -698,7 +791,7 @@ impl RobcoNativeApp {
 
     fn draw_desktop(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
             ui.heading("Desktop Shell");
             ui.label("This is the new native workbench, not the old TUI desktop.");
@@ -739,23 +832,24 @@ impl RobcoNativeApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
+            let palette = current_palette();
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, RETRO_BG);
+            screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
             }
-            screen.separator(&painter, 4);
-            screen.centered_text(&painter, 6, "Main Menu", RETRO_GREEN, true);
-            screen.separator(&painter, 8);
+            screen.separator(&painter, 4, &palette);
+            screen.centered_text(&painter, 6, "Main Menu", palette.fg, true);
+            screen.separator(&painter, 8, &palette);
             screen.text(
                 &painter,
                 3,
                 10,
                 &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
-                RETRO_GREEN,
+                palette.fg,
             );
 
             let mut visible_row = 13usize;
@@ -771,7 +865,8 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {}", entry.label)
                 };
-                let response = screen.selectable_row(ui, &painter, 4, visible_row, &text, selected);
+                let response =
+                    screen.selectable_row(ui, &painter, &palette, 4, visible_row, &text, selected);
                 if response.hovered() {
                     self.main_menu_idx = selectable_idx;
                 }
@@ -786,7 +881,7 @@ impl RobcoNativeApp {
             }
 
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 31, &self.shell_status, RETRO_GREEN_DIM);
+                screen.text(&painter, 4, 31, &self.shell_status, palette.dim);
             }
         });
     }
@@ -812,19 +907,20 @@ impl RobcoNativeApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
+            let palette = current_palette();
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, RETRO_BG);
+            screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
             }
-            screen.separator(&painter, 4);
-            screen.centered_text(&painter, 6, title, RETRO_GREEN, true);
-            screen.separator(&painter, 8);
+            screen.separator(&painter, 4, &palette);
+            screen.centered_text(&painter, 6, title, palette.fg, true);
+            screen.separator(&painter, 8, &palette);
             if let Some(sub) = subtitle {
-                screen.text(&painter, 3, 10, sub, RETRO_GREEN);
+                screen.text(&painter, 3, 10, sub, palette.fg);
             }
             let mut row = 13usize;
             for (idx, item) in items.iter().enumerate() {
@@ -834,7 +930,7 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {item}")
                 };
-                let response = screen.selectable_row(ui, &painter, 4, row, &text, selected);
+                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
                 if response.hovered() {
                     *selected_idx = idx;
                 }
@@ -845,7 +941,7 @@ impl RobcoNativeApp {
                 row += 1;
             }
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 31, &self.shell_status, RETRO_GREEN_DIM);
+                screen.text(&painter, 4, 31, &self.shell_status, palette.dim);
             }
         });
 
@@ -911,23 +1007,24 @@ impl RobcoNativeApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
+            let palette = current_palette();
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, RETRO_BG);
+            screen.paint_bg(&painter, palette.bg);
             for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+                screen.centered_text(&painter, idx + 1, line, palette.fg, true);
             }
-            screen.separator(&painter, 4);
-            screen.centered_text(&painter, 6, "Open Documents", RETRO_GREEN, true);
-            screen.separator(&painter, 8);
+            screen.separator(&painter, 4, &palette);
+            screen.centered_text(&painter, 6, "Open Documents", palette.fg, true);
+            screen.separator(&painter, 8, &palette);
             screen.text(
                 &painter,
                 3,
                 10,
                 &self.file_manager.cwd.display().to_string(),
-                RETRO_GREEN,
+                palette.fg,
             );
             let mut row = 13usize;
             for (idx, (label, path)) in rows.iter().enumerate() {
@@ -937,7 +1034,7 @@ impl RobcoNativeApp {
                 } else {
                     format!("    {label}")
                 };
-                let response = screen.selectable_row(ui, &painter, 4, row, &text, selected);
+                let response = screen.selectable_row(ui, &painter, &palette, 4, row, &text, selected);
                 if response.hovered() {
                     self.terminal_browser_idx = idx;
                 }
@@ -954,9 +1051,9 @@ impl RobcoNativeApp {
                 row += 1;
             }
             let hint = "Enter open | Tab back | Up/Down move";
-            screen.text(&painter, 4, 31, hint, RETRO_GREEN_DIM);
+            screen.text(&painter, 4, 31, hint, palette.dim);
             if !self.shell_status.is_empty() {
-                screen.text(&painter, 4, 33, &self.shell_status, RETRO_GREEN_DIM);
+                screen.text(&painter, 4, 33, &self.shell_status, palette.dim);
             }
         });
     }
@@ -1011,11 +1108,12 @@ impl RobcoNativeApp {
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
             .exact_height(28.0)
-            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
+                let palette = current_palette();
                 let (screen, _) = RetroScreen::new(ui, 100, 1);
                 let painter = ui.painter_at(screen.rect);
-                screen.footer_bar(&painter, &left, &center, "44%");
+                screen.footer_bar(&painter, &palette, &left, &center, "44%");
             });
     }
 

@@ -1,14 +1,70 @@
+use crate::config::current_theme_color;
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui,
     Vec2,
 };
+use ratatui::style::Color;
 
-pub const RETRO_GREEN: Color32 = Color32::from_rgb(111, 255, 84);
-pub const RETRO_GREEN_DIM: Color32 = Color32::from_rgb(56, 130, 42);
-pub const RETRO_BG: Color32 = Color32::from_rgb(6, 10, 6);
-pub const RETRO_PANEL: Color32 = Color32::from_rgb(10, 14, 10);
-pub const RETRO_SEL_BG: Color32 = Color32::from_rgb(111, 255, 84);
-pub const RETRO_SEL_FG: Color32 = Color32::from_rgb(0, 0, 0);
+#[derive(Debug, Clone, Copy)]
+pub struct RetroPalette {
+    pub fg: Color32,
+    pub dim: Color32,
+    pub bg: Color32,
+    pub panel: Color32,
+    pub selected_bg: Color32,
+    pub selected_fg: Color32,
+    pub hovered_bg: Color32,
+    pub active_bg: Color32,
+    pub selection_bg: Color32,
+}
+
+fn color32_from_theme(color: Color) -> Color32 {
+    match color {
+        Color::Black => Color32::from_rgb(0, 0, 0),
+        Color::DarkGray => Color32::from_rgb(85, 85, 85),
+        Color::Gray => Color32::from_rgb(170, 170, 170),
+        Color::White => Color32::from_rgb(240, 240, 240),
+        Color::Red | Color::LightRed => Color32::from_rgb(255, 90, 90),
+        Color::Green | Color::LightGreen => Color32::from_rgb(111, 255, 84),
+        Color::Yellow | Color::LightYellow => Color32::from_rgb(255, 191, 74),
+        Color::Blue | Color::LightBlue => Color32::from_rgb(105, 180, 255),
+        Color::Magenta | Color::LightMagenta => Color32::from_rgb(214, 112, 255),
+        Color::Cyan | Color::LightCyan => Color32::from_rgb(110, 235, 255),
+        Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+        Color::Indexed(_) | Color::Reset => Color32::from_rgb(111, 255, 84),
+    }
+}
+
+fn scale(color: Color32, factor: f32) -> Color32 {
+    let [r, g, b, a] = color.to_array();
+    Color32::from_rgba_unmultiplied(
+        ((r as f32) * factor).clamp(0.0, 255.0) as u8,
+        ((g as f32) * factor).clamp(0.0, 255.0) as u8,
+        ((b as f32) * factor).clamp(0.0, 255.0) as u8,
+        a,
+    )
+}
+
+pub fn current_palette() -> RetroPalette {
+    let fg = color32_from_theme(current_theme_color());
+    let brightness = (fg.r() as u16 + fg.g() as u16 + fg.b() as u16) / 3;
+    let selected_fg = if brightness > 96 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    };
+    RetroPalette {
+        fg,
+        dim: scale(fg, 0.52),
+        bg: Color32::from_rgb(0, 0, 0),
+        panel: scale(fg, 0.06),
+        selected_bg: fg,
+        selected_fg,
+        hovered_bg: scale(fg, 0.18),
+        active_bg: scale(fg, 0.26),
+        selection_bg: scale(fg, 0.26),
+    }
+}
 
 pub struct RetroScreen {
     pub rect: Rect,
@@ -65,9 +121,9 @@ impl RetroScreen {
         painter.text(pos, Align2::CENTER_TOP, text, font, color);
     }
 
-    pub fn separator(&self, painter: &Painter, row: usize) {
+    pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
         let text = "=".repeat(self.cols.saturating_sub(4));
-        self.centered_text(painter, row, &text, RETRO_GREEN_DIM, false);
+        self.centered_text(painter, row, &text, palette.dim, false);
     }
 
     pub fn row_rect(&self, col: usize, row: usize, width_chars: usize) -> Rect {
@@ -84,6 +140,7 @@ impl RetroScreen {
         &self,
         ui: &mut Ui,
         painter: &Painter,
+        palette: &RetroPalette,
         col: usize,
         row: usize,
         text: &str,
@@ -91,14 +148,14 @@ impl RetroScreen {
     ) -> Response {
         let rect = self.row_rect(col, row, text.chars().count());
         if selected {
-            painter.rect_filled(rect, 0.0, RETRO_SEL_BG);
+            painter.rect_filled(rect, 0.0, palette.selected_bg);
         }
         painter.text(
             rect.left_top(),
             Align2::LEFT_TOP,
             text,
             self.font.clone(),
-            if selected { RETRO_SEL_FG } else { RETRO_GREEN },
+            if selected { palette.selected_fg } else { palette.fg },
         );
         ui.interact(rect, ui.id().with(("retro_row", row, col, text)), Sense::click())
     }
@@ -106,59 +163,69 @@ impl RetroScreen {
     pub fn footer_bar(
         &self,
         painter: &Painter,
+        palette: &RetroPalette,
         left: &str,
         center: &str,
         right: &str,
     ) {
         let row = self.rows.saturating_sub(1);
         let rect = self.row_rect(0, row, self.cols);
-        painter.rect_filled(rect, 0.0, RETRO_SEL_BG);
+        painter.rect_filled(rect, 0.0, palette.selected_bg);
         painter.text(
             rect.left_top(),
             Align2::LEFT_TOP,
             left,
             self.font.clone(),
-            RETRO_SEL_FG,
+            palette.selected_fg,
         );
         painter.text(
             Pos2::new(rect.center().x, rect.top()),
             Align2::CENTER_TOP,
             center,
             self.font.clone(),
-            RETRO_SEL_FG,
+            palette.selected_fg,
         );
         painter.text(
             Pos2::new(rect.right(), rect.top()),
             Align2::RIGHT_TOP,
             right,
             self.font.clone(),
-            RETRO_SEL_FG,
+            palette.selected_fg,
         );
     }
 
-    pub fn boxed_panel(&self, painter: &Painter, col: usize, row: usize, w: usize, h: usize) {
+    pub fn boxed_panel(
+        &self,
+        painter: &Painter,
+        palette: &RetroPalette,
+        col: usize,
+        row: usize,
+        w: usize,
+        h: usize,
+    ) {
         let rect = self.row_rect(col, row, w);
         let rect = Rect::from_min_size(rect.min, egui::vec2(w as f32 * self.cell.x, h as f32 * self.cell.y));
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RETRO_GREEN));
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, palette.fg));
     }
 }
 
 pub fn configure_visuals(ctx: &Context) {
+    let palette = current_palette();
     let mut visuals = egui::Visuals::dark();
-    visuals.override_text_color = Some(RETRO_GREEN);
-    visuals.window_fill = RETRO_BG;
-    visuals.panel_fill = RETRO_PANEL;
-    visuals.widgets.noninteractive.bg_fill = RETRO_PANEL;
-    visuals.widgets.noninteractive.fg_stroke.color = RETRO_GREEN;
-    visuals.widgets.inactive.bg_fill = RETRO_BG;
-    visuals.widgets.inactive.fg_stroke.color = RETRO_GREEN;
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(25, 45, 20);
-    visuals.widgets.hovered.fg_stroke.color = RETRO_GREEN;
-    visuals.widgets.active.bg_fill = Color32::from_rgb(35, 65, 25);
-    visuals.widgets.active.fg_stroke.color = RETRO_GREEN;
-    visuals.selection.bg_fill = Color32::from_rgb(35, 65, 25);
-    visuals.selection.stroke.color = RETRO_GREEN;
-    visuals.extreme_bg_color = RETRO_BG;
-    visuals.faint_bg_color = RETRO_PANEL;
+    visuals.override_text_color = Some(palette.fg);
+    visuals.window_fill = palette.bg;
+    visuals.panel_fill = palette.panel;
+    visuals.widgets.noninteractive.bg_fill = palette.panel;
+    visuals.widgets.noninteractive.fg_stroke.color = palette.fg;
+    visuals.widgets.inactive.bg_fill = palette.bg;
+    visuals.widgets.inactive.fg_stroke.color = palette.fg;
+    visuals.widgets.hovered.bg_fill = palette.hovered_bg;
+    visuals.widgets.hovered.fg_stroke.color = palette.fg;
+    visuals.widgets.active.bg_fill = palette.active_bg;
+    visuals.widgets.active.fg_stroke.color = palette.fg;
+    visuals.selection.bg_fill = palette.selection_bg;
+    visuals.selection.stroke.color = palette.fg;
+    visuals.extreme_bg_color = palette.bg;
+    visuals.faint_bg_color = palette.panel;
     ctx.set_visuals(visuals);
 }
