@@ -162,11 +162,12 @@ pub fn draw_embedded_pty(
                         bold: false,
                         italic: false,
                         underline: false,
+                        reversed: false,
                     });
-                let fill = color32_from_tui(cell.fg);
-                let text_color = color32_from_tui(cell.bg);
+                let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
+                let fill = cursor_fg;
+                let text_color = cursor_bg;
                 painter.rect_filled(cursor_rect, 0.0, fill);
-                let cursor_text = if cell.ch == ' ' { "_" } else { " " };
                 if cell.ch != ' ' {
                     painter.text(
                         cursor_rect.left_top(),
@@ -179,7 +180,7 @@ pub fn draw_embedded_pty(
                     painter.text(
                         cursor_rect.left_top(),
                         Align2::LEFT_TOP,
-                        cursor_text,
+                        "_",
                         screen.font().clone(),
                         text_color,
                     );
@@ -202,14 +203,14 @@ fn draw_cell(
     cell: &PtyStyledCell,
 ) {
     let rect = screen.row_rect(col, row, 1);
-    let bg = color32_from_tui(cell.bg);
-    let fg = color32_from_tui(cell.fg);
+    let (fg, bg) = resolve_cell_colors(*cell);
     if bg != Color32::BLACK {
         painter.rect_filled(rect, 0.0, bg);
     }
     if cell.ch != ' ' {
+        let italic_x = if cell.italic { 0.25 } else { 0.0 };
         painter.text(
-            rect.left_top(),
+            Pos2::new(rect.left() + italic_x, rect.top()),
             Align2::LEFT_TOP,
             cell.ch.to_string(),
             screen.font().clone(),
@@ -374,11 +375,72 @@ fn color32_from_tui(color: Color) -> Color32 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_to_pty_cell_maps_and_clamps_coordinates() {
+        let rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 120.0));
+        assert_eq!(
+            pointer_to_pty_cell(rect, 20, 10, Pos2::new(10.0, 20.0)),
+            Some((0, 0))
+        );
+        assert_eq!(
+            pointer_to_pty_cell(rect, 20, 10, Pos2::new(209.9, 119.9)),
+            Some((19, 9))
+        );
+        assert_eq!(
+            pointer_to_pty_cell(rect, 20, 10, Pos2::new(111.0, 70.0)),
+            Some((10, 5))
+        );
+    }
+
+    #[test]
+    fn pointer_to_pty_cell_rejects_outside_points() {
+        let rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 50.0));
+        assert_eq!(
+            pointer_to_pty_cell(rect, 10, 5, Pos2::new(-1.0, 10.0)),
+            None
+        );
+        assert_eq!(
+            pointer_to_pty_cell(rect, 10, 5, Pos2::new(20.0, 51.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_cell_colors_swaps_on_reversed_attribute() {
+        let normal = PtyStyledCell {
+            ch: 'x',
+            fg: Color::Green,
+            bg: Color::Black,
+            bold: false,
+            italic: false,
+            underline: false,
+            reversed: false,
+        };
+        let reversed = PtyStyledCell {
+            reversed: true,
+            ..normal
+        };
+        let (nfg, nbg) = resolve_cell_colors(normal);
+        let (rfg, rbg) = resolve_cell_colors(reversed);
+        assert_eq!(nfg, rbg);
+        assert_eq!(nbg, rfg);
+    }
+}
+
 fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
     let events = ctx.input(|i| i.events.clone());
     for event in events {
         match event {
-            egui::Event::Paste(text) | egui::Event::Text(text) => {
+            egui::Event::Paste(text) => {
+                if !text.is_empty() {
+                    session.send_paste(&text);
+                }
+            }
+            egui::Event::Text(text) => {
                 if !text.is_empty() {
                     session.write(text.as_bytes());
                 }
@@ -392,6 +454,10 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
                 if modifiers.ctrl && key == Key::Q {
                     continue;
                 }
+                if (modifiers.command && key == Key::V) || (modifiers.shift && key == Key::Insert) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    continue;
+                }
                 if let Some((code, mods)) = map_key_event(key, modifiers) {
                     session.send_key(code, mods);
                 }
@@ -399,6 +465,15 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
             _ => {}
         }
     }
+}
+
+fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
+    let mut fg = color32_from_tui(cell.fg);
+    let mut bg = color32_from_tui(cell.bg);
+    if cell.reversed {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    (fg, bg)
 }
 
 fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyModifiers)> {

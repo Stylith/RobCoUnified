@@ -1,3 +1,4 @@
+use super::edit_menus_screen::EditMenuTarget;
 use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use crate::config::ConnectionKind;
 use crate::connections::NetworkMenuGroup;
@@ -73,6 +74,26 @@ pub enum PromptOutcome {
         action: InstallerPackageAction,
         confirmed: bool,
     },
+    EditMenuAddProgramName {
+        target: EditMenuTarget,
+        name: String,
+    },
+    EditMenuAddProgramCommand {
+        target: EditMenuTarget,
+        name: String,
+        command: String,
+    },
+    EditMenuAddCategoryName(String),
+    EditMenuAddCategoryPath {
+        name: String,
+        path: String,
+    },
+    ConfirmEditMenuDelete {
+        target: EditMenuTarget,
+        name: String,
+        confirmed: bool,
+    },
+    NewLogName(String),
     Noop,
 }
 
@@ -179,10 +200,34 @@ pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptO
                             display_name: prompt.buffer,
                         }
                     }
+                    TerminalPromptAction::EditMenuAddProgramName { target } => {
+                        PromptOutcome::EditMenuAddProgramName {
+                            target,
+                            name: prompt.buffer,
+                        }
+                    }
+                    TerminalPromptAction::EditMenuAddProgramCommand { target, name } => {
+                        PromptOutcome::EditMenuAddProgramCommand {
+                            target,
+                            name,
+                            command: prompt.buffer,
+                        }
+                    }
+                    TerminalPromptAction::EditMenuAddCategoryName => {
+                        PromptOutcome::EditMenuAddCategoryName(prompt.buffer)
+                    }
+                    TerminalPromptAction::EditMenuAddCategoryPath { name } => {
+                        PromptOutcome::EditMenuAddCategoryPath {
+                            name,
+                            path: prompt.buffer,
+                        }
+                    }
+                    TerminalPromptAction::NewLogName => PromptOutcome::NewLogName(prompt.buffer),
                     TerminalPromptAction::Noop => PromptOutcome::Noop,
                     TerminalPromptAction::ConfirmDeleteUser { .. }
                     | TerminalPromptAction::ConfirmToggleAdmin { .. }
-                    | TerminalPromptAction::ConfirmInstallerAction { .. } => PromptOutcome::Cancel,
+                    | TerminalPromptAction::ConfirmInstallerAction { .. }
+                    | TerminalPromptAction::ConfirmEditMenuDelete { .. } => PromptOutcome::Cancel,
                 };
             }
             PromptOutcome::Continue(prompt)
@@ -215,6 +260,13 @@ pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptO
                         PromptOutcome::ConfirmInstallerAction {
                             pkg,
                             action,
+                            confirmed: prompt.confirm_yes,
+                        }
+                    }
+                    TerminalPromptAction::ConfirmEditMenuDelete { target, name } => {
+                        PromptOutcome::ConfirmEditMenuDelete {
+                            target,
+                            name,
                             confirmed: prompt.confirm_yes,
                         }
                     }

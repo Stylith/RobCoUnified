@@ -4,6 +4,7 @@ mod connections_screen;
 mod data;
 mod default_apps_screen;
 mod document_browser;
+mod edit_menus_screen;
 mod file_manager;
 mod hacking_screen;
 mod installer_screen;

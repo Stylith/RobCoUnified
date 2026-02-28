@@ -561,6 +561,7 @@ pub struct PtyStyledCell {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub reversed: bool,
 }
 
 #[allow(dead_code)]
@@ -672,6 +673,21 @@ impl PtySession {
         }
     }
 
+    /// Send pasted text, honoring bracketed paste mode when enabled by child app.
+    #[allow(dead_code)]
+    pub fn send_paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let bracketed = self
+            .parser
+            .lock()
+            .map(|p| p.screen().bracketed_paste())
+            .unwrap_or(false);
+        let bytes = format_paste_bytes(text, bracketed);
+        self.write(&bytes);
+    }
+
     /// Send a translated mouse event to the PTY child using xterm SGR mouse encoding.
     pub fn send_mouse_event(
         &mut self,
@@ -779,6 +795,7 @@ impl PtySession {
                     bold: style.add_modifier.contains(Modifier::BOLD),
                     italic: style.add_modifier.contains(Modifier::ITALIC),
                     underline: style.add_modifier.contains(Modifier::UNDERLINED),
+                    reversed: style.add_modifier.contains(Modifier::REVERSED),
                 });
             }
             lines.push(out);
@@ -859,6 +876,18 @@ impl PtySession {
 
         f.render_widget(Paragraph::new(lines), area);
     }
+}
+
+#[allow(dead_code)]
+fn format_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    if !bracketed {
+        return text.as_bytes().to_vec();
+    }
+    let mut out = Vec::with_capacity(text.len() + 16);
+    out.extend_from_slice(b"\x1b[200~");
+    out.extend_from_slice(text.as_bytes());
+    out.extend_from_slice(b"\x1b[201~");
+    out
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1590,8 +1619,8 @@ fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoop
 #[cfg(test)]
 mod tests {
     use super::{
-        key_to_bytes, mouse_to_bytes, needs_ncurses_ascii_acs, smooth_ascii_border_char,
-        DecSpecialGraphics,
+        format_paste_bytes, key_to_bytes, mouse_to_bytes, needs_ncurses_ascii_acs,
+        smooth_ascii_border_char, DecSpecialGraphics,
     };
     use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
     use vt100::{MouseProtocolEncoding, MouseProtocolMode};
@@ -1711,5 +1740,14 @@ mod tests {
             MouseProtocolEncoding::Sgr,
         );
         assert!(bytes.is_none());
+    }
+
+    #[test]
+    fn paste_bytes_are_wrapped_only_in_bracketed_mode() {
+        assert_eq!(format_paste_bytes("abc\n", false), b"abc\n".to_vec());
+        assert_eq!(
+            format_paste_bytes("abc\n", true),
+            b"\x1b[200~abc\n\x1b[201~".to_vec()
+        );
     }
 }

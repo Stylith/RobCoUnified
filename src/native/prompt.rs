@@ -1,3 +1,4 @@
+use super::edit_menus_screen::EditMenuTarget;
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::ConnectionKind;
 use crate::config::HEADER_LINES;
@@ -85,6 +86,22 @@ pub enum TerminalPromptAction {
         pkg: String,
         action: InstallerPackageAction,
     },
+    EditMenuAddProgramName {
+        target: EditMenuTarget,
+    },
+    EditMenuAddProgramCommand {
+        target: EditMenuTarget,
+        name: String,
+    },
+    EditMenuAddCategoryName,
+    EditMenuAddCategoryPath {
+        name: String,
+    },
+    ConfirmEditMenuDelete {
+        target: EditMenuTarget,
+        name: String,
+    },
+    NewLogName,
     Noop,
 }
 

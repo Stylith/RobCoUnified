@@ -12,6 +12,7 @@ pub enum TerminalSettingsEvent {
     Persist,
     Back,
     OpenConnections,
+    OpenEditMenus,
     OpenDefaultApps,
     OpenAbout,
     EnterUserManagement,
@@ -26,6 +27,7 @@ enum SettingsRowId {
     InterfaceSize,
     DefaultOpenMode,
     Connections,
+    EditMenus,
     DefaultApps,
     About,
     UserManagement,
@@ -254,6 +256,7 @@ fn handle_settings_activation(
             TerminalSettingsEvent::None
         }
         SettingsRowId::Connections => TerminalSettingsEvent::OpenConnections,
+        SettingsRowId::EditMenus => TerminalSettingsEvent::OpenEditMenus,
         SettingsRowId::DefaultApps => TerminalSettingsEvent::OpenDefaultApps,
         SettingsRowId::About => TerminalSettingsEvent::OpenAbout,
         SettingsRowId::UserManagement => TerminalSettingsEvent::EnterUserManagement,
@@ -352,6 +355,7 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
     if !macos_connections_disabled() {
         rows.push(("Connections".to_string(), SettingsRowId::Connections));
     }
+    rows.push(("Edit Menus".to_string(), SettingsRowId::EditMenus));
     rows.push(("Default Apps".to_string(), SettingsRowId::DefaultApps));
     rows.push(("About".to_string(), SettingsRowId::About));
     if is_admin {
@@ -387,6 +391,7 @@ mod tests {
     fn terminal_settings_rows_include_default_apps_and_about() {
         let draft = get_settings();
         let user_rows = terminal_settings_rows(&draft, false);
+        assert!(user_rows.iter().any(|(label, _)| label == "Edit Menus"));
         assert!(user_rows.iter().any(|(label, _)| label == "Default Apps"));
         assert!(user_rows.iter().any(|(label, _)| label == "About"));
         assert_eq!(
@@ -422,6 +427,10 @@ mod tests {
             .iter()
             .position(|(_, id)| *id == SettingsRowId::DefaultApps)
             .unwrap();
+        let edit_menus_idx = rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::EditMenus)
+            .unwrap();
         let about_idx = rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::About)
@@ -431,6 +440,10 @@ mod tests {
             .position(|(_, id)| *id == SettingsRowId::UserManagement)
             .unwrap();
 
+        assert!(matches!(
+            handle_settings_activation(&mut draft, edit_menus_idx, &mut overlay, false),
+            TerminalSettingsEvent::OpenEditMenus
+        ));
         assert!(matches!(
             handle_settings_activation(&mut draft, default_apps_idx, &mut overlay, false),
             TerminalSettingsEvent::OpenDefaultApps

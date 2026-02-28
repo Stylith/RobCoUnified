@@ -61,6 +61,12 @@ pub fn word_processor_dir(username: &str) -> PathBuf {
     dir
 }
 
+pub fn logs_dir() -> PathBuf {
+    let dir = PathBuf::from("journal_entries");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn save_text_file(path: &PathBuf, text: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

@@ -4,7 +4,7 @@ use super::connections_screen::{
     TerminalConnectionsState,
 };
 use super::data::{
-    app_names, authenticate, current_settings, home_dir_fallback, read_shell_snapshot,
+    app_names, authenticate, current_settings, home_dir_fallback, logs_dir, read_shell_snapshot,
     read_text_file, save_settings, save_text_file, word_processor_dir, write_shell_snapshot,
 };
 use super::default_apps_screen::{
@@ -12,6 +12,10 @@ use super::default_apps_screen::{
     DefaultAppsEvent,
 };
 use super::document_browser::{activate_browser_selection, draw_terminal_document_browser};
+use super::edit_menus_screen::{
+    draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, EditMenusEvent,
+    TerminalEditMenusState,
+};
 use super::file_manager::{FileManagerAction, NativeFileManagerState};
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
 use super::installer_screen::{
@@ -48,17 +52,21 @@ use super::user_management::{
     screen_for_mode as user_management_screen_for_mode, UserManagementAction,
 };
 use crate::config::ConnectionKind;
-use crate::config::{load_games, load_networks, OpenMode, Settings, THEMES};
+use crate::config::{
+    load_apps, load_categories, load_games, load_networks, save_apps, save_categories, save_games,
+    save_networks, OpenMode, Settings, THEMES,
+};
 use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
 use crate::core::auth::{load_users, save_users, UserRecord};
 use crate::core::hacking::HackingGame;
-use crate::default_apps::{set_binding_for_slot, DefaultAppSlot};
+use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, DefaultAppSlot};
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
     RichText, TextEdit, TextStyle, TopBottomPanel,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -132,8 +140,8 @@ struct TerminalModeWindow {
     status: String,
 }
 
-const DOCUMENT_MENU_ITEMS: &[&str] = &["New Document", "Open Documents", "Back"];
-const STATIC_APP_MENU_ITEMS: &[&str] = &["ROBCO Word Processor"];
+const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
+const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 const TERMINAL_SCREEN_COLS: usize = 92;
 const TERMINAL_SCREEN_ROWS: usize = 34;
 const TERMINAL_CONTENT_COL: usize = 3;
@@ -247,16 +255,19 @@ pub struct RobcoNativeApp {
     terminal_screen: TerminalScreen,
     terminal_apps_idx: usize,
     terminal_documents_idx: usize,
+    terminal_logs_idx: usize,
     terminal_network_idx: usize,
     terminal_games_idx: usize,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
+    terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
     terminal_default_apps_idx: usize,
     terminal_default_app_choice_idx: usize,
     terminal_default_app_slot: Option<DefaultAppSlot>,
     terminal_browser_idx: usize,
+    terminal_browser_return: TerminalScreen,
     terminal_user_management_idx: usize,
     terminal_user_management_mode: UserManagementMode,
     terminal_settings_choice: Option<SettingsChoiceOverlay>,
@@ -293,16 +304,19 @@ impl Default for RobcoNativeApp {
             terminal_screen: TerminalScreen::MainMenu,
             terminal_apps_idx: 0,
             terminal_documents_idx: 0,
+            terminal_logs_idx: 0,
             terminal_network_idx: 0,
             terminal_games_idx: 0,
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
             terminal_settings_idx: 0,
+            terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
             terminal_default_apps_idx: 0,
             terminal_default_app_choice_idx: 0,
             terminal_default_app_slot: None,
             terminal_browser_idx: 0,
+            terminal_browser_return: TerminalScreen::Documents,
             terminal_user_management_idx: 0,
             terminal_user_management_mode: UserManagementMode::Root,
             terminal_settings_choice: None,
@@ -343,16 +357,19 @@ impl RobcoNativeApp {
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_apps_idx = 0;
         self.terminal_documents_idx = 0;
+        self.terminal_logs_idx = 0;
         self.terminal_network_idx = 0;
         self.terminal_games_idx = 0;
         self.terminal_pty = None;
         self.terminal_installer.reset();
         self.terminal_settings_idx = 0;
+        self.terminal_edit_menus.reset();
         self.terminal_connections.reset();
         self.terminal_default_apps_idx = 0;
         self.terminal_default_app_choice_idx = 0;
         self.terminal_default_app_slot = None;
         self.terminal_browser_idx = 0;
+        self.terminal_browser_return = TerminalScreen::Documents;
         self.terminal_user_management_idx = 0;
         self.terminal_user_management_mode = UserManagementMode::Root;
         self.terminal_settings_choice = None;
@@ -444,12 +461,23 @@ impl RobcoNativeApp {
         self.terminal_mode.open = false;
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
+        self.terminal_apps_idx = 0;
+        self.terminal_documents_idx = 0;
+        self.terminal_logs_idx = 0;
+        self.terminal_network_idx = 0;
+        self.terminal_games_idx = 0;
+        self.terminal_settings_idx = 0;
         self.terminal_default_apps_idx = 0;
         self.terminal_connections.reset();
+        self.terminal_edit_menus.reset();
         self.terminal_pty = None;
         self.terminal_installer.reset();
         self.terminal_default_app_choice_idx = 0;
         self.terminal_default_app_slot = None;
+        self.terminal_browser_idx = 0;
+        self.terminal_browser_return = TerminalScreen::Documents;
+        self.terminal_user_management_idx = 0;
+        self.terminal_user_management_mode = UserManagementMode::Root;
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
         self.terminal_flash = None;
@@ -658,13 +686,191 @@ impl RobcoNativeApp {
     }
 
     fn terminal_app_items(&self) -> Vec<String> {
-        let mut items: Vec<String> = STATIC_APP_MENU_ITEMS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        items.extend(app_names());
+        let mut items: Vec<String> = Vec::new();
+        if self.settings.draft.builtin_menu_visibility.nuke_codes {
+            items.push(BUILTIN_NUKE_CODES_APP.to_string());
+        }
+        if self.settings.draft.builtin_menu_visibility.text_editor {
+            items.push(BUILTIN_TEXT_EDITOR_APP.to_string());
+        }
+        items.extend(
+            app_names()
+                .into_iter()
+                .filter(|name| name != BUILTIN_NUKE_CODES_APP && name != BUILTIN_TEXT_EDITOR_APP),
+        );
+        items.push("---".to_string());
         items.push("Back".to_string());
         items
+    }
+
+    fn sorted_keys(data: &serde_json::Map<String, Value>) -> Vec<String> {
+        let mut names: Vec<String> = data.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
+        match target {
+            EditMenuTarget::Applications => Self::sorted_keys(&load_apps()),
+            EditMenuTarget::Documents => Self::sorted_keys(&load_categories()),
+            EditMenuTarget::Network => Self::sorted_keys(&load_networks()),
+            EditMenuTarget::Games => Self::sorted_keys(&load_games()),
+        }
+    }
+
+    fn add_program_entry(&mut self, target: EditMenuTarget, name: String, command: String) {
+        let Some(argv) = parse_custom_command_line(command.trim()) else {
+            self.shell_status = "Error: invalid command line".to_string();
+            return;
+        };
+        if argv.is_empty() {
+            self.shell_status = "Error: invalid command line".to_string();
+            return;
+        }
+        let json_argv = Value::Array(argv.into_iter().map(Value::String).collect());
+        match target {
+            EditMenuTarget::Applications => {
+                let mut apps = load_apps();
+                apps.insert(name.clone(), json_argv);
+                save_apps(&apps);
+            }
+            EditMenuTarget::Documents => {
+                self.shell_status = "Error: invalid target for command entry.".to_string();
+                return;
+            }
+            EditMenuTarget::Network => {
+                let mut network = load_networks();
+                network.insert(name.clone(), json_argv);
+                save_networks(&network);
+            }
+            EditMenuTarget::Games => {
+                let mut games = load_games();
+                games.insert(name.clone(), json_argv);
+                save_games(&games);
+            }
+        }
+        self.shell_status = format!("{name} added.");
+    }
+
+    fn delete_program_entry(&mut self, target: EditMenuTarget, name: &str) {
+        match target {
+            EditMenuTarget::Applications => {
+                let mut apps = load_apps();
+                apps.remove(name);
+                save_apps(&apps);
+            }
+            EditMenuTarget::Documents => {
+                self.delete_document_category(name);
+                return;
+            }
+            EditMenuTarget::Network => {
+                let mut network = load_networks();
+                network.remove(name);
+                save_networks(&network);
+            }
+            EditMenuTarget::Games => {
+                let mut games = load_games();
+                games.remove(name);
+                save_games(&games);
+            }
+        }
+        self.shell_status = format!("{name} deleted.");
+    }
+
+    fn expand_tilde(raw: &str) -> PathBuf {
+        if let Some(rest) = raw.strip_prefix('~') {
+            if let Some(home) = dirs::home_dir() {
+                return PathBuf::from(format!("{}{}", home.display(), rest));
+            }
+        }
+        PathBuf::from(raw)
+    }
+
+    fn add_document_category(&mut self, name: String, path_raw: String) {
+        let expanded = Self::expand_tilde(path_raw.trim());
+        if !expanded.is_dir() {
+            self.shell_status = "Error: Invalid directory.".to_string();
+            return;
+        }
+        let mut categories = load_categories();
+        categories.insert(name, Value::String(expanded.to_string_lossy().to_string()));
+        save_categories(&categories);
+        self.shell_status = "Category added.".to_string();
+    }
+
+    fn delete_document_category(&mut self, name: &str) {
+        let mut categories = load_categories();
+        categories.remove(name);
+        save_categories(&categories);
+        self.shell_status = "Deleted.".to_string();
+    }
+
+    fn sorted_document_categories() -> Vec<String> {
+        Self::sorted_keys(&load_categories())
+    }
+
+    fn open_document_browser_at(&mut self, dir: PathBuf, return_screen: TerminalScreen) {
+        if !dir.is_dir() {
+            self.shell_status = format!("Error: '{}' not found.", dir.display());
+            return;
+        }
+        self.file_manager.set_cwd(dir);
+        self.file_manager.selected = None;
+        self.terminal_browser_idx = 0;
+        self.terminal_browser_return = return_screen;
+        self.terminal_screen = TerminalScreen::DocumentBrowser;
+    }
+
+    fn open_log_view(&mut self) {
+        self.open_document_browser_at(logs_dir(), TerminalScreen::Logs);
+    }
+
+    fn normalize_new_file_name(raw: &str, default_stem: &str) -> Option<String> {
+        let candidate = if raw.trim().is_empty() {
+            default_stem.to_string()
+        } else {
+            raw.trim().to_string()
+        };
+        let mut normalized = String::new();
+        let mut last_was_sep = false;
+        for ch in candidate.chars() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                normalized.push(ch);
+                last_was_sep = false;
+            } else if ch.is_whitespace() && !normalized.is_empty() && !last_was_sep {
+                normalized.push('_');
+                last_was_sep = true;
+            }
+        }
+        let normalized = normalized.trim_matches(['_', '.', ' ']).to_string();
+        if normalized.is_empty() || normalized == "." || normalized == ".." {
+            return None;
+        }
+        if std::path::Path::new(&normalized).extension().is_some() {
+            Some(normalized)
+        } else {
+            Some(format!("{normalized}.txt"))
+        }
+    }
+
+    fn create_or_open_log(&mut self, raw_name: &str) {
+        let default_stem = Local::now().format("%Y-%m-%d").to_string();
+        let Some(name) = Self::normalize_new_file_name(raw_name, &default_stem) else {
+            self.shell_status = "Error: Invalid document name.".to_string();
+            return;
+        };
+        let path = logs_dir().join(name);
+        let existing = if path.exists() {
+            std::fs::read_to_string(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.editor.path = Some(path);
+        self.editor.text = existing;
+        self.editor.dirty = false;
+        self.editor.open = true;
+        self.editor.status = "Opened log.".to_string();
+        self.shell_status = "Opened log editor.".to_string();
     }
 
     fn persist_native_settings(&mut self) {
@@ -717,12 +923,14 @@ impl RobcoNativeApp {
                 match screen {
                     TerminalScreen::Applications => self.terminal_apps_idx = selected_idx,
                     TerminalScreen::Documents => self.terminal_documents_idx = selected_idx,
+                    TerminalScreen::Logs => self.terminal_logs_idx = selected_idx,
                     TerminalScreen::Network => self.terminal_network_idx = selected_idx,
                     TerminalScreen::Games => self.terminal_games_idx = selected_idx,
                     TerminalScreen::ProgramInstaller => {
                         self.terminal_installer.root_idx = selected_idx
                     }
                     TerminalScreen::Settings => self.terminal_settings_idx = selected_idx,
+                    TerminalScreen::EditMenus => {}
                     TerminalScreen::Connections => {
                         self.terminal_connections.root_idx = selected_idx
                     }
@@ -758,16 +966,6 @@ impl RobcoNativeApp {
         }
     }
 
-    fn open_documents_browser(&mut self) {
-        if let Some(session) = &self.session {
-            self.file_manager
-                .set_cwd(word_processor_dir(&session.username));
-            self.file_manager.selected = None;
-            self.terminal_browser_idx = 0;
-            self.terminal_screen = TerminalScreen::DocumentBrowser;
-        }
-    }
-
     fn handle_terminal_back(&mut self) {
         if self.terminal_settings_choice.is_some() {
             self.terminal_settings_choice = None;
@@ -800,6 +998,10 @@ impl RobcoNativeApp {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
             }
+            TerminalScreen::Logs => {
+                self.terminal_screen = TerminalScreen::Documents;
+                self.shell_status.clear();
+            }
             TerminalScreen::PtyApp => {
                 if let Some(mut pty) = self.terminal_pty.take() {
                     pty.session.terminate();
@@ -815,12 +1017,15 @@ impl RobcoNativeApp {
                 self.shell_status.clear();
                 self.terminal_installer.reset();
             }
-            TerminalScreen::Connections | TerminalScreen::DefaultApps | TerminalScreen::About => {
+            TerminalScreen::Connections
+            | TerminalScreen::DefaultApps
+            | TerminalScreen::About
+            | TerminalScreen::EditMenus => {
                 self.terminal_screen = TerminalScreen::Settings;
                 self.shell_status.clear();
             }
             TerminalScreen::DocumentBrowser => {
-                self.terminal_screen = TerminalScreen::Documents;
+                self.terminal_screen = self.terminal_browser_return;
                 self.shell_status.clear();
             }
         }
@@ -1009,6 +1214,64 @@ impl RobcoNativeApp {
                 }
                 self.terminal_user_management_mode = UserManagementMode::Root;
                 self.terminal_user_management_idx = 0;
+            }
+            PromptOutcome::EditMenuAddProgramName { target, name } => {
+                self.terminal_prompt = None;
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    self.shell_status = "Error: Invalid input.".to_string();
+                    return;
+                }
+                self.open_input_prompt(
+                    format!("Edit {}", target.title()),
+                    format!("Enter launch command for '{name}':"),
+                    TerminalPromptAction::EditMenuAddProgramCommand { target, name },
+                );
+            }
+            PromptOutcome::EditMenuAddProgramCommand {
+                target,
+                name,
+                command,
+            } => {
+                self.terminal_prompt = None;
+                self.add_program_entry(target, name, command);
+            }
+            PromptOutcome::EditMenuAddCategoryName(name) => {
+                self.terminal_prompt = None;
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    self.shell_status = "Error: Invalid input.".to_string();
+                    return;
+                }
+                self.open_input_prompt(
+                    "Edit Documents",
+                    "Enter folder path:",
+                    TerminalPromptAction::EditMenuAddCategoryPath { name },
+                );
+            }
+            PromptOutcome::EditMenuAddCategoryPath { name, path } => {
+                self.terminal_prompt = None;
+                if path.trim().is_empty() {
+                    self.shell_status = "Error: Invalid input.".to_string();
+                    return;
+                }
+                self.add_document_category(name, path);
+            }
+            PromptOutcome::ConfirmEditMenuDelete {
+                target,
+                name,
+                confirmed,
+            } => {
+                self.terminal_prompt = None;
+                if confirmed {
+                    self.delete_program_entry(target, &name);
+                } else {
+                    self.shell_status = "Cancelled.".to_string();
+                }
+            }
+            PromptOutcome::NewLogName(name) => {
+                self.terminal_prompt = None;
+                self.create_or_open_log(&name);
             }
             PromptOutcome::Noop => {
                 self.terminal_prompt = None;
@@ -1346,34 +1609,39 @@ impl RobcoNativeApp {
         self.terminal_apps_idx = selected;
         if let Some(idx) = activated {
             let label = &items[idx];
-            if label == "ROBCO Word Processor" {
+            if label == BUILTIN_TEXT_EDITOR_APP {
                 self.editor.open = true;
                 if self.editor.path.is_none() {
                     self.new_document();
                 }
-                self.shell_status = "Opened ROBCO Word Processor.".to_string();
+                self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
+            } else if label == BUILTIN_NUKE_CODES_APP {
+                self.shell_status = "Nuke Codes native app is pending rewrite.".to_string();
             } else if label == "Back" {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
             } else {
-                self.shell_status =
-                    format!("External app launch for '{label}' is pending rewrite.");
+                let apps = load_apps();
+                match resolve_program_command(label, &apps) {
+                    Ok(cmd) => self.open_embedded_pty(label, &cmd, TerminalScreen::Applications),
+                    Err(err) => self.shell_status = err,
+                }
             }
         }
     }
 
     fn draw_terminal_documents(&mut self, ctx: &Context) {
-        let items: Vec<String> = DOCUMENT_MENU_ITEMS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
+        let mut items = vec!["Logs".to_string()];
+        items.extend(Self::sorted_document_categories());
+        items.push("---".to_string());
+        items.push("Back".to_string());
         let mut selected = self
             .terminal_documents_idx
             .min(items.len().saturating_sub(1));
         let activated = draw_terminal_menu_screen(
             ctx,
             "Documents",
-            Some("ROBCO Word Processor"),
+            Some("Select Document Type"),
             &items,
             &mut selected,
             TERMINAL_SCREEN_COLS,
@@ -1390,14 +1658,73 @@ impl RobcoNativeApp {
         );
         self.terminal_documents_idx = selected;
         if let Some(idx) = activated {
-            match items[idx].as_str() {
-                "New Document" => {
-                    self.new_document();
-                    self.shell_status = "New document created.".to_string();
+            let selected = items[idx].as_str();
+            match selected {
+                "Logs" => {
+                    self.terminal_screen = TerminalScreen::Logs;
+                    self.terminal_logs_idx = 0;
+                    self.shell_status.clear();
                 }
-                "Open Documents" => self.open_documents_browser(),
                 "Back" => {
                     self.terminal_screen = TerminalScreen::MainMenu;
+                    self.shell_status.clear();
+                }
+                "---" => {}
+                category => {
+                    let categories = load_categories();
+                    let Some(path_str) = categories.get(category).and_then(|v| v.as_str()) else {
+                        self.shell_status = format!("Error: invalid category '{category}'.");
+                        return;
+                    };
+                    self.open_document_browser_at(
+                        PathBuf::from(path_str),
+                        TerminalScreen::Documents,
+                    );
+                }
+            }
+        }
+    }
+
+    fn draw_terminal_logs(&mut self, ctx: &Context) {
+        let items = vec![
+            "New Log".to_string(),
+            "View Logs".to_string(),
+            "---".to_string(),
+            "Back".to_string(),
+        ];
+        let mut selected = self.terminal_logs_idx.min(items.len().saturating_sub(1));
+        let activated = draw_terminal_menu_screen(
+            ctx,
+            "Logs",
+            None,
+            &items,
+            &mut selected,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+            &self.shell_status,
+        );
+        self.terminal_logs_idx = selected;
+        if let Some(idx) = activated {
+            match items[idx].as_str() {
+                "New Log" => {
+                    let default_stem = Local::now().format("%Y-%m-%d").to_string();
+                    self.open_input_prompt(
+                        "New Log",
+                        format!("Document name (.txt default, blank for {default_stem}.txt):"),
+                        TerminalPromptAction::NewLogName,
+                    );
+                }
+                "View Logs" => self.open_log_view(),
+                "Back" => {
+                    self.terminal_screen = TerminalScreen::Documents;
                     self.shell_status.clear();
                 }
                 _ => {}
@@ -1468,6 +1795,11 @@ impl RobcoNativeApp {
                 self.terminal_connections.reset();
                 self.shell_status.clear();
             }
+            TerminalSettingsEvent::OpenEditMenus => {
+                self.terminal_screen = TerminalScreen::EditMenus;
+                self.terminal_edit_menus.reset();
+                self.shell_status.clear();
+            }
             TerminalSettingsEvent::OpenDefaultApps => {
                 self.terminal_screen = TerminalScreen::DefaultApps;
                 self.terminal_default_apps_idx = 0;
@@ -1484,6 +1816,87 @@ impl RobcoNativeApp {
                 self.terminal_user_management_mode = UserManagementMode::Root;
                 self.terminal_user_management_idx = 0;
                 self.shell_status.clear();
+            }
+        }
+    }
+
+    fn draw_terminal_edit_menus(&mut self, ctx: &Context) {
+        let applications = self.edit_program_entries(EditMenuTarget::Applications);
+        let documents = self.edit_program_entries(EditMenuTarget::Documents);
+        let network = self.edit_program_entries(EditMenuTarget::Network);
+        let games = self.edit_program_entries(EditMenuTarget::Games);
+        let event = draw_edit_menus_screen(
+            ctx,
+            &mut self.terminal_edit_menus,
+            EditMenusEntries {
+                applications: &applications,
+                documents: &documents,
+                network: &network,
+                games: &games,
+            },
+            self.settings.draft.builtin_menu_visibility.nuke_codes,
+            self.settings.draft.builtin_menu_visibility.text_editor,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            EditMenusEvent::None => {}
+            EditMenusEvent::BackToSettings => {
+                self.terminal_screen = TerminalScreen::Settings;
+                self.shell_status.clear();
+            }
+            EditMenusEvent::ToggleBuiltinNukeCodes => {
+                self.settings.draft.builtin_menu_visibility.nuke_codes =
+                    !self.settings.draft.builtin_menu_visibility.nuke_codes;
+                self.persist_native_settings();
+            }
+            EditMenusEvent::ToggleBuiltinTextEditor => {
+                self.settings.draft.builtin_menu_visibility.text_editor =
+                    !self.settings.draft.builtin_menu_visibility.text_editor;
+                self.persist_native_settings();
+            }
+            EditMenusEvent::PromptAddProgramName(target) => {
+                self.open_input_prompt(
+                    format!("Edit {}", target.title()),
+                    format!("Enter {} display name:", target.singular()),
+                    TerminalPromptAction::EditMenuAddProgramName { target },
+                );
+            }
+            EditMenusEvent::PromptAddCategoryName => {
+                self.open_input_prompt(
+                    "Edit Documents",
+                    "Enter category name:",
+                    TerminalPromptAction::EditMenuAddCategoryName,
+                );
+            }
+            EditMenusEvent::ConfirmDeleteProgram { target, name } => {
+                self.open_confirm_prompt(
+                    format!("Delete {}", target.singular()),
+                    format!("Delete '{name}'?"),
+                    TerminalPromptAction::ConfirmEditMenuDelete { target, name },
+                );
+            }
+            EditMenusEvent::ConfirmDeleteCategory { name } => {
+                self.open_confirm_prompt(
+                    "Delete Category",
+                    format!("Delete category '{name}'?"),
+                    TerminalPromptAction::ConfirmEditMenuDelete {
+                        target: EditMenuTarget::Documents,
+                        name,
+                    },
+                );
+            }
+            EditMenusEvent::Status(status) => {
+                self.shell_status = status;
             }
         }
     }
@@ -2342,12 +2755,14 @@ impl eframe::App for RobcoNativeApp {
                 TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
                 TerminalScreen::Applications => self.draw_terminal_applications(ctx),
                 TerminalScreen::Documents => self.draw_terminal_documents(ctx),
+                TerminalScreen::Logs => self.draw_terminal_logs(ctx),
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
                 TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+                TerminalScreen::EditMenus => self.draw_terminal_edit_menus(ctx),
                 TerminalScreen::Connections => self.draw_terminal_connections(ctx),
                 TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
                 TerminalScreen::About => self.draw_terminal_about(ctx),
