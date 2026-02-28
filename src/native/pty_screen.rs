@@ -1,0 +1,549 @@
+use super::menu::TerminalScreen;
+use super::retro_ui::{current_palette, RetroScreen};
+use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect};
+use ratatui::style::Color;
+use std::path::Path;
+
+pub struct NativePtyState {
+    pub title: String,
+    pub return_screen: TerminalScreen,
+    pub session: PtySession,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyScreenEvent {
+    None,
+    CloseRequested,
+    ProcessExited,
+}
+
+pub fn spawn_embedded_pty(
+    title: &str,
+    cmd: &[String],
+    return_screen: TerminalScreen,
+    cols: u16,
+    rows: u16,
+) -> Result<NativePtyState, String> {
+    spawn_embedded_pty_with_options(
+        title,
+        cmd,
+        return_screen,
+        cols,
+        rows,
+        PtyLaunchOptions::default(),
+    )
+}
+
+pub fn spawn_embedded_pty_with_options(
+    title: &str,
+    cmd: &[String],
+    return_screen: TerminalScreen,
+    cols: u16,
+    rows: u16,
+    options: PtyLaunchOptions,
+) -> Result<NativePtyState, String> {
+    if cmd.is_empty() {
+        return Err("Error: empty command.".to_string());
+    }
+    let cmd = rewrite_legacy_command(cmd);
+    let session = spawn_with_fallback(&cmd, cols.max(1), rows.max(1), &options)
+        .map_err(|err| format!("Launch failed: {err}"))?;
+    Ok(NativePtyState {
+        title: title.to_string(),
+        return_screen,
+        session,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_embedded_pty(
+    ctx: &Context,
+    state: &mut NativePtyState,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    content_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> PtyScreenEvent {
+    if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
+        return PtyScreenEvent::CloseRequested;
+    }
+
+    let pty_cols = cols.saturating_sub(content_col * 2).max(1) as u16;
+    let pty_rows = status_row.saturating_sub(content_start_row + 1).max(1) as u16;
+    state.session.resize(pty_cols, pty_rows);
+    handle_pty_input(ctx, &mut state.session);
+
+    if !state.session.is_alive() {
+        return PtyScreenEvent::ProcessExited;
+    }
+
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::none()
+                .fill(current_palette().bg)
+                .inner_margin(0.0),
+        )
+        .show(ctx, |ui| {
+            let palette = current_palette();
+            let (screen, response) = RetroScreen::new(ui, cols, rows);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, palette.bg);
+            for (idx, line) in crate::config::HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
+            }
+            screen.separator(&painter, separator_top_row, &palette);
+            screen.centered_text(&painter, title_row, &state.title, palette.fg, true);
+            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.underlined_text(
+                &painter,
+                content_col,
+                subtitle_row,
+                "Embedded PTY  Ctrl+Q close",
+                palette.fg,
+            );
+
+            let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+            let content_rect = Rect::from_min_max(
+                screen.row_rect(content_col, content_start_row, 1).min,
+                Pos2::new(
+                    screen
+                        .row_rect(content_col + pty_cols as usize, content_start_row, 1)
+                        .min
+                        .x,
+                    screen
+                        .row_rect(content_col, content_start_row + pty_rows as usize, 1)
+                        .min
+                        .y,
+                ),
+            );
+            handle_pty_mouse(
+                ui.ctx(),
+                &response,
+                content_rect,
+                pty_cols,
+                pty_rows,
+                &mut state.session,
+            );
+
+            for (row_idx, row) in snapshot.cells.iter().enumerate() {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    draw_cell(
+                        &screen,
+                        &painter,
+                        content_col + col_idx,
+                        content_start_row + row_idx,
+                        cell,
+                    );
+                }
+            }
+
+            if !snapshot.cursor_hidden {
+                let row = content_start_row + snapshot.cursor_row as usize;
+                let col = content_col + snapshot.cursor_col as usize;
+                let cursor_rect = screen.row_rect(col, row, 1);
+                let cell = snapshot
+                    .cells
+                    .get(snapshot.cursor_row as usize)
+                    .and_then(|line| line.get(snapshot.cursor_col as usize))
+                    .copied()
+                    .unwrap_or(PtyStyledCell {
+                        ch: ' ',
+                        fg: Color::White,
+                        bg: Color::Black,
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                    });
+                let fill = color32_from_tui(cell.fg);
+                let text_color = color32_from_tui(cell.bg);
+                painter.rect_filled(cursor_rect, 0.0, fill);
+                let cursor_text = if cell.ch == ' ' { "_" } else { " " };
+                if cell.ch != ' ' {
+                    painter.text(
+                        cursor_rect.left_top(),
+                        Align2::LEFT_TOP,
+                        cell.ch.to_string(),
+                        screen.font().clone(),
+                        text_color,
+                    );
+                } else {
+                    painter.text(
+                        cursor_rect.left_top(),
+                        Align2::LEFT_TOP,
+                        cursor_text,
+                        screen.font().clone(),
+                        text_color,
+                    );
+                }
+            }
+
+            if !shell_status.is_empty() {
+                screen.text(&painter, content_col, status_row, shell_status, palette.dim);
+            }
+        });
+
+    PtyScreenEvent::None
+}
+
+fn draw_cell(
+    screen: &RetroScreen,
+    painter: &egui::Painter,
+    col: usize,
+    row: usize,
+    cell: &PtyStyledCell,
+) {
+    let rect = screen.row_rect(col, row, 1);
+    let bg = color32_from_tui(cell.bg);
+    let fg = color32_from_tui(cell.fg);
+    if bg != Color32::BLACK {
+        painter.rect_filled(rect, 0.0, bg);
+    }
+    if cell.ch != ' ' {
+        painter.text(
+            rect.left_top(),
+            Align2::LEFT_TOP,
+            cell.ch.to_string(),
+            screen.font().clone(),
+            fg,
+        );
+        if cell.bold {
+            painter.text(
+                Pos2::new(rect.left() + 0.7, rect.top()),
+                Align2::LEFT_TOP,
+                cell.ch.to_string(),
+                screen.font().clone(),
+                fg,
+            );
+        }
+    }
+    if cell.underline {
+        let y = rect.bottom() - 2.0;
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            egui::Stroke::new(1.0, fg),
+        );
+    }
+}
+
+fn handle_pty_mouse(
+    ctx: &Context,
+    response: &egui::Response,
+    content_rect: Rect,
+    pty_cols: u16,
+    pty_rows: u16,
+    session: &mut PtySession,
+) {
+    if !response.hovered() {
+        return;
+    }
+    let events = ctx.input(|i| i.events.clone());
+    for event in events {
+        match event {
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers,
+            } if content_rect.contains(pos) => {
+                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos)
+                {
+                    if let Some(btn) = map_mouse_button(button) {
+                        let kind = if pressed {
+                            MouseEventKind::Down(btn)
+                        } else {
+                            MouseEventKind::Up(btn)
+                        };
+                        session.send_mouse_event(kind, egui_mods_to_crossterm(modifiers), col, row);
+                    }
+                }
+            }
+            egui::Event::PointerMoved(pos) if content_rect.contains(pos) => {
+                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos)
+                {
+                    let mods = ctx.input(|i| egui_mods_to_crossterm(i.modifiers));
+                    let pointer = ctx.input(|i| i.pointer.clone());
+                    let kind = if pointer.button_down(egui::PointerButton::Primary) {
+                        MouseEventKind::Drag(MouseButton::Left)
+                    } else if pointer.button_down(egui::PointerButton::Secondary) {
+                        MouseEventKind::Drag(MouseButton::Right)
+                    } else if pointer.button_down(egui::PointerButton::Middle) {
+                        MouseEventKind::Drag(MouseButton::Middle)
+                    } else {
+                        MouseEventKind::Moved
+                    };
+                    session.send_mouse_event(kind, mods, col, row);
+                }
+            }
+            egui::Event::MouseWheel {
+                delta, modifiers, ..
+            } => {
+                let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+                    continue;
+                };
+                if !content_rect.contains(pos) {
+                    continue;
+                }
+                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos)
+                {
+                    let kind = if delta.y < 0.0 {
+                        Some(MouseEventKind::ScrollDown)
+                    } else if delta.y > 0.0 {
+                        Some(MouseEventKind::ScrollUp)
+                    } else if delta.x < 0.0 {
+                        Some(MouseEventKind::ScrollRight)
+                    } else if delta.x > 0.0 {
+                        Some(MouseEventKind::ScrollLeft)
+                    } else {
+                        None
+                    };
+                    if let Some(kind) = kind {
+                        session.send_mouse_event(kind, egui_mods_to_crossterm(modifiers), col, row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pointer_to_pty_cell(
+    content_rect: Rect,
+    pty_cols: u16,
+    pty_rows: u16,
+    pos: Pos2,
+) -> Option<(u16, u16)> {
+    if !content_rect.contains(pos) {
+        return None;
+    }
+    let cell_w = (content_rect.width() / pty_cols.max(1) as f32).max(1.0);
+    let cell_h = (content_rect.height() / pty_rows.max(1) as f32).max(1.0);
+    let col = ((pos.x - content_rect.left()) / cell_w).floor().max(0.0) as u16;
+    let row = ((pos.y - content_rect.top()) / cell_h).floor().max(0.0) as u16;
+    Some((
+        col.min(pty_cols.saturating_sub(1)),
+        row.min(pty_rows.saturating_sub(1)),
+    ))
+}
+
+fn map_mouse_button(button: egui::PointerButton) -> Option<MouseButton> {
+    match button {
+        egui::PointerButton::Primary => Some(MouseButton::Left),
+        egui::PointerButton::Secondary => Some(MouseButton::Right),
+        egui::PointerButton::Middle => Some(MouseButton::Middle),
+        _ => None,
+    }
+}
+
+fn egui_mods_to_crossterm(modifiers: egui::Modifiers) -> KeyModifiers {
+    let mut mods = KeyModifiers::empty();
+    if modifiers.ctrl {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if modifiers.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if modifiers.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+    mods
+}
+
+fn color32_from_tui(color: Color) -> Color32 {
+    match color {
+        Color::Black => Color32::from_rgb(0, 0, 0),
+        Color::DarkGray => Color32::from_rgb(85, 85, 85),
+        Color::Gray => Color32::from_rgb(170, 170, 170),
+        Color::White => Color32::from_rgb(240, 240, 240),
+        Color::Red | Color::LightRed => Color32::from_rgb(255, 90, 90),
+        Color::Green | Color::LightGreen => Color32::from_rgb(111, 255, 84),
+        Color::Yellow | Color::LightYellow => Color32::from_rgb(255, 191, 74),
+        Color::Blue | Color::LightBlue => Color32::from_rgb(105, 180, 255),
+        Color::Magenta | Color::LightMagenta => Color32::from_rgb(214, 112, 255),
+        Color::Cyan | Color::LightCyan => Color32::from_rgb(110, 235, 255),
+        Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+        Color::Indexed(_) | Color::Reset => Color32::from_rgb(111, 255, 84),
+    }
+}
+
+fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
+    let events = ctx.input(|i| i.events.clone());
+    for event in events {
+        match event {
+            egui::Event::Paste(text) | egui::Event::Text(text) => {
+                if !text.is_empty() {
+                    session.write(text.as_bytes());
+                }
+            }
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if modifiers.ctrl && key == Key::Q {
+                    continue;
+                }
+                if let Some((code, mods)) = map_key_event(key, modifiers) {
+                    session.send_key(code, mods);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyModifiers)> {
+    let mut mods = KeyModifiers::empty();
+    if modifiers.ctrl {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if modifiers.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if modifiers.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+
+    let code = match key {
+        Key::ArrowUp => KeyCode::Up,
+        Key::ArrowDown => KeyCode::Down,
+        Key::ArrowLeft => KeyCode::Left,
+        Key::ArrowRight => KeyCode::Right,
+        Key::Escape => KeyCode::Esc,
+        Key::Tab => KeyCode::Tab,
+        Key::Backspace => KeyCode::Backspace,
+        Key::Enter => KeyCode::Enter,
+        Key::Home => KeyCode::Home,
+        Key::End => KeyCode::End,
+        Key::Insert => KeyCode::Insert,
+        Key::Delete => KeyCode::Delete,
+        Key::PageUp => KeyCode::PageUp,
+        Key::PageDown => KeyCode::PageDown,
+        Key::Space => KeyCode::Char(' '),
+        Key::A => KeyCode::Char('a'),
+        Key::B => KeyCode::Char('b'),
+        Key::C => KeyCode::Char('c'),
+        Key::D => KeyCode::Char('d'),
+        Key::E => KeyCode::Char('e'),
+        Key::F => KeyCode::Char('f'),
+        Key::G => KeyCode::Char('g'),
+        Key::H => KeyCode::Char('h'),
+        Key::I => KeyCode::Char('i'),
+        Key::J => KeyCode::Char('j'),
+        Key::K => KeyCode::Char('k'),
+        Key::L => KeyCode::Char('l'),
+        Key::M => KeyCode::Char('m'),
+        Key::N => KeyCode::Char('n'),
+        Key::O => KeyCode::Char('o'),
+        Key::P => KeyCode::Char('p'),
+        Key::Q => KeyCode::Char('q'),
+        Key::R => KeyCode::Char('r'),
+        Key::S => KeyCode::Char('s'),
+        Key::T => KeyCode::Char('t'),
+        Key::U => KeyCode::Char('u'),
+        Key::V => KeyCode::Char('v'),
+        Key::W => KeyCode::Char('w'),
+        Key::X => KeyCode::Char('x'),
+        Key::Y => KeyCode::Char('y'),
+        Key::Z => KeyCode::Char('z'),
+        Key::Num0 => KeyCode::Char('0'),
+        Key::Num1 => KeyCode::Char('1'),
+        Key::Num2 => KeyCode::Char('2'),
+        Key::Num3 => KeyCode::Char('3'),
+        Key::Num4 => KeyCode::Char('4'),
+        Key::Num5 => KeyCode::Char('5'),
+        Key::Num6 => KeyCode::Char('6'),
+        Key::Num7 => KeyCode::Char('7'),
+        Key::Num8 => KeyCode::Char('8'),
+        Key::Num9 => KeyCode::Char('9'),
+        _ => return None,
+    };
+    Some((code, mods))
+}
+
+fn spawn_with_fallback(
+    cmd: &[String],
+    cols: u16,
+    rows: u16,
+    options: &PtyLaunchOptions,
+) -> anyhow::Result<PtySession> {
+    let program = &cmd[0];
+    let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
+    match PtySession::spawn(program, &args, cols, rows, options) {
+        Ok(session) => Ok(session),
+        Err(primary_err) => {
+            let Some(shell_cmd) = build_shell_fallback_command(cmd) else {
+                return Err(primary_err);
+            };
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            PtySession::spawn(shell_program, &shell_args, cols, rows, options).map_err(
+                |shell_err| {
+                    anyhow::anyhow!(
+                        "launch failed: {primary_err}; shell fallback failed: {shell_err}"
+                    )
+                },
+            )
+        }
+    }
+}
+
+fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
+    if cmd.is_empty() {
+        return Vec::new();
+    }
+    let mut out = cmd.to_vec();
+    if out[0] == "rtv" && !command_exists("rtv") && command_exists("tuir") {
+        out[0] = "tuir".to_string();
+    }
+    out
+}
+
+fn command_exists(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    if name.contains('/') {
+        return Path::new(name).is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+}
+
+fn build_shell_fallback_command(cmd: &[String]) -> Option<Vec<String>> {
+    if cmd.is_empty() || cmd[0].contains('/') {
+        return None;
+    }
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_string());
+    let line = cmd
+        .iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(vec![shell, "-ic".to_string(), line])
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || "-_./:=".contains(ch))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}

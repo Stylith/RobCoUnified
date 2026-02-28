@@ -24,11 +24,14 @@ fn sibling_tui_binary() -> PathBuf {
 
 fn shell_command_for_tui() -> String {
     let tui = sibling_tui_binary();
-    format!("cd '{}' && '{}'", tui.parent().unwrap_or(Path::new(".")).display(), tui.display())
+    format!(
+        "cd '{}' && '{}'",
+        tui.parent().unwrap_or(Path::new(".")).display(),
+        tui.display()
+    )
 }
 
-pub fn launch_plan() -> TerminalLaunchPlan {
-    let command = shell_command_for_tui();
+fn launch_plan_for_command(command: String, display: String) -> TerminalLaunchPlan {
     #[cfg(target_os = "macos")]
     {
         return TerminalLaunchPlan {
@@ -40,41 +43,73 @@ pub fn launch_plan() -> TerminalLaunchPlan {
                     command.replace('\\', "\\\\").replace('\"', "\\\"")
                 ),
             ],
-            display: "Terminal.app -> robcos".to_string(),
+            display,
         };
     }
     #[cfg(target_os = "windows")]
     {
         return TerminalLaunchPlan {
             program: "cmd".to_string(),
-            args: vec!["/C".to_string(), "start".to_string(), "cmd".to_string(), "/K".to_string(), command],
-            display: "cmd.exe -> robcos".to_string(),
+            args: vec![
+                "/C".to_string(),
+                "start".to_string(),
+                "cmd".to_string(),
+                "/K".to_string(),
+                command,
+            ],
+            display,
         };
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let terminals = [
-            ("x-terminal-emulator", vec!["-e".to_string(), command.clone()]),
-            ("gnome-terminal", vec!["--".to_string(), "sh".to_string(), "-lc".to_string(), command.clone()]),
-            ("konsole", vec!["-e".to_string(), "sh".to_string(), "-lc".to_string(), command.clone()]),
+            (
+                "x-terminal-emulator",
+                vec!["-e".to_string(), command.clone()],
+            ),
+            (
+                "gnome-terminal",
+                vec![
+                    "--".to_string(),
+                    "sh".to_string(),
+                    "-lc".to_string(),
+                    command.clone(),
+                ],
+            ),
+            (
+                "konsole",
+                vec![
+                    "-e".to_string(),
+                    "sh".to_string(),
+                    "-lc".to_string(),
+                    command.clone(),
+                ],
+            ),
             ("xfce4-terminal", vec!["-e".to_string(), command.clone()]),
-            ("kitty", vec!["sh".to_string(), "-lc".to_string(), command.clone()]),
+            (
+                "kitty",
+                vec!["sh".to_string(), "-lc".to_string(), command.clone()],
+            ),
         ];
         for (program, args) in terminals {
             if which(program) {
                 return TerminalLaunchPlan {
                     program: program.to_string(),
                     args,
-                    display: format!("{program} -> robcos"),
+                    display,
                 };
             }
         }
         TerminalLaunchPlan {
             program: "sh".to_string(),
             args: vec!["-lc".to_string(), command],
-            display: "sh -> robcos".to_string(),
+            display,
         }
     }
+}
+
+pub fn launch_plan() -> TerminalLaunchPlan {
+    launch_plan_for_command(shell_command_for_tui(), "terminal -> robcos".to_string())
 }
 
 pub fn launch_terminal_mode() -> Result<TerminalLaunchPlan> {

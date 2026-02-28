@@ -1,7 +1,22 @@
+mod about_screen;
 pub mod app;
+mod connections_screen;
 mod data;
+mod default_apps_screen;
+mod document_browser;
 mod file_manager;
+mod hacking_screen;
+mod installer_screen;
+mod menu;
+mod programs_screen;
+mod prompt;
+mod prompt_flow;
+mod pty_screen;
 mod retro_ui;
+mod settings_screen;
+mod shell_actions;
+mod shell_screen;
 mod terminal;
+mod user_management;
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};

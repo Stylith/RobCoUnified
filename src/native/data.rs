@@ -47,7 +47,8 @@ pub fn app_names() -> Vec<String> {
 }
 
 pub fn home_dir_fallback() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    dirs::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 pub fn documents_dir() -> PathBuf {

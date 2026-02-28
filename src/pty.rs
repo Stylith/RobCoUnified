@@ -544,6 +544,34 @@ pub struct PtySession {
     master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct PtyTextSnapshot {
+    pub lines: Vec<String>,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct PtyStyledCell {
+    pub ch: char,
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct PtyStyledSnapshot {
+    pub cells: Vec<Vec<PtyStyledCell>>,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub cursor_hidden: bool,
+}
+
 impl PtySession {
     pub fn spawn(
         program: &str,
@@ -692,6 +720,76 @@ impl PtySession {
     /// Is the child process still running?
     pub fn is_alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Snapshot the current screen as plain text for non-ratatui renderers.
+    #[allow(dead_code)]
+    pub fn snapshot_plain(&self, cols: u16, rows: u16) -> PtyTextSnapshot {
+        let Ok(parser) = self.parser.lock() else {
+            return PtyTextSnapshot {
+                lines: vec![String::new(); rows as usize],
+                cursor_row: 0,
+                cursor_col: 0,
+            };
+        };
+        let screen = parser.screen();
+        let mut lines: Vec<String> = screen.rows(0, cols).take(rows as usize).collect();
+        while lines.len() < rows as usize {
+            lines.push(String::new());
+        }
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        PtyTextSnapshot {
+            lines,
+            cursor_row: cursor_row.min(rows.saturating_sub(1)),
+            cursor_col: cursor_col.min(cols.saturating_sub(1)),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn snapshot_styled(&self, cols: u16, rows: u16) -> PtyStyledSnapshot {
+        let Ok(parser) = self.parser.lock() else {
+            return PtyStyledSnapshot {
+                cells: vec![vec![]; rows as usize],
+                cursor_row: 0,
+                cursor_col: 0,
+                cursor_hidden: false,
+            };
+        };
+        let screen = parser.screen();
+        let mut lines = Vec::with_capacity(rows as usize);
+        for row in 0..rows {
+            let mut out = Vec::with_capacity(cols as usize);
+            for col in 0..cols {
+                let cell = screen.cell(row, col);
+                let ch = cell
+                    .and_then(|c| c.contents().chars().next())
+                    .unwrap_or(' ');
+                let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
+                    smooth_ascii_border_char(screen, row, col, ch)
+                } else {
+                    ch
+                };
+                let style = cell
+                    .map(|c| vt100_style(c, self.color_mode))
+                    .unwrap_or_else(|| vt100_default_style(self.color_mode));
+                out.push(PtyStyledCell {
+                    ch,
+                    fg: style.fg.unwrap_or(crate::config::current_theme_color()),
+                    bg: style.bg.unwrap_or(Color::Black),
+                    bold: style.add_modifier.contains(Modifier::BOLD),
+                    italic: style.add_modifier.contains(Modifier::ITALIC),
+                    underline: style.add_modifier.contains(Modifier::UNDERLINED),
+                });
+            }
+            lines.push(out);
+        }
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        PtyStyledSnapshot {
+            cells: lines,
+            cursor_row: cursor_row.min(rows.saturating_sub(1)),
+            cursor_col: cursor_col.min(cols.saturating_sub(1)),
+            cursor_hidden: screen.hide_cursor(),
+        }
     }
 
     /// Force-stop the PTY child process and release its resources.

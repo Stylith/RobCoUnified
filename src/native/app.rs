@@ -1,14 +1,58 @@
+use super::about_screen::draw_about_screen;
+use super::connections_screen::{
+    apply_search_query as apply_connection_search_query, draw_connections_screen, ConnectionsEvent,
+    TerminalConnectionsState,
+};
 use super::data::{
     app_names, authenticate, current_settings, home_dir_fallback, read_shell_snapshot,
     read_text_file, save_settings, save_text_file, word_processor_dir, write_shell_snapshot,
 };
-use super::file_manager::{FileManagerAction, NativeFileManagerState};
-use super::retro_ui::{
-    configure_visuals, current_palette, RetroScreen,
+use super::default_apps_screen::{
+    apply_custom_command as apply_default_app_custom_command, draw_default_apps_screen,
+    DefaultAppsEvent,
 };
+use super::document_browser::{activate_browser_selection, draw_terminal_document_browser};
+use super::file_manager::{FileManagerAction, NativeFileManagerState};
+use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
+use super::installer_screen::{
+    add_package_to_menu, apply_filter as apply_installer_filter,
+    apply_search_query as apply_installer_search_query, build_package_command,
+    draw_installer_screen, InstallerEvent, InstallerPackageAction, TerminalInstallerState,
+};
+use super::menu::{
+    draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
+    UserManagementMode,
+};
+use super::programs_screen::{draw_programs_menu, resolve_program_command, ProgramMenuEvent};
+use super::prompt::{
+    draw_terminal_flash, draw_terminal_prompt_overlay, FlashAction, TerminalFlash, TerminalPrompt,
+    TerminalPromptAction, TerminalPromptKind,
+};
+use super::prompt_flow::{handle_prompt_input, PromptOutcome};
+use super::pty_screen::{
+    draw_embedded_pty, spawn_embedded_pty, spawn_embedded_pty_with_options, NativePtyState,
+    PtyScreenEvent,
+};
+use super::retro_ui::{configure_visuals, current_palette, RetroScreen};
+use super::settings_screen::{
+    run_terminal_settings_screen, TerminalSettingsEvent, NATIVE_UI_SCALE_OPTIONS,
+};
+use super::shell_actions::{
+    resolve_login_selection, resolve_main_menu_action, LoginSelectionAction,
+    MainMenuSelectionAction,
+};
+use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use super::terminal::{launch_plan, launch_terminal_mode};
-use crate::config::{OpenMode, Settings, HEADER_LINES, THEMES};
+use super::user_management::{
+    handle_selection as handle_user_management_selection,
+    screen_for_mode as user_management_screen_for_mode, UserManagementAction,
+};
+use crate::config::ConnectionKind;
+use crate::config::{load_games, load_networks, OpenMode, Settings, THEMES};
+use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
 use crate::core::auth::{load_users, save_users, UserRecord};
+use crate::core::hacking::HackingGame;
+use crate::default_apps::{set_binding_for_slot, DefaultAppSlot};
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
@@ -50,6 +94,14 @@ struct LoginState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginScreenMode {
     SelectUser,
+    Hacking,
+    Locked,
+}
+
+#[derive(Debug)]
+struct LoginHackingState {
+    username: String,
+    game: HackingGame,
 }
 
 #[derive(Debug)]
@@ -80,159 +132,6 @@ struct TerminalModeWindow {
     status: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SettingsChoiceKind {
-    Theme,
-    DefaultOpenMode,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SettingsChoiceOverlay {
-    kind: SettingsChoiceKind,
-    selected: usize,
-}
-
-#[derive(Debug, Clone)]
-enum UserManagementMode {
-    Root,
-    CreateAuthMethod { username: String },
-    DeleteUser,
-    ResetPassword,
-    ChangeAuthSelectUser,
-    ChangeAuthChoose { username: String },
-    ToggleAdmin,
-}
-
-#[derive(Debug, Clone)]
-enum FlashAction {
-    ExitApp,
-    FinishLogout,
-    FinishLogin {
-        username: String,
-        user: UserRecord,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct TerminalFlash {
-    message: String,
-    until: Instant,
-    action: FlashAction,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerminalPromptKind {
-    Input,
-    Password,
-    Confirm,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TerminalPromptAction {
-    LoginPassword,
-    CreateUsername,
-    CreatePassword { username: String },
-    CreatePasswordConfirm { username: String, first_password: String },
-    ResetPassword { username: String },
-    ResetPasswordConfirm { username: String, first_password: String },
-    ChangeAuthPassword { username: String },
-    ChangeAuthPasswordConfirm { username: String, first_password: String },
-    ConfirmDeleteUser { username: String },
-    ConfirmToggleAdmin { username: String },
-    Noop,
-}
-
-#[derive(Debug, Clone)]
-struct TerminalPrompt {
-    kind: TerminalPromptKind,
-    title: String,
-    prompt: String,
-    buffer: String,
-    confirm_yes: bool,
-    action: TerminalPromptAction,
-}
-
-#[derive(Debug, Clone)]
-enum LoginMenuRow {
-    User(String),
-    Separator,
-    Exit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerminalScreen {
-    MainMenu,
-    Applications,
-    Documents,
-    DocumentBrowser,
-    Settings,
-    UserManagement,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum MainMenuAction {
-    Applications,
-    Documents,
-    Network,
-    Games,
-    ProgramInstaller,
-    Terminal,
-    DesktopMode,
-    Settings,
-    Logout,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MainMenuEntry {
-    label: &'static str,
-    action: Option<MainMenuAction>,
-}
-
-const MAIN_MENU_ENTRIES: &[MainMenuEntry] = &[
-    MainMenuEntry {
-        label: "Applications",
-        action: Some(MainMenuAction::Applications),
-    },
-    MainMenuEntry {
-        label: "Documents",
-        action: Some(MainMenuAction::Documents),
-    },
-    MainMenuEntry {
-        label: "Network",
-        action: Some(MainMenuAction::Network),
-    },
-    MainMenuEntry {
-        label: "Games",
-        action: Some(MainMenuAction::Games),
-    },
-    MainMenuEntry {
-        label: "Program Installer",
-        action: Some(MainMenuAction::ProgramInstaller),
-    },
-    MainMenuEntry {
-        label: "Terminal",
-        action: Some(MainMenuAction::Terminal),
-    },
-    MainMenuEntry {
-        label: "Desktop Mode",
-        action: Some(MainMenuAction::DesktopMode),
-    },
-    MainMenuEntry {
-        label: "---",
-        action: None,
-    },
-    MainMenuEntry {
-        label: "Settings",
-        action: Some(MainMenuAction::Settings),
-    },
-    MainMenuEntry {
-        label: "Logout",
-        action: Some(MainMenuAction::Logout),
-    },
-];
-
 const DOCUMENT_MENU_ITEMS: &[&str] = &["New Document", "Open Documents", "Back"];
 const STATIC_APP_MENU_ITEMS: &[&str] = &["ROBCO Word Processor"];
 const TERMINAL_SCREEN_COLS: usize = 92;
@@ -246,21 +145,6 @@ const TERMINAL_SUBTITLE_ROW: usize = 7;
 const TERMINAL_MENU_START_ROW: usize = 9;
 const TERMINAL_STATUS_ROW: usize = 28;
 const TERMINAL_STATUS_ROW_ALT: usize = 30;
-
-fn selectable_menu_count() -> usize {
-    MAIN_MENU_ENTRIES.iter().filter(|entry| entry.action.is_some()).count()
-}
-
-const NATIVE_UI_SCALE_OPTIONS: &[f32] = &[0.85, 1.0, 1.2, 1.4, 1.7, 2.0, 2.3, 2.6];
-
-fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
-    MAIN_MENU_ENTRIES
-        .iter()
-        .copied()
-        .filter(|entry| entry.action.is_some())
-        .nth(idx)
-        .unwrap_or(MAIN_MENU_ENTRIES[0])
-}
 
 fn retro_footer_height() -> f32 {
     26.0
@@ -318,19 +202,30 @@ fn configure_native_fonts(ctx: &Context) {
 pub fn apply_native_appearance(ctx: &Context) {
     configure_visuals(ctx);
     let mut style = (*ctx.style()).clone();
-    let scale = crate::config::get_settings().native_ui_scale.clamp(0.75, 2.6);
+    let scale = crate::config::get_settings()
+        .native_ui_scale
+        .clamp(0.75, 2.6);
     style.text_styles = [
         (
             TextStyle::Heading,
             FontId::new(28.0 * scale, FontFamily::Monospace),
         ),
-        (TextStyle::Body, FontId::new(22.0 * scale, FontFamily::Monospace)),
+        (
+            TextStyle::Body,
+            FontId::new(22.0 * scale, FontFamily::Monospace),
+        ),
         (
             TextStyle::Monospace,
             FontId::new(22.0 * scale, FontFamily::Monospace),
         ),
-        (TextStyle::Button, FontId::new(22.0 * scale, FontFamily::Monospace)),
-        (TextStyle::Small, FontId::new(18.0 * scale, FontFamily::Monospace)),
+        (
+            TextStyle::Button,
+            FontId::new(22.0 * scale, FontFamily::Monospace),
+        ),
+        (
+            TextStyle::Small,
+            FontId::new(18.0 * scale, FontFamily::Monospace),
+        ),
     ]
     .into();
     ctx.set_style(style);
@@ -339,6 +234,7 @@ pub fn apply_native_appearance(ctx: &Context) {
 pub struct RobcoNativeApp {
     login: LoginState,
     login_mode: LoginScreenMode,
+    login_hacking: Option<LoginHackingState>,
     session: Option<SessionState>,
     file_manager: NativeFileManagerState,
     editor: EditorWindow,
@@ -351,7 +247,15 @@ pub struct RobcoNativeApp {
     terminal_screen: TerminalScreen,
     terminal_apps_idx: usize,
     terminal_documents_idx: usize,
+    terminal_network_idx: usize,
+    terminal_games_idx: usize,
+    terminal_pty: Option<NativePtyState>,
+    terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
+    terminal_connections: TerminalConnectionsState,
+    terminal_default_apps_idx: usize,
+    terminal_default_app_choice_idx: usize,
+    terminal_default_app_slot: Option<DefaultAppSlot>,
     terminal_browser_idx: usize,
     terminal_user_management_idx: usize,
     terminal_user_management_mode: UserManagementMode,
@@ -366,6 +270,7 @@ impl Default for RobcoNativeApp {
         Self {
             login: LoginState::default(),
             login_mode: LoginScreenMode::SelectUser,
+            login_hacking: None,
             session: None,
             file_manager: NativeFileManagerState::new(home_dir_fallback()),
             editor: EditorWindow {
@@ -388,7 +293,15 @@ impl Default for RobcoNativeApp {
             terminal_screen: TerminalScreen::MainMenu,
             terminal_apps_idx: 0,
             terminal_documents_idx: 0,
+            terminal_network_idx: 0,
+            terminal_games_idx: 0,
+            terminal_pty: None,
+            terminal_installer: TerminalInstallerState::default(),
             terminal_settings_idx: 0,
+            terminal_connections: TerminalConnectionsState::default(),
+            terminal_default_apps_idx: 0,
+            terminal_default_app_choice_idx: 0,
+            terminal_default_app_slot: None,
             terminal_browser_idx: 0,
             terminal_user_management_idx: 0,
             terminal_user_management_mode: UserManagementMode::Root,
@@ -408,6 +321,7 @@ impl RobcoNativeApp {
             username: username.to_string(),
             is_admin: user.is_admin,
         });
+        self.login_hacking = None;
         self.file_manager.cwd = if snapshot.file_manager_dir.exists() {
             snapshot.file_manager_dir
         } else {
@@ -429,7 +343,15 @@ impl RobcoNativeApp {
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_apps_idx = 0;
         self.terminal_documents_idx = 0;
+        self.terminal_network_idx = 0;
+        self.terminal_games_idx = 0;
+        self.terminal_pty = None;
+        self.terminal_installer.reset();
         self.terminal_settings_idx = 0;
+        self.terminal_connections.reset();
+        self.terminal_default_apps_idx = 0;
+        self.terminal_default_app_choice_idx = 0;
+        self.terminal_default_app_slot = None;
         self.terminal_browser_idx = 0;
         self.terminal_user_management_idx = 0;
         self.terminal_user_management_mode = UserManagementMode::Root;
@@ -462,6 +384,16 @@ impl RobcoNativeApp {
         );
     }
 
+    fn queue_hacking_start(&mut self, username: String) {
+        self.login.error.clear();
+        self.terminal_prompt = None;
+        self.queue_terminal_flash(
+            "SECURITY OVERRIDE",
+            1200,
+            FlashAction::StartHacking { username },
+        );
+    }
+
     fn do_login(&mut self) {
         self.login.error.clear();
         let username = self.login.selected_username.trim().to_string();
@@ -481,17 +413,6 @@ impl RobcoNativeApp {
         usernames
     }
 
-    fn login_menu_rows(&self) -> Vec<LoginMenuRow> {
-        let mut rows: Vec<LoginMenuRow> = self
-            .login_usernames()
-            .into_iter()
-            .map(LoginMenuRow::User)
-            .collect();
-        rows.push(LoginMenuRow::Separator);
-        rows.push(LoginMenuRow::Exit);
-        rows
-    }
-
     fn queue_terminal_flash(&mut self, message: impl Into<String>, ms: u64, action: FlashAction) {
         self.terminal_flash = Some(TerminalFlash {
             message: message.into(),
@@ -503,6 +424,7 @@ impl RobcoNativeApp {
     fn begin_logout(&mut self) {
         self.persist_snapshot();
         self.terminal_prompt = None;
+        self.terminal_pty = None;
         self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
     }
 
@@ -510,6 +432,7 @@ impl RobcoNativeApp {
         crate::config::reload_settings();
         self.session = None;
         self.login_mode = LoginScreenMode::SelectUser;
+        self.login_hacking = None;
         self.login.selected_idx = 0;
         self.login.selected_username.clear();
         self.login.password.clear();
@@ -521,6 +444,12 @@ impl RobcoNativeApp {
         self.terminal_mode.open = false;
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
+        self.terminal_default_apps_idx = 0;
+        self.terminal_connections.reset();
+        self.terminal_pty = None;
+        self.terminal_installer.reset();
+        self.terminal_default_app_choice_idx = 0;
+        self.terminal_default_app_slot = None;
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
         self.terminal_flash = None;
@@ -595,7 +524,12 @@ impl RobcoNativeApp {
         self.shell_status = status;
     }
 
-    fn update_user_record<F: FnOnce(&mut UserRecord)>(&mut self, username: &str, f: F, status: String) {
+    fn update_user_record<F: FnOnce(&mut UserRecord)>(
+        &mut self,
+        username: &str,
+        f: F,
+        status: String,
+    ) {
         let mut db = load_users();
         if let Some(record) = db.get_mut(username) {
             f(record);
@@ -606,86 +540,59 @@ impl RobcoNativeApp {
         }
     }
 
-    fn user_management_root_items(&self) -> Vec<String> {
-        vec![
-            "Create User".to_string(),
-            "Delete User".to_string(),
-            "Reset Password".to_string(),
-            "Change Auth Method".to_string(),
-            "Toggle Admin".to_string(),
-            "---".to_string(),
-            "Back".to_string(),
-        ]
-    }
-
-    fn auth_method_items(&self) -> Vec<String> {
-        vec![
-            "Password             — classic password login".to_string(),
-            "No Password          — log in without a password".to_string(),
-            "Hacking Minigame     — must hack in to log in".to_string(),
-            "---".to_string(),
-            "Back".to_string(),
-        ]
-    }
-
-    fn auth_method_from_label(label: &str) -> Option<crate::core::auth::AuthMethod> {
-        if label.starts_with("Password") {
-            Some(crate::core::auth::AuthMethod::Password)
-        } else if label.starts_with("No Password") {
-            Some(crate::core::auth::AuthMethod::NoPassword)
-        } else if label.starts_with("Hacking") {
-            Some(crate::core::auth::AuthMethod::HackingMinigame)
-        } else {
-            None
-        }
-    }
-
-    fn user_list_items(&self, include_current: bool) -> Vec<String> {
-        let current = self.session.as_ref().map(|s| s.username.as_str());
-        let mut users: Vec<String> = load_users()
-            .keys()
-            .filter(|u| include_current || Some(u.as_str()) != current)
-            .cloned()
-            .collect();
-        users.sort();
-        users.push("Back".to_string());
-        users
-    }
-
-    fn activate_login_selection(&mut self) {
-        self.login.error.clear();
-        let usernames = self.login_usernames();
-        let idx = self.login.selected_idx.min(usernames.len());
-        if idx == usernames.len() {
-            self.queue_terminal_flash("Exiting...", 800, FlashAction::ExitApp);
-            return;
-        }
-        let Some(selected) = usernames.get(idx).cloned() else {
-            return;
-        };
-
-        let db = load_users();
-        let Some(record) = db.get(&selected).cloned() else {
-            self.login.error = "Unknown user.".to_string();
-            return;
-        };
-        self.login.selected_username = selected.clone();
-        match record.auth_method {
-            crate::core::auth::AuthMethod::NoPassword => match authenticate(&selected, "") {
-                Ok(user) => self.queue_login(selected, user),
-                Err(err) => self.login.error = err.to_string(),
-            },
-            crate::core::auth::AuthMethod::Password => {
-                self.login.password.clear();
-                self.login_mode = LoginScreenMode::SelectUser;
-                self.open_password_prompt(
-                    "Password Prompt",
-                    format!("Password for {}", self.login.selected_username),
-                );
+    fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
+        match spawn_embedded_pty(title, cmd, return_screen, 86, 20) {
+            Ok(state) => {
+                self.terminal_pty = Some(state);
+                self.terminal_screen = TerminalScreen::PtyApp;
+                self.shell_status = format!("Opened {title} in PTY.");
             }
-            crate::core::auth::AuthMethod::HackingMinigame => {
-                self.login.error =
-                    "Hacking login is not implemented in the native rewrite yet.".to_string();
+            Err(err) => {
+                self.shell_status = err;
+            }
+        }
+    }
+
+    fn open_embedded_terminal_shell(&mut self) {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let shell_name = std::path::Path::new(&shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let mut cmd = vec![shell.clone()];
+        match shell_name {
+            "bash" => {
+                cmd.push("--noprofile".to_string());
+                cmd.push("--norc".to_string());
+            }
+            "zsh" => {
+                cmd.push("-f".to_string());
+            }
+            _ => {}
+        }
+        let options = crate::pty::PtyLaunchOptions {
+            env: vec![
+                ("PS1".into(), "> ".into()),
+                ("PROMPT".into(), "> ".into()),
+                ("ZDOTDIR".into(), "/dev/null".into()),
+            ],
+            top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
+        };
+        match spawn_embedded_pty_with_options(
+            "ROBCO MAINTENANCE TERMLINK",
+            &cmd,
+            TerminalScreen::MainMenu,
+            86,
+            20,
+            options,
+        ) {
+            Ok(state) => {
+                self.terminal_pty = Some(state);
+                self.terminal_screen = TerminalScreen::PtyApp;
+                self.shell_status = "Opened terminal shell in PTY.".to_string();
+            }
+            Err(err) => {
+                self.shell_status = err;
             }
         }
     }
@@ -750,47 +657,11 @@ impl RobcoNativeApp {
         }
     }
 
-    fn handle_main_menu_action(&mut self, action: MainMenuAction) {
-        match action {
-            MainMenuAction::Applications => {
-                self.terminal_screen = TerminalScreen::Applications;
-                self.terminal_apps_idx = 0;
-                self.shell_status.clear();
-            }
-            MainMenuAction::Documents => {
-                self.terminal_screen = TerminalScreen::Documents;
-                self.terminal_documents_idx = 0;
-                self.shell_status.clear();
-            }
-            MainMenuAction::Network => {
-                self.shell_status = "Network menu is not rewritten yet.".to_string();
-            }
-            MainMenuAction::Games => {
-                self.shell_status = "Games menu is not rewritten yet.".to_string();
-            }
-            MainMenuAction::ProgramInstaller => {
-                self.shell_status = "Program Installer is not rewritten yet.".to_string();
-            }
-            MainMenuAction::Terminal => {
-                self.terminal_mode.open = true;
-                self.shell_status.clear();
-            }
-            MainMenuAction::DesktopMode => {
-                self.desktop_mode_open = true;
-                self.shell_status = "Entered Desktop Mode.".to_string();
-            }
-            MainMenuAction::Settings => {
-                self.settings.draft = current_settings();
-                self.terminal_screen = TerminalScreen::Settings;
-                self.terminal_settings_idx = 0;
-                self.shell_status.clear();
-            }
-            MainMenuAction::Logout => self.begin_logout(),
-        }
-    }
-
     fn terminal_app_items(&self) -> Vec<String> {
-        let mut items: Vec<String> = STATIC_APP_MENU_ITEMS.iter().map(|s| (*s).to_string()).collect();
+        let mut items: Vec<String> = STATIC_APP_MENU_ITEMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         items.extend(app_names());
         items.push("Back".to_string());
         items
@@ -803,120 +674,97 @@ impl RobcoNativeApp {
         self.shell_status = "Settings saved.".to_string();
     }
 
-    fn open_settings_choice(&mut self, kind: SettingsChoiceKind) {
-        let selected = match kind {
-            SettingsChoiceKind::Theme => THEMES
-                .iter()
-                .position(|(name, _)| *name == self.settings.draft.theme)
-                .unwrap_or(0),
-            SettingsChoiceKind::DefaultOpenMode => match self.settings.draft.default_open_mode {
-                OpenMode::Terminal => 0,
-                OpenMode::Desktop => 1,
-            },
-        };
-        self.terminal_settings_choice = Some(SettingsChoiceOverlay { kind, selected });
-    }
-
-    fn settings_choice_items(&self, kind: SettingsChoiceKind) -> Vec<String> {
-        match kind {
-            SettingsChoiceKind::Theme => THEMES.iter().map(|(name, _)| (*name).to_string()).collect(),
-            SettingsChoiceKind::DefaultOpenMode => vec!["Terminal".to_string(), "Desktop".to_string()],
-        }
-    }
-
-    fn apply_settings_choice(&mut self, kind: SettingsChoiceKind, selected: usize) {
-        match kind {
-            SettingsChoiceKind::Theme => {
-                if let Some((name, _)) = THEMES.get(selected) {
-                    self.settings.draft.theme = (*name).to_string();
+    fn apply_login_selection_action(&mut self, action: LoginSelectionAction) {
+        self.login.error.clear();
+        match action {
+            LoginSelectionAction::Exit => {
+                self.queue_terminal_flash("Exiting...", 800, FlashAction::ExitApp);
+            }
+            LoginSelectionAction::PromptPassword { username } => {
+                self.login.selected_username = username;
+                self.login.password.clear();
+                self.login_mode = LoginScreenMode::SelectUser;
+                self.open_password_prompt(
+                    "Password Prompt",
+                    format!("Password for {}", self.login.selected_username),
+                );
+            }
+            LoginSelectionAction::AuthenticateWithoutPassword { username } => {
+                self.login.selected_username = username.clone();
+                match authenticate(&username, "") {
+                    Ok(user) => self.queue_login(username, user),
+                    Err(err) => self.login.error = err.to_string(),
                 }
             }
-            SettingsChoiceKind::DefaultOpenMode => {
-                self.settings.draft.default_open_mode = if selected == 0 {
-                    OpenMode::Terminal
-                } else {
-                    OpenMode::Desktop
-                };
+            LoginSelectionAction::StartHacking { username } => {
+                self.login.selected_username = username.clone();
+                self.queue_hacking_start(username);
+            }
+            LoginSelectionAction::ShowError(error) => {
+                self.login.error = error;
             }
         }
-        self.persist_native_settings();
     }
 
-    fn terminal_settings_rows(&self) -> Vec<String> {
-        let mut rows = vec![
-            format!(
-                "Sound: {} [toggle]",
-                if self.settings.draft.sound { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Bootup: {} [toggle]",
-                if self.settings.draft.bootup { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Navigation Hints: {} [toggle]",
-                if self.settings.draft.show_navigation_hints {
-                    "ON"
-                } else {
-                    "OFF"
+    fn apply_main_menu_selection_action(&mut self, action: MainMenuSelectionAction) {
+        match action {
+            MainMenuSelectionAction::OpenScreen {
+                screen,
+                selected_idx,
+                clear_status,
+            } => {
+                self.terminal_screen = screen;
+                match screen {
+                    TerminalScreen::Applications => self.terminal_apps_idx = selected_idx,
+                    TerminalScreen::Documents => self.terminal_documents_idx = selected_idx,
+                    TerminalScreen::Network => self.terminal_network_idx = selected_idx,
+                    TerminalScreen::Games => self.terminal_games_idx = selected_idx,
+                    TerminalScreen::ProgramInstaller => {
+                        self.terminal_installer.root_idx = selected_idx
+                    }
+                    TerminalScreen::Settings => self.terminal_settings_idx = selected_idx,
+                    TerminalScreen::Connections => {
+                        self.terminal_connections.root_idx = selected_idx
+                    }
+                    TerminalScreen::DefaultApps => self.terminal_default_apps_idx = selected_idx,
+                    TerminalScreen::About => {}
+                    TerminalScreen::UserManagement => {
+                        self.terminal_user_management_idx = selected_idx
+                    }
+                    TerminalScreen::DocumentBrowser => self.terminal_browser_idx = selected_idx,
+                    TerminalScreen::MainMenu => self.main_menu_idx = selected_idx,
+                    TerminalScreen::PtyApp => {}
                 }
-            ),
-            format!("Theme: {} [choose]", self.settings.draft.theme),
-            format!(
-                "Interface Size: {}% [adjust]",
-                (self.settings.draft.native_ui_scale * 100.0).round() as i32
-            ),
-            format!(
-                "Default Open Mode: {} [choose]",
-                match self.settings.draft.default_open_mode {
-                    OpenMode::Terminal => "Terminal",
-                    OpenMode::Desktop => "Desktop",
+                if clear_status {
+                    self.shell_status.clear();
                 }
-            ),
-        ];
-        if self.session.as_ref().is_some_and(|s| s.is_admin) {
-            rows.push("User Management".to_string());
+            }
+            MainMenuSelectionAction::OpenTerminalMode => {
+                self.open_embedded_terminal_shell();
+            }
+            MainMenuSelectionAction::EnterDesktopMode => {
+                self.desktop_mode_open = true;
+                self.shell_status = "Entered Desktop Mode.".to_string();
+            }
+            MainMenuSelectionAction::RefreshSettingsAndOpen => {
+                self.settings.draft = current_settings();
+                self.terminal_screen = TerminalScreen::Settings;
+                self.terminal_settings_idx = 0;
+                self.terminal_connections.reset();
+                self.terminal_default_app_slot = None;
+                self.shell_status.clear();
+            }
+            MainMenuSelectionAction::BeginLogout => self.begin_logout(),
         }
-        rows.push("Back".to_string());
-        rows
     }
 
     fn open_documents_browser(&mut self) {
         if let Some(session) = &self.session {
-            self.file_manager.set_cwd(word_processor_dir(&session.username));
+            self.file_manager
+                .set_cwd(word_processor_dir(&session.username));
             self.file_manager.selected = None;
             self.terminal_browser_idx = 0;
             self.terminal_screen = TerminalScreen::DocumentBrowser;
-        }
-    }
-
-    fn document_browser_rows(&self) -> Vec<(String, Option<PathBuf>)> {
-        let mut rows = Vec::new();
-        rows.push(("../".to_string(), None));
-        for row in self.file_manager.rows() {
-            let label = if row.is_dir {
-                format!("[DIR] {}", row.label)
-            } else {
-                row.label.clone()
-            };
-            rows.push((label, Some(row.path.clone())));
-        }
-        if rows.is_empty() {
-            rows.push(("(empty)".to_string(), None));
-        }
-        rows
-    }
-
-    fn activate_document_browser(&mut self) {
-        let rows = self.document_browser_rows();
-        let idx = self.terminal_browser_idx.min(rows.len().saturating_sub(1));
-        if idx == 0 {
-            self.file_manager.up();
-            self.terminal_browser_idx = 0;
-            return;
-        }
-        if let Some((_, Some(path))) = rows.get(idx) {
-            self.file_manager.select(Some(path.clone()));
-            self.activate_file_manager_selection();
         }
     }
 
@@ -925,13 +773,50 @@ impl RobcoNativeApp {
             self.terminal_settings_choice = None;
             return;
         }
+        if self.terminal_default_app_slot.is_some() {
+            self.terminal_default_app_slot = None;
+            return;
+        }
+        if matches!(self.terminal_screen, TerminalScreen::Connections)
+            && !self.terminal_connections.back()
+        {
+            self.shell_status.clear();
+            return;
+        }
+        if matches!(self.terminal_screen, TerminalScreen::ProgramInstaller)
+            && !self.terminal_installer.back()
+        {
+            self.shell_status.clear();
+            return;
+        }
         match self.terminal_screen {
             TerminalScreen::MainMenu => {}
             TerminalScreen::Applications
             | TerminalScreen::Documents
+            | TerminalScreen::Network
+            | TerminalScreen::Games
             | TerminalScreen::Settings
             | TerminalScreen::UserManagement => {
                 self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            TerminalScreen::PtyApp => {
+                if let Some(mut pty) = self.terminal_pty.take() {
+                    pty.session.terminate();
+                    self.terminal_screen = pty.return_screen;
+                    self.shell_status = format!("Closed {}.", pty.title);
+                } else {
+                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.shell_status.clear();
+                }
+            }
+            TerminalScreen::ProgramInstaller => {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+                self.terminal_installer.reset();
+            }
+            TerminalScreen::Connections | TerminalScreen::DefaultApps | TerminalScreen::About => {
+                self.terminal_screen = TerminalScreen::Settings;
                 self.shell_status.clear();
             }
             TerminalScreen::DocumentBrowser => {
@@ -941,403 +826,374 @@ impl RobcoNativeApp {
         }
     }
 
-    fn step_interface_size(&mut self, delta: isize) {
-        let current_idx = NATIVE_UI_SCALE_OPTIONS
-            .iter()
-            .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
-            .unwrap_or(1);
-        let next_idx = if delta < 0 {
-            current_idx.saturating_sub(delta.unsigned_abs())
-        } else {
-            (current_idx + delta as usize).min(NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1))
-        };
-        if next_idx != current_idx {
-            self.settings.draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[next_idx];
-            self.persist_native_settings();
-        }
-    }
-
-    fn interface_size_slider_text(&self, width: usize) -> String {
-        let width = width.max(4);
-        let idx = NATIVE_UI_SCALE_OPTIONS
-            .iter()
-            .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
-            .unwrap_or(1);
-        let max = NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1).max(1);
-        let fill = ((idx * (width - 1)) + (max / 2)) / max;
-        let mut chars = vec!['-'; width];
-        for ch in chars.iter_mut().take(fill) {
-            *ch = '=';
-        }
-        chars[fill.min(width - 1)] = '|';
-        format!("[{}]", chars.into_iter().collect::<String>())
-    }
-
     fn handle_terminal_prompt_input(&mut self, ctx: &Context) {
-        let Some(mut prompt) = self.terminal_prompt.clone() else {
+        let Some(prompt) = self.terminal_prompt.clone() else {
             return;
         };
-        match prompt.kind {
-            TerminalPromptKind::Input | TerminalPromptKind::Password => {
-                if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-                    self.terminal_prompt = None;
-                    self.login.password.clear();
-                    self.login.error.clear();
-                    return;
-                }
-                if ctx.input(|i| i.key_pressed(Key::Backspace)) {
-                    prompt.buffer.pop();
-                }
-                let events = ctx.input(|i| i.events.clone());
-                for event in events {
-                    if let egui::Event::Text(text) = event {
-                        for ch in text.chars() {
-                            if !ch.is_control() {
-                                prompt.buffer.push(ch);
-                            }
-                        }
-                    }
-                }
-                if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    match prompt.action {
-                        TerminalPromptAction::LoginPassword => {
-                            self.login.password = prompt.buffer.clone();
-                            self.do_login();
-                            if self.session.is_none() && self.terminal_flash.is_none() {
-                                prompt.buffer.clear();
-                                self.terminal_prompt = Some(prompt);
-                            }
-                            return;
-                        }
-                        TerminalPromptAction::CreateUsername => {
-                            let username = prompt.buffer.trim().to_string();
-                            if username.is_empty() {
-                                self.shell_status = "Username cannot be empty.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            let db = load_users();
-                            if db.contains_key(&username) {
-                                self.shell_status = "User already exists.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.terminal_user_management_mode =
-                                UserManagementMode::CreateAuthMethod { username };
-                            self.terminal_user_management_idx = 0;
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                        TerminalPromptAction::CreatePassword { username } => {
-                            let first_password = prompt.buffer.clone();
-                            if first_password.is_empty() {
-                                self.shell_status = "Password cannot be empty.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.open_password_prompt_with_action(
-                                "Confirm Password",
-                                format!("Re-enter password for {username}"),
-                                TerminalPromptAction::CreatePasswordConfirm {
-                                    username,
-                                    first_password,
-                                },
-                            );
-                            return;
-                        }
-                        TerminalPromptAction::CreatePasswordConfirm {
-                            username,
-                            first_password,
-                        } => {
-                            if prompt.buffer != first_password {
-                                self.shell_status = "Passwords do not match.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.save_user_and_status(
-                                &username,
-                                UserRecord {
-                                    password_hash: crate::core::auth::hash_password(&first_password),
-                                    is_admin: false,
-                                    auth_method: crate::core::auth::AuthMethod::Password,
-                                },
-                                format!("User '{username}' created."),
-                            );
-                            self.terminal_user_management_mode = UserManagementMode::Root;
-                            self.terminal_user_management_idx = 0;
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                        TerminalPromptAction::ResetPassword { username } => {
-                            let first_password = prompt.buffer.clone();
-                            if first_password.is_empty() {
-                                self.shell_status = "Password cannot be empty.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.open_password_prompt_with_action(
-                                "Confirm Password",
-                                format!("Re-enter password for {username}"),
-                                TerminalPromptAction::ResetPasswordConfirm {
-                                    username,
-                                    first_password,
-                                },
-                            );
-                            return;
-                        }
-                        TerminalPromptAction::ResetPasswordConfirm {
-                            username,
-                            first_password,
-                        } => {
-                            if prompt.buffer != first_password {
-                                self.shell_status = "Passwords do not match.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.update_user_record(
-                                &username,
-                                |record| {
-                                    record.password_hash =
-                                        crate::core::auth::hash_password(&first_password);
-                                    record.auth_method = crate::core::auth::AuthMethod::Password;
-                                },
-                                "Password updated.".to_string(),
-                            );
-                            self.terminal_user_management_mode = UserManagementMode::Root;
-                            self.terminal_user_management_idx = 0;
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                        TerminalPromptAction::ChangeAuthPassword { username } => {
-                            let first_password = prompt.buffer.clone();
-                            if first_password.is_empty() {
-                                self.shell_status = "Password cannot be empty.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.open_password_prompt_with_action(
-                                "Confirm Password",
-                                format!("Re-enter password for {username}"),
-                                TerminalPromptAction::ChangeAuthPasswordConfirm {
-                                    username,
-                                    first_password,
-                                },
-                            );
-                            return;
-                        }
-                        TerminalPromptAction::ChangeAuthPasswordConfirm {
-                            username,
-                            first_password,
-                        } => {
-                            if prompt.buffer != first_password {
-                                self.shell_status = "Passwords do not match.".to_string();
-                                self.terminal_prompt = None;
-                                return;
-                            }
-                            self.update_user_record(
-                                &username,
-                                |record| {
-                                    record.password_hash =
-                                        crate::core::auth::hash_password(&first_password);
-                                    record.auth_method = crate::core::auth::AuthMethod::Password;
-                                },
-                                format!("Auth method updated for '{username}'."),
-                            );
-                            self.terminal_user_management_mode = UserManagementMode::Root;
-                            self.terminal_user_management_idx = 0;
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                        TerminalPromptAction::Noop => {
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                        TerminalPromptAction::ConfirmDeleteUser { .. }
-                        | TerminalPromptAction::ConfirmToggleAdmin { .. } => {
-                            self.terminal_prompt = None;
-                            return;
-                        }
-                    }
+        match handle_prompt_input(ctx, prompt) {
+            PromptOutcome::Cancel => {
+                self.terminal_prompt = None;
+                self.login.password.clear();
+                self.login.error.clear();
+            }
+            PromptOutcome::Continue(prompt) => {
+                self.terminal_prompt = Some(prompt);
+            }
+            PromptOutcome::LoginPassword(password) => {
+                self.terminal_prompt = None;
+                self.login.password = password;
+                self.do_login();
+                if self.session.is_none() && self.terminal_flash.is_none() {
+                    self.open_password_prompt(
+                        "Password Prompt",
+                        format!("Password for {}", self.login.selected_username),
+                    );
                 }
             }
-            TerminalPromptKind::Confirm => {
-                if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-                    self.terminal_prompt = None;
+            PromptOutcome::CreateUsername(raw_username) => {
+                let username = raw_username.trim().to_string();
+                self.terminal_prompt = None;
+                if username.is_empty() {
+                    self.shell_status = "Username cannot be empty.".to_string();
                     return;
                 }
-                if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
-                    prompt.confirm_yes = true;
-                }
-                if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
-                    prompt.confirm_yes = false;
-                }
-                if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    if prompt.confirm_yes {
-                        match prompt.action {
-                            TerminalPromptAction::ConfirmDeleteUser { username } => {
-                                let mut db = load_users();
-                                db.remove(&username);
-                                save_users(&db);
-                                self.shell_status = format!("User '{username}' deleted.");
-                            }
-                            TerminalPromptAction::ConfirmToggleAdmin { username } => {
-                                let mut db = load_users();
-                                if let Some(record) = db.get_mut(&username) {
-                                    record.is_admin = !record.is_admin;
-                                    let label = if record.is_admin { "granted" } else { "revoked" };
-                                    save_users(&db);
-                                    self.shell_status =
-                                        format!("Admin {label} for '{username}'.");
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    self.terminal_user_management_mode = UserManagementMode::Root;
-                    self.terminal_user_management_idx = 0;
-                    self.terminal_prompt = None;
+                let db = load_users();
+                if db.contains_key(&username) {
+                    self.shell_status = "User already exists.".to_string();
                     return;
                 }
+                self.terminal_user_management_mode =
+                    UserManagementMode::CreateAuthMethod { username };
+                self.terminal_user_management_idx = 0;
             }
-        }
-        self.terminal_prompt = Some(prompt);
-    }
-
-    fn draw_terminal_prompt_overlay(&self, ui: &mut egui::Ui, screen: &RetroScreen) {
-        let Some(prompt) = &self.terminal_prompt else {
-            return;
-        };
-        let palette = current_palette();
-        let painter = ui.painter_at(screen.rect);
-        screen.boxed_panel(&painter, &palette, 23, 12, 46, 8);
-        screen.text(&painter, 26, 13, &prompt.title, palette.fg);
-        screen.text(&painter, 26, 15, &prompt.prompt, palette.fg);
-        match prompt.kind {
-            TerminalPromptKind::Input => {
-                let line = format!("> {}_", prompt.buffer);
-                screen.text(&painter, 26, 17, &line, palette.fg);
-                screen.text(&painter, 26, 19, "Enter apply | Esc/Tab cancel", palette.dim);
-            }
-            TerminalPromptKind::Password => {
-                let masked = format!("> {}_", "*".repeat(prompt.buffer.chars().count()));
-                screen.text(&painter, 26, 17, &masked, palette.fg);
-                screen.text(
-                    &painter,
-                    26,
-                    19,
-                    "Enter log in | Esc/Tab back | Backspace delete",
-                    palette.dim,
+            PromptOutcome::CreatePasswordFirst { username, password } => {
+                self.terminal_prompt = None;
+                if password.is_empty() {
+                    self.shell_status = "Password cannot be empty.".to_string();
+                    return;
+                }
+                self.open_password_prompt_with_action(
+                    "Confirm Password",
+                    format!("Re-enter password for {username}"),
+                    TerminalPromptAction::CreatePasswordConfirm {
+                        username,
+                        first_password: password,
+                    },
                 );
             }
-            TerminalPromptKind::Confirm => {
-                let yes = if prompt.confirm_yes { "[Yes]" } else { " Yes " };
-                let no = if prompt.confirm_yes { " No " } else { "[No]" };
-                screen.text(&painter, 26, 17, &format!("{yes}   {no}"), palette.fg);
-                screen.text(&painter, 26, 19, "Left/Right choose | Enter apply", palette.dim);
+            PromptOutcome::CreatePasswordConfirm {
+                username,
+                first_password,
+                confirmation,
+            } => {
+                self.terminal_prompt = None;
+                if confirmation != first_password {
+                    self.shell_status = "Passwords do not match.".to_string();
+                    return;
+                }
+                self.save_user_and_status(
+                    &username,
+                    UserRecord {
+                        password_hash: crate::core::auth::hash_password(&first_password),
+                        is_admin: false,
+                        auth_method: crate::core::auth::AuthMethod::Password,
+                    },
+                    format!("User '{username}' created."),
+                );
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
             }
+            PromptOutcome::ResetPasswordFirst { username, password } => {
+                self.terminal_prompt = None;
+                if password.is_empty() {
+                    self.shell_status = "Password cannot be empty.".to_string();
+                    return;
+                }
+                self.open_password_prompt_with_action(
+                    "Confirm Password",
+                    format!("Re-enter password for {username}"),
+                    TerminalPromptAction::ResetPasswordConfirm {
+                        username,
+                        first_password: password,
+                    },
+                );
+            }
+            PromptOutcome::ResetPasswordConfirm {
+                username,
+                first_password,
+                confirmation,
+            } => {
+                self.terminal_prompt = None;
+                if confirmation != first_password {
+                    self.shell_status = "Passwords do not match.".to_string();
+                    return;
+                }
+                self.update_user_record(
+                    &username,
+                    |record| {
+                        record.password_hash = crate::core::auth::hash_password(&first_password);
+                        record.auth_method = crate::core::auth::AuthMethod::Password;
+                    },
+                    "Password updated.".to_string(),
+                );
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
+            }
+            PromptOutcome::ChangeAuthPasswordFirst { username, password } => {
+                self.terminal_prompt = None;
+                if password.is_empty() {
+                    self.shell_status = "Password cannot be empty.".to_string();
+                    return;
+                }
+                self.open_password_prompt_with_action(
+                    "Confirm Password",
+                    format!("Re-enter password for {username}"),
+                    TerminalPromptAction::ChangeAuthPasswordConfirm {
+                        username,
+                        first_password: password,
+                    },
+                );
+            }
+            PromptOutcome::ChangeAuthPasswordConfirm {
+                username,
+                first_password,
+                confirmation,
+            } => {
+                self.terminal_prompt = None;
+                if confirmation != first_password {
+                    self.shell_status = "Passwords do not match.".to_string();
+                    return;
+                }
+                self.update_user_record(
+                    &username,
+                    |record| {
+                        record.password_hash = crate::core::auth::hash_password(&first_password);
+                        record.auth_method = crate::core::auth::AuthMethod::Password;
+                    },
+                    format!("Auth method updated for '{username}'."),
+                );
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
+            }
+            PromptOutcome::ConfirmDeleteUser {
+                username,
+                confirmed,
+            } => {
+                self.terminal_prompt = None;
+                if confirmed {
+                    let mut db = load_users();
+                    db.remove(&username);
+                    save_users(&db);
+                    self.shell_status = format!("User '{username}' deleted.");
+                }
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
+            }
+            PromptOutcome::ConfirmToggleAdmin {
+                username,
+                confirmed,
+            } => {
+                self.terminal_prompt = None;
+                if confirmed {
+                    let mut db = load_users();
+                    if let Some(record) = db.get_mut(&username) {
+                        record.is_admin = !record.is_admin;
+                        let label = if record.is_admin {
+                            "granted"
+                        } else {
+                            "revoked"
+                        };
+                        save_users(&db);
+                        self.shell_status = format!("Admin {label} for '{username}'.");
+                    }
+                }
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
+            }
+            PromptOutcome::Noop => {
+                self.terminal_prompt = None;
+            }
+            PromptOutcome::DefaultAppCustom { slot, raw } => {
+                self.terminal_prompt = None;
+                match apply_default_app_custom_command(slot, &raw) {
+                    DefaultAppsEvent::SetBinding { slot, binding } => {
+                        set_binding_for_slot(&mut self.settings.draft, slot, binding);
+                        self.persist_native_settings();
+                    }
+                    DefaultAppsEvent::Status(status) => {
+                        self.shell_status = status;
+                    }
+                    _ => {}
+                }
+            }
+            PromptOutcome::InstallerSearch(query) => {
+                self.terminal_prompt = None;
+                let event = apply_installer_search_query(&mut self.terminal_installer, &query);
+                self.apply_installer_event(event);
+            }
+            PromptOutcome::InstallerFilter(filter) => {
+                self.terminal_prompt = None;
+                apply_installer_filter(&mut self.terminal_installer, &filter);
+            }
+            PromptOutcome::InstallerDisplayName {
+                pkg,
+                target,
+                display_name,
+            } => {
+                self.terminal_prompt = None;
+                let event =
+                    add_package_to_menu(&mut self.terminal_installer, &pkg, target, &display_name);
+                self.apply_installer_event(event);
+            }
+            PromptOutcome::ConfirmInstallerAction {
+                pkg,
+                action,
+                confirmed,
+            } => {
+                self.terminal_prompt = None;
+                if confirmed {
+                    let event = build_package_command(&self.terminal_installer, &pkg, action);
+                    self.apply_installer_event(event);
+                } else {
+                    self.shell_status = "Cancelled.".to_string();
+                }
+            }
+            PromptOutcome::ConnectionSearch { kind, group, query } => {
+                self.terminal_prompt = None;
+                let event = apply_connection_search_query(
+                    &mut self.terminal_connections,
+                    kind,
+                    group,
+                    &query,
+                );
+                self.apply_connections_event(event);
+            }
+            PromptOutcome::ConnectionPassword {
+                kind,
+                name,
+                detail,
+                password,
+            } => {
+                self.terminal_prompt = None;
+                if matches!(kind, ConnectionKind::Network)
+                    && network_requires_password(&detail)
+                    && password.trim().is_empty()
+                {
+                    self.shell_status = "Cancelled.".to_string();
+                    return;
+                }
+                let target = DiscoveredConnection { name, detail };
+                self.connect_target(
+                    kind,
+                    target,
+                    if password.trim().is_empty() {
+                        None
+                    } else {
+                        Some(password)
+                    },
+                );
+            }
+        }
+    }
+
+    fn connect_target(
+        &mut self,
+        kind: ConnectionKind,
+        target: DiscoveredConnection,
+        password: Option<String>,
+    ) {
+        match connect_connection(
+            kind,
+            &target.name,
+            Some(target.detail.as_str()),
+            password.as_deref(),
+        ) {
+            Ok(msg) => self.shell_status = msg,
+            Err(err) => self.shell_status = err.to_string(),
         }
     }
 
     fn draw_login(&mut self, ctx: &Context) {
-        let rows = self.login_menu_rows();
-        if self.terminal_prompt.is_some() {
-            self.handle_terminal_prompt_input(ctx);
-        } else if self.login_mode == LoginScreenMode::SelectUser {
-            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                self.login.selected_idx = self.login.selected_idx.saturating_sub(1);
+        match self.login_mode {
+            LoginScreenMode::SelectUser => {
+                let rows = login_menu_rows_from_users(self.login_usernames());
+                if self.terminal_prompt.is_some() {
+                    self.handle_terminal_prompt_input(ctx);
+                }
+                let activated = draw_login_screen(
+                    ctx,
+                    &rows,
+                    &mut self.login.selected_idx,
+                    &self.login.error,
+                    self.terminal_prompt.as_ref(),
+                    TERMINAL_SCREEN_COLS,
+                    TERMINAL_SCREEN_ROWS,
+                    TERMINAL_HEADER_START_ROW,
+                    TERMINAL_SEPARATOR_TOP_ROW,
+                    TERMINAL_TITLE_ROW,
+                    TERMINAL_SEPARATOR_BOTTOM_ROW,
+                    TERMINAL_SUBTITLE_ROW,
+                    TERMINAL_MENU_START_ROW,
+                    TERMINAL_STATUS_ROW,
+                    TERMINAL_CONTENT_COL,
+                );
+                if activated {
+                    let usernames = self.login_usernames();
+                    let action = resolve_login_selection(self.login.selected_idx, &usernames);
+                    self.apply_login_selection_action(action);
+                }
             }
-            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                self.login.selected_idx =
-                    (self.login.selected_idx + 1).min(rows.len().saturating_sub(2));
+            LoginScreenMode::Hacking => {
+                let Some(hacking) = self.login_hacking.as_mut() else {
+                    self.login_mode = LoginScreenMode::SelectUser;
+                    return;
+                };
+                match draw_hacking_screen(
+                    ctx,
+                    &mut hacking.game,
+                    TERMINAL_SCREEN_COLS,
+                    TERMINAL_SCREEN_ROWS,
+                    TERMINAL_STATUS_ROW,
+                    TERMINAL_STATUS_ROW_ALT,
+                ) {
+                    HackingScreenEvent::None => {}
+                    HackingScreenEvent::Cancel => {
+                        self.login_mode = LoginScreenMode::SelectUser;
+                        self.login_hacking = None;
+                    }
+                    HackingScreenEvent::Success => {
+                        let username = hacking.username.clone();
+                        let db = load_users();
+                        if let Some(user) = db.get(&username).cloned() {
+                            self.queue_login(username, user);
+                        } else {
+                            self.login.error = "Unknown user.".to_string();
+                            self.login_mode = LoginScreenMode::SelectUser;
+                            self.login_hacking = None;
+                        }
+                    }
+                    HackingScreenEvent::LockedOut => {
+                        self.login_mode = LoginScreenMode::Locked;
+                        self.login_hacking = None;
+                    }
+                    HackingScreenEvent::ExitLocked => {}
+                }
             }
-            if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                self.activate_login_selection();
+            LoginScreenMode::Locked => {
+                if matches!(
+                    draw_locked_screen(
+                        ctx,
+                        TERMINAL_SCREEN_COLS,
+                        TERMINAL_SCREEN_ROWS,
+                        TERMINAL_STATUS_ROW_ALT
+                    ),
+                    HackingScreenEvent::ExitLocked
+                ) {
+                    self.login_mode = LoginScreenMode::SelectUser;
+                    self.login_hacking = None;
+                }
             }
         }
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-            let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-            let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
-            }
-            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "ROBCO TERMLINK - Select User", palette.fg, true);
-            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-            screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_SUBTITLE_ROW, "Welcome. Please select a user.", palette.fg);
-            if !self.login.error.is_empty() {
-                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.login.error, Color32::LIGHT_RED);
-            }
-
-            let mut row = TERMINAL_MENU_START_ROW;
-            let mut selectable_idx = 0usize;
-            for entry in &rows {
-                match entry {
-                    LoginMenuRow::Separator => {
-                        screen.text(
-                            &painter,
-                            TERMINAL_CONTENT_COL + 4,
-                            row,
-                            "---",
-                            palette.dim,
-                        );
-                    }
-                    LoginMenuRow::User(user) => {
-                        let selected = self.login_mode == LoginScreenMode::SelectUser
-                            && selectable_idx == self.login.selected_idx;
-                        let text = if selected {
-                            format!("  > {user}")
-                        } else {
-                            format!("    {user}")
-                        };
-                        let response = screen.selectable_row(
-                            ui,
-                            &painter,
-                            &palette,
-                            TERMINAL_CONTENT_COL,
-                            row,
-                            &text,
-                            selected,
-                        );
-                        if response.clicked() {
-                            self.login.selected_idx = selectable_idx;
-                            self.activate_login_selection();
-                        }
-                        selectable_idx += 1;
-                    }
-                    LoginMenuRow::Exit => {
-                        let selected = self.login_mode == LoginScreenMode::SelectUser
-                            && selectable_idx == self.login.selected_idx;
-                        let text = if selected {
-                            "  > Exit".to_string()
-                        } else {
-                            "    Exit".to_string()
-                        };
-                        let response = screen.selectable_row(
-                            ui,
-                            &painter,
-                            &palette,
-                            TERMINAL_CONTENT_COL,
-                            row,
-                            &text,
-                            selected,
-                        );
-                        if response.clicked() {
-                            self.login.selected_idx = selectable_idx;
-                            self.activate_login_selection();
-                        }
-                        selectable_idx += 1;
-                    }
-                }
-                row += 1;
-            }
-
-            self.draw_terminal_prompt_overlay(ui, &screen);
-        });
     }
 
     fn draw_top_bar(&mut self, ctx: &Context) {
@@ -1444,171 +1300,49 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_main_menu(&mut self, ctx: &Context) {
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            self.main_menu_idx = self.main_menu_idx.saturating_sub(1);
+        let activated = draw_main_menu_screen(
+            ctx,
+            &mut self.main_menu_idx,
+            &self.shell_status,
+            &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        if let Some(action) = activated {
+            let action = resolve_main_menu_action(action);
+            self.apply_main_menu_selection_action(action);
         }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            self.main_menu_idx = (self.main_menu_idx + 1).min(selectable_menu_count() - 1);
-        }
-        if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            if let Some(action) = entry_for_selectable_idx(self.main_menu_idx).action {
-                self.handle_main_menu_action(action);
-            }
-        }
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-            let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-            let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
-            }
-            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Main Menu", palette.fg, true);
-            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-            screen.underlined_text(
-                &painter,
-                TERMINAL_CONTENT_COL,
-                TERMINAL_SUBTITLE_ROW,
-                &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
-                palette.fg,
-            );
-
-            let mut visible_row = TERMINAL_MENU_START_ROW;
-            let mut selectable_idx = 0usize;
-            for entry in MAIN_MENU_ENTRIES {
-                if entry.action.is_none() {
-                    screen.text(
-                        &painter,
-                        TERMINAL_CONTENT_COL + 4,
-                        visible_row,
-                        entry.label,
-                        palette.dim,
-                    );
-                    visible_row += 1;
-                    continue;
-                }
-                let selected = selectable_idx == self.main_menu_idx;
-                let text = if selected {
-                    format!("  > {}", entry.label)
-                } else {
-                    format!("    {}", entry.label)
-                };
-                let response =
-                    screen.selectable_row(
-                        ui,
-                        &painter,
-                        &palette,
-                        TERMINAL_CONTENT_COL,
-                        visible_row,
-                        &text,
-                        selected,
-                    );
-                if response.clicked() {
-                    self.main_menu_idx = selectable_idx;
-                    if let Some(action) = entry.action {
-                        self.handle_main_menu_action(action);
-                    }
-                }
-                visible_row += 1;
-                selectable_idx += 1;
-            }
-
-            if !self.shell_status.is_empty() {
-                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.shell_status, palette.dim);
-            }
-        });
-    }
-
-    fn draw_terminal_menu_screen(
-        &mut self,
-        ctx: &Context,
-        title: &str,
-        subtitle: Option<&str>,
-        items: &[String],
-        selected_idx: &mut usize,
-    ) -> Option<usize> {
-        let selectable_rows: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
-            .collect();
-        if selectable_rows.is_empty() {
-            return None;
-        }
-        *selected_idx = (*selected_idx).min(selectable_rows.len().saturating_sub(1));
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            *selected_idx = selected_idx.saturating_sub(1);
-        }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            *selected_idx = (*selected_idx + 1).min(selectable_rows.len().saturating_sub(1));
-        }
-
-        let mut activated = None;
-        if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            activated = selectable_rows.get(*selected_idx).copied();
-        }
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-            let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-            let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
-            }
-            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-            screen.centered_text(&painter, TERMINAL_TITLE_ROW, title, palette.fg, true);
-            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-            if let Some(sub) = subtitle {
-                screen.underlined_text(&painter, TERMINAL_CONTENT_COL, TERMINAL_SUBTITLE_ROW, sub, palette.fg);
-            }
-            let mut row = TERMINAL_MENU_START_ROW;
-            for (idx, item) in items.iter().enumerate() {
-                if item == "---" {
-                    screen.text(
-                        &painter,
-                        TERMINAL_CONTENT_COL + 4,
-                        row,
-                        "---",
-                        palette.dim,
-                    );
-                    row += 1;
-                    continue;
-                }
-                let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
-                let text = if selected {
-                    format!("  > {item}")
-                } else {
-                    format!("    {item}")
-                };
-                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
-                if response.clicked() {
-                    if let Some(sel_idx) = selectable_rows.iter().position(|raw| *raw == idx) {
-                        *selected_idx = sel_idx;
-                    }
-                    activated = Some(idx);
-                }
-                row += 1;
-            }
-            if !self.shell_status.is_empty() {
-                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, &self.shell_status, palette.dim);
-            }
-        });
-
-        activated
     }
 
     fn draw_terminal_applications(&mut self, ctx: &Context) {
         let items = self.terminal_app_items();
         let mut selected = self.terminal_apps_idx.min(items.len().saturating_sub(1));
-        let activated =
-            self.draw_terminal_menu_screen(ctx, "Applications", Some("Built-in and configured apps"), &items, &mut selected);
+        let activated = draw_terminal_menu_screen(
+            ctx,
+            "Applications",
+            Some("Built-in and configured apps"),
+            &items,
+            &mut selected,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+            &self.shell_status,
+        );
         self.terminal_apps_idx = selected;
         if let Some(idx) = activated {
             let label = &items[idx];
@@ -1622,16 +1356,38 @@ impl RobcoNativeApp {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
             } else {
-                self.shell_status = format!("External app launch for '{label}' is pending rewrite.");
+                self.shell_status =
+                    format!("External app launch for '{label}' is pending rewrite.");
             }
         }
     }
 
     fn draw_terminal_documents(&mut self, ctx: &Context) {
-        let items: Vec<String> = DOCUMENT_MENU_ITEMS.iter().map(|s| (*s).to_string()).collect();
-        let mut selected = self.terminal_documents_idx.min(items.len().saturating_sub(1));
-        let activated =
-            self.draw_terminal_menu_screen(ctx, "Documents", Some("ROBCO Word Processor"), &items, &mut selected);
+        let items: Vec<String> = DOCUMENT_MENU_ITEMS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let mut selected = self
+            .terminal_documents_idx
+            .min(items.len().saturating_sub(1));
+        let activated = draw_terminal_menu_screen(
+            ctx,
+            "Documents",
+            Some("ROBCO Word Processor"),
+            &items,
+            &mut selected,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+            &self.shell_status,
+        );
         self.terminal_documents_idx = selected;
         if let Some(idx) = activated {
             match items[idx].as_str() {
@@ -1650,493 +1406,555 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_document_browser(&mut self, ctx: &Context) {
-        let rows = self.document_browser_rows();
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            self.terminal_browser_idx = self.terminal_browser_idx.saturating_sub(1);
-        }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            self.terminal_browser_idx =
-                (self.terminal_browser_idx + 1).min(rows.len().saturating_sub(1));
-        }
-        if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            self.activate_document_browser();
-        }
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-            let palette = current_palette();
-            let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-            let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
-                screen.centered_text(&painter, TERMINAL_HEADER_START_ROW + idx, line, palette.fg, true);
-            }
-            screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-            screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Open Documents", palette.fg, true);
-            screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-            screen.underlined_text(
-                &painter,
-                TERMINAL_CONTENT_COL,
-                TERMINAL_SUBTITLE_ROW,
-                &self.file_manager.cwd.display().to_string(),
-                palette.fg,
-            );
-            let mut row = TERMINAL_MENU_START_ROW;
-            for (idx, (label, path)) in rows.iter().enumerate() {
-                let selected = idx == self.terminal_browser_idx;
-                let text = if selected {
-                    format!("  > {label}")
-                } else {
-                    format!("    {label}")
-                };
-                let response = screen.selectable_row(ui, &painter, &palette, TERMINAL_CONTENT_COL, row, &text, selected);
-                if response.clicked() {
-                    self.terminal_browser_idx = idx;
-                    if idx == 0 {
-                        self.file_manager.up();
-                        self.terminal_browser_idx = 0;
-                    } else if let Some(path) = path {
-                        self.file_manager.select(Some(path.clone()));
-                        self.activate_file_manager_selection();
-                    }
+        let activated = draw_terminal_document_browser(
+            ctx,
+            &self.file_manager,
+            &mut self.terminal_browser_idx,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_STATUS_ROW_ALT,
+            TERMINAL_CONTENT_COL,
+        );
+        if activated.is_some() {
+            match activate_browser_selection(&mut self.file_manager, self.terminal_browser_idx) {
+                FileManagerAction::None => {}
+                FileManagerAction::ChangedDir => {
+                    self.terminal_browser_idx = 0;
                 }
-                row += 1;
+                FileManagerAction::OpenFile(path) => {
+                    self.file_manager.select(Some(path));
+                    self.activate_file_manager_selection();
+                }
             }
-            let hint = "Enter open | Tab back | Up/Down move";
-            screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, hint, palette.dim);
-            if !self.shell_status.is_empty() {
-                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW_ALT, &self.shell_status, palette.dim);
-            }
-        });
+        }
     }
 
     fn draw_terminal_settings(&mut self, ctx: &Context) {
-        let items = self.terminal_settings_rows();
-        self.terminal_settings_idx = self
-            .terminal_settings_idx
-            .min(items.len().saturating_sub(1));
+        let event = run_terminal_settings_screen(
+            ctx,
+            &mut self.settings.draft,
+            &mut self.terminal_settings_idx,
+            &mut self.terminal_settings_choice,
+            self.session.as_ref().is_some_and(|s| s.is_admin),
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            TerminalSettingsEvent::None => {}
+            TerminalSettingsEvent::Persist => self.persist_native_settings(),
+            TerminalSettingsEvent::Back => {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            TerminalSettingsEvent::OpenConnections => {
+                self.terminal_screen = TerminalScreen::Connections;
+                self.terminal_connections.reset();
+                self.shell_status.clear();
+            }
+            TerminalSettingsEvent::OpenDefaultApps => {
+                self.terminal_screen = TerminalScreen::DefaultApps;
+                self.terminal_default_apps_idx = 0;
+                self.terminal_default_app_choice_idx = 0;
+                self.terminal_default_app_slot = None;
+                self.shell_status.clear();
+            }
+            TerminalSettingsEvent::OpenAbout => {
+                self.terminal_screen = TerminalScreen::About;
+                self.shell_status.clear();
+            }
+            TerminalSettingsEvent::EnterUserManagement => {
+                self.terminal_screen = TerminalScreen::UserManagement;
+                self.terminal_user_management_mode = UserManagementMode::Root;
+                self.terminal_user_management_idx = 0;
+                self.shell_status.clear();
+            }
+        }
+    }
 
-        if let Some(mut overlay) = self.terminal_settings_choice {
-            let choice_items = self.settings_choice_items(overlay.kind);
-            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                overlay.selected = overlay.selected.saturating_sub(1);
+    fn apply_connections_event(&mut self, event: ConnectionsEvent) {
+        match event {
+            ConnectionsEvent::None => {}
+            ConnectionsEvent::BackToSettings => {
+                self.terminal_screen = TerminalScreen::Settings;
+                self.shell_status.clear();
             }
-            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                overlay.selected = (overlay.selected + 1).min(choice_items.len().saturating_sub(1));
+            ConnectionsEvent::OpenNetworkGroups => {
+                self.terminal_connections.view =
+                    super::connections_screen::ConnectionsView::NetworkGroups;
+                self.shell_status.clear();
             }
-            if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-                self.terminal_settings_choice = None;
-            } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                self.apply_settings_choice(overlay.kind, overlay.selected);
-                self.terminal_settings_choice = None;
-            } else {
-                self.terminal_settings_choice = Some(overlay);
+            ConnectionsEvent::OpenBluetooth => {
+                self.terminal_connections.view = super::connections_screen::ConnectionsView::Kind {
+                    kind: ConnectionKind::Bluetooth,
+                    group: None,
+                };
+                self.terminal_connections.kind_idx = 0;
+                self.shell_status.clear();
             }
-        } else {
-            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                self.terminal_settings_idx = self.terminal_settings_idx.saturating_sub(1);
+            ConnectionsEvent::OpenPromptSearch { kind, group } => {
+                self.open_input_prompt(
+                    "Connections",
+                    "Search query:",
+                    TerminalPromptAction::ConnectionSearch { kind, group },
+                );
             }
-            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                self.terminal_settings_idx =
-                    (self.terminal_settings_idx + 1).min(items.len().saturating_sub(1));
+            ConnectionsEvent::OpenPasswordPrompt { kind, target } => {
+                self.open_password_prompt_with_action(
+                    "Connections",
+                    format!("Password for {} (blank cancels)", target.name),
+                    TerminalPromptAction::ConnectionPassword {
+                        kind,
+                        name: target.name,
+                        detail: target.detail,
+                    },
+                );
             }
-            if self.terminal_settings_idx == 4 {
-                if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
-                    self.step_interface_size(-1);
-                }
-                if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
-                    self.step_interface_size(1);
-                }
+            ConnectionsEvent::ConnectImmediate { kind, target } => {
+                self.connect_target(kind, target, None);
             }
-            if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                match self.terminal_settings_idx {
-                    0 => {
-                        self.settings.draft.sound = !self.settings.draft.sound;
-                        self.persist_native_settings();
-                    }
-                    1 => {
-                        self.settings.draft.bootup = !self.settings.draft.bootup;
-                        self.persist_native_settings();
-                    }
-                    2 => {
-                        self.settings.draft.show_navigation_hints =
-                            !self.settings.draft.show_navigation_hints;
-                        self.persist_native_settings();
-                    }
-                    3 => self.open_settings_choice(SettingsChoiceKind::Theme),
-                    4 => {}
-                    5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
-                    6 => {
-                        self.terminal_screen = TerminalScreen::MainMenu;
-                        self.shell_status.clear();
-                    }
-                    _ => {}
+            ConnectionsEvent::Status(status) => {
+                if status == crate::connections::macos_connections_disabled_hint() {
+                    self.shell_status = status;
+                    self.terminal_screen = TerminalScreen::Settings;
+                } else {
+                    self.shell_status = status;
                 }
             }
         }
+    }
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
+    fn draw_terminal_connections(&mut self, ctx: &Context) {
+        let event = draw_connections_screen(
+            ctx,
+            &mut self.terminal_connections,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        self.apply_connections_event(event);
+    }
+
+    fn draw_terminal_prompt_overlay_global(&self, ctx: &Context) {
+        let Some(prompt) = self.terminal_prompt.as_ref() else {
+            return;
+        };
+        egui::Area::new(Id::new("native_terminal_prompt_overlay"))
+            .order(egui::Order::Foreground)
+            .fixed_pos([0.0, 0.0])
             .show(ctx, |ui| {
-                let palette = current_palette();
+                ui.set_min_size(ui.max_rect().size());
                 let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-                let painter = ui.painter_at(screen.rect);
-                screen.paint_bg(&painter, palette.bg);
-                for (idx, line) in HEADER_LINES.iter().enumerate() {
-                    screen.centered_text(
-                        &painter,
-                        TERMINAL_HEADER_START_ROW + idx,
-                        line,
-                        palette.fg,
-                        true,
-                    );
-                }
-                screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-                screen.centered_text(&painter, TERMINAL_TITLE_ROW, "Settings", palette.fg, true);
-                screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-                screen.underlined_text(
-                    &painter,
-                    TERMINAL_CONTENT_COL,
-                    TERMINAL_SUBTITLE_ROW,
-                    "Native terminal-style settings",
-                    palette.fg,
-                );
-
-                let choice_items = self
-                    .terminal_settings_choice
-                    .map(|overlay| self.settings_choice_items(overlay.kind));
-                let mut row = TERMINAL_MENU_START_ROW;
-                for (idx, item) in items.iter().enumerate() {
-                    let selected = idx == self.terminal_settings_idx;
-                    let text = if selected {
-                        format!("  > {item}")
-                    } else {
-                        format!("    {item}")
-                    };
-                    let response = screen.selectable_row(
-                        ui,
-                        &painter,
-                        &palette,
-                        TERMINAL_CONTENT_COL,
-                        row,
-                        &text,
-                        selected,
-                    );
-                    if response.clicked() {
-                        self.terminal_settings_idx = idx;
-                        if self.terminal_settings_choice.is_some() {
-                            self.terminal_settings_choice = None;
-                        } else {
-                            match idx {
-                                0 => {
-                                    self.settings.draft.sound = !self.settings.draft.sound;
-                                    self.persist_native_settings();
-                                }
-                                1 => {
-                                    self.settings.draft.bootup = !self.settings.draft.bootup;
-                                    self.persist_native_settings();
-                                }
-                                2 => {
-                                    self.settings.draft.show_navigation_hints =
-                                        !self.settings.draft.show_navigation_hints;
-                                    self.persist_native_settings();
-                                }
-                                3 => self.open_settings_choice(SettingsChoiceKind::Theme),
-                                4 => {}
-                                5 => self.open_settings_choice(SettingsChoiceKind::DefaultOpenMode),
-                                6 if self.session.as_ref().is_some_and(|s| s.is_admin) => {
-                                    self.terminal_screen = TerminalScreen::UserManagement;
-                                    self.terminal_user_management_mode = UserManagementMode::Root;
-                                    self.terminal_user_management_idx = 0;
-                                    self.shell_status.clear();
-                                }
-                                _ if item == "Back" => {
-                                    self.terminal_screen = TerminalScreen::MainMenu;
-                                    self.shell_status.clear();
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    row += 1;
-
-                    if selected {
-                        if let (Some(overlay), Some(choice_items)) =
-                            (self.terminal_settings_choice, choice_items.as_ref())
-                        {
-                            for (choice_idx, choice) in choice_items.iter().enumerate() {
-                                let choice_selected = choice_idx == overlay.selected;
-                                let choice_text = if choice_selected {
-                                    format!("      > {choice}")
-                                } else {
-                                    format!("        {choice}")
-                                };
-                                let response = screen.selectable_row(
-                                    ui,
-                                    &painter,
-                                    &palette,
-                                    TERMINAL_CONTENT_COL,
-                                    row,
-                                    &choice_text,
-                                    choice_selected,
-                                );
-                                if response.clicked() {
-                                    self.terminal_settings_choice = None;
-                                    self.apply_settings_choice(overlay.kind, choice_idx);
-                                    return;
-                                }
-                                row += 1;
-                            }
-                            screen.text(
-                                &painter,
-                                TERMINAL_CONTENT_COL + 4,
-                                row,
-                                "Enter apply | Esc/Tab close",
-                                palette.dim,
-                            );
-                            row += 1;
-                        }
-                        if idx == 4 {
-                            let slider = format!(
-                                "        {}  Left/Right adjust",
-                                self.interface_size_slider_text(18)
-                            );
-                            screen.text(
-                                &painter,
-                                TERMINAL_CONTENT_COL,
-                                row,
-                                &slider,
-                                palette.dim,
-                            );
-                            row += 1;
-                        }
-                    }
-                }
-
-                if !self.shell_status.is_empty() {
-                    screen.text(
-                        &painter,
-                        TERMINAL_CONTENT_COL,
-                        TERMINAL_STATUS_ROW,
-                        &self.shell_status,
-                        palette.dim,
-                    );
-                }
+                draw_terminal_prompt_overlay(ui, &screen, prompt);
             });
+    }
+
+    fn draw_terminal_default_apps(&mut self, ctx: &Context) {
+        let event = draw_default_apps_screen(
+            ctx,
+            &self.settings.draft,
+            &mut self.terminal_default_apps_idx,
+            &mut self.terminal_default_app_choice_idx,
+            &mut self.terminal_default_app_slot,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            DefaultAppsEvent::None => {}
+            DefaultAppsEvent::Back => {
+                self.terminal_screen = TerminalScreen::Settings;
+                self.shell_status.clear();
+            }
+            DefaultAppsEvent::OpenSlot(slot) => {
+                self.terminal_default_app_slot = Some(slot);
+                self.terminal_default_app_choice_idx = 0;
+            }
+            DefaultAppsEvent::CloseSlotPicker => {
+                self.terminal_default_app_slot = None;
+            }
+            DefaultAppsEvent::SetBinding { slot, binding } => {
+                set_binding_for_slot(&mut self.settings.draft, slot, binding);
+                self.persist_native_settings();
+                self.terminal_default_app_slot = None;
+            }
+            DefaultAppsEvent::PromptCustom(slot) => {
+                self.open_input_prompt(
+                    "Default Apps",
+                    format!(
+                        "{} command (example: epy):",
+                        crate::default_apps::slot_label(slot)
+                    ),
+                    TerminalPromptAction::DefaultAppCustom { slot },
+                );
+            }
+            DefaultAppsEvent::Status(status) => {
+                self.shell_status = status;
+            }
+        }
+    }
+
+    fn draw_terminal_about(&mut self, ctx: &Context) {
+        if draw_about_screen(
+            ctx,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        ) {
+            self.terminal_screen = TerminalScreen::Settings;
+            self.shell_status.clear();
+        }
+    }
+
+    fn draw_terminal_network(&mut self, ctx: &Context) {
+        let networks = load_networks();
+        let entries: Vec<String> = networks.keys().cloned().collect();
+        let event = draw_programs_menu(
+            ctx,
+            "Network",
+            Some("Select Network Program"),
+            &entries,
+            &mut self.terminal_network_idx,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            ProgramMenuEvent::None => {}
+            ProgramMenuEvent::Back => {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &networks) {
+                Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Network),
+                Err(err) => self.shell_status = err,
+            },
+        }
+    }
+
+    fn draw_terminal_games(&mut self, ctx: &Context) {
+        let games = load_games();
+        let entries: Vec<String> = games.keys().cloned().collect();
+        let event = draw_programs_menu(
+            ctx,
+            "Games",
+            Some("Select Game"),
+            &entries,
+            &mut self.terminal_games_idx,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            ProgramMenuEvent::None => {}
+            ProgramMenuEvent::Back => {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &games) {
+                Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Games),
+                Err(err) => self.shell_status = err,
+            },
+        }
+    }
+
+    fn draw_terminal_pty(&mut self, ctx: &Context) {
+        let Some(state) = self.terminal_pty.as_mut() else {
+            self.terminal_screen = TerminalScreen::MainMenu;
+            self.shell_status = "No embedded PTY session.".to_string();
+            return;
+        };
+        let event = draw_embedded_pty(
+            ctx,
+            state,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        match event {
+            PtyScreenEvent::None => {}
+            PtyScreenEvent::CloseRequested => self.handle_terminal_back(),
+            PtyScreenEvent::ProcessExited => {
+                if let Some(pty) = self.terminal_pty.take() {
+                    self.terminal_screen = pty.return_screen;
+                    self.shell_status = format!("{} exited.", pty.title);
+                } else {
+                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.shell_status = "PTY session exited.".to_string();
+                }
+            }
+        }
+    }
+
+    fn apply_installer_event(&mut self, event: InstallerEvent) {
+        match event {
+            InstallerEvent::None => {}
+            InstallerEvent::BackToMainMenu => {
+                self.terminal_installer.reset();
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            InstallerEvent::OpenSearchPrompt => {
+                self.open_input_prompt(
+                    "Program Installer",
+                    "Search packages:",
+                    TerminalPromptAction::InstallerSearch,
+                );
+            }
+            InstallerEvent::OpenFilterPrompt => {
+                self.open_input_prompt(
+                    "Installed Apps",
+                    "Filter:",
+                    TerminalPromptAction::InstallerFilter,
+                );
+            }
+            InstallerEvent::OpenConfirmAction { pkg, action } => {
+                let prompt = match action {
+                    InstallerPackageAction::Install => format!("Install {pkg}?"),
+                    InstallerPackageAction::Update => format!("Update {pkg}?"),
+                    InstallerPackageAction::Uninstall => format!("Uninstall {pkg}?"),
+                };
+                self.open_confirm_prompt(
+                    "Program Installer",
+                    prompt,
+                    TerminalPromptAction::ConfirmInstallerAction { pkg, action },
+                );
+            }
+            InstallerEvent::OpenDisplayNamePrompt { pkg, target } => {
+                self.open_input_prompt(
+                    "Add to Menu",
+                    format!("Display name for '{pkg}':"),
+                    TerminalPromptAction::InstallerDisplayName { pkg, target },
+                );
+            }
+            InstallerEvent::LaunchCommand { argv, status } => {
+                self.open_embedded_pty(
+                    "Program Installer",
+                    &argv,
+                    TerminalScreen::ProgramInstaller,
+                );
+                self.shell_status = status;
+            }
+            InstallerEvent::Status(status) => {
+                self.shell_status = status;
+            }
+        }
+    }
+
+    fn draw_terminal_program_installer(&mut self, ctx: &Context) {
+        let event = draw_installer_screen(
+            ctx,
+            &mut self.terminal_installer,
+            &self.shell_status,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+        );
+        self.apply_installer_event(event);
     }
 
     fn draw_terminal_user_management(&mut self, ctx: &Context) {
         let mode = self.terminal_user_management_mode.clone();
-        let (title, subtitle, items) = match &mode {
-            UserManagementMode::Root => (
-                "User Management",
-                None,
-                self.user_management_root_items(),
-            ),
-            UserManagementMode::CreateAuthMethod { username } => (
-                "Choose Authentication Method",
-                Some(format!("Create user '{username}'")),
-                self.auth_method_items(),
-            ),
-            UserManagementMode::DeleteUser => (
-                "Delete User",
-                None,
-                self.user_list_items(true),
-            ),
-            UserManagementMode::ResetPassword => (
-                "Reset Password",
-                None,
-                self.user_list_items(true),
-            ),
-            UserManagementMode::ChangeAuthSelectUser => (
-                "Change Auth Method — Select User",
-                None,
-                self.user_list_items(true),
-            ),
-            UserManagementMode::ChangeAuthChoose { username } => (
-                "Choose Authentication Method",
-                Some(format!("Change auth for '{username}'")),
-                self.auth_method_items(),
-            ),
-            UserManagementMode::ToggleAdmin => (
-                "Toggle Admin",
-                None,
-                self.user_list_items(false),
-            ),
-        };
-        let mut selected = self
-            .terminal_user_management_idx
-            .min(items.iter().filter(|i| i.as_str() != "---").count().saturating_sub(1));
-        let refs: Vec<String> = items;
-        let activated =
-            self.draw_terminal_menu_screen(ctx, title, subtitle.as_deref(), &refs, &mut selected);
+        let screen = user_management_screen_for_mode(
+            &mode,
+            self.session.as_ref().map(|s| s.username.as_str()),
+        );
+        let mut selected = self.terminal_user_management_idx.min(
+            screen
+                .items
+                .iter()
+                .filter(|i| i.as_str() != "---")
+                .count()
+                .saturating_sub(1),
+        );
+        let refs = screen.items;
+        let activated = draw_terminal_menu_screen(
+            ctx,
+            screen.title,
+            screen.subtitle.as_deref(),
+            &refs,
+            &mut selected,
+            TERMINAL_SCREEN_COLS,
+            TERMINAL_SCREEN_ROWS,
+            TERMINAL_HEADER_START_ROW,
+            TERMINAL_SEPARATOR_TOP_ROW,
+            TERMINAL_TITLE_ROW,
+            TERMINAL_SEPARATOR_BOTTOM_ROW,
+            TERMINAL_SUBTITLE_ROW,
+            TERMINAL_MENU_START_ROW,
+            TERMINAL_STATUS_ROW,
+            TERMINAL_CONTENT_COL,
+            &self.shell_status,
+        );
         self.terminal_user_management_idx = selected;
         if let Some(idx) = activated {
             let selected_label = refs[idx].clone();
-            match &mode {
-                UserManagementMode::Root => match selected_label.as_str() {
-                    "Create User" => self.open_input_prompt(
-                        "Create User",
-                        "New username:",
-                        TerminalPromptAction::CreateUsername,
-                    ),
-                    "Delete User" => {
-                        self.terminal_user_management_mode = UserManagementMode::DeleteUser;
-                        self.terminal_user_management_idx = 0;
-                    }
-                    "Reset Password" => {
-                        self.terminal_user_management_mode = UserManagementMode::ResetPassword;
-                        self.terminal_user_management_idx = 0;
-                    }
-                    "Change Auth Method" => {
-                        self.terminal_user_management_mode =
-                            UserManagementMode::ChangeAuthSelectUser;
-                        self.terminal_user_management_idx = 0;
-                    }
-                    "Toggle Admin" => {
-                        self.terminal_user_management_mode = UserManagementMode::ToggleAdmin;
-                        self.terminal_user_management_idx = 0;
-                    }
-                    "Back" => {
-                        self.terminal_screen = TerminalScreen::Settings;
-                        self.terminal_user_management_idx = 0;
-                    }
-                    _ => {}
-                },
-                UserManagementMode::CreateAuthMethod { username } => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
-                    } else if let Some(method) = Self::auth_method_from_label(&selected_label) {
-                        match method {
-                            crate::core::auth::AuthMethod::Password => {
-                                self.open_password_prompt_with_action(
-                                    "Create User",
-                                    format!("Password for {username}"),
-                                    TerminalPromptAction::CreatePassword {
-                                        username: username.clone(),
-                                    },
-                                );
-                            }
-                            crate::core::auth::AuthMethod::NoPassword => {
-                                self.save_user_and_status(
-                                    username,
-                                    UserRecord {
-                                        password_hash: String::new(),
-                                        is_admin: false,
-                                        auth_method: method,
-                                    },
-                                    format!("User '{username}' created."),
-                                );
-                                self.terminal_user_management_mode = UserManagementMode::Root;
-                                self.terminal_user_management_idx = 0;
-                            }
-                            crate::core::auth::AuthMethod::HackingMinigame => {
-                                self.shell_status =
-                                    "Hacking auth user creation is pending native rewrite.".to_string();
-                                self.terminal_user_management_mode = UserManagementMode::Root;
-                                self.terminal_user_management_idx = 0;
-                            }
-                        }
-                    }
+            match handle_user_management_selection(
+                &mode,
+                &selected_label,
+                self.session.as_ref().map(|s| s.username.as_str()),
+            ) {
+                UserManagementAction::None => {}
+                UserManagementAction::OpenCreateUserPrompt => self.open_input_prompt(
+                    "Create User",
+                    "New username:",
+                    TerminalPromptAction::CreateUsername,
+                ),
+                UserManagementAction::SetMode { mode, selected_idx } => {
+                    self.terminal_user_management_mode = mode;
+                    self.terminal_user_management_idx = selected_idx;
                 }
-                UserManagementMode::DeleteUser => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
-                    } else if self
-                        .session
-                        .as_ref()
-                        .is_some_and(|s| s.username == selected_label)
-                    {
-                        self.shell_status = "Cannot delete yourself.".to_string();
-                    } else {
-                        self.open_confirm_prompt(
-                            "Delete User",
-                            format!("Delete user '{selected_label}'?"),
-                            TerminalPromptAction::ConfirmDeleteUser {
-                                username: selected_label,
-                            },
-                        );
-                    }
+                UserManagementAction::BackToSettings => {
+                    self.terminal_screen = TerminalScreen::Settings;
+                    self.terminal_user_management_idx = 0;
                 }
-                UserManagementMode::ResetPassword => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
-                    } else {
+                UserManagementAction::CreateWithMethod { username, method } => match method {
+                    crate::core::auth::AuthMethod::Password => {
                         self.open_password_prompt_with_action(
-                            "Reset Password",
-                            format!("New password for '{selected_label}'"),
-                            TerminalPromptAction::ResetPassword {
-                                username: selected_label,
-                            },
+                            "Create User",
+                            format!("Password for {username}"),
+                            TerminalPromptAction::CreatePassword { username },
                         );
                     }
-                }
-                UserManagementMode::ChangeAuthSelectUser => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
-                    } else {
-                        self.terminal_user_management_mode =
-                            UserManagementMode::ChangeAuthChoose {
-                                username: selected_label,
-                            };
-                        self.terminal_user_management_idx = 0;
-                    }
-                }
-                UserManagementMode::ChangeAuthChoose { username } => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode =
-                            UserManagementMode::ChangeAuthSelectUser;
-                        self.terminal_user_management_idx = 0;
-                    } else if let Some(method) = Self::auth_method_from_label(&selected_label) {
-                        match method {
-                            crate::core::auth::AuthMethod::Password => {
-                                self.open_password_prompt_with_action(
-                                    "Change Auth Method",
-                                    format!("New password for '{username}'"),
-                                    TerminalPromptAction::ChangeAuthPassword {
-                                        username: username.clone(),
-                                    },
-                                );
-                            }
-                            crate::core::auth::AuthMethod::NoPassword => {
-                                self.update_user_record(
-                                    username,
-                                    |record| {
-                                        record.auth_method = crate::core::auth::AuthMethod::NoPassword;
-                                        record.password_hash.clear();
-                                    },
-                                    format!("Auth method updated for '{username}'."),
-                                );
-                                self.terminal_user_management_mode = UserManagementMode::Root;
-                                self.terminal_user_management_idx = 0;
-                            }
-                            crate::core::auth::AuthMethod::HackingMinigame => {
-                                self.shell_status =
-                                    "Hacking auth is pending native rewrite.".to_string();
-                                self.terminal_user_management_mode = UserManagementMode::Root;
-                                self.terminal_user_management_idx = 0;
-                            }
-                        }
-                    }
-                }
-                UserManagementMode::ToggleAdmin => {
-                    if selected_label == "Back" {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
-                    } else {
-                        self.open_confirm_prompt(
-                            "Toggle Admin",
-                            format!("Toggle admin for '{selected_label}'?"),
-                            TerminalPromptAction::ConfirmToggleAdmin {
-                                username: selected_label,
+                    crate::core::auth::AuthMethod::NoPassword => {
+                        self.save_user_and_status(
+                            &username,
+                            UserRecord {
+                                password_hash: String::new(),
+                                is_admin: false,
+                                auth_method: method,
                             },
+                            format!("User '{username}' created."),
+                        );
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    crate::core::auth::AuthMethod::HackingMinigame => {
+                        self.shell_status =
+                            "Hacking auth user creation is pending native rewrite.".to_string();
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    }
+                },
+                UserManagementAction::ConfirmDeleteUser { username } => {
+                    self.open_confirm_prompt(
+                        "Delete User",
+                        format!("Delete user '{username}'?"),
+                        TerminalPromptAction::ConfirmDeleteUser { username },
+                    );
+                }
+                UserManagementAction::OpenResetPassword { username } => {
+                    self.open_password_prompt_with_action(
+                        "Reset Password",
+                        format!("New password for '{username}'"),
+                        TerminalPromptAction::ResetPassword { username },
+                    );
+                }
+                UserManagementAction::ChangeAuthWithMethod { username, method } => match method {
+                    crate::core::auth::AuthMethod::Password => {
+                        self.open_password_prompt_with_action(
+                            "Change Auth Method",
+                            format!("New password for '{username}'"),
+                            TerminalPromptAction::ChangeAuthPassword { username },
                         );
                     }
+                    crate::core::auth::AuthMethod::NoPassword => {
+                        self.update_user_record(
+                            &username,
+                            |record| {
+                                record.auth_method = crate::core::auth::AuthMethod::NoPassword;
+                                record.password_hash.clear();
+                            },
+                            format!("Auth method updated for '{username}'."),
+                        );
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    }
+                    crate::core::auth::AuthMethod::HackingMinigame => {
+                        self.shell_status = "Hacking auth is pending native rewrite.".to_string();
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = 0;
+                    }
+                },
+                UserManagementAction::ConfirmToggleAdmin { username } => {
+                    self.open_confirm_prompt(
+                        "Toggle Admin",
+                        format!("Toggle admin for '{username}'?"),
+                        TerminalPromptAction::ConfirmToggleAdmin { username },
+                    );
+                }
+                UserManagementAction::Status(status) => {
+                    self.shell_status = status;
                 }
             }
         }
@@ -2159,7 +1977,11 @@ impl RobcoNativeApp {
             .resizable(false)
             .exact_height(retro_footer_height())
             .show_separator_line(false)
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
+            .frame(
+                egui::Frame::none()
+                    .fill(current_palette().bg)
+                    .inner_margin(0.0),
+            )
             .show(ctx, |ui| {
                 let palette = current_palette();
                 let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, 1);
@@ -2184,7 +2006,8 @@ impl RobcoNativeApp {
                     }
                     if ui.button("Word Processor Home").clicked() {
                         if let Some(session) = &self.session {
-                            self.file_manager.set_cwd(word_processor_dir(&session.username));
+                            self.file_manager
+                                .set_cwd(word_processor_dir(&session.username));
                         }
                     }
                     ui.label(self.file_manager.cwd.display().to_string());
@@ -2284,12 +2107,18 @@ impl RobcoNativeApp {
             .default_size([500.0, 360.0])
             .show(ctx, |ui| {
                 let mut changed = false;
-                changed |= ui.checkbox(&mut self.settings.draft.sound, "Sound").changed();
-                changed |= ui.checkbox(&mut self.settings.draft.bootup, "Bootup").changed();
-                changed |= ui.checkbox(
-                    &mut self.settings.draft.show_navigation_hints,
-                    "Show navigation hints",
-                ).changed();
+                changed |= ui
+                    .checkbox(&mut self.settings.draft.sound, "Sound")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut self.settings.draft.bootup, "Bootup")
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut self.settings.draft.show_navigation_hints,
+                        "Show navigation hints",
+                    )
+                    .changed();
                 ui.horizontal(|ui| {
                     ui.label("Theme");
                     let mut current_idx = THEMES
@@ -2336,16 +2165,20 @@ impl RobcoNativeApp {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Default Open Mode");
-                    changed |= ui.selectable_value(
-                        &mut self.settings.draft.default_open_mode,
-                        OpenMode::Terminal,
-                        "Terminal",
-                    ).changed();
-                    changed |= ui.selectable_value(
-                        &mut self.settings.draft.default_open_mode,
-                        OpenMode::Desktop,
-                        "Desktop",
-                    ).changed();
+                    changed |= ui
+                        .selectable_value(
+                            &mut self.settings.draft.default_open_mode,
+                            OpenMode::Terminal,
+                            "Terminal",
+                        )
+                        .changed();
+                    changed |= ui
+                        .selectable_value(
+                            &mut self.settings.draft.default_open_mode,
+                            OpenMode::Desktop,
+                            "Desktop",
+                        )
+                        .changed();
                 });
                 ui.separator();
                 if changed {
@@ -2377,8 +2210,7 @@ impl RobcoNativeApp {
                     }
                 }
                 if ui.button("Nuke Codes").clicked() {
-                    self.applications.status =
-                        "Nuke Codes UI is not rewritten yet.".to_string();
+                    self.applications.status = "Nuke Codes UI is not rewritten yet.".to_string();
                 }
                 ui.separator();
                 ui.heading("Configured Apps");
@@ -2408,7 +2240,9 @@ impl RobcoNativeApp {
             .default_size([480.0, 220.0])
             .show(ctx, |ui| {
                 ui.label("Terminal mode stays a first-class product mode.");
-                ui.small("The native shell launches the existing `robcos` TUI in your system terminal.");
+                ui.small(
+                    "The native shell launches the existing `robcos` TUI in your system terminal.",
+                );
                 ui.separator();
                 ui.label(format!("Launch path: {}", plan.display));
                 ui.monospace(format!("{} {}", plan.program, plan.args.join(" ")));
@@ -2429,29 +2263,6 @@ impl RobcoNativeApp {
                 }
             });
         self.terminal_mode.open = open;
-    }
-
-    fn draw_terminal_flash(&self, ctx: &Context, message: &str) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-                let palette = current_palette();
-                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
-                let painter = ui.painter_at(screen.rect);
-                screen.paint_bg(&painter, palette.bg);
-                for (idx, line) in HEADER_LINES.iter().enumerate() {
-                    screen.centered_text(
-                        &painter,
-                        TERMINAL_HEADER_START_ROW + idx,
-                        line,
-                        palette.fg,
-                        true,
-                    );
-                }
-                screen.separator(&painter, TERMINAL_SEPARATOR_TOP_ROW, &palette);
-                screen.separator(&painter, TERMINAL_SEPARATOR_BOTTOM_ROW, &palette);
-                screen.text(&painter, TERMINAL_CONTENT_COL, TERMINAL_STATUS_ROW, message, palette.fg);
-            });
     }
 }
 
@@ -2479,10 +2290,29 @@ impl eframe::App for RobcoNativeApp {
                     FlashAction::FinishLogin { username, user } => {
                         self.restore_for_user(&username, &user);
                     }
+                    FlashAction::StartHacking { username } => {
+                        self.login_mode = LoginScreenMode::Hacking;
+                        self.login_hacking = Some(LoginHackingState {
+                            username,
+                            game: HackingGame::new(
+                                crate::config::get_settings().hacking_difficulty,
+                            ),
+                        });
+                    }
                 }
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
-                self.draw_terminal_flash(ctx, &flash.message);
+                draw_terminal_flash(
+                    ctx,
+                    &flash.message,
+                    TERMINAL_SCREEN_COLS,
+                    TERMINAL_SCREEN_ROWS,
+                    TERMINAL_HEADER_START_ROW,
+                    TERMINAL_SEPARATOR_TOP_ROW,
+                    TERMINAL_SEPARATOR_BOTTOM_ROW,
+                    TERMINAL_STATUS_ROW,
+                    TERMINAL_CONTENT_COL,
+                );
                 self.draw_terminal_footer(ctx);
                 return;
             }
@@ -2493,7 +2323,10 @@ impl eframe::App for RobcoNativeApp {
             return;
         }
 
-        if !self.desktop_mode_open && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+        if !self.desktop_mode_open
+            && !matches!(self.terminal_screen, TerminalScreen::PtyApp)
+            && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
+        {
             self.handle_terminal_back();
         }
 
@@ -2502,14 +2335,25 @@ impl eframe::App for RobcoNativeApp {
             self.draw_start_panel(ctx);
             self.draw_desktop(ctx);
         } else {
+            if self.terminal_prompt.is_some() {
+                self.handle_terminal_prompt_input(ctx);
+            }
             match self.terminal_screen {
                 TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
                 TerminalScreen::Applications => self.draw_terminal_applications(ctx),
                 TerminalScreen::Documents => self.draw_terminal_documents(ctx),
+                TerminalScreen::Network => self.draw_terminal_network(ctx),
+                TerminalScreen::Games => self.draw_terminal_games(ctx),
+                TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
+                TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
                 TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+                TerminalScreen::Connections => self.draw_terminal_connections(ctx),
+                TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
+                TerminalScreen::About => self.draw_terminal_about(ctx),
                 TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
             }
+            self.draw_terminal_prompt_overlay_global(ctx);
         }
         self.draw_terminal_footer(ctx);
         self.draw_file_manager(ctx);

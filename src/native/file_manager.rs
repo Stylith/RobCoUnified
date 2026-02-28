@@ -65,7 +65,11 @@ impl NativeFileManagerState {
             let path = entry.path();
             let label = entry.file_name().to_string_lossy().to_string();
             let is_dir = path.is_dir();
-            let row = FileEntryRow { path, label, is_dir };
+            let row = FileEntryRow {
+                path,
+                label,
+                is_dir,
+            };
             if is_dir {
                 dirs.push(row);
             } else {

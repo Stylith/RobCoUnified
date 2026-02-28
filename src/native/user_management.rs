@@ -1,0 +1,238 @@
+use super::menu::UserManagementMode;
+use crate::core::auth::{load_users, AuthMethod};
+
+#[derive(Debug, Clone)]
+pub enum UserManagementAction {
+    None,
+    OpenCreateUserPrompt,
+    SetMode {
+        mode: UserManagementMode,
+        selected_idx: usize,
+    },
+    BackToSettings,
+    CreateWithMethod {
+        username: String,
+        method: AuthMethod,
+    },
+    ConfirmDeleteUser {
+        username: String,
+    },
+    OpenResetPassword {
+        username: String,
+    },
+    ChangeAuthWithMethod {
+        username: String,
+        method: AuthMethod,
+    },
+    ConfirmToggleAdmin {
+        username: String,
+    },
+    Status(String),
+}
+
+pub struct UserManagementScreen {
+    pub title: &'static str,
+    pub subtitle: Option<String>,
+    pub items: Vec<String>,
+}
+
+pub fn screen_for_mode(
+    mode: &UserManagementMode,
+    current_username: Option<&str>,
+) -> UserManagementScreen {
+    match mode {
+        UserManagementMode::Root => UserManagementScreen {
+            title: "User Management",
+            subtitle: None,
+            items: root_items(),
+        },
+        UserManagementMode::CreateAuthMethod { username } => UserManagementScreen {
+            title: "Choose Authentication Method",
+            subtitle: Some(format!("Create user '{username}'")),
+            items: auth_method_items(),
+        },
+        UserManagementMode::DeleteUser => UserManagementScreen {
+            title: "Delete User",
+            subtitle: None,
+            items: user_list_items(current_username, true),
+        },
+        UserManagementMode::ResetPassword => UserManagementScreen {
+            title: "Reset Password",
+            subtitle: None,
+            items: user_list_items(current_username, true),
+        },
+        UserManagementMode::ChangeAuthSelectUser => UserManagementScreen {
+            title: "Change Auth Method — Select User",
+            subtitle: None,
+            items: user_list_items(current_username, true),
+        },
+        UserManagementMode::ChangeAuthChoose { username } => UserManagementScreen {
+            title: "Choose Authentication Method",
+            subtitle: Some(format!("Change auth for '{username}'")),
+            items: auth_method_items(),
+        },
+        UserManagementMode::ToggleAdmin => UserManagementScreen {
+            title: "Toggle Admin",
+            subtitle: None,
+            items: user_list_items(current_username, false),
+        },
+    }
+}
+
+pub fn handle_selection(
+    mode: &UserManagementMode,
+    selected_label: &str,
+    current_username: Option<&str>,
+) -> UserManagementAction {
+    match mode {
+        UserManagementMode::Root => match selected_label {
+            "Create User" => UserManagementAction::OpenCreateUserPrompt,
+            "Delete User" => UserManagementAction::SetMode {
+                mode: UserManagementMode::DeleteUser,
+                selected_idx: 0,
+            },
+            "Reset Password" => UserManagementAction::SetMode {
+                mode: UserManagementMode::ResetPassword,
+                selected_idx: 0,
+            },
+            "Change Auth Method" => UserManagementAction::SetMode {
+                mode: UserManagementMode::ChangeAuthSelectUser,
+                selected_idx: 0,
+            },
+            "Toggle Admin" => UserManagementAction::SetMode {
+                mode: UserManagementMode::ToggleAdmin,
+                selected_idx: 0,
+            },
+            "Back" => UserManagementAction::BackToSettings,
+            _ => UserManagementAction::None,
+        },
+        UserManagementMode::CreateAuthMethod { username } => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::Root,
+                    selected_idx: 0,
+                }
+            } else if let Some(method) = auth_method_from_label(selected_label) {
+                UserManagementAction::CreateWithMethod {
+                    username: username.clone(),
+                    method,
+                }
+            } else {
+                UserManagementAction::None
+            }
+        }
+        UserManagementMode::DeleteUser => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::Root,
+                    selected_idx: 0,
+                }
+            } else if current_username.is_some_and(|username| username == selected_label) {
+                UserManagementAction::Status("Cannot delete yourself.".to_string())
+            } else {
+                UserManagementAction::ConfirmDeleteUser {
+                    username: selected_label.to_string(),
+                }
+            }
+        }
+        UserManagementMode::ResetPassword => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::Root,
+                    selected_idx: 0,
+                }
+            } else {
+                UserManagementAction::OpenResetPassword {
+                    username: selected_label.to_string(),
+                }
+            }
+        }
+        UserManagementMode::ChangeAuthSelectUser => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::Root,
+                    selected_idx: 0,
+                }
+            } else {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::ChangeAuthChoose {
+                        username: selected_label.to_string(),
+                    },
+                    selected_idx: 0,
+                }
+            }
+        }
+        UserManagementMode::ChangeAuthChoose { username } => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::ChangeAuthSelectUser,
+                    selected_idx: 0,
+                }
+            } else if let Some(method) = auth_method_from_label(selected_label) {
+                UserManagementAction::ChangeAuthWithMethod {
+                    username: username.clone(),
+                    method,
+                }
+            } else {
+                UserManagementAction::None
+            }
+        }
+        UserManagementMode::ToggleAdmin => {
+            if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::Root,
+                    selected_idx: 0,
+                }
+            } else {
+                UserManagementAction::ConfirmToggleAdmin {
+                    username: selected_label.to_string(),
+                }
+            }
+        }
+    }
+}
+
+fn root_items() -> Vec<String> {
+    vec![
+        "Create User".to_string(),
+        "Delete User".to_string(),
+        "Reset Password".to_string(),
+        "Change Auth Method".to_string(),
+        "Toggle Admin".to_string(),
+        "---".to_string(),
+        "Back".to_string(),
+    ]
+}
+
+fn auth_method_items() -> Vec<String> {
+    vec![
+        "Password             — classic password login".to_string(),
+        "No Password          — log in without a password".to_string(),
+        "Hacking Minigame     — must hack in to log in".to_string(),
+        "---".to_string(),
+        "Back".to_string(),
+    ]
+}
+
+fn auth_method_from_label(label: &str) -> Option<AuthMethod> {
+    if label.starts_with("Password") {
+        Some(AuthMethod::Password)
+    } else if label.starts_with("No Password") {
+        Some(AuthMethod::NoPassword)
+    } else if label.starts_with("Hacking") {
+        Some(AuthMethod::HackingMinigame)
+    } else {
+        None
+    }
+}
+
+fn user_list_items(current_username: Option<&str>, include_current: bool) -> Vec<String> {
+    let mut users: Vec<String> = load_users()
+        .keys()
+        .filter(|u| include_current || Some(u.as_str()) != current_username)
+        .cloned()
+        .collect();
+    users.sort();
+    users.push("Back".to_string());
+    users
+}

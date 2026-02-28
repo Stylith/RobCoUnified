@@ -1,3 +1,11 @@
 pub mod config;
+pub mod connections;
 pub mod core;
+pub mod default_apps;
+pub mod launcher;
 pub mod native;
+pub mod pty;
+pub mod session;
+pub mod sound;
+pub mod status;
+pub mod ui;
