@@ -119,11 +119,20 @@ pub fn draw_embedded_pty(
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
 
-            let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+            let plain_fast = state.session.prefers_plain_render();
+            let plain_snapshot = if plain_fast {
+                Some(state.session.snapshot_plain(pty_cols, pty_rows))
+            } else {
+                None
+            };
+            let plain_has_borders = plain_snapshot
+                .as_ref()
+                .map(|snap| snap.lines.iter().any(|line| line_has_border_glyphs(line)))
+                .unwrap_or(false);
             let content_rect = Rect::from_min_max(
                 screen.row_rect(0, 0, 1).min,
                 Pos2::new(
-                    screen.row_rect(pty_cols as usize, 0, 1).min.x,
+                    screen.rect.right(),
                     screen.row_rect(0, pty_rows as usize, 1).min.y,
                 ),
             );
@@ -137,67 +146,35 @@ pub fn draw_embedded_pty(
             );
             let content_painter = painter.with_clip_rect(content_rect);
 
-            for (row_idx, row) in snapshot.cells.iter().enumerate() {
-                for (col_idx, cell) in row.iter().enumerate() {
-                    let mut cell_to_draw = *cell;
-                    if smooth_borders {
-                        cell_to_draw.ch = smooth_border_char_from_snapshot(
-                            &snapshot.cells,
-                            row_idx,
-                            col_idx,
-                            cell.ch,
+            if plain_fast && !plain_has_borders {
+                let snap = plain_snapshot.as_ref().expect("plain snapshot present");
+                for (row_idx, line) in snap.lines.iter().enumerate() {
+                    if !line.is_empty() {
+                        content_painter.text(
+                            screen.row_rect(0, row_idx, 1).left_top(),
+                            Align2::LEFT_TOP,
+                            line,
+                            screen.font().clone(),
+                            palette.fg,
                         );
                     }
-                    let border_conn = if smooth_borders {
-                        vector_border_connections(
-                            &snapshot.cells,
-                            row_idx,
-                            col_idx,
-                            cell_to_draw.ch,
-                        )
-                    } else {
-                        None
-                    };
-                    draw_cell(
-                        &screen,
-                        &content_painter,
-                        col_idx,
-                        row_idx,
-                        &cell_to_draw,
-                        border_conn,
-                    );
                 }
-            }
-
-            if !snapshot.cursor_hidden {
-                let row = snapshot.cursor_row as usize;
-                let col = snapshot.cursor_col as usize;
+                let row = snap.cursor_row as usize;
+                let col = snap.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
-                let cell = snapshot
-                    .cells
-                    .get(snapshot.cursor_row as usize)
-                    .and_then(|line| line.get(snapshot.cursor_col as usize))
-                    .copied()
-                    .unwrap_or(PtyStyledCell {
-                        ch: ' ',
-                        fg: Color::White,
-                        bg: Color::Black,
-                        bold: false,
-                        italic: false,
-                        underline: false,
-                        reversed: false,
-                    });
-                let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
-                let fill = cursor_fg;
-                let text_color = cursor_bg;
-                content_painter.rect_filled(cursor_rect, 0.0, fill);
-                if cell.ch != ' ' {
+                let ch = snap
+                    .lines
+                    .get(row)
+                    .and_then(|line| line.chars().nth(col))
+                    .unwrap_or(' ');
+                content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
+                if ch != ' ' {
                     content_painter.text(
                         cursor_rect.left_top(),
                         Align2::LEFT_TOP,
-                        cell.ch.to_string(),
+                        ch.to_string(),
                         screen.font().clone(),
-                        text_color,
+                        palette.bg,
                     );
                 } else {
                     content_painter.text(
@@ -205,8 +182,82 @@ pub fn draw_embedded_pty(
                         Align2::LEFT_TOP,
                         "_",
                         screen.font().clone(),
-                        text_color,
+                        palette.bg,
                     );
+                }
+            } else {
+                let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+                for (row_idx, row) in snapshot.cells.iter().enumerate() {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        let mut cell_to_draw = *cell;
+                        if smooth_borders {
+                            cell_to_draw.ch = smooth_border_char_from_snapshot(
+                                &snapshot.cells,
+                                row_idx,
+                                col_idx,
+                                cell.ch,
+                            );
+                        }
+                        let border_conn = if smooth_borders {
+                            vector_border_connections(
+                                &snapshot.cells,
+                                row_idx,
+                                col_idx,
+                                cell_to_draw.ch,
+                            )
+                        } else {
+                            None
+                        };
+                        draw_cell(
+                            &screen,
+                            &content_painter,
+                            col_idx,
+                            row_idx,
+                            &cell_to_draw,
+                            border_conn,
+                        );
+                    }
+                }
+
+                if !snapshot.cursor_hidden {
+                    let row = snapshot.cursor_row as usize;
+                    let col = snapshot.cursor_col as usize;
+                    let cursor_rect = screen.row_rect(col, row, 1);
+                    let cell = snapshot
+                        .cells
+                        .get(snapshot.cursor_row as usize)
+                        .and_then(|line| line.get(snapshot.cursor_col as usize))
+                        .copied()
+                        .unwrap_or(PtyStyledCell {
+                            ch: ' ',
+                            fg: Color::White,
+                            bg: Color::Black,
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            reversed: false,
+                        });
+                    let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
+                    let fill = cursor_fg;
+                    let text_color = cursor_bg;
+                    content_painter.rect_filled(cursor_rect, 0.0, fill);
+                    if cell.ch != ' ' {
+                        content_painter.text(
+                            cursor_rect.left_top(),
+                            Align2::LEFT_TOP,
+                            cell.ch.to_string(),
+                            screen.font().clone(),
+                            text_color,
+                        );
+                    } else {
+                        content_painter.text(
+                            cursor_rect.left_top(),
+                            Align2::LEFT_TOP,
+                            "_",
+                            screen.font().clone(),
+                            text_color,
+                        );
+                    }
                 }
             }
         });
@@ -777,6 +828,38 @@ fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyMo
         _ => return None,
     };
     Some((code, mods))
+}
+
+fn line_has_border_glyphs(line: &str) -> bool {
+    line.chars().any(|ch| {
+        matches!(
+            ch,
+            '-' | '|'
+                | '+'
+                | '─'
+                | '│'
+                | '┌'
+                | '┐'
+                | '└'
+                | '┘'
+                | '├'
+                | '┤'
+                | '┬'
+                | '┴'
+                | '┼'
+                | '═'
+                | '║'
+                | '╔'
+                | '╗'
+                | '╚'
+                | '╝'
+                | '╠'
+                | '╣'
+                | '╦'
+                | '╩'
+                | '╬'
+        )
+    })
 }
 
 fn spawn_with_fallback(

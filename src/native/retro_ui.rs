@@ -190,12 +190,17 @@ impl RetroScreen {
     }
 
     pub fn row_rect(&self, col: usize, row: usize, width_chars: usize) -> Rect {
-        Rect::from_min_size(
-            Pos2::new(
-                self.rect.left() + col as f32 * self.cell.x,
-                self.rect.top() + row as f32 * self.cell.y,
-            ),
-            egui::vec2(width_chars as f32 * self.cell.x, self.cell.y),
+        let left = self.rect.left() + col as f32 * self.cell.x;
+        let top = self.rect.top() + row as f32 * self.cell.y;
+        let nominal_right = left + width_chars.max(1) as f32 * self.cell.x;
+        let right = if col.saturating_add(width_chars.max(1)) >= self.cols {
+            self.rect.right()
+        } else {
+            nominal_right.min(self.rect.right())
+        };
+        Rect::from_min_max(
+            Pos2::new(left.min(self.rect.right()), top),
+            Pos2::new(right.max(left), top + self.cell.y),
         )
     }
 

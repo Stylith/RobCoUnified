@@ -757,6 +757,12 @@ impl PtySession {
         }
     }
 
+    /// True when PTY should favor fast plain line rendering.
+    #[allow(dead_code)]
+    pub fn prefers_plain_render(&self) -> bool {
+        matches!(self.render_mode, PtyRenderMode::Plain)
+    }
+
     /// Snapshot the current screen as plain text for non-ratatui renderers.
     #[allow(dead_code)]
     pub fn snapshot_plain(&self, cols: u16, rows: u16) -> PtyTextSnapshot {
