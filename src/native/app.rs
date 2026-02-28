@@ -34,8 +34,7 @@ use super::prompt::{
 };
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
-    draw_embedded_pty, spawn_embedded_pty, spawn_embedded_pty_with_options, NativePtyState,
-    PtyScreenEvent,
+    draw_embedded_pty, spawn_embedded_pty_with_options, NativePtyState, PtyScreenEvent,
 };
 use super::retro_ui::{configure_visuals, current_palette, RetroScreen};
 use super::settings_screen::{
@@ -569,17 +568,31 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
-        match spawn_embedded_pty(
-            title,
-            cmd,
-            return_screen,
-            TERMINAL_SCREEN_COLS as u16,
-            TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
-        ) {
+        let perf_mode = should_force_native_pty_perf_profile(cmd);
+        let (cols, rows) = if perf_mode {
+            // nbsdgames/bsdgames are significantly faster in a classic 80x25 plain path.
+            (80, 25)
+        } else {
+            (
+                TERMINAL_SCREEN_COLS as u16,
+                TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
+            )
+        };
+        let mut options = crate::pty::PtyLaunchOptions::default();
+        if perf_mode {
+            options
+                .env
+                .push(("ROBCOS_PTY_RENDER".into(), "plain".into()));
+        }
+        match spawn_embedded_pty_with_options(title, cmd, return_screen, cols, rows, options) {
             Ok(state) => {
                 self.terminal_pty = Some(state);
                 self.terminal_screen = TerminalScreen::PtyApp;
-                self.shell_status = format!("Opened {title} in PTY.");
+                if perf_mode {
+                    self.shell_status = format!("Opened {title} in PTY (fast profile).");
+                } else {
+                    self.shell_status = format!("Opened {title} in PTY.");
+                }
             }
             Err(err) => {
                 self.shell_status = err;
@@ -2850,4 +2863,18 @@ impl eframe::App for RobcoNativeApp {
                 });
         }
     }
+}
+
+fn should_force_native_pty_perf_profile(cmd: &[String]) -> bool {
+    let Some(program) = cmd.first() else {
+        return false;
+    };
+    let Some(name) = std::path::Path::new(program)
+        .file_name()
+        .and_then(|part| part.to_str())
+        .map(|part| part.to_ascii_lowercase())
+    else {
+        return false;
+    };
+    name.starts_with("nbsdgames") || name.starts_with("bsdgames")
 }

@@ -28,6 +28,7 @@ pub enum PtyScreenEvent {
     ProcessExited,
 }
 
+#[allow(dead_code)]
 pub fn spawn_embedded_pty(
     title: &str,
     cmd: &[String],
