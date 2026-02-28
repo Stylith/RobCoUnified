@@ -4,8 +4,9 @@ use super::connections_screen::{
     TerminalConnectionsState,
 };
 use super::data::{
-    app_names, authenticate, current_settings, home_dir_fallback, logs_dir, read_shell_snapshot,
-    read_text_file, save_settings, save_text_file, word_processor_dir, write_shell_snapshot,
+    app_names, authenticate, bind_login_session, current_settings, home_dir_fallback, logs_dir,
+    read_shell_snapshot, read_text_file, save_settings, save_text_file, word_processor_dir,
+    write_shell_snapshot,
 };
 use super::default_apps_screen::{
     apply_custom_command as apply_default_app_custom_command, draw_default_apps_screen,
@@ -418,6 +419,7 @@ impl RobcoNativeApp {
     }
 
     fn queue_login(&mut self, username: String, user: UserRecord) {
+        bind_login_session(&username);
         self.login.password.clear();
         self.login.error.clear();
         self.terminal_prompt = None;
@@ -2820,6 +2822,7 @@ impl eframe::App for RobcoNativeApp {
         }
 
         if self.session.is_none() {
+            self.draw_terminal_footer(ctx);
             self.draw_login(ctx);
             return;
         }

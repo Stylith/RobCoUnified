@@ -77,7 +77,7 @@ pub fn draw_terminal_document_browser(
     }
 
     let mut activated = None;
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
         activated = Some(*selected_idx);
     }
 

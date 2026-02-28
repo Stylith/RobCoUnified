@@ -34,7 +34,8 @@ pub fn draw_login_screen(
         }
     }
 
-    let enter_pressed = prompt.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+    let enter_pressed = prompt.is_none()
+        && ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
     let mut activated = enter_pressed;
 
     egui::CentralPanel::default()
@@ -158,7 +159,8 @@ pub fn draw_main_menu_screen(
         *selected_idx = (*selected_idx + 1).min(selectable_menu_count() - 1);
     }
 
-    let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+    let enter_pressed =
+        ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
     let mut activated = None;
     if enter_pressed {
         activated = entry_for_selectable_idx(*selected_idx).action;

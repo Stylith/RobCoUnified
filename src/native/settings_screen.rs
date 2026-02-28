@@ -65,7 +65,8 @@ pub fn run_terminal_settings_screen(
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
             *choice_overlay = None;
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
+        {
             apply_settings_choice(draft, overlay.kind, overlay.selected);
             *choice_overlay = None;
             event = TerminalSettingsEvent::Persist;
@@ -79,7 +80,7 @@ pub fn run_terminal_settings_screen(
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             *selected_idx = (*selected_idx + 1).min(items.len().saturating_sub(1));
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
             event = handle_settings_activation(draft, *selected_idx, choice_overlay, is_admin);
         }
     }

@@ -16,9 +16,7 @@ pub fn authenticate(username: &str, password: &str) -> Result<UserRecord, &'stat
             write_session(username);
             Ok(record.clone())
         }
-        AuthMethod::HackingMinigame => {
-            Err("Hacking login is not implemented in the native rewrite yet.")
-        }
+        AuthMethod::HackingMinigame => Err("Use the hacking minigame flow from the login menu."),
         AuthMethod::Password => {
             if record.password_hash == hash_password(password) {
                 set_current_user(Some(username));
@@ -29,6 +27,11 @@ pub fn authenticate(username: &str, password: &str) -> Result<UserRecord, &'stat
             }
         }
     }
+}
+
+pub fn bind_login_session(username: &str) {
+    set_current_user(Some(username));
+    write_session(username);
 }
 
 pub fn current_settings() -> Settings {

@@ -1065,13 +1065,13 @@ fn render_plain_texture_if_possible(
         dirty_rows.to_vec()
     };
     if !update_rows.is_empty() {
-                let mut missing_font = false;
-                let Some(font) = state.plain_texture.font.as_ref() else {
-                    return false;
-                };
-                if let Some(image) = state.plain_texture.image.as_mut() {
-                    for row in update_rows {
-                        clear_texture_row(image, row, cell_h, palette.bg);
+        let mut missing_font = false;
+        let Some(font) = state.plain_texture.font.as_ref() else {
+            return false;
+        };
+        if let Some(image) = state.plain_texture.image.as_mut() {
+            for row in update_rows {
+                clear_texture_row(image, row, cell_h, palette.bg);
                 let line = lines.get(row).map(String::as_str).unwrap_or("");
                 let max_cols = cols.min(line.chars().count());
                 for (col, ch) in line.chars().take(max_cols).enumerate() {
@@ -1079,15 +1079,7 @@ fn render_plain_texture_if_possible(
                         continue;
                     }
                     if !draw_glyph_to_image(
-                        image,
-                        font,
-                        ch,
-                        col,
-                        row,
-                        cell_w,
-                        cell_h,
-                        font_px,
-                        palette.fg,
+                        image, font, ch, col, row, cell_w, cell_h, font_px, palette.fg,
                     ) {
                         missing_font = true;
                     }
