@@ -4,9 +4,12 @@ Fallout-style terminal environment built with Rust, ratatui, and crossterm.
 
 RobCoOS is an application-layer shell experience, not a full standalone operating system.
 
+![RobCoOS screenshot 1](assets/readme/desktop-screenshot-1.png)
+![RobCoOS screenshot 2](assets/readme/desktop-screenshot-2.png)
+
 ## Version
 
-`0.3.0`
+`0.3.1`
 
 ## Highlights
 
@@ -61,7 +64,7 @@ cargo build --release
 Tagged GitHub releases package platform-specific artifacts:
 
 - macOS: `RobCoOS.app` inside the release zip
-- Linux: binary + `.desktop` entry + icon inside the release zip
+- Linux: x86_64 and aarch64 binaries + `.desktop` entry + icon inside the release zip
 - Windows: `robcos.exe` with embedded application icon inside the release zip
 
 ## Run
