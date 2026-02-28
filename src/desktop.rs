@@ -1180,7 +1180,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 
     let categories = load_categories();
     let mut document_items = vec![StartLeafItem {
-        label: "Logs".to_string(),
+        label: "Text Editor".to_string(),
         action: StartAction::OpenDocumentLogs,
     }];
     for key in sorted_json_keys(&categories) {
@@ -1207,8 +1207,8 @@ fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
         DesktopHubKind::Applications => "Applications",
         DesktopHubKind::Documents => "Documents",
         DesktopHubKind::DocumentCategory => "Documents",
-        DesktopHubKind::Logs => "Logs",
-        DesktopHubKind::LogEntry => "Log",
+        DesktopHubKind::Logs => "Text Editor",
+        DesktopHubKind::LogEntry => "Document",
         DesktopHubKind::Network => "Network",
         DesktopHubKind::Connections => "Connections",
         DesktopHubKind::ConnectionsNetworkMenu => "Network Connections",
@@ -1243,12 +1243,12 @@ fn desktop_hub_subtitle(hub: &DesktopHubState) -> String {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "Browse documents".to_string()),
-        DesktopHubKind::Logs => "Select a log entry".to_string(),
+        DesktopHubKind::Logs => "Create or open saved text documents".to_string(),
         DesktopHubKind::LogEntry => hub
             .context_path
             .as_ref()
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "Log options".to_string()),
+            .unwrap_or_else(|| "Document options".to_string()),
         DesktopHubKind::Network => "Network tools".to_string(),
         DesktopHubKind::Connections => "Connection settings and devices".to_string(),
         DesktopHubKind::ConnectionsNetworkMenu => {
@@ -1449,7 +1449,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::Documents => {
             let categories = load_categories();
             let mut items = vec![DesktopHubItem {
-                label: "Logs".to_string(),
+                label: "Text Editor".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
                 enabled: true,
             }];
@@ -1527,14 +1527,14 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         }
         DesktopHubKind::Logs => {
             let mut items = vec![DesktopHubItem {
-                label: "Create New Log".to_string(),
+                label: "New Text Document".to_string(),
                 action: DesktopHubItemAction::CreateLog,
                 enabled: true,
             }];
             let logs = desktop_log_files();
             if logs.is_empty() {
                 items.push(DesktopHubItem {
-                    label: "(No logs found)".to_string(),
+                    label: "(No saved documents found)".to_string(),
                     action: DesktopHubItemAction::None,
                     enabled: false,
                 });
@@ -1561,7 +1561,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::LogEntry => {
             let Some(path) = hub.context_path.as_ref() else {
                 return vec![DesktopHubItem {
-                    label: "Log not found".to_string(),
+                    label: "Document not found".to_string(),
                     action: DesktopHubItemAction::None,
                     enabled: false,
                 }];
@@ -1588,7 +1588,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     enabled: false,
                 },
                 DesktopHubItem {
-                    label: "Back to Logs".to_string(),
+                    label: "Back to Text Editor".to_string(),
                     action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
                     enabled: true,
                 },
@@ -6896,7 +6896,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 enabled: true,
             });
             items.push(TopMenuItem {
-                label: "Logs".to_string(),
+                label: "Text Editor".to_string(),
                 shortcut: None,
                 action: TopMenuAction::OpenLogs,
                 enabled: true,
@@ -7144,7 +7144,7 @@ fn spotlight_items(state: &DesktopState) -> Vec<SpotlightItem> {
             action: TopMenuAction::OpenDocuments,
         },
         SpotlightItem {
-            label: "Logs".to_string(),
+            label: "Text Editor".to_string(),
             action: TopMenuAction::OpenLogs,
         },
         SpotlightItem {
@@ -10974,7 +10974,7 @@ fn desktop_hub_window_title(
         DesktopHubKind::LogEntry => context_path
             .and_then(|p| p.file_stem())
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Log".to_string()),
+            .unwrap_or_else(|| "Document".to_string()),
         DesktopHubKind::InstallerPackage => context_text
             .filter(|s| !s.is_empty())
             .unwrap_or("Package")
@@ -11885,13 +11885,13 @@ fn run_desktop_hub_action(
             }
         }
         DesktopHubItemAction::CreateLog => {
-            run_with_mouse_capture_paused(terminal, documents::journal_new)?;
+            run_with_mouse_capture_paused(terminal, documents::new_text_document)?;
         }
         DesktopHubItemAction::OpenLogEntry(path) => {
             let title = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Log".to_string());
+                .unwrap_or_else(|| "Document".to_string());
             open_desktop_hub_window_with_context(
                 state,
                 DesktopHubKind::LogEntry,

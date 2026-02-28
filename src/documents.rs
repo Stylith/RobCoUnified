@@ -14,8 +14,8 @@ use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
 use crate::launcher::launch_argv;
 use crate::status::render_status_bar;
 use crate::ui::{
-    confirm, dim_style, flash_message, normal_style, pad_horizontal, pager, render_header,
-    render_separator, run_menu, title_style, MenuResult, Term,
+    confirm, dim_style, flash_message, input_prompt, normal_style, pad_horizontal, pager,
+    render_header, render_separator, run_menu, title_style, MenuResult, Term,
 };
 
 // ── Document scanning ─────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ fn sort_key(f: &Path) -> String {
     }
 }
 
-// ── Inline text editor (journal) ──────────────────────────────────────────────
+// ── Inline text editor ────────────────────────────────────────────────────────
 
 struct Editor {
     lines: Vec<String>,
@@ -291,18 +291,85 @@ fn journal_dir() -> PathBuf {
     }
 }
 
-pub fn journal_new(terminal: &mut Term) -> Result<()> {
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let title = format!("New Entry — {today}");
-    if let Some(text) = run_editor(terminal, &title, "")? {
-        if !text.trim().is_empty() {
-            let path = journal_dir().join(format!("{today}.txt"));
-            let mut existing = std::fs::read_to_string(&path).unwrap_or_default();
-            existing.push_str(&text);
-            existing.push('\n');
-            std::fs::write(&path, existing)?;
-            flash_message(terminal, "Entry saved.", 800)?;
+fn normalize_new_text_document_name(raw: &str, default_stem: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let candidate = if trimmed.is_empty() {
+        default_stem.trim()
+    } else {
+        trimmed
+    };
+
+    let mut normalized = String::new();
+    let mut last_was_sep = false;
+    for ch in candidate.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            normalized.push(ch);
+            last_was_sep = false;
+        } else if ch.is_whitespace() {
+            if !normalized.is_empty() && !last_was_sep {
+                normalized.push('_');
+                last_was_sep = true;
+            }
         }
+    }
+
+    let normalized = normalized.trim_matches(['_', '.', ' ']).to_string();
+    if normalized.is_empty() || normalized == "." || normalized == ".." {
+        return None;
+    }
+
+    let has_extension = Path::new(&normalized).extension().is_some();
+    if has_extension {
+        Some(normalized)
+    } else {
+        Some(format!("{normalized}.txt"))
+    }
+}
+
+fn prompt_new_text_document_path(terminal: &mut Term, dir: &Path) -> Result<Option<PathBuf>> {
+    let default_stem = Local::now().format("%Y-%m-%d").to_string();
+    loop {
+        let prompt = format!("Document name (.txt default, blank for {default_stem}.txt):");
+        let Some(raw) = input_prompt(terminal, &prompt)? else {
+            return Ok(None);
+        };
+        let Some(name) = normalize_new_text_document_name(&raw, &default_stem) else {
+            flash_message(terminal, "Error: Invalid document name.", 900)?;
+            continue;
+        };
+        return Ok(Some(dir.join(name)));
+    }
+}
+
+pub fn new_text_document(terminal: &mut Term) -> Result<()> {
+    let dir = journal_dir();
+    let Some(path) = prompt_new_text_document_path(terminal, &dir)? else {
+        return Ok(());
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document.txt");
+    let existing = if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => {
+                flash_message(terminal, "File is not UTF-8 text", 1000)?;
+                return Ok(());
+            }
+        }
+    } else {
+        String::new()
+    };
+    let title = if path.exists() {
+        format!("Edit: {file_name}")
+    } else {
+        format!("New: {file_name}")
+    };
+
+    if let Some(text) = run_editor(terminal, &title, &existing)? {
+        std::fs::write(&path, text)?;
+        flash_message(terminal, &format!("Saved {file_name}."), 900)?;
     }
     Ok(())
 }
@@ -310,7 +377,7 @@ pub fn journal_new(terminal: &mut Term) -> Result<()> {
 pub fn journal_view(terminal: &mut Term) -> Result<()> {
     let dir = journal_dir();
     if !dir.exists() {
-        return flash_message(terminal, "Error: journal_entries folder not found.", 800);
+        return flash_message(terminal, "Error: saved documents folder not found.", 800);
     }
     let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir)?
         .flatten()
@@ -318,7 +385,7 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
         .map(|e| e.path())
         .collect();
     if logs.is_empty() {
-        return flash_message(terminal, "Error: No entries found.", 800);
+        return flash_message(terminal, "Error: No saved documents found.", 800);
     }
     logs.sort_by(|a, b| b.cmp(a)); // newest first
 
@@ -330,7 +397,7 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
         keys.push("Back".to_string());
         let opts: Vec<&str> = keys.iter().map(String::as_str).collect();
 
-        let sel = match run_menu(terminal, "View Logs", &opts, None)? {
+        let sel = match run_menu(terminal, "Saved Documents", &opts, None)? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) => s,
@@ -381,14 +448,14 @@ pub fn logs_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
             terminal,
-            "Logs",
-            &["Create New Log", "View Logs", "---", "Back"],
+            "Text Editor",
+            &["New Text Document", "Open Saved Documents", "---", "Back"],
             None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "Create New Log" => journal_new(terminal)?,
-                "View Logs" => journal_view(terminal)?,
+                "New Text Document" => new_text_document(terminal)?,
+                "Open Saved Documents" => journal_view(terminal)?,
                 _ => break,
             },
         }
@@ -490,7 +557,7 @@ pub fn open_documents_category(terminal: &mut Term, title: &str, path: &Path) ->
 pub fn documents_menu(terminal: &mut Term) -> Result<()> {
     loop {
         let categories = load_categories();
-        let mut choices = vec!["Logs".to_string()];
+        let mut choices = vec!["Text Editor".to_string()];
         choices.extend(categories.keys().cloned());
         choices.push("---".to_string());
         choices.push("Back".to_string());
@@ -499,7 +566,7 @@ pub fn documents_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Documents", &opts, Some("Select Document Type"))? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
-            MenuResult::Selected(s) if s == "Logs" => logs_menu(terminal)?,
+            MenuResult::Selected(s) if s == "Text Editor" => logs_menu(terminal)?,
             MenuResult::Selected(s) => {
                 if let Some(v) = categories.get(&s) {
                     let path_str = v.as_str().unwrap_or("");
@@ -510,4 +577,33 @@ pub fn documents_menu(terminal: &mut Term) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_new_text_document_name;
+
+    #[test]
+    fn new_text_document_name_uses_default_txt_extension() {
+        assert_eq!(
+            normalize_new_text_document_name("", "2077-10-23"),
+            Some("2077-10-23.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn new_text_document_name_preserves_existing_extension() {
+        assert_eq!(
+            normalize_new_text_document_name("vault_notes.md", "default"),
+            Some("vault_notes.md".to_string())
+        );
+    }
+
+    #[test]
+    fn new_text_document_name_strips_path_chars_and_spaces() {
+        assert_eq!(
+            normalize_new_text_document_name(" ../Field Report 01 ", "default"),
+            Some("Field_Report_01.txt".to_string())
+        );
+    }
 }
