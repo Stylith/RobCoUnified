@@ -559,7 +559,9 @@ impl RobcoNativeApp {
     }
 
     fn draw_login(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .show(ctx, |ui| {
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, RETRO_BG);
@@ -695,7 +697,9 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .show(ctx, |ui| {
             ui.heading("Desktop Shell");
             ui.label("This is the new native workbench, not the old TUI desktop.");
             ui.add_space(8.0);
@@ -734,7 +738,9 @@ impl RobcoNativeApp {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .show(ctx, |ui| {
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, RETRO_BG);
@@ -805,7 +811,9 @@ impl RobcoNativeApp {
             activated = Some(*selected_idx);
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .show(ctx, |ui| {
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, RETRO_BG);
@@ -902,7 +910,9 @@ impl RobcoNativeApp {
             self.activate_document_browser();
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
+            .show(ctx, |ui| {
             let (screen, _) = RetroScreen::new(ui, 100, 38);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, RETRO_BG);
@@ -1001,6 +1011,7 @@ impl RobcoNativeApp {
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
             .exact_height(28.0)
+            .frame(egui::Frame::none().fill(RETRO_BG).inner_margin(0.0))
             .show(ctx, |ui| {
                 let (screen, _) = RetroScreen::new(ui, 100, 1);
                 let painter = ui.painter_at(screen.rect);
