@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=__VERSION__
+Type=Application
+Name=RobCoOS
+Comment=Fallout-style terminal environment built with Rust
+Exec=robcos
+Icon=icon
+Terminal=true
+Categories=System;Utility;
+Keywords=terminal;retro;fallout;robco;

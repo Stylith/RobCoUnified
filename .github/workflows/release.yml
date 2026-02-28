@@ -50,14 +50,37 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
+          version="$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = \"([^\"]+)\"/\1/')"
+          dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
+          app_dir="$dist_dir/RobCoOS.app"
+          mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$app_dir/Contents/MacOS/robcos"
+          chmod +x "$app_dir/Contents/MacOS/robcos"
+          cp assets/icon.icns "$app_dir/Contents/Resources/icon.icns"
+          sed "s/__VERSION__/$version/g" packaging/macos/Info.plist > "$app_dir/Contents/Info.plist"
+          cp README.md LICENSE icon.png "$dist_dir/"
+          (
+            cd "$dist_dir"
+            zip -r "../RobCoOS-${{ matrix.asset_name }}.zip" "RobCoOS.app" README.md LICENSE icon.png
+          )
+        env:
+          COPYFILE_DISABLE: 1
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version="$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = \"([^\"]+)\"/\1/')"
           dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
           mkdir -p "$dist_dir"
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$dist_dir/"
-          cp README.md LICENSE "$dist_dir/"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$dist_dir/robcos"
+          chmod +x "$dist_dir/robcos"
+          cp README.md LICENSE icon.png "$dist_dir/"
+          sed "s/__VERSION__/$version/g" packaging/linux/robcos.desktop > "$dist_dir/robcos.desktop"
           (
             cd dist
             zip -r "RobCoOS-${{ matrix.asset_name }}.zip" "RobCoOS-${{ matrix.asset_name }}"
@@ -72,6 +95,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$distDir/"
           Copy-Item "README.md" "$distDir/"
           Copy-Item "LICENSE" "$distDir/"
+          Copy-Item "icon.png" "$distDir/"
           Compress-Archive -Path "$distDir/*" -DestinationPath "dist/RobCoOS-${{ matrix.asset_name }}.zip" -Force
 
       - name: Upload zip artifact
@@ -98,6 +122,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*.zip
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-rc.') }}
