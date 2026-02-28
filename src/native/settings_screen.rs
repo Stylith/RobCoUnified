@@ -4,8 +4,6 @@ use crate::config::{CliAcsMode, OpenMode, Settings, HEADER_LINES, THEMES};
 use crate::connections::macos_connections_disabled;
 use eframe::egui::{self, Context};
 
-pub const NATIVE_UI_SCALE_OPTIONS: &[f32] = &[0.85, 1.0, 1.2, 1.4, 1.7, 2.0, 2.3, 2.6];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalSettingsEvent {
     None,
@@ -25,7 +23,6 @@ enum SettingsRowId {
     NavigationHints,
     Theme,
     BorderGlyphs,
-    InterfaceSize,
     DefaultOpenMode,
     Connections,
     EditMenus,
@@ -82,19 +79,6 @@ pub fn run_terminal_settings_screen(
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             *selected_idx = (*selected_idx + 1).min(items.len().saturating_sub(1));
         }
-        if matches!(
-            items.get(*selected_idx).map(|(_, id)| *id),
-            Some(SettingsRowId::InterfaceSize)
-        ) {
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) && step_interface_size(draft, -1)
-            {
-                event = TerminalSettingsEvent::Persist;
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) && step_interface_size(draft, 1)
-            {
-                event = TerminalSettingsEvent::Persist;
-            }
-        }
         if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
             event = handle_settings_activation(draft, *selected_idx, choice_overlay, is_admin);
         }
@@ -127,7 +111,7 @@ pub fn run_terminal_settings_screen(
 
             let choice_items = choice_overlay.map(|overlay| settings_choice_items(overlay.kind));
             let mut row = menu_start_row;
-            for (idx, (item, row_id)) in items.iter().enumerate() {
+            for (idx, (item, _row_id)) in items.iter().enumerate() {
                 let selected = idx == *selected_idx;
                 let text = if selected {
                     format!("  > {item}")
@@ -189,14 +173,6 @@ pub fn run_terminal_settings_screen(
                         );
                         row += 1;
                     }
-                    if matches!(row_id, SettingsRowId::InterfaceSize) {
-                        let slider = format!(
-                            "        {}  Left/Right adjust",
-                            interface_size_slider_text(draft.native_ui_scale, 18)
-                        );
-                        screen.text(&painter, content_col, row, &slider, palette.dim);
-                        row += 1;
-                    }
                 }
             }
 
@@ -206,22 +182,6 @@ pub fn run_terminal_settings_screen(
         });
 
     event
-}
-
-pub fn interface_size_slider_text(scale: f32, width: usize) -> String {
-    let width = width.max(4);
-    let idx = NATIVE_UI_SCALE_OPTIONS
-        .iter()
-        .position(|v| (*v - scale).abs() < 0.001)
-        .unwrap_or(1);
-    let max = NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1).max(1);
-    let fill = ((idx * (width - 1)) + (max / 2)) / max;
-    let mut chars = vec!['-'; width];
-    for ch in chars.iter_mut().take(fill) {
-        *ch = '=';
-    }
-    chars[fill.min(width - 1)] = '|';
-    format!("[{}]", chars.into_iter().collect::<String>())
 }
 
 fn handle_settings_activation(
@@ -258,7 +218,6 @@ fn handle_settings_activation(
             };
             TerminalSettingsEvent::Persist
         }
-        SettingsRowId::InterfaceSize => TerminalSettingsEvent::None,
         SettingsRowId::DefaultOpenMode => {
             open_settings_choice(draft, choice_overlay, SettingsChoiceKind::DefaultOpenMode);
             TerminalSettingsEvent::None
@@ -354,13 +313,6 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
         ),
         (
             format!(
-                "Interface Size: {}% [adjust]",
-                (draft.native_ui_scale * 100.0).round() as i32
-            ),
-            SettingsRowId::InterfaceSize,
-        ),
-        (
-            format!(
                 "Default Open Mode: {} [choose]",
                 match draft.default_open_mode {
                     OpenMode::Terminal => "Terminal",
@@ -381,23 +333,6 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
     }
     rows.push(("Back".to_string(), SettingsRowId::Back));
     rows
-}
-
-fn step_interface_size(draft: &mut Settings, delta: isize) -> bool {
-    let current_idx = NATIVE_UI_SCALE_OPTIONS
-        .iter()
-        .position(|v| (*v - draft.native_ui_scale).abs() < 0.001)
-        .unwrap_or(1);
-    let next_idx = if delta < 0 {
-        current_idx.saturating_sub(delta.unsigned_abs())
-    } else {
-        (current_idx + delta as usize).min(NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1))
-    };
-    if next_idx == current_idx {
-        return false;
-    }
-    draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[next_idx];
-    true
 }
 
 #[cfg(test)]
@@ -489,16 +424,6 @@ mod tests {
         let rows = terminal_settings_rows(&draft, false);
         let has_connections = rows.iter().any(|(_, id)| *id == SettingsRowId::Connections);
         assert_eq!(has_connections, !macos_connections_disabled());
-    }
-
-    #[test]
-    fn step_interface_size_changes_to_neighbor_value() {
-        let mut draft = get_settings();
-        draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[1];
-        assert!(step_interface_size(&mut draft, 1));
-        assert_eq!(draft.native_ui_scale, NATIVE_UI_SCALE_OPTIONS[2]);
-        assert!(step_interface_size(&mut draft, -1));
-        assert_eq!(draft.native_ui_scale, NATIVE_UI_SCALE_OPTIONS[1]);
     }
 
     #[test]

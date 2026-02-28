@@ -1,4 +1,4 @@
-use crate::config::{current_theme_color, get_settings};
+use crate::config::current_theme_color;
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
@@ -82,17 +82,17 @@ impl RetroScreen {
         let (rect, response) = ui.allocate_exact_size(desired, Sense::hover());
         let cell_w = (rect.width() / cols.max(1) as f32).floor().max(8.0);
         let cell_h = (rect.height() / rows.max(1) as f32).floor().max(12.0);
-        let scale = get_settings().native_ui_scale.clamp(0.75, 2.6);
-        // Keep the retro font inside the fixed cell grid so larger UI sizes do not
-        // cause menu labels to overflow into adjacent cells.
-        let height_font = ((cell_h - 2.0).max(10.0) * scale).max(10.0);
-        let width_limited_font = ((cell_w - 1.0).max(7.0) / 0.50).max(10.0);
+        // Terminal sizing is driven by the caller-provided grid (cols/rows).
+        // Keeping glyph sizing grid-relative avoids double-scaling artifacts.
+        let target_font = (cell_h * 0.80).max(8.0);
+        let height_limit = (cell_h - 3.0).max(8.0);
+        let width_limit = ((cell_w - 1.0).max(7.0) / 0.53).max(8.0);
         (
             Self {
                 rect,
                 cols,
                 cell: egui::vec2(cell_w, cell_h),
-                font: FontId::monospace(height_font.min(width_limited_font)),
+                font: FontId::monospace(target_font.min(height_limit.min(width_limit))),
             },
             response,
         )
@@ -105,6 +105,16 @@ impl RetroScreen {
 
     pub fn font(&self) -> &FontId {
         &self.font
+    }
+
+    fn row_top(&self, row: usize) -> f32 {
+        self.rect.top() + row as f32 * self.cell.y
+    }
+
+    fn row_text_y(&self, row: usize) -> f32 {
+        let top = self.row_top(row);
+        let inset = ((self.cell.y - self.font.size).max(0.0) * 0.5).floor();
+        top + inset
     }
 
     fn paint_text(
@@ -136,7 +146,7 @@ impl RetroScreen {
         let clipped = self.clip_text(col, text);
         let pos = Pos2::new(
             self.rect.left() + col as f32 * self.cell.x,
-            self.rect.top() + row as f32 * self.cell.y,
+            self.row_text_y(row),
         );
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
     }
@@ -152,15 +162,15 @@ impl RetroScreen {
         let clipped = self.clip_text(col, text);
         let pos = Pos2::new(
             self.rect.left() + col as f32 * self.cell.x,
-            self.rect.top() + row as f32 * self.cell.y,
+            self.row_text_y(row),
         );
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
-        let width = painter
-            .layout_no_wrap(clipped.clone(), self.font.clone(), color)
-            .size()
-            .x;
+        // Force underline width to character-cell geometry so it stays stable
+        // across fonts/scales and does not overshoot subtitle text.
+        let width = clipped.chars().count() as f32 * self.cell.x;
         if width > 0.0 {
-            let y = pos.y + self.cell.y - 2.0;
+            let row_bottom = self.row_top(row) + self.cell.y - 1.0;
+            let y = (pos.y + self.font.size + 1.0).min(row_bottom);
             painter.line_segment(
                 [Pos2::new(pos.x, y), Pos2::new(pos.x + width, y)],
                 Stroke::new(1.0, color),
@@ -177,10 +187,7 @@ impl RetroScreen {
         strong: bool,
     ) {
         let clipped = self.clip_text(1, text);
-        let pos = Pos2::new(
-            self.rect.center().x,
-            self.rect.top() + row as f32 * self.cell.y,
-        );
+        let pos = Pos2::new(self.rect.center().x, self.row_text_y(row));
         self.paint_text(painter, pos, Align2::CENTER_TOP, &clipped, color, strong);
     }
 
@@ -221,7 +228,7 @@ impl RetroScreen {
         }
         self.paint_text(
             painter,
-            rect.left_top(),
+            Pos2::new(rect.left(), self.row_text_y(row)),
             Align2::LEFT_TOP,
             &clipped,
             if selected {

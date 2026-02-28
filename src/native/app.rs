@@ -37,9 +37,7 @@ use super::pty_screen::{
     draw_embedded_pty, spawn_embedded_pty_with_options, NativePtyState, PtyScreenEvent,
 };
 use super::retro_ui::{configure_visuals, current_palette, RetroScreen};
-use super::settings_screen::{
-    run_terminal_settings_screen, TerminalSettingsEvent, NATIVE_UI_SCALE_OPTIONS,
-};
+use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_actions::{
     resolve_login_selection, resolve_main_menu_action, LoginSelectionAction,
     MainMenuSelectionAction,
@@ -53,10 +51,10 @@ use super::user_management::{
 use crate::config::ConnectionKind;
 use crate::config::{
     load_apps, load_categories, load_games, load_networks, save_apps, save_categories, save_games,
-    save_networks, OpenMode, Settings, THEMES,
+    save_networks, set_current_user, OpenMode, Settings, THEMES,
 };
 use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
-use crate::core::auth::{load_users, save_users, UserRecord};
+use crate::core::auth::{load_users, read_session, save_users, UserRecord};
 use crate::core::hacking::HackingGame;
 use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, DefaultAppSlot};
 use chrono::Local;
@@ -142,7 +140,7 @@ struct TerminalModeWindow {
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 const TERMINAL_SCREEN_COLS: usize = 92;
-const TERMINAL_SCREEN_ROWS: usize = 34;
+const TERMINAL_SCREEN_ROWS: usize = 28;
 const TERMINAL_CONTENT_COL: usize = 3;
 const TERMINAL_HEADER_START_ROW: usize = 0;
 const TERMINAL_SEPARATOR_TOP_ROW: usize = 3;
@@ -150,11 +148,42 @@ const TERMINAL_TITLE_ROW: usize = 4;
 const TERMINAL_SEPARATOR_BOTTOM_ROW: usize = 5;
 const TERMINAL_SUBTITLE_ROW: usize = 7;
 const TERMINAL_MENU_START_ROW: usize = 9;
-const TERMINAL_STATUS_ROW: usize = 28;
-const TERMINAL_STATUS_ROW_ALT: usize = 30;
+const TERMINAL_STATUS_ROW: usize = 24;
+const TERMINAL_STATUS_ROW_ALT: usize = 26;
+
+#[derive(Clone, Copy)]
+struct TerminalLayout {
+    cols: usize,
+    rows: usize,
+    content_col: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    status_row_alt: usize,
+}
+
+fn terminal_layout_for_scale(_scale: f32) -> TerminalLayout {
+    TerminalLayout {
+        cols: TERMINAL_SCREEN_COLS,
+        rows: TERMINAL_SCREEN_ROWS,
+        content_col: TERMINAL_CONTENT_COL,
+        header_start_row: TERMINAL_HEADER_START_ROW,
+        separator_top_row: TERMINAL_SEPARATOR_TOP_ROW,
+        title_row: TERMINAL_TITLE_ROW,
+        separator_bottom_row: TERMINAL_SEPARATOR_BOTTOM_ROW,
+        subtitle_row: TERMINAL_SUBTITLE_ROW,
+        menu_start_row: TERMINAL_MENU_START_ROW,
+        status_row: TERMINAL_STATUS_ROW,
+        status_row_alt: TERMINAL_STATUS_ROW_ALT,
+    }
+}
 
 fn retro_footer_height() -> f32 {
-    26.0
+    31.0
 }
 
 fn try_load_font_bytes() -> Option<Vec<u8>> {
@@ -209,30 +238,18 @@ fn configure_native_fonts(ctx: &Context) {
 pub fn apply_native_appearance(ctx: &Context) {
     configure_visuals(ctx);
     let mut style = (*ctx.style()).clone();
-    let scale = crate::config::get_settings()
-        .native_ui_scale
-        .clamp(0.75, 2.6);
+    // Keep global egui zoom fixed. Terminal-mode sizing is handled in RetroScreen
+    // to avoid feedback loops between zoom and cell/grid calculations.
+    ctx.set_zoom_factor(1.0);
     style.text_styles = [
-        (
-            TextStyle::Heading,
-            FontId::new(28.0 * scale, FontFamily::Monospace),
-        ),
-        (
-            TextStyle::Body,
-            FontId::new(22.0 * scale, FontFamily::Monospace),
-        ),
+        (TextStyle::Heading, FontId::new(28.0, FontFamily::Monospace)),
+        (TextStyle::Body, FontId::new(22.0, FontFamily::Monospace)),
         (
             TextStyle::Monospace,
-            FontId::new(22.0 * scale, FontFamily::Monospace),
+            FontId::new(22.0, FontFamily::Monospace),
         ),
-        (
-            TextStyle::Button,
-            FontId::new(22.0 * scale, FontFamily::Monospace),
-        ),
-        (
-            TextStyle::Small,
-            FontId::new(18.0 * scale, FontFamily::Monospace),
-        ),
+        (TextStyle::Button, FontId::new(22.0, FontFamily::Monospace)),
+        (TextStyle::Small, FontId::new(18.0, FontFamily::Monospace)),
     ]
     .into();
     ctx.set_style(style);
@@ -277,6 +294,13 @@ pub struct RobcoNativeApp {
 
 impl Default for RobcoNativeApp {
     fn default() -> Self {
+        // Keep pre-login terminal rendering consistent with the most recent user session.
+        if let Some(last_user) = read_session() {
+            if load_users().contains_key(&last_user) {
+                set_current_user(Some(&last_user));
+            }
+        }
+        let settings_draft = current_settings();
         Self {
             login: LoginState::default(),
             login_mode: LoginScreenMode::SelectUser,
@@ -292,7 +316,7 @@ impl Default for RobcoNativeApp {
             },
             settings: SettingsWindow {
                 open: false,
-                draft: current_settings(),
+                draft: settings_draft,
                 status: String::new(),
             },
             applications: ApplicationsWindow::default(),
@@ -327,6 +351,10 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn terminal_layout(&self) -> TerminalLayout {
+        terminal_layout_for_scale(self.settings.draft.native_ui_scale)
+    }
+
     fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
         crate::config::reload_settings();
         let snapshot: NativeShellSnapshot = read_shell_snapshot(username);
@@ -575,6 +603,7 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
+        let layout = self.terminal_layout();
         let mut options = crate::pty::PtyLaunchOptions::default();
         options
             .env
@@ -583,8 +612,8 @@ impl RobcoNativeApp {
             title,
             cmd,
             return_screen,
-            TERMINAL_SCREEN_COLS as u16,
-            TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
+            layout.cols as u16,
+            layout.rows.saturating_sub(1) as u16,
             options,
         ) {
             Ok(state) => {
@@ -599,6 +628,7 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_terminal_shell(&mut self) {
+        let layout = self.terminal_layout();
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         let shell_name = std::path::Path::new(&shell)
             .file_name()
@@ -628,8 +658,8 @@ impl RobcoNativeApp {
             "ROBCO MAINTENANCE TERMLINK",
             &cmd,
             TerminalScreen::MainMenu,
-            TERMINAL_SCREEN_COLS as u16,
-            TERMINAL_SCREEN_ROWS.saturating_sub(1) as u16,
+            layout.cols as u16,
+            layout.rows.saturating_sub(1) as u16,
             options,
         ) {
             Ok(state) => {
@@ -1395,6 +1425,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_login(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         match self.login_mode {
             LoginScreenMode::SelectUser => {
                 let rows = login_menu_rows_from_users(self.login_usernames());
@@ -1407,16 +1438,16 @@ impl RobcoNativeApp {
                     &mut self.login.selected_idx,
                     &self.login.error,
                     self.terminal_prompt.as_ref(),
-                    TERMINAL_SCREEN_COLS,
-                    TERMINAL_SCREEN_ROWS,
-                    TERMINAL_HEADER_START_ROW,
-                    TERMINAL_SEPARATOR_TOP_ROW,
-                    TERMINAL_TITLE_ROW,
-                    TERMINAL_SEPARATOR_BOTTOM_ROW,
-                    TERMINAL_SUBTITLE_ROW,
-                    TERMINAL_MENU_START_ROW,
-                    TERMINAL_STATUS_ROW,
-                    TERMINAL_CONTENT_COL,
+                    layout.cols,
+                    layout.rows,
+                    layout.header_start_row,
+                    layout.separator_top_row,
+                    layout.title_row,
+                    layout.separator_bottom_row,
+                    layout.subtitle_row,
+                    layout.menu_start_row,
+                    layout.status_row,
+                    layout.content_col,
                 );
                 if activated {
                     let usernames = self.login_usernames();
@@ -1432,10 +1463,10 @@ impl RobcoNativeApp {
                 match draw_hacking_screen(
                     ctx,
                     &mut hacking.game,
-                    TERMINAL_SCREEN_COLS,
-                    TERMINAL_SCREEN_ROWS,
-                    TERMINAL_STATUS_ROW,
-                    TERMINAL_STATUS_ROW_ALT,
+                    layout.cols,
+                    layout.rows,
+                    layout.status_row,
+                    layout.status_row_alt,
                 ) {
                     HackingScreenEvent::None => {}
                     HackingScreenEvent::Cancel => {
@@ -1462,12 +1493,7 @@ impl RobcoNativeApp {
             }
             LoginScreenMode::Locked => {
                 if matches!(
-                    draw_locked_screen(
-                        ctx,
-                        TERMINAL_SCREEN_COLS,
-                        TERMINAL_SCREEN_ROWS,
-                        TERMINAL_STATUS_ROW_ALT
-                    ),
+                    draw_locked_screen(ctx, layout.cols, layout.rows, layout.status_row_alt),
                     HackingScreenEvent::ExitLocked
                 ) {
                     self.login_mode = LoginScreenMode::SelectUser;
@@ -1581,21 +1607,22 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_main_menu(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let activated = draw_main_menu_screen(
             ctx,
             &mut self.main_menu_idx,
             &self.shell_status,
             &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         if let Some(action) = activated {
             let action = resolve_main_menu_action(action);
@@ -1604,6 +1631,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_applications(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let items = self.terminal_app_items();
         let mut selected = self.terminal_apps_idx.min(items.len().saturating_sub(1));
         let activated = draw_terminal_menu_screen(
@@ -1612,16 +1640,16 @@ impl RobcoNativeApp {
             Some("Built-in and configured apps"),
             &items,
             &mut selected,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
             &self.shell_status,
         );
         self.terminal_apps_idx = selected;
@@ -1649,6 +1677,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_documents(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let mut items = vec!["Logs".to_string()];
         items.extend(Self::sorted_document_categories());
         items.push("---".to_string());
@@ -1662,16 +1691,16 @@ impl RobcoNativeApp {
             Some("Select Document Type"),
             &items,
             &mut selected,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
             &self.shell_status,
         );
         self.terminal_documents_idx = selected;
@@ -1704,6 +1733,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_logs(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let items = vec![
             "New Log".to_string(),
             "View Logs".to_string(),
@@ -1717,16 +1747,16 @@ impl RobcoNativeApp {
             None,
             &items,
             &mut selected,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
             &self.shell_status,
         );
         self.terminal_logs_idx = selected;
@@ -1751,22 +1781,23 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_document_browser(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let activated = draw_terminal_document_browser(
             ctx,
             &self.file_manager,
             &mut self.terminal_browser_idx,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_STATUS_ROW_ALT,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.status_row_alt,
+            layout.content_col,
         );
         if activated.is_some() {
             match activate_browser_selection(&mut self.file_manager, self.terminal_browser_idx) {
@@ -1783,6 +1814,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_settings(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let event = run_terminal_settings_screen(
             ctx,
             &mut self.settings.draft,
@@ -1790,16 +1822,16 @@ impl RobcoNativeApp {
             &mut self.terminal_settings_choice,
             self.session.as_ref().is_some_and(|s| s.is_admin),
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             TerminalSettingsEvent::None => {}
@@ -1839,6 +1871,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_edit_menus(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let applications = self.edit_program_entries(EditMenuTarget::Applications);
         let documents = self.edit_program_entries(EditMenuTarget::Documents);
         let network = self.edit_program_entries(EditMenuTarget::Network);
@@ -1855,16 +1888,16 @@ impl RobcoNativeApp {
             self.settings.draft.builtin_menu_visibility.nuke_codes,
             self.settings.draft.builtin_menu_visibility.text_editor,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             EditMenusEvent::None => {}
@@ -1972,25 +2005,27 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_connections(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let event = draw_connections_screen(
             ctx,
             &mut self.terminal_connections,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         self.apply_connections_event(event);
     }
 
     fn draw_terminal_prompt_overlay_global(&self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let Some(prompt) = self.terminal_prompt.as_ref() else {
             return;
         };
@@ -1999,12 +2034,13 @@ impl RobcoNativeApp {
             .fixed_pos([0.0, 0.0])
             .show(ctx, |ui| {
                 ui.set_min_size(ui.max_rect().size());
-                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, TERMINAL_SCREEN_ROWS);
+                let (screen, _) = RetroScreen::new(ui, layout.cols, layout.rows);
                 draw_terminal_prompt_overlay(ui, &screen, prompt);
             });
     }
 
     fn draw_terminal_default_apps(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let event = draw_default_apps_screen(
             ctx,
             &self.settings.draft,
@@ -2012,16 +2048,16 @@ impl RobcoNativeApp {
             &mut self.terminal_default_app_choice_idx,
             &mut self.terminal_default_app_slot,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             DefaultAppsEvent::None => {}
@@ -2058,18 +2094,19 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_about(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         if draw_about_screen(
             ctx,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         ) {
             self.terminal_screen = TerminalScreen::Settings;
             self.shell_status.clear();
@@ -2077,6 +2114,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_network(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let networks = load_networks();
         let entries: Vec<String> = networks.keys().cloned().collect();
         let event = draw_programs_menu(
@@ -2086,16 +2124,16 @@ impl RobcoNativeApp {
             &entries,
             &mut self.terminal_network_idx,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             ProgramMenuEvent::None => {}
@@ -2111,6 +2149,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_games(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let games = load_games();
         let entries: Vec<String> = games.keys().cloned().collect();
         let event = draw_programs_menu(
@@ -2120,16 +2159,16 @@ impl RobcoNativeApp {
             &entries,
             &mut self.terminal_games_idx,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             ProgramMenuEvent::None => {}
@@ -2145,6 +2184,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_pty(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let Some(state) = self.terminal_pty.as_mut() else {
             self.terminal_screen = TerminalScreen::MainMenu;
             self.shell_status = "No embedded PTY session.".to_string();
@@ -2154,16 +2194,16 @@ impl RobcoNativeApp {
             ctx,
             state,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         match event {
             PtyScreenEvent::None => {}
@@ -2236,25 +2276,27 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_program_installer(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let event = draw_installer_screen(
             ctx,
             &mut self.terminal_installer,
             &self.shell_status,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
         );
         self.apply_installer_event(event);
     }
 
     fn draw_terminal_user_management(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let mode = self.terminal_user_management_mode.clone();
         let screen = user_management_screen_for_mode(
             &mode,
@@ -2275,16 +2317,16 @@ impl RobcoNativeApp {
             screen.subtitle.as_deref(),
             &refs,
             &mut selected,
-            TERMINAL_SCREEN_COLS,
-            TERMINAL_SCREEN_ROWS,
-            TERMINAL_HEADER_START_ROW,
-            TERMINAL_SEPARATOR_TOP_ROW,
-            TERMINAL_TITLE_ROW,
-            TERMINAL_SEPARATOR_BOTTOM_ROW,
-            TERMINAL_SUBTITLE_ROW,
-            TERMINAL_MENU_START_ROW,
-            TERMINAL_STATUS_ROW,
-            TERMINAL_CONTENT_COL,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
             &self.shell_status,
         );
         self.terminal_user_management_idx = selected;
@@ -2392,6 +2434,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_footer(&self, ctx: &Context) {
+        let layout = self.terminal_layout();
         let now = Local::now();
         let left = now.format("%a %Y-%m-%d %I:%M%p").to_string();
         let mode = if self.desktop_mode_open {
@@ -2415,7 +2458,7 @@ impl RobcoNativeApp {
             )
             .show(ctx, |ui| {
                 let palette = current_palette();
-                let (screen, _) = RetroScreen::new(ui, TERMINAL_SCREEN_COLS, 1);
+                let (screen, _) = RetroScreen::new(ui, layout.cols, 1);
                 let painter = ui.painter_at(screen.rect);
                 screen.footer_bar(&painter, &palette, &left, &center, "44%");
             });
@@ -2621,33 +2664,6 @@ impl RobcoNativeApp {
                         });
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Interface Size");
-                    let mut scale_idx = NATIVE_UI_SCALE_OPTIONS
-                        .iter()
-                        .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
-                        .unwrap_or(1);
-                    egui::ComboBox::from_id_salt("native_settings_scale")
-                        .selected_text(format!(
-                            "{}%",
-                            (self.settings.draft.native_ui_scale * 100.0).round() as i32
-                        ))
-                        .show_ui(ui, |ui| {
-                            for (idx, value) in NATIVE_UI_SCALE_OPTIONS.iter().enumerate() {
-                                if ui
-                                    .selectable_value(
-                                        &mut scale_idx,
-                                        idx,
-                                        format!("{}%", (*value * 100.0).round() as i32),
-                                    )
-                                    .changed()
-                                {
-                                    self.settings.draft.native_ui_scale = *value;
-                                    changed = true;
-                                }
-                            }
-                        });
-                });
-                ui.horizontal(|ui| {
                     ui.label("Default Open Mode");
                     changed |= ui
                         .selectable_value(
@@ -2786,17 +2802,18 @@ impl eframe::App for RobcoNativeApp {
                 }
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
+                let layout = self.terminal_layout();
                 self.draw_terminal_footer(ctx);
                 draw_terminal_flash(
                     ctx,
                     &flash.message,
-                    TERMINAL_SCREEN_COLS,
-                    TERMINAL_SCREEN_ROWS,
-                    TERMINAL_HEADER_START_ROW,
-                    TERMINAL_SEPARATOR_TOP_ROW,
-                    TERMINAL_SEPARATOR_BOTTOM_ROW,
-                    TERMINAL_STATUS_ROW,
-                    TERMINAL_CONTENT_COL,
+                    layout.cols,
+                    layout.rows,
+                    layout.header_start_row,
+                    layout.separator_top_row,
+                    layout.separator_bottom_row,
+                    layout.status_row,
+                    layout.content_col,
                 );
                 return;
             }
