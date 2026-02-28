@@ -69,7 +69,6 @@ pub fn current_palette() -> RetroPalette {
 pub struct RetroScreen {
     pub rect: Rect,
     cols: usize,
-    rows: usize,
     cell: Vec2,
     font: FontId,
 }
@@ -84,7 +83,6 @@ impl RetroScreen {
             Self {
                 rect,
                 cols,
-                rows,
                 cell: egui::vec2(cell_w, cell_h),
                 font: FontId::monospace((cell_h - 2.0).max(10.0)),
             },
@@ -168,25 +166,27 @@ impl RetroScreen {
         center: &str,
         right: &str,
     ) {
-        let row = self.rows.saturating_sub(1);
-        let rect = self.row_rect(0, row, self.cols);
+        let rect = self.rect;
         painter.rect_filled(rect, 0.0, palette.selected_bg);
+        let left_pos = Pos2::new(rect.left() + 4.0, rect.top());
+        let center_pos = Pos2::new(rect.center().x, rect.top());
+        let right_pos = Pos2::new(rect.right() - 4.0, rect.top());
         painter.text(
-            rect.left_top(),
+            left_pos,
             Align2::LEFT_TOP,
             left,
             self.font.clone(),
             palette.selected_fg,
         );
         painter.text(
-            Pos2::new(rect.center().x, rect.top()),
+            center_pos,
             Align2::CENTER_TOP,
             center,
             self.font.clone(),
             palette.selected_fg,
         );
         painter.text(
-            Pos2::new(rect.right(), rect.top()),
+            right_pos,
             Align2::RIGHT_TOP,
             right,
             self.font.clone(),
