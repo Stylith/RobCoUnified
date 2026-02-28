@@ -326,7 +326,10 @@ fn normalize_new_text_document_name(raw: &str, default_stem: &str) -> Option<Str
     }
 }
 
-fn prompt_new_text_document_path(terminal: &mut Term, dir: &Path) -> Result<Option<PathBuf>> {
+fn prompt_new_text_document_path_in_dir(
+    terminal: &mut Term,
+    dir: &Path,
+) -> Result<Option<PathBuf>> {
     let default_stem = Local::now().format("%Y-%m-%d").to_string();
     loop {
         let prompt = format!("Document name (.txt default, blank for {default_stem}.txt):");
@@ -341,9 +344,13 @@ fn prompt_new_text_document_path(terminal: &mut Term, dir: &Path) -> Result<Opti
     }
 }
 
+pub fn prompt_new_text_document_path(terminal: &mut Term) -> Result<Option<PathBuf>> {
+    prompt_new_text_document_path_in_dir(terminal, &journal_dir())
+}
+
 pub fn new_text_document(terminal: &mut Term) -> Result<()> {
     let dir = journal_dir();
-    let Some(path) = prompt_new_text_document_path(terminal, &dir)? else {
+    let Some(path) = prompt_new_text_document_path_in_dir(terminal, &dir)? else {
         return Ok(());
     };
     let file_name = path
@@ -422,11 +429,7 @@ pub fn journal_view(terminal: &mut Term) -> Result<()> {
                         pager(terminal, &text, &sel)?;
                     }
                     "Edit" => {
-                        let text = std::fs::read_to_string(&path).unwrap_or_default();
-                        if let Some(new_text) = run_editor(terminal, &sel, &text)? {
-                            std::fs::write(&path, new_text + "\n")?;
-                            flash_message(terminal, "Saved.", 800)?;
-                        }
+                        edit_text_file(terminal, &path)?;
                     }
                     "Delete" => {
                         if confirm(terminal, &format!("Delete '{sel}'?"))? {
@@ -448,14 +451,14 @@ pub fn logs_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
             terminal,
-            "Text Editor",
-            &["New Text Document", "Open Saved Documents", "---", "Back"],
+            "Logs",
+            &["Create New Log", "View Logs", "---", "Back"],
             None,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
-                "New Text Document" => new_text_document(terminal)?,
-                "Open Saved Documents" => journal_view(terminal)?,
+                "Create New Log" => new_text_document(terminal)?,
+                "View Logs" => journal_view(terminal)?,
                 _ => break,
             },
         }
@@ -557,7 +560,7 @@ pub fn open_documents_category(terminal: &mut Term, title: &str, path: &Path) ->
 pub fn documents_menu(terminal: &mut Term) -> Result<()> {
     loop {
         let categories = load_categories();
-        let mut choices = vec!["Text Editor".to_string()];
+        let mut choices = vec!["Logs".to_string()];
         choices.extend(categories.keys().cloned());
         choices.push("---".to_string());
         choices.push("Back".to_string());
@@ -566,7 +569,7 @@ pub fn documents_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Documents", &opts, Some("Select Document Type"))? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
-            MenuResult::Selected(s) if s == "Text Editor" => logs_menu(terminal)?,
+            MenuResult::Selected(s) if s == "Logs" => logs_menu(terminal)?,
             MenuResult::Selected(s) => {
                 if let Some(v) = categories.get(&s) {
                     let path_str = v.as_str().unwrap_or("");

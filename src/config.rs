@@ -471,6 +471,8 @@ impl Default for DesktopCliProfiles {
 pub struct BuiltinMenuVisibilitySettings {
     #[serde(default = "default_true")]
     pub nuke_codes: bool,
+    #[serde(default = "default_true")]
+    pub text_editor: bool,
 }
 
 fn default_true() -> bool {
@@ -514,7 +516,10 @@ pub fn cycle_hacking_difficulty(current: HackingDifficulty, forward: bool) -> Ha
 
 impl Default for BuiltinMenuVisibilitySettings {
     fn default() -> Self {
-        Self { nuke_codes: true }
+        Self {
+            nuke_codes: true,
+            text_editor: true,
+        }
     }
 }
 
@@ -600,6 +605,7 @@ impl Default for Settings {
 fn apply_legacy_settings_migrations(settings: &mut Settings) {
     if settings.hide_builtin_apps_in_menus {
         settings.builtin_menu_visibility.nuke_codes = false;
+        settings.builtin_menu_visibility.text_editor = false;
         settings.hide_builtin_apps_in_menus = false;
     }
 }
@@ -671,11 +677,13 @@ mod tests {
         let mut settings = Settings::default();
         settings.hide_builtin_apps_in_menus = true;
         settings.builtin_menu_visibility.nuke_codes = true;
+        settings.builtin_menu_visibility.text_editor = true;
 
         apply_legacy_settings_migrations(&mut settings);
 
         assert!(!settings.hide_builtin_apps_in_menus);
         assert!(!settings.builtin_menu_visibility.nuke_codes);
+        assert!(!settings.builtin_menu_visibility.text_editor);
     }
 
     #[test]

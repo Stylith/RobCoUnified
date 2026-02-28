@@ -229,6 +229,7 @@ const FILE_MANAGER_RECENT_LIMIT: usize = 12;
 const FILE_MANAGER_RECENT_FOLDERS_LIMIT: usize = 10;
 const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
 const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
+const BUILTIN_TEXT_EDITOR_APP: &str = "Text Editor";
 
 impl FileManagerState {
     fn new() -> Self {
@@ -595,11 +596,102 @@ impl Drop for PtyWindowState {
     }
 }
 
+#[derive(Debug, Clone)]
+enum DesktopTextEditorDialog {
+    ConfirmDiscard {
+        selected: usize,
+    },
+    Input {
+        kind: DesktopTextEditorInputKind,
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopTextEditorInputKind {
+    SaveAs,
+    Rename,
+    Search,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopTextEditorState {
+    path: PathBuf,
+    lines: Vec<String>,
+    row: usize,
+    col: usize,
+    scroll_y: usize,
+    scroll_x: usize,
+    dirty: bool,
+    read_only: bool,
+    search_query: String,
+    search_matches: Vec<(usize, usize)>,
+    search_index: usize,
+    dialog: Option<DesktopTextEditorDialog>,
+}
+
+impl DesktopTextEditorState {
+    fn from_text(path: PathBuf, text: &str, read_only: bool) -> Self {
+        let lines = if text.is_empty() {
+            vec![String::new()]
+        } else {
+            text.lines().map(str::to_string).collect()
+        };
+        Self {
+            path,
+            lines,
+            row: 0,
+            col: 0,
+            scroll_y: 0,
+            scroll_x: 0,
+            dirty: false,
+            read_only,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_index: 0,
+            dialog: None,
+        }
+    }
+
+    fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("document.txt")
+            .to_string()
+    }
+
+    fn text(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    fn line_len(&self, row: usize) -> usize {
+        self.lines.get(row).map(|line| line.len()).unwrap_or(0)
+    }
+
+    fn clamp_cursor(&mut self) {
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.row = self.row.min(self.lines.len().saturating_sub(1));
+        self.col = self.col.min(self.line_len(self.row));
+    }
+
+    fn dialog_input_seed(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("document.txt")
+            .to_string()
+    }
+}
+
 enum WindowKind {
     FileManager(FileManagerState),
     DesktopHub(DesktopHubState),
     FileManagerSettings(FileManagerSettingsState),
     DesktopSettings(DesktopSettingsState),
+    TextEditor(DesktopTextEditorState),
     PtyApp(PtyWindowState),
 }
 
@@ -608,11 +700,13 @@ enum DesktopHubItemAction {
     None,
     CloseFocusedWindow,
     ToggleBuiltinNukeCodesVisibility,
+    ToggleBuiltinTextEditorVisibility,
     LaunchCommand {
         title: String,
         cmd: Vec<String>,
     },
     LaunchNukeCodes,
+    LaunchTextEditor,
     OpenHub(DesktopHubKind),
     OpenHubWithPath {
         kind: DesktopHubKind,
@@ -707,6 +801,25 @@ struct DesktopWindow {
     minimized: bool,
     maximized: bool,
     kind: WindowKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopTextEditorAction {
+    None,
+    Save,
+    SaveAndClose,
+    SaveAs,
+    Rename,
+    Close,
+    ForceClose,
+    FindNext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopTextEditorDialogMouseAction {
+    None,
+    Action(DesktopTextEditorAction),
+    Cancel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1156,6 +1269,7 @@ fn build_command_leaf_items(
 fn refresh_start_leaf_items(state: &mut StartState) {
     let apps = load_apps();
     let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+    let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
     let mut app_items = Vec::new();
     if nuke_codes_visible {
         app_items.push(StartLeafItem {
@@ -1163,8 +1277,14 @@ fn refresh_start_leaf_items(state: &mut StartState) {
             action: StartAction::LaunchNukeCodes,
         });
     }
+    if text_editor_visible {
+        app_items.push(StartLeafItem {
+            label: BUILTIN_TEXT_EDITOR_APP.to_string(),
+            action: StartAction::OpenDocumentLogs,
+        });
+    }
     for key in sorted_json_keys(&apps) {
-        if key == BUILTIN_NUKE_CODES_APP {
+        if key == BUILTIN_NUKE_CODES_APP || key == BUILTIN_TEXT_EDITOR_APP {
             continue;
         }
         if let Some(v) = apps.get(&key) {
@@ -1180,7 +1300,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 
     let categories = load_categories();
     let mut document_items = vec![StartLeafItem {
-        label: "Text Editor".to_string(),
+        label: "Logs".to_string(),
         action: StartAction::OpenDocumentLogs,
     }];
     for key in sorted_json_keys(&categories) {
@@ -1207,8 +1327,8 @@ fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
         DesktopHubKind::Applications => "Applications",
         DesktopHubKind::Documents => "Documents",
         DesktopHubKind::DocumentCategory => "Documents",
-        DesktopHubKind::Logs => "Text Editor",
-        DesktopHubKind::LogEntry => "Document",
+        DesktopHubKind::Logs => "Logs",
+        DesktopHubKind::LogEntry => "Log",
         DesktopHubKind::Network => "Network",
         DesktopHubKind::Connections => "Connections",
         DesktopHubKind::ConnectionsNetworkMenu => "Network Connections",
@@ -1243,12 +1363,12 @@ fn desktop_hub_subtitle(hub: &DesktopHubState) -> String {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "Browse documents".to_string()),
-        DesktopHubKind::Logs => "Create or open saved text documents".to_string(),
+        DesktopHubKind::Logs => "Create or open saved logs".to_string(),
         DesktopHubKind::LogEntry => hub
             .context_path
             .as_ref()
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "Document options".to_string()),
+            .unwrap_or_else(|| "Log options".to_string()),
         DesktopHubKind::Network => "Network tools".to_string(),
         DesktopHubKind::Connections => "Connection settings and devices".to_string(),
         DesktopHubKind::ConnectionsNetworkMenu => {
@@ -1414,6 +1534,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::Applications => {
             let apps = load_apps();
             let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+            let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
             let mut items = Vec::new();
             if nuke_codes_visible {
                 items.push(DesktopHubItem {
@@ -1422,8 +1543,15 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     enabled: true,
                 });
             }
+            if text_editor_visible {
+                items.push(DesktopHubItem {
+                    label: BUILTIN_TEXT_EDITOR_APP.to_string(),
+                    action: DesktopHubItemAction::LaunchTextEditor,
+                    enabled: true,
+                });
+            }
             for key in sorted_json_keys(&apps) {
-                if key == BUILTIN_NUKE_CODES_APP {
+                if key == BUILTIN_NUKE_CODES_APP || key == BUILTIN_TEXT_EDITOR_APP {
                     continue;
                 }
                 if let Some(value) = apps.get(&key) {
@@ -1449,7 +1577,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::Documents => {
             let categories = load_categories();
             let mut items = vec![DesktopHubItem {
-                label: "Text Editor".to_string(),
+                label: "Logs".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
                 enabled: true,
             }];
@@ -1527,14 +1655,14 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         }
         DesktopHubKind::Logs => {
             let mut items = vec![DesktopHubItem {
-                label: "New Text Document".to_string(),
+                label: "Create New Log".to_string(),
                 action: DesktopHubItemAction::CreateLog,
                 enabled: true,
             }];
             let logs = desktop_log_files();
             if logs.is_empty() {
                 items.push(DesktopHubItem {
-                    label: "(No saved documents found)".to_string(),
+                    label: "(No logs found)".to_string(),
                     action: DesktopHubItemAction::None,
                     enabled: false,
                 });
@@ -1561,7 +1689,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
         DesktopHubKind::LogEntry => {
             let Some(path) = hub.context_path.as_ref() else {
                 return vec![DesktopHubItem {
-                    label: "Document not found".to_string(),
+                    label: "Log not found".to_string(),
                     action: DesktopHubItemAction::None,
                     enabled: false,
                 }];
@@ -1588,7 +1716,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     enabled: false,
                 },
                 DesktopHubItem {
-                    label: "Back to Text Editor".to_string(),
+                    label: "Back to Logs".to_string(),
                     action: DesktopHubItemAction::OpenHub(DesktopHubKind::Logs),
                     enabled: true,
                 },
@@ -2117,6 +2245,18 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                         }
                     ),
                     action: DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility,
+                    enabled: true,
+                },
+                DesktopHubItem {
+                    label: format!(
+                        "Text Editor in Applications: {} [toggle]",
+                        if get_settings().builtin_menu_visibility.text_editor {
+                            "VISIBLE"
+                        } else {
+                            "HIDDEN"
+                        }
+                    ),
+                    action: DesktopHubItemAction::ToggleBuiltinTextEditorVisibility,
                     enabled: true,
                 },
                 DesktopHubItem {
@@ -3297,6 +3437,7 @@ fn handle_key(
         let focused_area = state.windows[last_idx].rect.to_rect();
         let mut close_focused = false;
         let mut settings_action = DesktopSettingsAction::None;
+        let mut text_editor_action = DesktopTextEditorAction::None;
         let mut file_open_request: Option<(PathBuf, FileManagerOpenRequest)> = None;
         let mut refresh_file_managers = false;
         let mut hub_action: Option<DesktopHubItemAction> = None;
@@ -3308,6 +3449,11 @@ fn handle_key(
             }
             WindowKind::DesktopSettings(settings) => {
                 settings_action = handle_desktop_settings_key(settings, code, modifiers);
+            }
+            WindowKind::TextEditor(editor) => {
+                let content = desktop_text_editor_content_rect(focused_area);
+                let body = desktop_text_editor_body_rect(content);
+                text_editor_action = handle_desktop_text_editor_key(editor, body, code, modifiers);
             }
             WindowKind::FileManager(fm) => {
                 let s = get_settings().desktop_file_manager;
@@ -3682,6 +3828,10 @@ fn handle_key(
         if matches!(settings_action, DesktopSettingsAction::CloseWindow) {
             close_focused = false;
         }
+        if !matches!(text_editor_action, DesktopTextEditorAction::None) {
+            close_focused =
+                run_desktop_text_editor_action(terminal, state, focused_id, text_editor_action)?;
+        }
         if refresh_file_managers {
             refresh_all_file_manager_windows(state);
         }
@@ -3961,6 +4111,9 @@ fn handle_mouse(
             return Ok(None);
         }
         if handle_file_manager_scroll_mouse(state, mouse) {
+            return Ok(None);
+        }
+        if handle_text_editor_scroll_mouse(state, mouse) {
             return Ok(None);
         }
         if handle_settings_scroll_mouse(state, mouse) {
@@ -4636,6 +4789,7 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
             "File Manager Settings".to_string(),
             "file_manager_settings".to_string(),
         ),
+        WindowKind::TextEditor(_) => ("Text Editor".to_string(), "text_editor".to_string()),
     };
     let mut keys = manual_key_aliases(&key);
     let title_key = slugify_manual_key(&win.title);
@@ -5269,6 +5423,7 @@ fn reap_closed_pty_windows(state: &mut DesktopState) {
                 WindowKind::FileManager(_) => true,
                 WindowKind::DesktopHub(_) => true,
                 WindowKind::FileManagerSettings(_) => true,
+                WindowKind::TextEditor(_) => true,
             }
         };
         if is_alive {
@@ -6769,6 +6924,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 Some(WindowKind::DesktopHub(_)) => "Arrows/Mouse scroll | Enter to open",
                 Some(WindowKind::FileManagerSettings(_)) => "Adjust and apply with Enter/Space",
                 Some(WindowKind::DesktopSettings(_)) => "Navigate Arrows | Select Enter",
+                Some(WindowKind::TextEditor(_)) => "Ctrl+S Save | Ctrl+Q Discard | Tab Close",
                 Some(WindowKind::PtyApp(_)) => "Keys pass through to app",
                 None => "",
             };
@@ -6896,7 +7052,7 @@ fn top_menu_items(state: &DesktopState, kind: TopMenuKind) -> Vec<TopMenuItem> {
                 enabled: true,
             });
             items.push(TopMenuItem {
-                label: "Text Editor".to_string(),
+                label: "Logs".to_string(),
                 shortcut: None,
                 action: TopMenuAction::OpenLogs,
                 enabled: true,
@@ -7144,7 +7300,7 @@ fn spotlight_items(state: &DesktopState) -> Vec<SpotlightItem> {
             action: TopMenuAction::OpenDocuments,
         },
         SpotlightItem {
-            label: "Text Editor".to_string(),
+            label: "Logs".to_string(),
             action: TopMenuAction::OpenLogs,
         },
         SpotlightItem {
@@ -7584,7 +7740,178 @@ fn draw_window(f: &mut ratatui::Frame, win: &DesktopWindow, focused: bool, pty_f
         WindowKind::DesktopSettings(settings) => {
             draw_desktop_settings_window(f, area, settings, focused)
         }
+        WindowKind::TextEditor(editor) => draw_desktop_text_editor_window(f, area, editor, focused),
         WindowKind::PtyApp(app) => draw_pty_window(f, area, app, pty_force_plain),
+    }
+}
+
+fn draw_desktop_text_editor_window(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    editor: &DesktopTextEditorState,
+    focused: bool,
+) {
+    let content = desktop_text_editor_content_rect(area);
+    if content.width == 0 || content.height == 0 {
+        return;
+    }
+
+    let body = desktop_text_editor_body_rect(content);
+    let mode = if editor.read_only { "VIEW" } else { "EDIT" };
+    let dirty = if editor.dirty { " *" } else { "" };
+    let search_line = if editor.search_query.is_empty() {
+        "Search: Ctrl+F".to_string()
+    } else if editor.search_matches.is_empty() {
+        format!("Search: {} (0 matches)", editor.search_query)
+    } else {
+        format!(
+            "Search: {} ({}/{})",
+            editor.search_query,
+            editor.search_index + 1,
+            editor.search_matches.len()
+        )
+    };
+    let path_line = truncate_with_ellipsis(
+        &format!("{}{}", editor.path.display(), dirty),
+        content.width as usize,
+    );
+    let status_line = truncate_with_ellipsis(
+        &format!("{mode}  Ln {} Col {}", editor.row + 1, editor.col + 1),
+        content.width as usize,
+    );
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                path_line,
+                if focused { normal_style() } else { dim_style() },
+            )),
+            Line::from(Span::styled(status_line, dim_style())),
+            Line::from(Span::styled(
+                truncate_with_ellipsis(&search_line, content.width as usize),
+                if editor.search_query.is_empty() {
+                    dim_style()
+                } else {
+                    normal_style()
+                },
+            )),
+        ]),
+        Rect {
+            x: content.x,
+            y: content.y,
+            width: content.width,
+            height: content.height.min(3),
+        },
+    );
+
+    if body.width == 0 || body.height == 0 {
+        return;
+    }
+
+    let gutter = desktop_text_editor_gutter_width(editor);
+    let text_width = desktop_text_editor_visible_text_width(editor, body).max(1);
+    let mut lines = Vec::new();
+    for vis_row in 0..body.height as usize {
+        let idx = editor.scroll_y + vis_row;
+        if idx >= editor.lines.len() {
+            lines.push(Line::from(""));
+            continue;
+        }
+        let line_no = format!("{:>width$} ", idx + 1, width = gutter.saturating_sub(1));
+        let text = &editor.lines[idx];
+        let mut visible: String = text
+            .chars()
+            .skip(editor.scroll_x)
+            .take(text_width)
+            .collect();
+
+        if focused && idx == editor.row {
+            let cursor_idx = editor.col.saturating_sub(editor.scroll_x).min(text_width);
+            if cursor_idx >= visible.chars().count() {
+                visible.push('_');
+            } else {
+                let mut chars: Vec<char> = visible.chars().collect();
+                chars.insert(cursor_idx, '_');
+                visible = chars.into_iter().take(text_width).collect();
+            }
+        }
+
+        let line_text = format!(
+            "{}{}",
+            line_no,
+            truncate_with_ellipsis(&visible, text_width)
+        );
+        let style = if focused && idx == editor.row {
+            sel_style()
+        } else {
+            normal_style()
+        };
+        lines.push(Line::from(Span::styled(
+            truncate_with_ellipsis(&line_text, body.width as usize),
+            style,
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), body);
+
+    if let Some(footer) = desktop_hint_footer_rect(content) {
+        let hint = if editor.read_only {
+            "Arrows move | Ctrl+F search | F3 next | Tab close"
+        } else {
+            "Ctrl+S save | Ctrl+Shift+S save as | Ctrl+R rename | Ctrl+F search | Tab close"
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(hint, dim_style()))),
+            footer,
+        );
+    }
+
+    if let Some(dialog) = &editor.dialog {
+        let (dialog_rect, inner) = desktop_text_editor_dialog_rects(content, dialog);
+        f.render_widget(Clear, dialog_rect);
+        f.render_widget(
+            Block::default().borders(Borders::ALL).style(sel_style()),
+            dialog_rect,
+        );
+        match dialog {
+            DesktopTextEditorDialog::ConfirmDiscard { selected } => {
+                let buttons = [
+                    if *selected == 0 { "[Save]" } else { "Save" },
+                    if *selected == 1 {
+                        "[Discard]"
+                    } else {
+                        "Discard"
+                    },
+                    if *selected == 2 { "[Cancel]" } else { "Cancel" },
+                ]
+                .join(" ");
+                let lines = vec![
+                    Line::from(Span::styled("Unsaved changes", title_style())),
+                    Line::from("Save before closing this log?"),
+                    Line::from(""),
+                    Line::from(Span::styled(buttons, normal_style())),
+                ];
+                f.render_widget(Paragraph::new(lines), inner);
+            }
+            DesktopTextEditorDialog::Input { kind, value } => {
+                let title = match kind {
+                    DesktopTextEditorInputKind::SaveAs => "Save As",
+                    DesktopTextEditorInputKind::Rename => "Rename Log",
+                    DesktopTextEditorInputKind::Search => "Find",
+                };
+                let prompt = match kind {
+                    DesktopTextEditorInputKind::SaveAs => "File name or path:",
+                    DesktopTextEditorInputKind::Rename => "New file name:",
+                    DesktopTextEditorInputKind::Search => "Search text:",
+                };
+                let lines = vec![
+                    Line::from(Span::styled(title, title_style())),
+                    Line::from(prompt),
+                    Line::from(Span::styled(format!("> {value}_"), normal_style())),
+                    Line::from(""),
+                    Line::from(Span::styled("[Apply] [Cancel]", normal_style())),
+                ];
+                f.render_widget(Paragraph::new(lines), inner);
+            }
+        }
     }
 }
 
@@ -10061,6 +10388,8 @@ fn handle_window_content_mouse(
     let mut close_window_id = None;
     let mut settings_action = DesktopSettingsAction::None;
     let mut settings_window_id = None;
+    let mut text_editor_action = DesktopTextEditorAction::None;
+    let mut text_editor_window_id = None;
     let mut refresh_file_managers = false;
     let empty_trash_clicked = if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
         if let Some(win) = state.windows.get(idx_last) {
@@ -10106,6 +10435,41 @@ fn handle_window_content_mouse(
                     close_window_id = Some(win.id);
                 }
                 None
+            }
+            WindowKind::TextEditor(editor) => {
+                if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    return Ok(());
+                }
+                let content = desktop_text_editor_content_rect(win.rect.to_rect());
+                text_editor_window_id = Some(win.id);
+                match desktop_text_editor_dialog_mouse_action(
+                    editor,
+                    content,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    DesktopTextEditorDialogMouseAction::Action(action) => {
+                        text_editor_action = action;
+                        None
+                    }
+                    DesktopTextEditorDialogMouseAction::Cancel => {
+                        editor.dialog = None;
+                        None
+                    }
+                    DesktopTextEditorDialogMouseAction::None => {
+                        let body = desktop_text_editor_body_rect(content);
+                        if !point_in_rect(mouse.column, mouse.row, body) {
+                            return Ok(());
+                        }
+                        desktop_text_editor_set_cursor_from_point(
+                            editor,
+                            body,
+                            mouse.column,
+                            mouse.row,
+                        );
+                        None
+                    }
+                }
             }
             WindowKind::FileManager(fm) => {
                 if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -10277,6 +10641,15 @@ fn handle_window_content_mouse(
     if !matches!(settings_action, DesktopSettingsAction::None) {
         if let Some(window_id) = settings_window_id {
             run_desktop_settings_action(terminal, current_user, state, window_id, settings_action)?;
+        }
+    }
+    if !matches!(text_editor_action, DesktopTextEditorAction::None) {
+        if let Some(window_id) = text_editor_window_id {
+            let close =
+                run_desktop_text_editor_action(terminal, state, window_id, text_editor_action)?;
+            if close {
+                close_window_id = Some(window_id);
+            }
         }
     }
 
@@ -10674,6 +11047,53 @@ fn handle_settings_scroll_mouse(
     }
 }
 
+fn handle_text_editor_scroll_mouse(
+    state: &mut DesktopState,
+    mouse: crossterm::event::MouseEvent,
+) -> bool {
+    let delta: isize = match mouse.kind {
+        MouseEventKind::ScrollUp => -1,
+        MouseEventKind::ScrollDown => 1,
+        _ => 0,
+    };
+    if delta == 0 {
+        return false;
+    }
+
+    let mut target_idx: Option<usize> = None;
+    for idx in (0..state.windows.len()).rev() {
+        let win = &state.windows[idx];
+        if win.minimized || !point_in_rect(mouse.column, mouse.row, win.rect.to_rect()) {
+            continue;
+        }
+        if matches!(win.kind, WindowKind::TextEditor(_)) {
+            target_idx = Some(idx);
+            break;
+        }
+    }
+    if target_idx.is_none() {
+        if let Some(idx) = focused_visible_window_idx(state) {
+            if matches!(state.windows[idx].kind, WindowKind::TextEditor(_)) {
+                target_idx = Some(idx);
+            }
+        }
+    }
+    let Some(idx) = target_idx else {
+        return false;
+    };
+
+    let body = {
+        let area = state.windows[idx].rect.to_rect();
+        let content = desktop_text_editor_content_rect(area);
+        desktop_text_editor_body_rect(content)
+    };
+    let WindowKind::TextEditor(editor) = &mut state.windows[idx].kind else {
+        return false;
+    };
+    desktop_text_editor_scroll_by(editor, delta, body);
+    true
+}
+
 fn open_file_manager_window(state: &mut DesktopState) {
     if let Some(id) = state.windows.iter().find_map(|w| {
         if matches!(&w.kind, WindowKind::FileManager(_)) {
@@ -10724,6 +11144,587 @@ fn open_trash_in_file_manager(state: &mut DesktopState) {
     let trash = file_manager_trash_dir();
     let _ = std::fs::create_dir_all(&trash);
     open_file_manager_window_at_path(state, trash);
+}
+
+fn desktop_text_editor_content_rect(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn desktop_text_editor_body_rect(content: Rect) -> Rect {
+    let footer_rows = u16::from(desktop_navigation_hints_enabled());
+    Rect {
+        x: content.x,
+        y: content.y + 3,
+        width: content.width,
+        height: content.height.saturating_sub(3 + footer_rows),
+    }
+}
+
+fn body_rect_for_window(win: &DesktopWindow) -> Rect {
+    desktop_text_editor_body_rect(desktop_text_editor_content_rect(win.rect.to_rect()))
+}
+
+fn desktop_text_editor_gutter_width(editor: &DesktopTextEditorState) -> usize {
+    let digits = editor.lines.len().max(1).to_string().len();
+    digits + 2
+}
+
+fn desktop_text_editor_visible_text_width(editor: &DesktopTextEditorState, body: Rect) -> usize {
+    let gutter = desktop_text_editor_gutter_width(editor);
+    body.width.saturating_sub(gutter as u16) as usize
+}
+
+fn desktop_text_editor_ensure_cursor_visible(editor: &mut DesktopTextEditorState, body: Rect) {
+    editor.clamp_cursor();
+    if body.height == 0 || body.width == 0 {
+        editor.scroll_y = 0;
+        editor.scroll_x = 0;
+        return;
+    }
+    let visible_rows = body.height as usize;
+    if editor.row < editor.scroll_y {
+        editor.scroll_y = editor.row;
+    } else if editor.row >= editor.scroll_y.saturating_add(visible_rows) {
+        editor.scroll_y = editor.row.saturating_sub(visible_rows.saturating_sub(1));
+    }
+    let visible_cols = desktop_text_editor_visible_text_width(editor, body).max(1);
+    if editor.col < editor.scroll_x {
+        editor.scroll_x = editor.col;
+    } else if editor.col >= editor.scroll_x.saturating_add(visible_cols) {
+        editor.scroll_x = editor.col.saturating_sub(visible_cols.saturating_sub(1));
+    }
+}
+
+fn desktop_text_editor_move_vertical(
+    editor: &mut DesktopTextEditorState,
+    delta: isize,
+    body: Rect,
+) {
+    if delta < 0 {
+        editor.row = editor.row.saturating_sub(delta.unsigned_abs());
+    } else {
+        editor.row = (editor.row + delta as usize).min(editor.lines.len().saturating_sub(1));
+    }
+    editor.col = editor.col.min(editor.line_len(editor.row));
+    desktop_text_editor_ensure_cursor_visible(editor, body);
+}
+
+fn desktop_text_editor_scroll_by(editor: &mut DesktopTextEditorState, delta: isize, body: Rect) {
+    if body.height == 0 {
+        return;
+    }
+    let max_scroll = editor.lines.len().saturating_sub(body.height as usize);
+    if delta < 0 {
+        editor.scroll_y = editor.scroll_y.saturating_sub(delta.unsigned_abs());
+    } else {
+        editor.scroll_y = (editor.scroll_y + delta as usize).min(max_scroll);
+    }
+    editor.row = editor.row.min(editor.lines.len().saturating_sub(1));
+    if editor.row < editor.scroll_y {
+        editor.row = editor.scroll_y;
+    } else if editor.row >= editor.scroll_y.saturating_add(body.height as usize) {
+        editor.row = editor
+            .scroll_y
+            .saturating_add(body.height as usize)
+            .saturating_sub(1);
+    }
+    editor.col = editor.col.min(editor.line_len(editor.row));
+}
+
+fn desktop_text_editor_insert_char(editor: &mut DesktopTextEditorState, c: char) {
+    editor.lines[editor.row].insert(editor.col, c);
+    editor.col += 1;
+    editor.dirty = true;
+    desktop_text_editor_refresh_search(editor);
+}
+
+fn desktop_text_editor_backspace(editor: &mut DesktopTextEditorState) {
+    if editor.col > 0 {
+        editor.lines[editor.row].remove(editor.col - 1);
+        editor.col -= 1;
+        editor.dirty = true;
+    } else if editor.row > 0 {
+        let current = editor.lines.remove(editor.row);
+        editor.row -= 1;
+        editor.col = editor.lines[editor.row].len();
+        editor.lines[editor.row].push_str(&current);
+        editor.dirty = true;
+    }
+    desktop_text_editor_refresh_search(editor);
+}
+
+fn desktop_text_editor_newline(editor: &mut DesktopTextEditorState) {
+    let rest = editor.lines[editor.row][editor.col..].to_string();
+    editor.lines[editor.row].truncate(editor.col);
+    editor.row += 1;
+    editor.lines.insert(editor.row, rest);
+    editor.col = 0;
+    editor.dirty = true;
+    desktop_text_editor_refresh_search(editor);
+}
+
+fn desktop_text_editor_refresh_search(editor: &mut DesktopTextEditorState) {
+    let query = editor.search_query.to_ascii_lowercase();
+    editor.search_matches.clear();
+    editor.search_index = 0;
+    if query.is_empty() {
+        return;
+    }
+    for (row, line) in editor.lines.iter().enumerate() {
+        let lower = line.to_ascii_lowercase();
+        let mut start = 0;
+        while let Some(idx) = lower[start..].find(&query) {
+            editor.search_matches.push((row, start + idx));
+            start += idx + query.len().max(1);
+            if start >= lower.len() {
+                break;
+            }
+        }
+    }
+}
+
+fn desktop_text_editor_jump_to_match(
+    editor: &mut DesktopTextEditorState,
+    body: Rect,
+    match_idx: usize,
+) {
+    if let Some((row, col)) = editor.search_matches.get(match_idx).copied() {
+        editor.search_index = match_idx;
+        editor.row = row;
+        editor.col = col;
+        desktop_text_editor_ensure_cursor_visible(editor, body);
+    }
+}
+
+fn desktop_text_editor_find_next(editor: &mut DesktopTextEditorState, body: Rect) {
+    if editor.search_matches.is_empty() {
+        return;
+    }
+    let next = (editor.search_index + 1) % editor.search_matches.len();
+    desktop_text_editor_jump_to_match(editor, body, next);
+}
+
+fn normalize_text_editor_target_path(current_path: &Path, raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut target = PathBuf::from(trimmed);
+    if !target.is_absolute() {
+        let parent = current_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        target = parent.join(target);
+    }
+    if target.extension().is_none() {
+        target.set_extension("txt");
+    }
+    target.file_name()?;
+    Some(target)
+}
+
+fn handle_desktop_text_editor_key(
+    editor: &mut DesktopTextEditorState,
+    body: Rect,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> DesktopTextEditorAction {
+    if let Some(dialog) = &mut editor.dialog {
+        match dialog {
+            DesktopTextEditorDialog::ConfirmDiscard { selected } => match code {
+                KeyCode::Left => {
+                    *selected = selected.saturating_sub(1);
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::Right | KeyCode::Tab => {
+                    *selected = (*selected + 1).min(2);
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::BackTab => {
+                    *selected = selected.saturating_sub(1);
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::Esc => {
+                    editor.dialog = None;
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::Enter => {
+                    let action = match *selected {
+                        0 => DesktopTextEditorAction::SaveAndClose,
+                        1 => DesktopTextEditorAction::ForceClose,
+                        _ => DesktopTextEditorAction::None,
+                    };
+                    editor.dialog = None;
+                    return action;
+                }
+                _ => return DesktopTextEditorAction::None,
+            },
+            DesktopTextEditorDialog::Input { kind, value } => match code {
+                KeyCode::Esc => {
+                    editor.dialog = None;
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::Enter => {
+                    let action = match kind {
+                        DesktopTextEditorInputKind::SaveAs => DesktopTextEditorAction::SaveAs,
+                        DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
+                        DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
+                    };
+                    return action;
+                }
+                KeyCode::Backspace => {
+                    let _ = value.pop();
+                    return DesktopTextEditorAction::None;
+                }
+                KeyCode::Char(c)
+                    if !modifiers.contains(KeyModifiers::CONTROL)
+                        && !modifiers.contains(KeyModifiers::ALT)
+                        && !modifiers.contains(KeyModifiers::SUPER)
+                        && (c as u32) >= 32 =>
+                {
+                    value.push(c);
+                    return DesktopTextEditorAction::None;
+                }
+                _ => return DesktopTextEditorAction::None,
+            },
+        }
+    }
+
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match code {
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                return if editor.read_only {
+                    DesktopTextEditorAction::None
+                } else if modifiers.contains(KeyModifiers::SHIFT) {
+                    editor.dialog = Some(DesktopTextEditorDialog::Input {
+                        kind: DesktopTextEditorInputKind::SaveAs,
+                        value: editor.dialog_input_seed(),
+                    });
+                    DesktopTextEditorAction::None
+                } else {
+                    DesktopTextEditorAction::Save
+                };
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                return DesktopTextEditorAction::ForceClose;
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if !editor.read_only {
+                    editor.dialog = Some(DesktopTextEditorDialog::Input {
+                        kind: DesktopTextEditorInputKind::Rename,
+                        value: editor.dialog_input_seed(),
+                    });
+                }
+                return DesktopTextEditorAction::None;
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                editor.dialog = Some(DesktopTextEditorDialog::Input {
+                    kind: DesktopTextEditorInputKind::Search,
+                    value: editor.search_query.clone(),
+                });
+                return DesktopTextEditorAction::None;
+            }
+            KeyCode::Home => {
+                editor.scroll_x = 0;
+                return DesktopTextEditorAction::None;
+            }
+            _ => {}
+        }
+    }
+
+    match code {
+        KeyCode::Esc | KeyCode::Tab => {
+            if editor.dirty && !editor.read_only {
+                editor.dialog = Some(DesktopTextEditorDialog::ConfirmDiscard { selected: 0 });
+                DesktopTextEditorAction::None
+            } else {
+                DesktopTextEditorAction::Close
+            }
+        }
+        KeyCode::F(2) => {
+            if editor.read_only {
+                DesktopTextEditorAction::None
+            } else {
+                DesktopTextEditorAction::Save
+            }
+        }
+        KeyCode::Up => {
+            desktop_text_editor_move_vertical(editor, -1, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Down => {
+            desktop_text_editor_move_vertical(editor, 1, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::PageUp => {
+            let step = (body.height as usize).max(1) as isize;
+            desktop_text_editor_move_vertical(editor, -step, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::PageDown => {
+            let step = (body.height as usize).max(1) as isize;
+            desktop_text_editor_move_vertical(editor, step, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::F(3) => DesktopTextEditorAction::FindNext,
+        KeyCode::Home => {
+            editor.col = 0;
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::End => {
+            editor.col = editor.line_len(editor.row);
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Left => {
+            if editor.col > 0 {
+                editor.col -= 1;
+            } else if editor.row > 0 {
+                editor.row -= 1;
+                editor.col = editor.line_len(editor.row);
+            }
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Right => {
+            if editor.col < editor.line_len(editor.row) {
+                editor.col += 1;
+            } else if editor.row + 1 < editor.lines.len() {
+                editor.row += 1;
+                editor.col = 0;
+            }
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Backspace if !editor.read_only => {
+            desktop_text_editor_backspace(editor);
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Enter if !editor.read_only => {
+            desktop_text_editor_newline(editor);
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        KeyCode::Char(c)
+            if !editor.read_only
+                && !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT)
+                && !modifiers.contains(KeyModifiers::SUPER)
+                && (c as u32) >= 32 =>
+        {
+            desktop_text_editor_insert_char(editor, c);
+            desktop_text_editor_ensure_cursor_visible(editor, body);
+            DesktopTextEditorAction::None
+        }
+        _ => DesktopTextEditorAction::None,
+    }
+}
+
+fn desktop_text_editor_set_cursor_from_point(
+    editor: &mut DesktopTextEditorState,
+    body: Rect,
+    x: u16,
+    y: u16,
+) {
+    if !point_in_rect(x, y, body) || body.height == 0 {
+        return;
+    }
+    let rel_row = (y - body.y) as usize;
+    let row = (editor.scroll_y + rel_row).min(editor.lines.len().saturating_sub(1));
+    let gutter = desktop_text_editor_gutter_width(editor) as u16;
+    let rel_col = x.saturating_sub(body.x.saturating_add(gutter)) as usize;
+    let col = (editor.scroll_x + rel_col).min(editor.line_len(row));
+    editor.row = row;
+    editor.col = col;
+    desktop_text_editor_ensure_cursor_visible(editor, body);
+}
+
+fn open_desktop_text_editor_window(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    path: PathBuf,
+    read_only: bool,
+) -> Result<()> {
+    let text = std::fs::read_to_string(&path).map_err(|_| anyhow!("File is not UTF-8 text"))?;
+
+    if let Some(id) = state.windows.iter().find_map(|w| match &w.kind {
+        WindowKind::TextEditor(editor) if editor.path == path => Some(w.id),
+        _ => None,
+    }) {
+        if let Some(win) = state.windows.iter_mut().find(|w| w.id == id) {
+            win.title = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Text Editor")
+                .to_string();
+            if let WindowKind::TextEditor(editor) = &mut win.kind {
+                editor.read_only &= read_only;
+                editor.dialog = None;
+                if !editor.dirty {
+                    *editor = DesktopTextEditorState::from_text(path.clone(), &text, read_only);
+                }
+            }
+        }
+        focus_window(state, id);
+        return Ok(());
+    }
+
+    let (rect, id) = if let Ok(size) = terminal.size() {
+        let full = full_rect(size.width, size.height);
+        let desk = desktop_area(full);
+        let mut rect = WinRect {
+            x: desk.x as i32 + 8,
+            y: desk.y as i32 + 4,
+            w: desk.width.saturating_sub(16).clamp(56, 100),
+            h: desk.height.saturating_sub(8).clamp(16, 34),
+        };
+        clamp_window_with_min(&mut rect, desk, 56, 16);
+        (rect, state.next_id)
+    } else {
+        (
+            WinRect {
+                x: 10,
+                y: 4,
+                w: 80,
+                h: 24,
+            },
+            state.next_id,
+        )
+    };
+
+    state.next_id += 1;
+    state.windows.push(DesktopWindow {
+        id,
+        title: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Text Editor")
+            .to_string(),
+        rect,
+        restore_rect: None,
+        minimized: false,
+        maximized: false,
+        kind: WindowKind::TextEditor(DesktopTextEditorState::from_text(path, &text, read_only)),
+    });
+    Ok(())
+}
+
+fn run_desktop_text_editor_action(
+    terminal: &mut Term,
+    state: &mut DesktopState,
+    window_id: u64,
+    action: DesktopTextEditorAction,
+) -> Result<bool> {
+    match action {
+        DesktopTextEditorAction::None => Ok(false),
+        DesktopTextEditorAction::Close | DesktopTextEditorAction::ForceClose => Ok(true),
+        DesktopTextEditorAction::Save | DesktopTextEditorAction::SaveAndClose => {
+            let mut saved_name = None;
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                if let WindowKind::TextEditor(editor) = &mut win.kind {
+                    if let Some(parent) = editor.path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    std::fs::write(&editor.path, editor.text())?;
+                    editor.dirty = false;
+                    editor.dialog = None;
+                    saved_name = Some(editor.file_name());
+                }
+            }
+            refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+            refresh_all_file_manager_windows(state);
+            let label = saved_name.unwrap_or_else(|| "document".to_string());
+            flash_message(terminal, &format!("Saved {label}."), 900)?;
+            Ok(matches!(action, DesktopTextEditorAction::SaveAndClose))
+        }
+        DesktopTextEditorAction::SaveAs | DesktopTextEditorAction::Rename => {
+            let mut msg = None;
+            let mut close = false;
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                if let WindowKind::TextEditor(editor) = &mut win.kind {
+                    let Some(DesktopTextEditorDialog::Input { kind, value }) =
+                        editor.dialog.clone()
+                    else {
+                        return Ok(false);
+                    };
+                    let Some(target) = normalize_text_editor_target_path(&editor.path, &value)
+                    else {
+                        flash_message(terminal, "Invalid file name.", 1000)?;
+                        return Ok(false);
+                    };
+                    if matches!(kind, DesktopTextEditorInputKind::Rename) {
+                        if target != editor.path {
+                            if target.exists() {
+                                flash_message(terminal, "Target already exists.", 1000)?;
+                                return Ok(false);
+                            }
+                            if let Some(parent) = target.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            std::fs::rename(&editor.path, &target)?;
+                        }
+                        editor.path = target.clone();
+                        win.title = editor.file_name();
+                        editor.dialog = None;
+                        msg = Some(format!("Renamed to {}.", editor.file_name()));
+                    } else {
+                        if let Some(parent) = target.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        std::fs::write(&target, editor.text())?;
+                        editor.path = target;
+                        editor.dirty = false;
+                        editor.dialog = None;
+                        win.title = editor.file_name();
+                        msg = Some(format!("Saved as {}.", editor.file_name()));
+                    }
+                    close = false;
+                }
+            }
+            refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+            refresh_all_file_manager_windows(state);
+            if let Some(message) = msg {
+                flash_message(terminal, &message, 900)?;
+            }
+            Ok(close)
+        }
+        DesktopTextEditorAction::FindNext => {
+            if let Some(win) = state.windows.iter_mut().find(|w| w.id == window_id) {
+                let body = body_rect_for_window(win);
+                if let WindowKind::TextEditor(editor) = &mut win.kind {
+                    if let Some(DesktopTextEditorDialog::Input { kind, value }) =
+                        editor.dialog.take()
+                    {
+                        if matches!(kind, DesktopTextEditorInputKind::Search) {
+                            editor.search_query = value;
+                            desktop_text_editor_refresh_search(editor);
+                            if editor.search_matches.is_empty() {
+                                flash_message(terminal, "No matches found.", 900)?;
+                                return Ok(false);
+                            }
+                            desktop_text_editor_jump_to_match(editor, body, 0);
+                            return Ok(false);
+                        }
+                        editor.dialog = Some(DesktopTextEditorDialog::Input { kind, value });
+                    }
+                    if editor.search_matches.is_empty() {
+                        flash_message(terminal, "No matches found.", 900)?;
+                    } else {
+                        desktop_text_editor_find_next(editor, body);
+                    }
+                }
+            }
+            Ok(false)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -10974,7 +11975,7 @@ fn desktop_hub_window_title(
         DesktopHubKind::LogEntry => context_path
             .and_then(|p| p.file_stem())
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Document".to_string()),
+            .unwrap_or_else(|| "Log".to_string()),
         DesktopHubKind::InstallerPackage => context_text
             .filter(|s| !s.is_empty())
             .unwrap_or("Package")
@@ -11185,6 +12186,15 @@ fn run_desktop_hub_action(
             refresh_desktop_hub_windows(state, DesktopHubKind::EditApps);
             refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
         }
+        DesktopHubItemAction::ToggleBuiltinTextEditorVisibility => {
+            update_settings(|s| {
+                s.builtin_menu_visibility.text_editor = !s.builtin_menu_visibility.text_editor;
+            });
+            persist_settings();
+            refresh_start_leaf_items(&mut state.start);
+            refresh_desktop_hub_windows(state, DesktopHubKind::EditApps);
+            refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
+        }
         DesktopHubItemAction::LaunchCommand { title, cmd } => {
             if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
                 flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
@@ -11200,6 +12210,9 @@ fn run_desktop_hub_action(
                 flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
             }
         }
+        DesktopHubItemAction::LaunchTextEditor => {
+            open_desktop_hub_window(state, DesktopHubKind::Logs);
+        }
         DesktopHubItemAction::OpenHub(kind) => open_desktop_hub_window(state, kind),
         DesktopHubItemAction::OpenHubWithPath { kind, title, path } => {
             open_desktop_hub_window_with_context(state, kind, Some(title), Some(path), None)
@@ -11214,9 +12227,11 @@ fn run_desktop_hub_action(
                 .unwrap_or_else(|| "EPY".to_string());
             match resolve_document_open(&path) {
                 Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) => {
-                    run_with_mouse_capture_paused(terminal, |t| {
-                        documents::view_text_file(t, &path)
-                    })?;
+                    if let Err(err) =
+                        open_desktop_text_editor_window(terminal, state, path.clone(), true)
+                    {
+                        flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+                    }
                 }
                 Some(ResolvedDocumentOpen::ExternalArgv(cmd)) => {
                     if let Err(err) =
@@ -11885,7 +12900,23 @@ fn run_desktop_hub_action(
             }
         }
         DesktopHubItemAction::CreateLog => {
-            run_with_mouse_capture_paused(terminal, documents::new_text_document)?;
+            let mut path = None;
+            run_with_mouse_capture_paused(terminal, |t| {
+                path = documents::prompt_new_text_document_path(t)?;
+                Ok(())
+            })?;
+            if let Some(path) = path {
+                if !path.exists() {
+                    let _ = std::fs::write(&path, "");
+                }
+                if let Err(err) =
+                    open_desktop_text_editor_window(terminal, state, path.clone(), false)
+                {
+                    flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+                } else {
+                    refresh_desktop_hub_windows(state, DesktopHubKind::Logs);
+                }
+            }
         }
         DesktopHubItemAction::OpenLogEntry(path) => {
             let title = path
@@ -11901,10 +12932,14 @@ fn run_desktop_hub_action(
             );
         }
         DesktopHubItemAction::ViewLog(path) => {
-            run_with_mouse_capture_paused(terminal, |t| documents::view_text_file(t, &path))?;
+            if let Err(err) = open_desktop_text_editor_window(terminal, state, path, true) {
+                flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+            }
         }
         DesktopHubItemAction::EditLog(path) => {
-            run_with_mouse_capture_paused(terminal, |t| documents::edit_text_file(t, &path))?;
+            if let Err(err) = open_desktop_text_editor_window(terminal, state, path, false) {
+                flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+            }
         }
         DesktopHubItemAction::DeleteLog(path) => {
             let name = path
@@ -12103,10 +13138,14 @@ fn handle_file_open_request(
                 }
             }
             let open_mode = get_settings().desktop_file_manager.text_open_mode;
-            run_with_mouse_capture_paused(terminal, |t| match open_mode {
-                FileManagerTextOpenMode::Editor => documents::edit_text_file(t, path),
-                FileManagerTextOpenMode::Viewer => documents::view_text_file(t, path),
-            })?;
+            if let Err(err) = open_desktop_text_editor_window(
+                terminal,
+                state,
+                path.to_path_buf(),
+                matches!(open_mode, FileManagerTextOpenMode::Viewer),
+            ) {
+                flash_message(terminal, &format!("Open failed: {err}"), 1200)?;
+            }
         }
         FileManagerOpenRequest::External => {
             #[cfg(target_os = "macos")]
@@ -13666,6 +14705,7 @@ fn min_window_size_for_kind(kind: &WindowKind) -> (u16, u16) {
         WindowKind::FileManager(_) => (MIN_WINDOW_W, MIN_WINDOW_H),
         WindowKind::DesktopHub(_) => (46, 14),
         WindowKind::FileManagerSettings(_) => (46, 10),
+        WindowKind::TextEditor(_) => (56, 16),
     }
 }
 
@@ -13968,6 +15008,107 @@ fn full_rect(width: u16, height: u16) -> Rect {
         y: 0,
         width,
         height,
+    }
+}
+
+fn centered_rect_in_area(area: Rect, width: u16, height: u16) -> Rect {
+    let w = width.min(area.width).max(1);
+    let h = height.min(area.height).max(1);
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
+}
+
+fn desktop_text_editor_dialog_rects(
+    content: Rect,
+    dialog: &DesktopTextEditorDialog,
+) -> (Rect, Rect) {
+    let width = content.width.clamp(28, 56);
+    let height = match dialog {
+        DesktopTextEditorDialog::ConfirmDiscard { .. } => 7,
+        DesktopTextEditorDialog::Input { .. } => 7,
+    };
+    let dialog_rect = centered_rect_in_area(content, width, height);
+    let inner = Rect {
+        x: dialog_rect.x + 1,
+        y: dialog_rect.y + 1,
+        width: dialog_rect.width.saturating_sub(2),
+        height: dialog_rect.height.saturating_sub(2),
+    };
+    (dialog_rect, inner)
+}
+
+fn text_editor_button_rects(inner: Rect, labels: &[&str], line_y: u16) -> Vec<Rect> {
+    let mut x = inner.x;
+    let mut rects = Vec::new();
+    for label in labels {
+        let rendered = format!("[{label}]");
+        let width = rendered.chars().count().min(inner.width as usize) as u16;
+        rects.push(Rect {
+            x,
+            y: line_y,
+            width,
+            height: 1,
+        });
+        x = x.saturating_add(width + 1);
+    }
+    rects
+}
+
+fn desktop_text_editor_dialog_mouse_action(
+    editor: &mut DesktopTextEditorState,
+    content: Rect,
+    x: u16,
+    y: u16,
+) -> DesktopTextEditorDialogMouseAction {
+    let Some(dialog) = editor.dialog.as_ref() else {
+        return DesktopTextEditorDialogMouseAction::None;
+    };
+    let (dialog_rect, inner) = desktop_text_editor_dialog_rects(content, dialog);
+    if !point_in_rect(x, y, dialog_rect) {
+        return DesktopTextEditorDialogMouseAction::None;
+    }
+    match dialog {
+        DesktopTextEditorDialog::ConfirmDiscard { .. } => {
+            let labels = ["Save", "Discard", "Cancel"];
+            let rects = text_editor_button_rects(inner, &labels, inner.y + 3);
+            for (idx, rect) in rects.into_iter().enumerate() {
+                if point_in_rect(x, y, rect) {
+                    return match idx {
+                        0 => DesktopTextEditorDialogMouseAction::Action(
+                            DesktopTextEditorAction::SaveAndClose,
+                        ),
+                        1 => DesktopTextEditorDialogMouseAction::Action(
+                            DesktopTextEditorAction::ForceClose,
+                        ),
+                        _ => DesktopTextEditorDialogMouseAction::Cancel,
+                    };
+                }
+            }
+            DesktopTextEditorDialogMouseAction::None
+        }
+        DesktopTextEditorDialog::Input { kind, .. } => {
+            let rects = text_editor_button_rects(inner, &["Apply", "Cancel"], inner.y + 3);
+            for (idx, rect) in rects.into_iter().enumerate() {
+                if point_in_rect(x, y, rect) {
+                    return if idx == 0 {
+                        DesktopTextEditorDialogMouseAction::Action(match kind {
+                            DesktopTextEditorInputKind::SaveAs => DesktopTextEditorAction::SaveAs,
+                            DesktopTextEditorInputKind::Rename => DesktopTextEditorAction::Rename,
+                            DesktopTextEditorInputKind::Search => DesktopTextEditorAction::FindNext,
+                        })
+                    } else {
+                        DesktopTextEditorDialogMouseAction::Cancel
+                    };
+                }
+            }
+            DesktopTextEditorDialogMouseAction::None
+        }
     }
 }
 
@@ -14709,6 +15850,197 @@ mod tests {
         assert!(hacking_rows
             .iter()
             .any(|row| row.label.starts_with("Hacking Difficulty: ")));
+    }
+
+    #[test]
+    fn applications_hub_includes_builtin_text_editor_when_visible() {
+        let hub = DesktopHubState {
+            kind: DesktopHubKind::Applications,
+            selected: 0,
+            scroll: 0,
+            context_path: None,
+            context_text: None,
+            input: String::new(),
+            input2: String::new(),
+            mode_idx: 0,
+            flag: false,
+            input_mode: false,
+            cached_rows: Vec::new(),
+        };
+
+        let items = desktop_hub_items(&hub, "ignored");
+        let has_text_editor = items
+            .iter()
+            .any(|item| item.label == BUILTIN_TEXT_EDITOR_APP);
+        assert_eq!(
+            has_text_editor,
+            get_settings().builtin_menu_visibility.text_editor
+        );
+    }
+
+    #[test]
+    fn text_editor_warns_before_tab_close_when_dirty() {
+        let mut editor = DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "", false);
+        let body = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 8,
+        };
+
+        assert!(matches!(
+            handle_desktop_text_editor_key(
+                &mut editor,
+                body,
+                KeyCode::Char('a'),
+                KeyModifiers::NONE
+            ),
+            DesktopTextEditorAction::None
+        ));
+        assert!(editor.dirty);
+        assert!(matches!(
+            handle_desktop_text_editor_key(&mut editor, body, KeyCode::Tab, KeyModifiers::NONE),
+            DesktopTextEditorAction::None
+        ));
+        assert!(matches!(
+            editor.dialog,
+            Some(DesktopTextEditorDialog::ConfirmDiscard { .. })
+        ));
+    }
+
+    #[test]
+    fn text_editor_ctrl_q_discards_and_ctrl_s_saves() {
+        let mut editor = DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "", false);
+        let body = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 8,
+        };
+
+        let _ = handle_desktop_text_editor_key(
+            &mut editor,
+            body,
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        );
+        assert!(matches!(
+            handle_desktop_text_editor_key(
+                &mut editor,
+                body,
+                KeyCode::Char('q'),
+                KeyModifiers::CONTROL
+            ),
+            DesktopTextEditorAction::ForceClose
+        ));
+        assert!(matches!(
+            handle_desktop_text_editor_key(
+                &mut editor,
+                body,
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL
+            ),
+            DesktopTextEditorAction::Save
+        ));
+    }
+
+    #[test]
+    fn text_editor_mouse_target_maps_to_visible_cursor_position() {
+        let mut editor =
+            DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "alpha\nbeta", false);
+        editor.scroll_y = 1;
+        editor.scroll_x = 1;
+        let body = Rect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 4,
+        };
+        let gutter = desktop_text_editor_gutter_width(&editor) as u16;
+
+        desktop_text_editor_set_cursor_from_point(&mut editor, body, body.x + gutter + 2, body.y);
+
+        assert_eq!(editor.row, 1);
+        assert_eq!(editor.col, 3);
+    }
+
+    #[test]
+    fn text_editor_search_dialog_submits_find_next() {
+        let mut editor =
+            DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "alpha beta alpha", false);
+        let body = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 8,
+        };
+
+        let _ = handle_desktop_text_editor_key(
+            &mut editor,
+            body,
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL,
+        );
+        assert!(matches!(
+            editor.dialog,
+            Some(DesktopTextEditorDialog::Input {
+                kind: DesktopTextEditorInputKind::Search,
+                ..
+            })
+        ));
+        let _ = handle_desktop_text_editor_key(
+            &mut editor,
+            body,
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        );
+        assert!(matches!(
+            handle_desktop_text_editor_key(&mut editor, body, KeyCode::Enter, KeyModifiers::NONE),
+            DesktopTextEditorAction::FindNext
+        ));
+    }
+
+    #[test]
+    fn text_editor_confirm_dialog_mouse_hits_discard_button() {
+        let mut editor = DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "", false);
+        editor.dialog = Some(DesktopTextEditorDialog::ConfirmDiscard { selected: 0 });
+        let content = Rect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 16,
+        };
+        let (_, inner) = desktop_text_editor_dialog_rects(content, editor.dialog.as_ref().unwrap());
+        let rects = text_editor_button_rects(inner, &["Save", "Discard", "Cancel"], inner.y + 3);
+        let discard = rects[1];
+
+        assert_eq!(
+            desktop_text_editor_dialog_mouse_action(&mut editor, content, discard.x, discard.y),
+            DesktopTextEditorDialogMouseAction::Action(DesktopTextEditorAction::ForceClose)
+        );
+    }
+
+    #[test]
+    fn text_editor_input_dialog_mouse_hits_cancel_button() {
+        let mut editor = DesktopTextEditorState::from_text(PathBuf::from("note.txt"), "", false);
+        editor.dialog = Some(DesktopTextEditorDialog::Input {
+            kind: DesktopTextEditorInputKind::Search,
+            value: String::new(),
+        });
+        let content = Rect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 16,
+        };
+        let (_, inner) = desktop_text_editor_dialog_rects(content, editor.dialog.as_ref().unwrap());
+        let rects = text_editor_button_rects(inner, &["Apply", "Cancel"], inner.y + 3);
+        let cancel = rects[1];
+
+        assert_eq!(
+            desktop_text_editor_dialog_mouse_action(&mut editor, content, cancel.x, cancel.y),
+            DesktopTextEditorDialogMouseAction::Cancel
+        );
     }
 
     #[test]

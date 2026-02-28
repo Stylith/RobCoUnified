@@ -11,6 +11,7 @@ use crate::ui::{
 };
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
+const BUILTIN_TEXT_EDITOR_APP: &str = "Text Editor";
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
@@ -84,13 +85,20 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
         }
         let apps = load_apps();
         let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+        let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
         let mut choices: Vec<String> = Vec::new();
         if nuke_codes_visible {
             choices.push(BUILTIN_NUKE_CODES_APP.to_string());
         }
+        if text_editor_visible {
+            choices.push(BUILTIN_TEXT_EDITOR_APP.to_string());
+        }
         choices.extend(
             apps.keys()
-                .filter(|name| name.as_str() != BUILTIN_NUKE_CODES_APP)
+                .filter(|name| {
+                    name.as_str() != BUILTIN_NUKE_CODES_APP
+                        && name.as_str() != BUILTIN_TEXT_EDITOR_APP
+                })
                 .cloned(),
         );
         choices.push("---".to_string());
@@ -102,6 +110,12 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) if s == "Back" => break,
             MenuResult::Selected(s) if s == BUILTIN_NUKE_CODES_APP => {
                 crate::nuke_codes::nuke_codes_screen(terminal)?;
+                if crate::session::has_switch_request() {
+                    break;
+                }
+            }
+            MenuResult::Selected(s) if s == BUILTIN_TEXT_EDITOR_APP => {
+                crate::documents::logs_menu(terminal)?;
                 if crate::session::has_switch_request() {
                     break;
                 }
@@ -182,11 +196,17 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
         } else {
             "Nuke Codes in Applications: HIDDEN [toggle]"
         };
+        let text_editor_label = if get_settings().builtin_menu_visibility.text_editor {
+            "Text Editor in Applications: VISIBLE [toggle]"
+        } else {
+            "Text Editor in Applications: HIDDEN [toggle]"
+        };
         match run_menu(
             terminal,
             "Edit Applications",
             &[
                 nuke_codes_label,
+                text_editor_label,
                 "---",
                 "Add App",
                 "Delete App",
@@ -202,6 +222,13 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
                     update_settings(|cfg| {
                         cfg.builtin_menu_visibility.nuke_codes =
                             !cfg.builtin_menu_visibility.nuke_codes;
+                    });
+                    persist_settings();
+                }
+                l if l == text_editor_label => {
+                    update_settings(|cfg| {
+                        cfg.builtin_menu_visibility.text_editor =
+                            !cfg.builtin_menu_visibility.text_editor;
                     });
                     persist_settings();
                 }
