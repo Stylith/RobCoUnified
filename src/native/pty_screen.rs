@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MAX_NATIVE_PTY_COLS: usize = 80;
@@ -25,6 +26,9 @@ pub struct NativePtyState {
     pub session: PtySession,
     prev_plain_lines: Vec<String>,
     prev_plain_cursor: Option<(u16, u16)>,
+    plain_row_galleys: Vec<Option<Arc<egui::Galley>>>,
+    plain_cache_font_size: f32,
+    plain_cache_fg: Color32,
     perf: PtyPerfStats,
     show_perf_overlay: bool,
 }
@@ -127,6 +131,9 @@ pub fn spawn_embedded_pty_with_options(
         session,
         prev_plain_lines: Vec::new(),
         prev_plain_cursor: None,
+        plain_row_galleys: Vec::new(),
+        plain_cache_font_size: 0.0,
+        plain_cache_fg: Color32::TRANSPARENT,
         perf: PtyPerfStats::default(),
         show_perf_overlay: false,
     })
@@ -226,18 +233,6 @@ pub fn draw_embedded_pty(
 
             if plain_fast {
                 let snap = plain_snapshot.as_ref().expect("plain snapshot present");
-                if state.show_perf_overlay {
-                    dirty_stats = diff_plain_snapshot(
-                        &state.prev_plain_lines,
-                        &snap.lines,
-                        state.prev_plain_cursor,
-                        (snap.cursor_row, snap.cursor_col),
-                        pty_cols as usize,
-                        pty_rows as usize,
-                    );
-                    state.prev_plain_lines = snap.lines.clone();
-                    state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
-                }
                 let smoothed_lines =
                     if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
                         let mut lines = snap.lines.clone();
@@ -247,17 +242,34 @@ pub fn draw_embedded_pty(
                         None
                     };
                 let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
-                for (row_idx, line) in lines_ref.iter().enumerate() {
-                    if !line.is_empty() {
-                        content_painter.text(
+                if state.show_perf_overlay {
+                    dirty_stats = diff_plain_snapshot(
+                        &state.prev_plain_lines,
+                        lines_ref,
+                        state.prev_plain_cursor,
+                        (snap.cursor_row, snap.cursor_col),
+                        pty_cols as usize,
+                        pty_rows as usize,
+                    );
+                }
+                ensure_plain_row_galleys(
+                    state,
+                    &content_painter,
+                    screen.font(),
+                    palette.fg,
+                    lines_ref,
+                );
+                for (row_idx, galley) in state.plain_row_galleys.iter().enumerate() {
+                    if let Some(galley) = galley {
+                        content_painter.galley(
                             screen.row_rect(0, row_idx, 1).left_top(),
-                            Align2::LEFT_TOP,
-                            line,
-                            screen.font().clone(),
+                            galley.clone(),
                             palette.fg,
                         );
                     }
                 }
+                state.prev_plain_lines = lines_ref.to_vec();
+                state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
                 let row = snap.cursor_row as usize;
                 let col = snap.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
@@ -290,9 +302,10 @@ pub fn draw_embedded_pty(
                 if state.show_perf_overlay {
                     dirty_stats.changed_rows = dirty_stats.total_rows;
                     dirty_stats.changed_cells = dirty_stats.total_cells;
-                    state.prev_plain_lines.clear();
-                    state.prev_plain_cursor = None;
                 }
+                state.prev_plain_lines.clear();
+                state.prev_plain_cursor = None;
+                state.plain_row_galleys.clear();
                 for (row_idx, row) in snapshot.cells.iter().enumerate() {
                     for (col_idx, cell) in row.iter().enumerate() {
                         let mut cell_to_draw = *cell;
@@ -957,6 +970,43 @@ fn map_key_event(key: Key, modifiers: egui::Modifiers) -> Option<(KeyCode, KeyMo
         _ => return None,
     };
     Some((code, mods))
+}
+
+fn ensure_plain_row_galleys(
+    state: &mut NativePtyState,
+    painter: &egui::Painter,
+    font: &egui::FontId,
+    fg: Color32,
+    lines: &[String],
+) {
+    if state.plain_row_galleys.len() != lines.len() {
+        state.plain_row_galleys.resize(lines.len(), None);
+    }
+    let style_changed = (state.plain_cache_font_size - font.size).abs() > f32::EPSILON
+        || state.plain_cache_fg != fg;
+    if style_changed {
+        for galley in &mut state.plain_row_galleys {
+            *galley = None;
+        }
+        state.plain_cache_font_size = font.size;
+        state.plain_cache_fg = fg;
+    }
+    for (row_idx, line) in lines.iter().enumerate() {
+        let text_changed = state
+            .prev_plain_lines
+            .get(row_idx)
+            .map(String::as_str)
+            .unwrap_or("")
+            != line.as_str();
+        if line.is_empty() {
+            state.plain_row_galleys[row_idx] = None;
+            continue;
+        }
+        if style_changed || text_changed || state.plain_row_galleys[row_idx].is_none() {
+            state.plain_row_galleys[row_idx] =
+                Some(painter.layout_no_wrap(line.clone(), font.clone(), fg));
+        }
+    }
 }
 
 fn diff_plain_snapshot(
