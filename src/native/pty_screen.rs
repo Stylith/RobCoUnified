@@ -1065,10 +1065,13 @@ fn render_plain_texture_if_possible(
         dirty_rows.to_vec()
     };
     if !update_rows.is_empty() {
-        let mut missing_font = false;
-        if let Some(image) = state.plain_texture.image.as_mut() {
-            for row in update_rows {
-                clear_texture_row(image, row, cell_h, palette.bg);
+                let mut missing_font = false;
+                let Some(font) = state.plain_texture.font.as_ref() else {
+                    return false;
+                };
+                if let Some(image) = state.plain_texture.image.as_mut() {
+                    for row in update_rows {
+                        clear_texture_row(image, row, cell_h, palette.bg);
                 let line = lines.get(row).map(String::as_str).unwrap_or("");
                 let max_cols = cols.min(line.chars().count());
                 for (col, ch) in line.chars().take(max_cols).enumerate() {
@@ -1077,7 +1080,7 @@ fn render_plain_texture_if_possible(
                     }
                     if !draw_glyph_to_image(
                         image,
-                        state.plain_texture.font.as_ref().expect("checked"),
+                        font,
                         ch,
                         col,
                         row,
@@ -1149,9 +1152,13 @@ fn ensure_plain_texture_surface(
         rows.saturating_mul(cell_h_px),
     ];
     renderer.image = Some(egui::ColorImage::new(size, Color32::BLACK));
+    let Some(image) = renderer.image.as_ref() else {
+        renderer.texture = None;
+        return true;
+    };
     renderer.texture = Some(ctx.load_texture(
         "native_pty_plain_texture",
-        egui::ImageData::Color(renderer.image.as_ref().expect("set").clone().into()),
+        egui::ImageData::Color(image.clone().into()),
         egui::TextureOptions::NEAREST,
     ));
     true
