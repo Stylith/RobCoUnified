@@ -1,0 +1,1285 @@
+use super::data::{
+    app_names, authenticate, current_settings, home_dir_fallback, read_shell_snapshot,
+    read_text_file, save_settings, save_text_file, word_processor_dir, write_shell_snapshot,
+};
+use super::file_manager::{FileManagerAction, NativeFileManagerState};
+use super::retro_ui::{
+    configure_visuals, RetroScreen, RETRO_BG, RETRO_GREEN, RETRO_GREEN_DIM,
+};
+use super::terminal::{launch_plan, launch_terminal_mode};
+use crate::config::{OpenMode, Settings, HEADER_LINES, THEMES};
+use crate::core::auth::{load_users, UserRecord};
+use chrono::Local;
+use eframe::egui::{
+    self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
+    RichText, TextEdit, TextStyle, TopBottomPanel,
+};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NativeShellSnapshot {
+    file_manager_dir: PathBuf,
+    editor_path: Option<PathBuf>,
+}
+
+impl Default for NativeShellSnapshot {
+    fn default() -> Self {
+        Self {
+            file_manager_dir: home_dir_fallback(),
+            editor_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SessionState {
+    username: String,
+    is_admin: bool,
+}
+
+#[derive(Debug, Default)]
+struct LoginState {
+    username: String,
+    password: String,
+    error: String,
+}
+
+#[derive(Debug)]
+struct EditorWindow {
+    open: bool,
+    path: Option<PathBuf>,
+    text: String,
+    dirty: bool,
+    status: String,
+}
+
+#[derive(Debug)]
+struct SettingsWindow {
+    open: bool,
+    draft: Settings,
+    status: String,
+}
+
+#[derive(Debug, Default)]
+struct ApplicationsWindow {
+    open: bool,
+    status: String,
+}
+
+#[derive(Debug, Default)]
+struct TerminalModeWindow {
+    open: bool,
+    status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalScreen {
+    MainMenu,
+    Applications,
+    Documents,
+    DocumentBrowser,
+    Settings,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MainMenuAction {
+    Applications,
+    Documents,
+    Network,
+    Games,
+    ProgramInstaller,
+    Terminal,
+    DesktopMode,
+    Settings,
+    Logout,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MainMenuEntry {
+    label: &'static str,
+    action: Option<MainMenuAction>,
+}
+
+const MAIN_MENU_ENTRIES: &[MainMenuEntry] = &[
+    MainMenuEntry {
+        label: "Applications",
+        action: Some(MainMenuAction::Applications),
+    },
+    MainMenuEntry {
+        label: "Documents",
+        action: Some(MainMenuAction::Documents),
+    },
+    MainMenuEntry {
+        label: "Network",
+        action: Some(MainMenuAction::Network),
+    },
+    MainMenuEntry {
+        label: "Games",
+        action: Some(MainMenuAction::Games),
+    },
+    MainMenuEntry {
+        label: "Program Installer",
+        action: Some(MainMenuAction::ProgramInstaller),
+    },
+    MainMenuEntry {
+        label: "Terminal",
+        action: Some(MainMenuAction::Terminal),
+    },
+    MainMenuEntry {
+        label: "Desktop Mode",
+        action: Some(MainMenuAction::DesktopMode),
+    },
+    MainMenuEntry {
+        label: "---",
+        action: None,
+    },
+    MainMenuEntry {
+        label: "Settings",
+        action: Some(MainMenuAction::Settings),
+    },
+    MainMenuEntry {
+        label: "Logout",
+        action: Some(MainMenuAction::Logout),
+    },
+];
+
+const DOCUMENT_MENU_ITEMS: &[&str] = &["New Document", "Open Documents", "Back"];
+const STATIC_APP_MENU_ITEMS: &[&str] = &["ROBCO Word Processor"];
+
+fn selectable_menu_count() -> usize {
+    MAIN_MENU_ENTRIES.iter().filter(|entry| entry.action.is_some()).count()
+}
+
+fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
+    MAIN_MENU_ENTRIES
+        .iter()
+        .copied()
+        .filter(|entry| entry.action.is_some())
+        .nth(idx)
+        .unwrap_or(MAIN_MENU_ENTRIES[0])
+}
+
+fn try_load_font_bytes() -> Option<Vec<u8>> {
+    let mut candidates = vec![
+        PathBuf::from("assets/fonts/FixedsysExcelsior301-Regular.ttf"),
+        PathBuf::from("assets/fonts/Sysfixed.ttf"),
+        PathBuf::from("assets/fonts/sysfixed.ttf"),
+        PathBuf::from("Sysfixed.ttf"),
+        PathBuf::from("sysfixed.ttf"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
+        candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
+    }
+    candidates.push(PathBuf::from("/Library/Fonts/Sysfixed.ttf"));
+    candidates.push(PathBuf::from("/Library/Fonts/sysfixed.ttf"));
+    candidates.push(PathBuf::from("/System/Library/Fonts/Monaco.ttf"));
+
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(&path) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+pub fn configure_native_context(ctx: &Context) {
+    configure_visuals(ctx);
+
+    let mut fonts = FontDefinitions::default();
+    if let Some(bytes) = try_load_font_bytes() {
+        fonts
+            .font_data
+            .insert("retro".into(), FontData::from_owned(bytes).into());
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, "retro".into());
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "retro".into());
+    }
+    ctx.set_fonts(fonts);
+
+    let mut style = (*ctx.style()).clone();
+    style.text_styles = [
+        (
+            TextStyle::Heading,
+            FontId::new(28.0, FontFamily::Monospace),
+        ),
+        (TextStyle::Body, FontId::new(22.0, FontFamily::Monospace)),
+        (
+            TextStyle::Monospace,
+            FontId::new(22.0, FontFamily::Monospace),
+        ),
+        (TextStyle::Button, FontId::new(22.0, FontFamily::Monospace)),
+        (TextStyle::Small, FontId::new(18.0, FontFamily::Monospace)),
+    ]
+    .into();
+    ctx.set_style(style);
+}
+
+pub struct RobcoNativeApp {
+    login: LoginState,
+    session: Option<SessionState>,
+    file_manager: NativeFileManagerState,
+    editor: EditorWindow,
+    settings: SettingsWindow,
+    applications: ApplicationsWindow,
+    terminal_mode: TerminalModeWindow,
+    start_open: bool,
+    desktop_mode_open: bool,
+    main_menu_idx: usize,
+    terminal_screen: TerminalScreen,
+    terminal_apps_idx: usize,
+    terminal_documents_idx: usize,
+    terminal_settings_idx: usize,
+    terminal_browser_idx: usize,
+    shell_status: String,
+}
+
+impl Default for RobcoNativeApp {
+    fn default() -> Self {
+        Self {
+            login: LoginState::default(),
+            session: None,
+            file_manager: NativeFileManagerState::new(home_dir_fallback()),
+            editor: EditorWindow {
+                open: false,
+                path: None,
+                text: String::new(),
+                dirty: false,
+                status: String::new(),
+            },
+            settings: SettingsWindow {
+                open: false,
+                draft: current_settings(),
+                status: String::new(),
+            },
+            applications: ApplicationsWindow::default(),
+            terminal_mode: TerminalModeWindow::default(),
+            start_open: true,
+            desktop_mode_open: false,
+            main_menu_idx: 0,
+            terminal_screen: TerminalScreen::MainMenu,
+            terminal_apps_idx: 0,
+            terminal_documents_idx: 0,
+            terminal_settings_idx: 0,
+            terminal_browser_idx: 0,
+            shell_status: String::new(),
+        }
+    }
+}
+
+impl RobcoNativeApp {
+    fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
+        let snapshot: NativeShellSnapshot = read_shell_snapshot(username);
+        self.session = Some(SessionState {
+            username: username.to_string(),
+            is_admin: user.is_admin,
+        });
+        self.file_manager.cwd = if snapshot.file_manager_dir.exists() {
+            snapshot.file_manager_dir
+        } else {
+            word_processor_dir(username)
+        };
+        self.file_manager.open = false;
+        self.file_manager.selected = None;
+        self.editor.open = false;
+        self.editor.path = None;
+        self.editor.text.clear();
+        self.editor.dirty = false;
+        self.editor.status.clear();
+        self.settings.draft = current_settings();
+        self.settings.status.clear();
+        self.terminal_mode.status.clear();
+        self.start_open = true;
+        self.desktop_mode_open = false;
+        self.main_menu_idx = 0;
+        self.terminal_screen = TerminalScreen::MainMenu;
+        self.terminal_apps_idx = 0;
+        self.terminal_documents_idx = 0;
+        self.terminal_settings_idx = 0;
+        self.terminal_browser_idx = 0;
+        self.shell_status.clear();
+    }
+
+    fn persist_snapshot(&self) {
+        if let Some(session) = &self.session {
+            write_shell_snapshot(
+                &session.username,
+                &NativeShellSnapshot {
+                    file_manager_dir: self.file_manager.cwd.clone(),
+                    editor_path: self.editor.path.clone(),
+                },
+            );
+        }
+    }
+
+    fn do_login(&mut self) {
+        self.login.error.clear();
+        let username = self.login.username.trim().to_string();
+        if username.is_empty() {
+            self.login.error = "Select or enter a user.".to_string();
+            return;
+        }
+        match authenticate(&username, &self.login.password) {
+            Ok(user) => {
+                self.login.password.clear();
+                self.restore_for_user(&username, &user);
+            }
+            Err(err) => self.login.error = err.to_string(),
+        }
+    }
+
+    fn logout(&mut self) {
+        self.persist_snapshot();
+        self.session = None;
+        self.login.password.clear();
+        self.login.error.clear();
+        self.file_manager.open = false;
+        self.editor.open = false;
+        self.settings.open = false;
+        self.applications.open = false;
+        self.terminal_mode.open = false;
+        self.desktop_mode_open = false;
+        self.terminal_screen = TerminalScreen::MainMenu;
+        self.shell_status.clear();
+    }
+
+    fn open_path_in_editor(&mut self, path: PathBuf) {
+        match read_text_file(&path) {
+            Ok(text) => {
+                self.editor.path = Some(path);
+                self.editor.text = text;
+                self.editor.dirty = false;
+                self.editor.open = true;
+                self.editor.status = "Opened document.".to_string();
+            }
+            Err(err) => {
+                self.editor.status = format!("Open failed: {err}");
+                self.editor.open = true;
+            }
+        }
+    }
+
+    fn activate_file_manager_selection(&mut self) {
+        match self.file_manager.activate_selected() {
+            FileManagerAction::None | FileManagerAction::ChangedDir => {}
+            FileManagerAction::OpenFile(path) => self.open_path_in_editor(path),
+        }
+    }
+
+    fn new_document(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let base = word_processor_dir(&session.username);
+        let mut path = base.join("document.txt");
+        let mut idx = 1usize;
+        while path.exists() {
+            path = base.join(format!("document-{idx}.txt"));
+            idx += 1;
+        }
+        self.editor.path = Some(path);
+        self.editor.text.clear();
+        self.editor.dirty = false;
+        self.editor.open = true;
+        self.editor.status = "New document.".to_string();
+    }
+
+    fn save_editor(&mut self) {
+        let Some(path) = self.editor.path.clone() else {
+            self.editor.status = "No document path set.".to_string();
+            return;
+        };
+        match save_text_file(&path, &self.editor.text) {
+            Ok(()) => {
+                self.editor.dirty = false;
+                self.editor.status = format!(
+                    "Saved {}.",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("document")
+                );
+            }
+            Err(err) => self.editor.status = format!("Save failed: {err}"),
+        }
+    }
+
+    fn handle_main_menu_action(&mut self, action: MainMenuAction) {
+        match action {
+            MainMenuAction::Applications => {
+                self.terminal_screen = TerminalScreen::Applications;
+                self.terminal_apps_idx = 0;
+                self.shell_status.clear();
+            }
+            MainMenuAction::Documents => {
+                self.terminal_screen = TerminalScreen::Documents;
+                self.terminal_documents_idx = 0;
+                self.shell_status.clear();
+            }
+            MainMenuAction::Network => {
+                self.shell_status = "Network menu is not rewritten yet.".to_string();
+            }
+            MainMenuAction::Games => {
+                self.shell_status = "Games menu is not rewritten yet.".to_string();
+            }
+            MainMenuAction::ProgramInstaller => {
+                self.shell_status = "Program Installer is not rewritten yet.".to_string();
+            }
+            MainMenuAction::Terminal => {
+                self.terminal_mode.open = true;
+                self.shell_status.clear();
+            }
+            MainMenuAction::DesktopMode => {
+                self.desktop_mode_open = true;
+                self.shell_status = "Entered Desktop Mode.".to_string();
+            }
+            MainMenuAction::Settings => {
+                self.settings.draft = current_settings();
+                self.terminal_screen = TerminalScreen::Settings;
+                self.terminal_settings_idx = 0;
+                self.shell_status.clear();
+            }
+            MainMenuAction::Logout => self.logout(),
+        }
+    }
+
+    fn terminal_app_items(&self) -> Vec<String> {
+        let mut items: Vec<String> = STATIC_APP_MENU_ITEMS.iter().map(|s| (*s).to_string()).collect();
+        items.extend(app_names());
+        items.push("Back".to_string());
+        items
+    }
+
+    fn cycle_theme(&mut self, forward: bool) {
+        let names: Vec<&str> = THEMES.iter().map(|(n, _)| *n).collect();
+        let current = names
+            .iter()
+            .position(|name| *name == self.settings.draft.theme)
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1) % names.len()
+        } else {
+            current.checked_sub(1).unwrap_or(names.len().saturating_sub(1))
+        };
+        self.settings.draft.theme = names[next].to_string();
+    }
+
+    fn terminal_settings_rows(&self) -> Vec<String> {
+        vec![
+            format!(
+                "Sound: {} [toggle]",
+                if self.settings.draft.sound { "ON" } else { "OFF" }
+            ),
+            format!(
+                "Bootup: {} [toggle]",
+                if self.settings.draft.bootup { "ON" } else { "OFF" }
+            ),
+            format!(
+                "Navigation Hints: {} [toggle]",
+                if self.settings.draft.show_navigation_hints {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            ),
+            format!("Theme: {} [cycle]", self.settings.draft.theme),
+            format!(
+                "Default Open Mode: {} [cycle]",
+                match self.settings.draft.default_open_mode {
+                    OpenMode::Terminal => "Terminal",
+                    OpenMode::Desktop => "Desktop",
+                }
+            ),
+            "Save Settings".to_string(),
+            "Back".to_string(),
+        ]
+    }
+
+    fn open_documents_browser(&mut self) {
+        if let Some(session) = &self.session {
+            self.file_manager.set_cwd(word_processor_dir(&session.username));
+            self.file_manager.selected = None;
+            self.terminal_browser_idx = 0;
+            self.terminal_screen = TerminalScreen::DocumentBrowser;
+        }
+    }
+
+    fn document_browser_rows(&self) -> Vec<(String, Option<PathBuf>)> {
+        let mut rows = Vec::new();
+        rows.push(("../".to_string(), None));
+        for row in self.file_manager.rows() {
+            let label = if row.is_dir {
+                format!("[DIR] {}", row.label)
+            } else {
+                row.label.clone()
+            };
+            rows.push((label, Some(row.path.clone())));
+        }
+        if rows.is_empty() {
+            rows.push(("(empty)".to_string(), None));
+        }
+        rows
+    }
+
+    fn activate_document_browser(&mut self) {
+        let rows = self.document_browser_rows();
+        let idx = self.terminal_browser_idx.min(rows.len().saturating_sub(1));
+        if idx == 0 {
+            self.file_manager.up();
+            self.terminal_browser_idx = 0;
+            return;
+        }
+        if let Some((_, Some(path))) = rows.get(idx) {
+            self.file_manager.select(Some(path.clone()));
+            self.activate_file_manager_selection();
+        }
+    }
+
+    fn handle_terminal_back(&mut self) {
+        match self.terminal_screen {
+            TerminalScreen::MainMenu => {}
+            TerminalScreen::Applications
+            | TerminalScreen::Documents
+            | TerminalScreen::Settings => {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            }
+            TerminalScreen::DocumentBrowser => {
+                self.terminal_screen = TerminalScreen::Documents;
+                self.shell_status.clear();
+            }
+        }
+    }
+
+    fn draw_login(&mut self, ctx: &Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, RETRO_BG);
+            for (idx, line) in HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+            }
+            screen.separator(&painter, 4);
+            screen.centered_text(&painter, 6, "LOGON", RETRO_GREEN, true);
+            screen.separator(&painter, 8);
+            screen.boxed_panel(&painter, 26, 11, 48, 11);
+            screen.text(&painter, 29, 13, "User", RETRO_GREEN,);
+            screen.text(&painter, 29, 16, "Password", RETRO_GREEN);
+            if !self.login.error.is_empty() {
+                screen.text(&painter, 29, 22, &self.login.error, Color32::LIGHT_RED);
+            }
+            screen.text(
+                &painter,
+                29,
+                24,
+                "Terminal mode remains a first-class mode.",
+                RETRO_GREEN_DIM,
+            );
+
+            let mut users: Vec<String> = load_users().keys().cloned().collect();
+            users.sort();
+            let user_rect = screen.row_rect(42, 13, 26);
+            let pass_rect = screen.row_rect(42, 16, 26);
+            let button_rect = screen.row_rect(42, 19, 12);
+
+            ui.allocate_ui_at_rect(user_rect, |ui| {
+                egui::ComboBox::from_id_source("native_login_user")
+                    .selected_text(if self.login.username.is_empty() {
+                        "(select user)"
+                    } else {
+                        &self.login.username
+                    })
+                    .show_ui(ui, |ui| {
+                        for user in &users {
+                            ui.selectable_value(&mut self.login.username, user.clone(), user);
+                        }
+                    });
+            });
+            ui.allocate_ui_at_rect(pass_rect, |ui| {
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.login.password)
+                        .password(true)
+                        .hint_text("Password"),
+                );
+                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    self.do_login();
+                }
+            });
+            ui.allocate_ui_at_rect(button_rect, |ui| {
+                if ui.button("Log In").clicked() {
+                    self.do_login();
+                }
+            });
+        });
+    }
+
+    fn draw_top_bar(&mut self, ctx: &Context) {
+        TopBottomPanel::top("native_top_bar").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("RobCoOS Native");
+                if let Some(session) = &self.session {
+                    ui.separator();
+                    ui.label(format!("User: {}", session.username));
+                    if session.is_admin {
+                        ui.label(RichText::new("ADMIN").strong());
+                    }
+                }
+                ui.separator();
+                if ui.button("Start").clicked() {
+                    self.start_open = !self.start_open;
+                }
+                if ui.button("File Manager").clicked() {
+                    self.file_manager.open = true;
+                }
+                if ui.button("Word Processor").clicked() {
+                    self.editor.open = true;
+                    if self.editor.path.is_none() {
+                        self.new_document();
+                    }
+                }
+                if ui.button("Settings").clicked() {
+                    self.settings.open = true;
+                }
+                if ui.button("Apps").clicked() {
+                    self.applications.open = true;
+                }
+                if ui.button("Terminal Mode").clicked() {
+                    self.terminal_mode.open = true;
+                }
+                if ui.button("Log Out").clicked() {
+                    self.logout();
+                }
+            });
+        });
+    }
+
+    fn draw_start_panel(&mut self, ctx: &Context) {
+        if !self.start_open {
+            return;
+        }
+        egui::SidePanel::left("native_start_panel")
+            .default_width(220.0)
+            .show(ctx, |ui| {
+                ui.heading("Start");
+                ui.separator();
+                if ui.button("New Document").clicked() {
+                    self.new_document();
+                }
+                if ui.button("Open File Manager").clicked() {
+                    self.file_manager.open = true;
+                }
+                if ui.button("Open Settings").clicked() {
+                    self.settings.open = true;
+                }
+                if ui.button("Open Applications").clicked() {
+                    self.applications.open = true;
+                }
+                if ui.button("Launch Terminal Mode").clicked() {
+                    self.terminal_mode.open = true;
+                }
+                if ui.button("Return To Terminal Menu").clicked() {
+                    self.desktop_mode_open = false;
+                }
+                ui.separator();
+                ui.label("Rewrite target:");
+                ui.small("Native shell replacing the terminal-owned desktop.");
+                ui.small("Terminal mode stays supported as a first-class product mode.");
+            });
+    }
+
+    fn draw_desktop(&mut self, ctx: &Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Desktop Shell");
+            ui.label("This is the new native workbench, not the old TUI desktop.");
+            ui.add_space(8.0);
+            ui.columns(3, |cols| {
+                cols[0].group(|ui| {
+                    ui.label(RichText::new("Desktop").strong());
+                    ui.small("Native top bar, start panel, and app windows.");
+                });
+                cols[1].group(|ui| {
+                    ui.label(RichText::new("Core").strong());
+                    ui.small("Shared users, settings, and document storage paths.");
+                });
+                cols[2].group(|ui| {
+                    ui.label(RichText::new("Dual Mode").strong());
+                    ui.small(
+                        "Terminal mode is preserved. Desktop mode is what this native shell is replacing.",
+                    );
+                    if ui.button("Launch Terminal Mode").clicked() {
+                        self.terminal_mode.open = true;
+                    }
+                });
+            });
+        });
+    }
+
+    fn draw_terminal_main_menu(&mut self, ctx: &Context) {
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            self.main_menu_idx = self.main_menu_idx.saturating_sub(1);
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            self.main_menu_idx = (self.main_menu_idx + 1).min(selectable_menu_count() - 1);
+        }
+        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            if let Some(action) = entry_for_selectable_idx(self.main_menu_idx).action {
+                self.handle_main_menu_action(action);
+            }
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, RETRO_BG);
+            for (idx, line) in HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+            }
+            screen.separator(&painter, 4);
+            screen.centered_text(&painter, 6, "Main Menu", RETRO_GREEN, true);
+            screen.separator(&painter, 8);
+            screen.text(
+                &painter,
+                3,
+                10,
+                &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
+                RETRO_GREEN,
+            );
+
+            let mut visible_row = 13usize;
+            let mut selectable_idx = 0usize;
+            for entry in MAIN_MENU_ENTRIES {
+                if entry.action.is_none() {
+                    visible_row += 1;
+                    continue;
+                }
+                let selected = selectable_idx == self.main_menu_idx;
+                let text = if selected {
+                    format!("  > {}", entry.label)
+                } else {
+                    format!("    {}", entry.label)
+                };
+                let response = screen.selectable_row(ui, &painter, 4, visible_row, &text, selected);
+                if response.hovered() {
+                    self.main_menu_idx = selectable_idx;
+                }
+                if response.clicked() {
+                    self.main_menu_idx = selectable_idx;
+                    if let Some(action) = entry.action {
+                        self.handle_main_menu_action(action);
+                    }
+                }
+                visible_row += 1;
+                selectable_idx += 1;
+            }
+
+            if !self.shell_status.is_empty() {
+                screen.text(&painter, 4, 31, &self.shell_status, RETRO_GREEN_DIM);
+            }
+        });
+    }
+
+    fn draw_terminal_menu_screen(
+        &mut self,
+        ctx: &Context,
+        title: &str,
+        subtitle: Option<&str>,
+        items: &[String],
+        selected_idx: &mut usize,
+    ) -> Option<usize> {
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            *selected_idx = selected_idx.saturating_sub(1);
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            *selected_idx = (*selected_idx + 1).min(items.len().saturating_sub(1));
+        }
+
+        let mut activated = None;
+        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            activated = Some(*selected_idx);
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, RETRO_BG);
+            for (idx, line) in HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+            }
+            screen.separator(&painter, 4);
+            screen.centered_text(&painter, 6, title, RETRO_GREEN, true);
+            screen.separator(&painter, 8);
+            if let Some(sub) = subtitle {
+                screen.text(&painter, 3, 10, sub, RETRO_GREEN);
+            }
+            let mut row = 13usize;
+            for (idx, item) in items.iter().enumerate() {
+                let selected = idx == *selected_idx;
+                let text = if selected {
+                    format!("  > {item}")
+                } else {
+                    format!("    {item}")
+                };
+                let response = screen.selectable_row(ui, &painter, 4, row, &text, selected);
+                if response.hovered() {
+                    *selected_idx = idx;
+                }
+                if response.clicked() {
+                    *selected_idx = idx;
+                    activated = Some(idx);
+                }
+                row += 1;
+            }
+            if !self.shell_status.is_empty() {
+                screen.text(&painter, 4, 31, &self.shell_status, RETRO_GREEN_DIM);
+            }
+        });
+
+        activated
+    }
+
+    fn draw_terminal_applications(&mut self, ctx: &Context) {
+        let items = self.terminal_app_items();
+        let mut selected = self.terminal_apps_idx.min(items.len().saturating_sub(1));
+        let activated =
+            self.draw_terminal_menu_screen(ctx, "Applications", Some("Built-in and configured apps"), &items, &mut selected);
+        self.terminal_apps_idx = selected;
+        if let Some(idx) = activated {
+            let label = &items[idx];
+            if label == "ROBCO Word Processor" {
+                self.editor.open = true;
+                if self.editor.path.is_none() {
+                    self.new_document();
+                }
+                self.shell_status = "Opened ROBCO Word Processor.".to_string();
+            } else if label == "Back" {
+                self.terminal_screen = TerminalScreen::MainMenu;
+                self.shell_status.clear();
+            } else {
+                self.shell_status = format!("External app launch for '{label}' is pending rewrite.");
+            }
+        }
+    }
+
+    fn draw_terminal_documents(&mut self, ctx: &Context) {
+        let items: Vec<String> = DOCUMENT_MENU_ITEMS.iter().map(|s| (*s).to_string()).collect();
+        let mut selected = self.terminal_documents_idx.min(items.len().saturating_sub(1));
+        let activated =
+            self.draw_terminal_menu_screen(ctx, "Documents", Some("ROBCO Word Processor"), &items, &mut selected);
+        self.terminal_documents_idx = selected;
+        if let Some(idx) = activated {
+            match items[idx].as_str() {
+                "New Document" => {
+                    self.new_document();
+                    self.shell_status = "New document created.".to_string();
+                }
+                "Open Documents" => self.open_documents_browser(),
+                "Back" => {
+                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.shell_status.clear();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn draw_terminal_document_browser(&mut self, ctx: &Context) {
+        let rows = self.document_browser_rows();
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            self.terminal_browser_idx = self.terminal_browser_idx.saturating_sub(1);
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            self.terminal_browser_idx =
+                (self.terminal_browser_idx + 1).min(rows.len().saturating_sub(1));
+        }
+        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            self.activate_document_browser();
+        }
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let (screen, _) = RetroScreen::new(ui, 100, 38);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, RETRO_BG);
+            for (idx, line) in HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, idx + 1, line, RETRO_GREEN, true);
+            }
+            screen.separator(&painter, 4);
+            screen.centered_text(&painter, 6, "Open Documents", RETRO_GREEN, true);
+            screen.separator(&painter, 8);
+            screen.text(
+                &painter,
+                3,
+                10,
+                &self.file_manager.cwd.display().to_string(),
+                RETRO_GREEN,
+            );
+            let mut row = 13usize;
+            for (idx, (label, path)) in rows.iter().enumerate() {
+                let selected = idx == self.terminal_browser_idx;
+                let text = if selected {
+                    format!("  > {label}")
+                } else {
+                    format!("    {label}")
+                };
+                let response = screen.selectable_row(ui, &painter, 4, row, &text, selected);
+                if response.hovered() {
+                    self.terminal_browser_idx = idx;
+                }
+                if response.clicked() {
+                    self.terminal_browser_idx = idx;
+                    if idx == 0 {
+                        self.file_manager.up();
+                        self.terminal_browser_idx = 0;
+                    } else if let Some(path) = path {
+                        self.file_manager.select(Some(path.clone()));
+                        self.activate_file_manager_selection();
+                    }
+                }
+                row += 1;
+            }
+            let hint = "Enter open | Tab back | Up/Down move";
+            screen.text(&painter, 4, 31, hint, RETRO_GREEN_DIM);
+            if !self.shell_status.is_empty() {
+                screen.text(&painter, 4, 33, &self.shell_status, RETRO_GREEN_DIM);
+            }
+        });
+    }
+
+    fn draw_terminal_settings(&mut self, ctx: &Context) {
+        let items = self.terminal_settings_rows();
+        let mut selected = self.terminal_settings_idx.min(items.len().saturating_sub(1));
+        let activated =
+            self.draw_terminal_menu_screen(ctx, "Settings", Some("Native terminal-style settings"), &items, &mut selected);
+        self.terminal_settings_idx = selected;
+        if let Some(idx) = activated {
+            match idx {
+                0 => self.settings.draft.sound = !self.settings.draft.sound,
+                1 => self.settings.draft.bootup = !self.settings.draft.bootup,
+                2 => {
+                    self.settings.draft.show_navigation_hints =
+                        !self.settings.draft.show_navigation_hints
+                }
+                3 => self.cycle_theme(true),
+                4 => {
+                    self.settings.draft.default_open_mode = match self.settings.draft.default_open_mode {
+                        OpenMode::Terminal => OpenMode::Desktop,
+                        OpenMode::Desktop => OpenMode::Terminal,
+                    };
+                }
+                5 => {
+                    save_settings(self.settings.draft.clone());
+                    self.shell_status = "Settings saved.".to_string();
+                }
+                6 => {
+                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.shell_status.clear();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn draw_terminal_footer(&self, ctx: &Context) {
+        let now = Local::now();
+        let left = now.format("%a %Y-%m-%d %I:%M%p").to_string();
+        let mode = if self.desktop_mode_open {
+            "desktop"
+        } else {
+            "terminal"
+        };
+        let center = if let Some(session) = &self.session {
+            format!("[{} | {}]", session.username, mode)
+        } else {
+            "[*]".to_string()
+        };
+        TopBottomPanel::bottom("native_terminal_footer")
+            .resizable(false)
+            .exact_height(28.0)
+            .show(ctx, |ui| {
+                let (screen, _) = RetroScreen::new(ui, 100, 1);
+                let painter = ui.painter_at(screen.rect);
+                screen.footer_bar(&painter, &left, &center, "44%");
+            });
+    }
+
+    fn draw_file_manager(&mut self, ctx: &Context) {
+        if !self.file_manager.open {
+            return;
+        }
+        let mut open = self.file_manager.open;
+        egui::Window::new("File Manager")
+            .id(Id::new("native_file_manager"))
+            .open(&mut open)
+            .default_size([700.0, 480.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Up").clicked() {
+                        self.file_manager.up();
+                    }
+                    if ui.button("Word Processor Home").clicked() {
+                        if let Some(session) = &self.session {
+                            self.file_manager.set_cwd(word_processor_dir(&session.username));
+                        }
+                    }
+                    ui.label(self.file_manager.cwd.display().to_string());
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for row in self.file_manager.rows() {
+                        let selected = self.file_manager.selected.as_ref() == Some(&row.path);
+                        let label = if row.is_dir {
+                            format!("[DIR] {}", row.label)
+                        } else {
+                            row.label.clone()
+                        };
+                        let response = ui.selectable_label(selected, label);
+                        if response.clicked() {
+                            self.file_manager.select(Some(row.path.clone()));
+                        }
+                        if response.double_clicked() {
+                            self.file_manager.select(Some(row.path.clone()));
+                            self.activate_file_manager_selection();
+                        }
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        self.activate_file_manager_selection();
+                    }
+                    if ui.button("New Document").clicked() {
+                        self.new_document();
+                    }
+                });
+            });
+        self.file_manager.open = open;
+    }
+
+    fn draw_editor(&mut self, ctx: &Context) {
+        if !self.editor.open {
+            return;
+        }
+        let title = self
+            .editor
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|p| p.to_str())
+            .unwrap_or("ROBCO Word Processor")
+            .to_string();
+        let mut open = self.editor.open;
+        egui::Window::new(title)
+            .id(Id::new("native_word_processor"))
+            .open(&mut open)
+            .default_size([820.0, 560.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("New").clicked() {
+                        self.new_document();
+                    }
+                    if ui.button("Save").clicked() {
+                        self.save_editor();
+                    }
+                    if ui.button("Open File Manager").clicked() {
+                        self.file_manager.open = true;
+                    }
+                    if let Some(path) = &self.editor.path {
+                        ui.label(path.display().to_string());
+                    }
+                });
+                ui.separator();
+                let edit = TextEdit::multiline(&mut self.editor.text)
+                    .desired_rows(24)
+                    .lock_focus(true)
+                    .code_editor();
+                let response = ui.add_sized(ui.available_size(), edit);
+                if response.changed() {
+                    self.editor.dirty = true;
+                }
+                if !self.editor.status.is_empty() {
+                    ui.separator();
+                    ui.small(&self.editor.status);
+                }
+            });
+        self.editor.open = open;
+        if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
+            self.save_editor();
+        }
+    }
+
+    fn draw_settings(&mut self, ctx: &Context) {
+        if !self.settings.open {
+            return;
+        }
+        let mut open = self.settings.open;
+        egui::Window::new("Settings")
+            .id(Id::new("native_settings"))
+            .open(&mut open)
+            .default_size([500.0, 360.0])
+            .show(ctx, |ui| {
+                ui.checkbox(&mut self.settings.draft.sound, "Sound");
+                ui.checkbox(&mut self.settings.draft.bootup, "Bootup");
+                ui.checkbox(
+                    &mut self.settings.draft.show_navigation_hints,
+                    "Show navigation hints",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    ui.text_edit_singleline(&mut self.settings.draft.theme);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Default Open Mode");
+                    ui.selectable_value(
+                        &mut self.settings.draft.default_open_mode,
+                        OpenMode::Terminal,
+                        "Terminal",
+                    );
+                    ui.selectable_value(
+                        &mut self.settings.draft.default_open_mode,
+                        OpenMode::Desktop,
+                        "Desktop",
+                    );
+                });
+                ui.separator();
+                if ui.button("Save Settings").clicked() {
+                    save_settings(self.settings.draft.clone());
+                    self.settings.status = "Settings saved.".to_string();
+                }
+                if !self.settings.status.is_empty() {
+                    ui.small(&self.settings.status);
+                }
+            });
+        self.settings.open = open;
+    }
+
+    fn draw_applications(&mut self, ctx: &Context) {
+        if !self.applications.open {
+            return;
+        }
+        let mut open = self.applications.open;
+        egui::Window::new("Applications")
+            .id(Id::new("native_applications"))
+            .open(&mut open)
+            .default_size([420.0, 380.0])
+            .show(ctx, |ui| {
+                ui.heading("Built-in");
+                if ui.button("ROBCO Word Processor").clicked() {
+                    self.editor.open = true;
+                    if self.editor.path.is_none() {
+                        self.new_document();
+                    }
+                }
+                if ui.button("Nuke Codes").clicked() {
+                    self.applications.status =
+                        "Nuke Codes UI is not rewritten yet.".to_string();
+                }
+                ui.separator();
+                ui.heading("Configured Apps");
+                for name in app_names() {
+                    if ui.button(&name).clicked() {
+                        self.applications.status =
+                            format!("External app launch for '{name}' is pending rewrite.");
+                    }
+                }
+                if !self.applications.status.is_empty() {
+                    ui.separator();
+                    ui.small(&self.applications.status);
+                }
+            });
+        self.applications.open = open;
+    }
+
+    fn draw_terminal_mode(&mut self, ctx: &Context) {
+        if !self.terminal_mode.open {
+            return;
+        }
+        let plan = launch_plan();
+        let mut open = self.terminal_mode.open;
+        egui::Window::new("Terminal Mode")
+            .id(Id::new("native_terminal_mode"))
+            .open(&mut open)
+            .default_size([480.0, 220.0])
+            .show(ctx, |ui| {
+                ui.label("Terminal mode stays a first-class product mode.");
+                ui.small("The native shell launches the existing `robcos` TUI in your system terminal.");
+                ui.separator();
+                ui.label(format!("Launch path: {}", plan.display));
+                ui.monospace(format!("{} {}", plan.program, plan.args.join(" ")));
+                if ui.button("Open Terminal Mode").clicked() {
+                    match launch_terminal_mode() {
+                        Ok(used) => {
+                            self.terminal_mode.status =
+                                format!("Launched terminal mode via {}.", used.display);
+                        }
+                        Err(err) => {
+                            self.terminal_mode.status = format!("Launch failed: {err}");
+                        }
+                    }
+                }
+                if !self.terminal_mode.status.is_empty() {
+                    ui.separator();
+                    ui.small(&self.terminal_mode.status);
+                }
+            });
+        self.terminal_mode.open = open;
+    }
+}
+
+impl eframe::App for RobcoNativeApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.persist_snapshot();
+    }
+
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        if self.session.is_none() {
+            self.draw_login(ctx);
+            return;
+        }
+
+        if !self.desktop_mode_open && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
+            self.handle_terminal_back();
+        }
+
+        if self.desktop_mode_open {
+            self.draw_top_bar(ctx);
+            self.draw_start_panel(ctx);
+            self.draw_desktop(ctx);
+        } else {
+            match self.terminal_screen {
+                TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
+                TerminalScreen::Applications => self.draw_terminal_applications(ctx),
+                TerminalScreen::Documents => self.draw_terminal_documents(ctx),
+                TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
+                TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+            }
+        }
+        self.draw_terminal_footer(ctx);
+        self.draw_file_manager(ctx);
+        self.draw_editor(ctx);
+        self.draw_settings(ctx);
+        self.draw_applications(ctx);
+        self.draw_terminal_mode(ctx);
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.persist_snapshot();
+        }
+
+        if self.session.is_some() && self.editor.open && self.editor.dirty {
+            egui::Area::new(Id::new("native_unsaved_badge"))
+                .anchor(Align2::RIGHT_BOTTOM, [-16.0, -16.0])
+                .show(ctx, |ui| {
+                    ui.label(RichText::new("Unsaved changes").color(Color32::LIGHT_RED));
+                });
+        }
+    }
+}

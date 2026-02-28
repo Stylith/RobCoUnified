@@ -1,114 +1,16 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use crate::config::{
-    base_dir, cycle_hacking_difficulty, get_settings, hacking_difficulty_label, load_json,
-    mark_default_apps_prompt_pending, persist_settings, save_json, update_settings, users_dir,
+    cycle_hacking_difficulty, get_settings, hacking_difficulty_label,
+    mark_default_apps_prompt_pending, persist_settings, update_settings, users_dir,
 };
 use crate::ui::{
     confirm, flash_message, input_prompt, is_back_menu_label, password_prompt, run_menu,
     MenuResult, Term,
 };
-
-// ── Auth method ───────────────────────────────────────────────────────────────
-
-/// How a user authenticates at the login screen.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthMethod {
-    /// Standard SHA-256 hashed password (default).
-    #[default]
-    Password,
-    /// No authentication required — user logs in immediately.
-    NoPassword,
-    /// User must complete the hacking minigame to log in.
-    HackingMinigame,
-}
-
-// ── User record ───────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UserRecord {
-    pub password_hash: String,
-    pub is_admin: bool,
-    #[serde(default)]
-    pub auth_method: AuthMethod,
-}
-
-fn users_db_path() -> PathBuf {
-    users_dir().join("users.json")
-}
-pub type UsersDb = HashMap<String, UserRecord>;
-
-pub fn load_users() -> UsersDb {
-    load_json(&users_db_path())
-}
-pub fn save_users(db: &UsersDb) {
-    let _ = save_json(&users_db_path(), db);
-}
-
-pub fn hash_password(pw: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(pw.as_bytes());
-    hex::encode(h.finalize())
-}
-
-#[allow(dead_code)]
-pub fn verify_password(username: &str, pw: &str) -> bool {
-    let db = load_users();
-    db.get(username)
-        .map(|r| r.password_hash == hash_password(pw))
-        .unwrap_or(false)
-}
-
-pub fn is_admin(username: &str) -> bool {
-    load_users()
-        .get(username)
-        .map(|r| r.is_admin)
-        .unwrap_or(false)
-}
-
-// ── Session file ──────────────────────────────────────────────────────────────
-
-fn session_file() -> PathBuf {
-    base_dir().join(".session")
-}
-
-pub fn write_session(username: &str) {
-    let _ = std::fs::write(session_file(), username);
-}
-
-#[allow(dead_code)]
-pub fn read_session() -> Option<String> {
-    std::fs::read_to_string(session_file())
-        .ok()
-        .map(|s| s.trim().to_string())
-}
-
-pub fn clear_session() {
-    let _ = std::fs::remove_file(session_file());
-}
-
-// ── Bootstrap: create default admin if no users exist ────────────────────────
-
-pub fn ensure_default_admin() {
-    let mut db = load_users();
-    if db.is_empty() {
-        db.insert(
-            "admin".to_string(),
-            UserRecord {
-                password_hash: hash_password("admin"),
-                is_admin: true,
-                auth_method: AuthMethod::Password,
-            },
-        );
-        save_users(&db);
-        mark_default_apps_prompt_pending("admin");
-    }
-}
+pub use robcos::core::auth::{
+    clear_session, ensure_default_admin, hash_password, is_admin, load_users, save_users,
+    write_session, AuthMethod, UserRecord,
+};
 
 // ── Login screen ─────────────────────────────────────────────────────────────
 
