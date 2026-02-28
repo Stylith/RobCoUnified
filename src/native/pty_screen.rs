@@ -91,14 +91,15 @@ pub fn draw_embedded_pty(
     // Keep one terminal row as safety padding above the global footer/status bar.
     let pty_rows = rows.saturating_sub(1).max(1) as u16;
     state.session.resize(pty_cols, pty_rows);
-    handle_pty_input(ctx, &mut state.session);
+    let input_activity = handle_pty_input(ctx, &mut state.session);
     // Prefer output-driven repaints, but keep a regular repaint cadence so
     // animated apps (e.g. cmatrix) keep moving even when activity detection
     // is temporarily quiet.
-    if state.session.take_output_activity() {
+    let output_activity = state.session.take_output_activity();
+    if input_activity || output_activity {
         ctx.request_repaint();
     }
-    ctx.request_repaint_after(Duration::from_millis(33));
+    ctx.request_repaint_after(Duration::from_millis(16));
 
     if !state.session.is_alive() {
         return PtyScreenEvent::ProcessExited;
@@ -145,11 +146,16 @@ pub fn draw_embedded_pty(
 
             if plain_fast {
                 let snap = plain_snapshot.as_ref().expect("plain snapshot present");
-                let mut lines = snap.lines.clone();
-                if smooth_borders {
-                    smooth_ascii_borders_in_plain_lines(&mut lines);
-                }
-                for (row_idx, line) in lines.iter().enumerate() {
+                let smoothed_lines =
+                    if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
+                        let mut lines = snap.lines.clone();
+                        smooth_ascii_borders_in_plain_lines(&mut lines);
+                        Some(lines)
+                    } else {
+                        None
+                    };
+                let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
+                for (row_idx, line) in lines_ref.iter().enumerate() {
                     if !line.is_empty() {
                         content_painter.text(
                             screen.row_rect(0, row_idx, 1).left_top(),
@@ -163,7 +169,7 @@ pub fn draw_embedded_pty(
                 let row = snap.cursor_row as usize;
                 let col = snap.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
-                let ch = lines
+                let ch = lines_ref
                     .get(row)
                     .and_then(|line| line.chars().nth(col))
                     .unwrap_or(' ');
@@ -504,18 +510,21 @@ mod tests {
     }
 }
 
-fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
+fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
+    let mut had_input = false;
     let events = ctx.input(|i| i.events.clone());
     for event in events {
         match event {
             egui::Event::Paste(text) => {
                 if !text.is_empty() {
                     session.send_paste(&text);
+                    had_input = true;
                 }
             }
             egui::Event::Text(text) => {
                 if !text.is_empty() {
                     session.write(text.as_bytes());
+                    had_input = true;
                 }
             }
             egui::Event::Key {
@@ -533,11 +542,13 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) {
                 }
                 if let Some((code, mods)) = map_key_event(key, modifiers) {
                     session.send_key(code, mods);
+                    had_input = true;
                 }
             }
             _ => {}
         }
     }
+    had_input
 }
 
 fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
@@ -879,6 +890,14 @@ fn smooth_ascii_borders_in_plain_lines(lines: &mut [String]) {
         let len = line.chars().count();
         *line = grid[row_idx].iter().take(len).collect();
     }
+}
+
+fn plain_lines_have_ascii_borders(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        line.as_bytes()
+            .iter()
+            .any(|b| matches!(*b, b'+' | b'-' | b'|'))
+    })
 }
 
 fn spawn_with_fallback(
