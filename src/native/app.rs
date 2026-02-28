@@ -158,6 +158,8 @@ fn selectable_menu_count() -> usize {
     MAIN_MENU_ENTRIES.iter().filter(|entry| entry.action.is_some()).count()
 }
 
+const NATIVE_UI_SCALE_OPTIONS: &[f32] = &[0.85, 1.0, 1.15, 1.3, 1.5];
+
 fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
     MAIN_MENU_ENTRIES
         .iter()
@@ -192,8 +194,11 @@ fn try_load_font_bytes() -> Option<Vec<u8>> {
 }
 
 pub fn configure_native_context(ctx: &Context) {
-    configure_visuals(ctx);
+    configure_native_fonts(ctx);
+    apply_native_appearance(ctx);
+}
 
+fn configure_native_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
     if let Some(bytes) = try_load_font_bytes() {
         fonts
@@ -211,20 +216,24 @@ pub fn configure_native_context(ctx: &Context) {
             .insert(0, "retro".into());
     }
     ctx.set_fonts(fonts);
+}
 
+pub fn apply_native_appearance(ctx: &Context) {
+    configure_visuals(ctx);
     let mut style = (*ctx.style()).clone();
+    let scale = crate::config::get_settings().native_ui_scale.clamp(0.75, 1.75);
     style.text_styles = [
         (
             TextStyle::Heading,
-            FontId::new(28.0, FontFamily::Monospace),
+            FontId::new(28.0 * scale, FontFamily::Monospace),
         ),
-        (TextStyle::Body, FontId::new(22.0, FontFamily::Monospace)),
+        (TextStyle::Body, FontId::new(22.0 * scale, FontFamily::Monospace)),
         (
             TextStyle::Monospace,
-            FontId::new(22.0, FontFamily::Monospace),
+            FontId::new(22.0 * scale, FontFamily::Monospace),
         ),
-        (TextStyle::Button, FontId::new(22.0, FontFamily::Monospace)),
-        (TextStyle::Small, FontId::new(18.0, FontFamily::Monospace)),
+        (TextStyle::Button, FontId::new(22.0 * scale, FontFamily::Monospace)),
+        (TextStyle::Small, FontId::new(18.0 * scale, FontFamily::Monospace)),
     ]
     .into();
     ctx.set_style(style);
@@ -523,6 +532,26 @@ impl RobcoNativeApp {
         self.settings.draft.theme = names[next].to_string();
     }
 
+    fn cycle_native_ui_scale(&mut self, forward: bool) {
+        let current = self.settings.draft.native_ui_scale;
+        let idx = NATIVE_UI_SCALE_OPTIONS
+            .iter()
+            .position(|v| (*v - current).abs() < 0.001)
+            .unwrap_or(1);
+        let next = if forward {
+            (idx + 1) % NATIVE_UI_SCALE_OPTIONS.len()
+        } else {
+            idx.checked_sub(1)
+                .unwrap_or(NATIVE_UI_SCALE_OPTIONS.len().saturating_sub(1))
+        };
+        self.settings.draft.native_ui_scale = NATIVE_UI_SCALE_OPTIONS[next];
+    }
+
+    fn persist_native_settings(&mut self) {
+        save_settings(self.settings.draft.clone());
+        self.shell_status = "Settings saved.".to_string();
+    }
+
     fn terminal_settings_rows(&self) -> Vec<String> {
         vec![
             format!(
@@ -543,13 +572,16 @@ impl RobcoNativeApp {
             ),
             format!("Theme: {} [cycle]", self.settings.draft.theme),
             format!(
+                "Interface Size: {}% [cycle]",
+                (self.settings.draft.native_ui_scale * 100.0).round() as i32
+            ),
+            format!(
                 "Default Open Mode: {} [cycle]",
                 match self.settings.draft.default_open_mode {
                     OpenMode::Terminal => "Terminal",
                     OpenMode::Desktop => "Desktop",
                 }
             ),
-            "Save Settings".to_string(),
             "Back".to_string(),
         ]
     }
@@ -1066,22 +1098,33 @@ impl RobcoNativeApp {
         self.terminal_settings_idx = selected;
         if let Some(idx) = activated {
             match idx {
-                0 => self.settings.draft.sound = !self.settings.draft.sound,
-                1 => self.settings.draft.bootup = !self.settings.draft.bootup,
+                0 => {
+                    self.settings.draft.sound = !self.settings.draft.sound;
+                    self.persist_native_settings();
+                }
+                1 => {
+                    self.settings.draft.bootup = !self.settings.draft.bootup;
+                    self.persist_native_settings();
+                }
                 2 => {
                     self.settings.draft.show_navigation_hints =
-                        !self.settings.draft.show_navigation_hints
+                        !self.settings.draft.show_navigation_hints;
+                    self.persist_native_settings();
                 }
-                3 => self.cycle_theme(true),
+                3 => {
+                    self.cycle_theme(true);
+                    self.persist_native_settings();
+                }
                 4 => {
+                    self.cycle_native_ui_scale(true);
+                    self.persist_native_settings();
+                }
+                5 => {
                     self.settings.draft.default_open_mode = match self.settings.draft.default_open_mode {
                         OpenMode::Terminal => OpenMode::Desktop,
                         OpenMode::Desktop => OpenMode::Terminal,
                     };
-                }
-                5 => {
-                    save_settings(self.settings.draft.clone());
-                    self.shell_status = "Settings saved.".to_string();
+                    self.persist_native_settings();
                 }
                 6 => {
                     self.terminal_screen = TerminalScreen::MainMenu;
@@ -1108,6 +1151,7 @@ impl RobcoNativeApp {
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
             .exact_height(28.0)
+            .show_separator_line(false)
             .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
             .show(ctx, |ui| {
                 let palette = current_palette();
@@ -1232,31 +1276,72 @@ impl RobcoNativeApp {
             .open(&mut open)
             .default_size([500.0, 360.0])
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.settings.draft.sound, "Sound");
-                ui.checkbox(&mut self.settings.draft.bootup, "Bootup");
-                ui.checkbox(
+                let mut changed = false;
+                changed |= ui.checkbox(&mut self.settings.draft.sound, "Sound").changed();
+                changed |= ui.checkbox(&mut self.settings.draft.bootup, "Bootup").changed();
+                changed |= ui.checkbox(
                     &mut self.settings.draft.show_navigation_hints,
                     "Show navigation hints",
-                );
+                ).changed();
                 ui.horizontal(|ui| {
                     ui.label("Theme");
-                    ui.text_edit_singleline(&mut self.settings.draft.theme);
+                    let mut current_idx = THEMES
+                        .iter()
+                        .position(|(name, _)| *name == self.settings.draft.theme)
+                        .unwrap_or(0);
+                    egui::ComboBox::from_id_salt("native_settings_theme")
+                        .selected_text(THEMES[current_idx].0)
+                        .show_ui(ui, |ui| {
+                            for (idx, (name, _)) in THEMES.iter().enumerate() {
+                                if ui.selectable_value(&mut current_idx, idx, *name).changed() {
+                                    self.settings.draft.theme = (*name).to_string();
+                                    changed = true;
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Interface Size");
+                    let mut scale_idx = NATIVE_UI_SCALE_OPTIONS
+                        .iter()
+                        .position(|v| (*v - self.settings.draft.native_ui_scale).abs() < 0.001)
+                        .unwrap_or(1);
+                    egui::ComboBox::from_id_salt("native_settings_scale")
+                        .selected_text(format!(
+                            "{}%",
+                            (self.settings.draft.native_ui_scale * 100.0).round() as i32
+                        ))
+                        .show_ui(ui, |ui| {
+                            for (idx, value) in NATIVE_UI_SCALE_OPTIONS.iter().enumerate() {
+                                if ui
+                                    .selectable_value(
+                                        &mut scale_idx,
+                                        idx,
+                                        format!("{}%", (*value * 100.0).round() as i32),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings.draft.native_ui_scale = *value;
+                                    changed = true;
+                                }
+                            }
+                        });
                 });
                 ui.horizontal(|ui| {
                     ui.label("Default Open Mode");
-                    ui.selectable_value(
+                    changed |= ui.selectable_value(
                         &mut self.settings.draft.default_open_mode,
                         OpenMode::Terminal,
                         "Terminal",
-                    );
-                    ui.selectable_value(
+                    ).changed();
+                    changed |= ui.selectable_value(
                         &mut self.settings.draft.default_open_mode,
                         OpenMode::Desktop,
                         "Desktop",
-                    );
+                    ).changed();
                 });
                 ui.separator();
-                if ui.button("Save Settings").clicked() {
+                if changed {
                     save_settings(self.settings.draft.clone());
                     self.settings.status = "Settings saved.".to_string();
                 }
@@ -1350,6 +1435,8 @@ impl eframe::App for RobcoNativeApp {
     }
 
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        apply_native_appearance(ctx);
+
         if self.session.is_none() {
             self.draw_login(ctx);
             return;

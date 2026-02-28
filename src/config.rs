@@ -567,10 +567,16 @@ pub struct Settings {
     pub desktop_icon_positions: DesktopIconPositionsSettings,
     #[serde(default)]
     pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_native_ui_scale")]
+    pub native_ui_scale: f32,
 }
 
 fn default_desktop_wallpaper() -> String {
     "RobCo".to_string()
+}
+
+fn default_native_ui_scale() -> f32 {
+    1.0
 }
 
 impl Default for Settings {
@@ -598,6 +604,7 @@ impl Default for Settings {
             desktop_session: DesktopSessionSettings::default(),
             desktop_icon_positions: DesktopIconPositionsSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
+            native_ui_scale: default_native_ui_scale(),
         }
     }
 }
@@ -720,6 +727,16 @@ mod tests {
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert_eq!(decoded.hacking_difficulty, HackingDifficulty::Normal);
+    }
+
+    #[test]
+    fn native_ui_scale_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("native_ui_scale");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert!((decoded.native_ui_scale - 1.0).abs() < f32::EPSILON);
     }
 }
 
