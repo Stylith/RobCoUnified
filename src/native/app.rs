@@ -28,6 +28,9 @@ use super::menu::{
     draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
     UserManagementMode,
 };
+use super::nuke_codes_screen::{
+    draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView,
+};
 use super::programs_screen::{draw_programs_menu, resolve_program_command, ProgramMenuEvent};
 use super::prompt::{
     draw_terminal_flash, draw_terminal_prompt_overlay, FlashAction, TerminalFlash, TerminalPrompt,
@@ -279,6 +282,8 @@ pub struct RobcoNativeApp {
     terminal_logs_idx: usize,
     terminal_network_idx: usize,
     terminal_games_idx: usize,
+    terminal_nuke_codes: NukeCodesView,
+    terminal_nuke_codes_return: TerminalScreen,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
@@ -315,6 +320,8 @@ struct ParkedSessionState {
     terminal_logs_idx: usize,
     terminal_network_idx: usize,
     terminal_games_idx: usize,
+    terminal_nuke_codes: NukeCodesView,
+    terminal_nuke_codes_return: TerminalScreen,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
@@ -375,6 +382,8 @@ impl Default for RobcoNativeApp {
             terminal_logs_idx: 0,
             terminal_network_idx: 0,
             terminal_games_idx: 0,
+            terminal_nuke_codes: NukeCodesView::default(),
+            terminal_nuke_codes_return: TerminalScreen::Applications,
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
             terminal_settings_idx: 0,
@@ -451,6 +460,8 @@ impl RobcoNativeApp {
             terminal_logs_idx: self.terminal_logs_idx,
             terminal_network_idx: self.terminal_network_idx,
             terminal_games_idx: self.terminal_games_idx,
+            terminal_nuke_codes: self.terminal_nuke_codes.clone(),
+            terminal_nuke_codes_return: self.terminal_nuke_codes_return,
             terminal_pty: self.terminal_pty.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
             terminal_settings_idx: self.terminal_settings_idx,
@@ -511,6 +522,8 @@ impl RobcoNativeApp {
         self.terminal_logs_idx = parked.terminal_logs_idx;
         self.terminal_network_idx = parked.terminal_network_idx;
         self.terminal_games_idx = parked.terminal_games_idx;
+        self.terminal_nuke_codes = parked.terminal_nuke_codes;
+        self.terminal_nuke_codes_return = parked.terminal_nuke_codes_return;
         self.terminal_pty = parked.terminal_pty;
         self.terminal_installer = parked.terminal_installer;
         self.terminal_settings_idx = parked.terminal_settings_idx;
@@ -749,6 +762,8 @@ impl RobcoNativeApp {
         self.terminal_logs_idx = 0;
         self.terminal_network_idx = 0;
         self.terminal_games_idx = 0;
+        self.terminal_nuke_codes = NukeCodesView::default();
+        self.terminal_nuke_codes_return = TerminalScreen::Applications;
         self.terminal_pty = None;
         self.terminal_installer.reset();
         self.terminal_settings_idx = 0;
@@ -870,6 +885,8 @@ impl RobcoNativeApp {
         self.terminal_logs_idx = 0;
         self.terminal_network_idx = 0;
         self.terminal_games_idx = 0;
+        self.terminal_nuke_codes = NukeCodesView::default();
+        self.terminal_nuke_codes_return = TerminalScreen::Applications;
         self.terminal_settings_idx = 0;
         self.terminal_default_apps_idx = 0;
         self.terminal_connections.reset();
@@ -1345,6 +1362,7 @@ impl RobcoNativeApp {
                     TerminalScreen::Logs => self.terminal_logs_idx = selected_idx,
                     TerminalScreen::Network => self.terminal_network_idx = selected_idx,
                     TerminalScreen::Games => self.terminal_games_idx = selected_idx,
+                    TerminalScreen::NukeCodes => {}
                     TerminalScreen::ProgramInstaller => {
                         self.terminal_installer.reset();
                         self.terminal_installer.root_idx = selected_idx;
@@ -1447,6 +1465,10 @@ impl RobcoNativeApp {
             | TerminalScreen::About
             | TerminalScreen::EditMenus => {
                 self.terminal_screen = TerminalScreen::Settings;
+                self.shell_status.clear();
+            }
+            TerminalScreen::NukeCodes => {
+                self.terminal_screen = self.terminal_nuke_codes_return;
                 self.shell_status.clear();
             }
             TerminalScreen::DocumentBrowser => {
@@ -2220,7 +2242,7 @@ impl RobcoNativeApp {
                 }
                 self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
             } else if label == BUILTIN_NUKE_CODES_APP {
-                self.shell_status = "Nuke Codes native app is pending rewrite.".to_string();
+                self.open_nuke_codes_screen(TerminalScreen::Applications);
             } else if label == "Back" {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
@@ -2236,6 +2258,13 @@ impl RobcoNativeApp {
             Ok(cmd) => self.open_embedded_pty(name, &cmd, return_screen),
             Err(err) => self.shell_status = err,
         }
+    }
+
+    fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
+        self.terminal_nuke_codes = fetch_nuke_codes();
+        self.terminal_nuke_codes_return = return_screen;
+        self.terminal_screen = TerminalScreen::NukeCodes;
+        self.shell_status.clear();
     }
 
     fn draw_terminal_documents(&mut self, ctx: &Context) {
@@ -2743,6 +2772,32 @@ impl RobcoNativeApp {
                 Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Games),
                 Err(err) => self.shell_status = err,
             },
+        }
+    }
+
+    fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
+        match draw_nuke_codes_screen(
+            ctx,
+            &self.terminal_nuke_codes,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
+        ) {
+            NukeCodesEvent::None => {}
+            NukeCodesEvent::Refresh => {
+                self.terminal_nuke_codes = fetch_nuke_codes();
+            }
+            NukeCodesEvent::Back => {
+                self.terminal_screen = self.terminal_nuke_codes_return;
+                self.shell_status.clear();
+            }
         }
     }
 
@@ -3363,7 +3418,10 @@ impl RobcoNativeApp {
                 if self.settings.draft.builtin_menu_visibility.nuke_codes
                     && ui.button("Nuke Codes").clicked()
                 {
-                    self.applications.status = "Nuke Codes UI is not rewritten yet.".to_string();
+                    close_after_launch = true;
+                    self.start_open = false;
+                    self.desktop_mode_open = false;
+                    self.open_nuke_codes_screen(TerminalScreen::MainMenu);
                 }
                 ui.separator();
                 ui.heading("Configured Apps");
@@ -3527,6 +3585,7 @@ impl eframe::App for RobcoNativeApp {
                 TerminalScreen::Logs => self.draw_terminal_logs(ctx),
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
+                TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
@@ -3819,12 +3878,13 @@ mod tests {
         assert_eq!(app.shell_status, "Closed session 3.");
     }
 
-    fn terminal_submenu_screens() -> [TerminalScreen; 12] {
+    fn terminal_submenu_screens() -> [TerminalScreen; 13] {
         [
             TerminalScreen::Applications,
             TerminalScreen::Documents,
             TerminalScreen::Network,
             TerminalScreen::Games,
+            TerminalScreen::NukeCodes,
             TerminalScreen::ProgramInstaller,
             TerminalScreen::Logs,
             TerminalScreen::DocumentBrowser,

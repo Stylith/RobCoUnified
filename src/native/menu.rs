@@ -41,6 +41,7 @@ pub enum TerminalScreen {
     Documents,
     Network,
     Games,
+    NukeCodes,
     PtyApp,
     ProgramInstaller,
     Logs,

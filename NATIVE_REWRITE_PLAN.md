@@ -106,6 +106,7 @@ The rewrite is a new native application layer, not a replacement of the current 
   - desktop taskbar now exposes quick toggles for core windows and a live clock
   - desktop Applications now launches configured apps via embedded PTY and transitions cleanly into terminal PTY surface
   - desktop built-in app visibility now follows the same per-user menu visibility toggles as terminal mode
+  - built-in `Nuke Codes` now uses a native terminal-style screen from both terminal Applications and native desktop Applications (no placeholder status path)
 
 ## Next parity targets
 

@@ -9,6 +9,7 @@ mod file_manager;
 mod hacking_screen;
 mod installer_screen;
 mod menu;
+mod nuke_codes_screen;
 mod programs_screen;
 mod prompt;
 mod prompt_flow;
