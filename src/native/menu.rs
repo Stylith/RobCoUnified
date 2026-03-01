@@ -14,14 +14,16 @@ pub struct SettingsChoiceOverlay {
     pub selected: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementMode {
     Root,
     CreateAuthMethod { username: String },
+    CreateHackingDifficulty { username: String },
     DeleteUser,
     ResetPassword,
     ChangeAuthSelectUser,
     ChangeAuthChoose { username: String },
+    ChangeAuthHackingDifficulty { username: String },
     ToggleAdmin,
 }
 

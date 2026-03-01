@@ -51,8 +51,9 @@ use super::user_management::{
 };
 use crate::config::ConnectionKind;
 use crate::config::{
-    load_apps, load_categories, load_games, load_networks, save_apps, save_categories, save_games,
-    save_networks, set_current_user, OpenMode, Settings, THEMES,
+    cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
+    persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
+    update_settings, OpenMode, Settings, THEMES,
 };
 use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
 use crate::core::auth::{load_users, read_session, save_users, UserRecord};
@@ -2303,6 +2304,7 @@ impl RobcoNativeApp {
         let screen = user_management_screen_for_mode(
             &mode,
             self.session.as_ref().map(|s| s.username.as_str()),
+            get_settings().hacking_difficulty,
         );
         let mut selected = self.terminal_user_management_idx.min(
             screen
@@ -2345,6 +2347,13 @@ impl RobcoNativeApp {
                     "New username:",
                     TerminalPromptAction::CreateUsername,
                 ),
+                UserManagementAction::CycleHackingDifficulty => {
+                    update_settings(|s| {
+                        s.hacking_difficulty = cycle_hacking_difficulty(s.hacking_difficulty, true);
+                    });
+                    persist_settings();
+                    self.shell_status = "Settings saved.".to_string();
+                }
                 UserManagementAction::SetMode { mode, selected_idx } => {
                     self.terminal_user_management_mode = mode;
                     self.terminal_user_management_idx = selected_idx;
@@ -2375,12 +2384,32 @@ impl RobcoNativeApp {
                         self.terminal_user_management_idx = 0;
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
-                        self.shell_status =
-                            "Hacking auth user creation is pending native rewrite.".to_string();
+                        self.save_user_and_status(
+                            &username,
+                            UserRecord {
+                                password_hash: String::new(),
+                                is_admin: false,
+                                auth_method: crate::core::auth::AuthMethod::HackingMinigame,
+                            },
+                            format!("User '{username}' created."),
+                        );
                         self.terminal_user_management_mode = UserManagementMode::Root;
                         self.terminal_user_management_idx = 0;
                     }
                 },
+                UserManagementAction::ApplyCreateHacking { username } => {
+                    self.save_user_and_status(
+                        &username,
+                        UserRecord {
+                            password_hash: String::new(),
+                            is_admin: false,
+                            auth_method: crate::core::auth::AuthMethod::HackingMinigame,
+                        },
+                        format!("User '{username}' created."),
+                    );
+                    self.terminal_user_management_mode = UserManagementMode::Root;
+                    self.terminal_user_management_idx = 0;
+                }
                 UserManagementAction::ConfirmDeleteUser { username } => {
                     self.open_confirm_prompt(
                         "Delete User",
@@ -2416,11 +2445,30 @@ impl RobcoNativeApp {
                         self.terminal_user_management_idx = 0;
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
-                        self.shell_status = "Hacking auth is pending native rewrite.".to_string();
+                        self.update_user_record(
+                            &username,
+                            |record| {
+                                record.auth_method = crate::core::auth::AuthMethod::HackingMinigame;
+                                record.password_hash.clear();
+                            },
+                            format!("Auth method updated for '{username}'."),
+                        );
                         self.terminal_user_management_mode = UserManagementMode::Root;
                         self.terminal_user_management_idx = 0;
                     }
                 },
+                UserManagementAction::ApplyChangeAuthHacking { username } => {
+                    self.update_user_record(
+                        &username,
+                        |record| {
+                            record.auth_method = crate::core::auth::AuthMethod::HackingMinigame;
+                            record.password_hash.clear();
+                        },
+                        format!("Auth method updated for '{username}'."),
+                    );
+                    self.terminal_user_management_mode = UserManagementMode::Root;
+                    self.terminal_user_management_idx = 0;
+                }
                 UserManagementAction::ConfirmToggleAdmin { username } => {
                     self.open_confirm_prompt(
                         "Toggle Admin",

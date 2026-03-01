@@ -1,10 +1,12 @@
 use super::menu::UserManagementMode;
+use crate::config::{hacking_difficulty_label, HackingDifficulty};
 use crate::core::auth::{load_users, AuthMethod};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementAction {
     None,
     OpenCreateUserPrompt,
+    CycleHackingDifficulty,
     SetMode {
         mode: UserManagementMode,
         selected_idx: usize,
@@ -13,6 +15,9 @@ pub enum UserManagementAction {
     CreateWithMethod {
         username: String,
         method: AuthMethod,
+    },
+    ApplyCreateHacking {
+        username: String,
     },
     ConfirmDeleteUser {
         username: String,
@@ -23,6 +28,9 @@ pub enum UserManagementAction {
     ChangeAuthWithMethod {
         username: String,
         method: AuthMethod,
+    },
+    ApplyChangeAuthHacking {
+        username: String,
     },
     ConfirmToggleAdmin {
         username: String,
@@ -39,6 +47,7 @@ pub struct UserManagementScreen {
 pub fn screen_for_mode(
     mode: &UserManagementMode,
     current_username: Option<&str>,
+    hacking_difficulty: HackingDifficulty,
 ) -> UserManagementScreen {
     match mode {
         UserManagementMode::Root => UserManagementScreen {
@@ -50,6 +59,11 @@ pub fn screen_for_mode(
             title: "Choose Authentication Method",
             subtitle: Some(format!("Create user '{username}'")),
             items: auth_method_items(),
+        },
+        UserManagementMode::CreateHackingDifficulty { username } => UserManagementScreen {
+            title: "Hacking Difficulty",
+            subtitle: Some(format!("Create user '{username}'")),
+            items: hacking_difficulty_items(hacking_difficulty),
         },
         UserManagementMode::DeleteUser => UserManagementScreen {
             title: "Delete User",
@@ -70,6 +84,11 @@ pub fn screen_for_mode(
             title: "Choose Authentication Method",
             subtitle: Some(format!("Change auth for '{username}'")),
             items: auth_method_items(),
+        },
+        UserManagementMode::ChangeAuthHackingDifficulty { username } => UserManagementScreen {
+            title: "Hacking Difficulty",
+            subtitle: Some(format!("Change auth for '{username}'")),
+            items: hacking_difficulty_items(hacking_difficulty),
         },
         UserManagementMode::ToggleAdmin => UserManagementScreen {
             title: "Toggle Admin",
@@ -112,10 +131,35 @@ pub fn handle_selection(
                     mode: UserManagementMode::Root,
                     selected_idx: 0,
                 }
+            } else if selected_label.starts_with("Hacking") {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::CreateHackingDifficulty {
+                        username: username.clone(),
+                    },
+                    selected_idx: 0,
+                }
             } else if let Some(method) = auth_method_from_label(selected_label) {
                 UserManagementAction::CreateWithMethod {
                     username: username.clone(),
                     method,
+                }
+            } else {
+                UserManagementAction::None
+            }
+        }
+        UserManagementMode::CreateHackingDifficulty { username } => {
+            if is_hacking_difficulty_label(selected_label) {
+                UserManagementAction::CycleHackingDifficulty
+            } else if selected_label == "Apply" {
+                UserManagementAction::ApplyCreateHacking {
+                    username: username.clone(),
+                }
+            } else if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::CreateAuthMethod {
+                        username: username.clone(),
+                    },
+                    selected_idx: 0,
                 }
             } else {
                 UserManagementAction::None
@@ -168,10 +212,35 @@ pub fn handle_selection(
                     mode: UserManagementMode::ChangeAuthSelectUser,
                     selected_idx: 0,
                 }
+            } else if selected_label.starts_with("Hacking") {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::ChangeAuthHackingDifficulty {
+                        username: username.clone(),
+                    },
+                    selected_idx: 0,
+                }
             } else if let Some(method) = auth_method_from_label(selected_label) {
                 UserManagementAction::ChangeAuthWithMethod {
                     username: username.clone(),
                     method,
+                }
+            } else {
+                UserManagementAction::None
+            }
+        }
+        UserManagementMode::ChangeAuthHackingDifficulty { username } => {
+            if is_hacking_difficulty_label(selected_label) {
+                UserManagementAction::CycleHackingDifficulty
+            } else if selected_label == "Apply" {
+                UserManagementAction::ApplyChangeAuthHacking {
+                    username: username.clone(),
+                }
+            } else if selected_label == "Back" {
+                UserManagementAction::SetMode {
+                    mode: UserManagementMode::ChangeAuthChoose {
+                        username: username.clone(),
+                    },
+                    selected_idx: 0,
                 }
             } else {
                 UserManagementAction::None
@@ -214,6 +283,18 @@ fn auth_method_items() -> Vec<String> {
     ]
 }
 
+fn hacking_difficulty_items(difficulty: HackingDifficulty) -> Vec<String> {
+    vec![
+        format!(
+            "Difficulty: {} [cycle]",
+            hacking_difficulty_label(difficulty)
+        ),
+        "Apply".to_string(),
+        "---".to_string(),
+        "Back".to_string(),
+    ]
+}
+
 fn auth_method_from_label(label: &str) -> Option<AuthMethod> {
     if label.starts_with("Password") {
         Some(AuthMethod::Password)
@@ -226,6 +307,10 @@ fn auth_method_from_label(label: &str) -> Option<AuthMethod> {
     }
 }
 
+fn is_hacking_difficulty_label(label: &str) -> bool {
+    label.starts_with("Difficulty:")
+}
+
 fn user_list_items(current_username: Option<&str>, include_current: bool) -> Vec<String> {
     let mut users: Vec<String> = load_users()
         .keys()
@@ -235,4 +320,58 @@ fn user_list_items(current_username: Option<&str>, include_current: bool) -> Vec
     users.sort();
     users.push("Back".to_string());
     users
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::menu::UserManagementMode;
+    use super::*;
+    use crate::config::HackingDifficulty;
+
+    #[test]
+    fn create_hacking_selection_routes_to_difficulty_mode() {
+        let mode = UserManagementMode::CreateAuthMethod {
+            username: "alice".to_string(),
+        };
+        let action = handle_selection(
+            &mode,
+            "Hacking Minigame     — must hack in to log in",
+            Some("admin"),
+        );
+        assert!(matches!(
+            action,
+            UserManagementAction::SetMode {
+                mode: UserManagementMode::CreateHackingDifficulty { .. },
+                selected_idx: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn create_hacking_difficulty_rows_map_to_expected_actions() {
+        let mode = UserManagementMode::CreateHackingDifficulty {
+            username: "alice".to_string(),
+        };
+        let cycle = handle_selection(&mode, "Difficulty: Normal [cycle]", Some("admin"));
+        assert_eq!(cycle, UserManagementAction::CycleHackingDifficulty);
+
+        let apply = handle_selection(&mode, "Apply", Some("admin"));
+        assert!(matches!(
+            apply,
+            UserManagementAction::ApplyCreateHacking { username } if username == "alice"
+        ));
+    }
+
+    #[test]
+    fn screen_for_hacking_difficulty_uses_current_label() {
+        let mode = UserManagementMode::ChangeAuthHackingDifficulty {
+            username: "bob".to_string(),
+        };
+        let screen = screen_for_mode(&mode, Some("admin"), HackingDifficulty::Hard);
+        assert_eq!(screen.title, "Hacking Difficulty");
+        assert!(screen
+            .items
+            .first()
+            .is_some_and(|item| item.contains("Hard [cycle]")));
+    }
 }
