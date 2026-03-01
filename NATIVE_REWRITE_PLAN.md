@@ -97,6 +97,11 @@ The rewrite is a new native application layer, not a replacement of the current 
     - switch between sessions and restore each screen/context
     - close active session and restore previous session context after index remap
     - separator/non-selectable row mapping stability in native terminal menus
+- Terminal-first visual parity hardening continued (non-hacking):
+  - selectable row highlight width now follows terminal cell geometry for consistent menu behavior
+- Desktop-only expansion pass landed:
+  - desktop central workspace now exposes icon-launch actions and explicit window/session state panels
+  - desktop shell moved further from placeholder copy toward actionable native workbench behavior
 
 ## Next parity targets
 

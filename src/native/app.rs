@@ -1976,31 +1976,107 @@ impl RobcoNativeApp {
 
     fn draw_desktop(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg).inner_margin(0.0))
+            .frame(
+                egui::Frame::none()
+                    .fill(current_palette().bg)
+                    .inner_margin(0.0),
+            )
             .show(ctx, |ui| {
-            ui.heading("Desktop Shell");
-            ui.label("This is the new native workbench, not the old TUI desktop.");
-            ui.add_space(8.0);
-            ui.columns(3, |cols| {
-                cols[0].group(|ui| {
-                    ui.label(RichText::new("Desktop").strong());
-                    ui.small("Native top bar, start panel, and app windows.");
+                let palette = current_palette();
+                let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+                ui.horizontal(|ui| {
+                    ui.heading("Desktop");
+                    ui.separator();
+                    ui.small("Native shell workbench");
+                    ui.separator();
+                    ui.small(now);
                 });
-                cols[1].group(|ui| {
-                    ui.label(RichText::new("Core").strong());
-                    ui.small("Shared users, settings, and document storage paths.");
-                });
-                cols[2].group(|ui| {
-                    ui.label(RichText::new("Dual Mode").strong());
-                    ui.small(
-                        "Terminal mode is preserved. Desktop mode is what this native shell is replacing.",
-                    );
-                    if ui.button("Launch Terminal Mode").clicked() {
-                        self.terminal_mode.open = true;
-                    }
+                ui.add_space(8.0);
+                ui.columns(3, |cols| {
+                    cols[0].group(|ui| {
+                        ui.label(RichText::new("Desktop Icons").strong());
+                        ui.add_space(6.0);
+                        if ui.button("[ My Files ]").clicked() {
+                            self.file_manager.open = true;
+                        }
+                        if ui.button("[ Word Processor ]").clicked() {
+                            self.editor.open = true;
+                            if self.editor.path.is_none() {
+                                self.new_document();
+                            }
+                        }
+                        if ui.button("[ Settings ]").clicked() {
+                            self.settings.open = true;
+                        }
+                        if ui.button("[ Applications ]").clicked() {
+                            self.applications.open = true;
+                        }
+                        if ui.button("[ Terminal Mode ]").clicked() {
+                            self.terminal_mode.open = true;
+                        }
+                    });
+                    cols[1].group(|ui| {
+                        ui.label(RichText::new("Workspace").strong());
+                        ui.add_space(6.0);
+                        ui.colored_label(palette.dim, "Native desktop shell frame");
+                        ui.colored_label(
+                            palette.dim,
+                            "Terminal mode remains first-class and separate.",
+                        );
+                        ui.colored_label(
+                            palette.dim,
+                            "Settings, files, and users are shared core data.",
+                        );
+                        ui.add_space(10.0);
+                        ui.label("Open windows");
+                        ui.small(format!(
+                            "File Manager: {}",
+                            if self.file_manager.open {
+                                "OPEN"
+                            } else {
+                                "closed"
+                            }
+                        ));
+                        ui.small(format!(
+                            "Word Processor: {}",
+                            if self.editor.open { "OPEN" } else { "closed" }
+                        ));
+                        ui.small(format!(
+                            "Settings: {}",
+                            if self.settings.open { "OPEN" } else { "closed" }
+                        ));
+                        ui.small(format!(
+                            "Applications: {}",
+                            if self.applications.open {
+                                "OPEN"
+                            } else {
+                                "closed"
+                            }
+                        ));
+                    });
+                    cols[2].group(|ui| {
+                        ui.label(RichText::new("Session").strong());
+                        ui.add_space(6.0);
+                        if let Some(session) = &self.session {
+                            ui.small(format!("User: {}", session.username));
+                            ui.small(if session.is_admin {
+                                "Role: admin"
+                            } else {
+                                "Role: user"
+                            });
+                        }
+                        ui.small(format!("Theme: {}", self.settings.draft.theme));
+                        ui.small(format!(
+                            "Start menu: {}",
+                            if self.start_open { "OPEN" } else { "closed" }
+                        ));
+                        ui.add_space(10.0);
+                        if ui.button("Return To Terminal Menu").clicked() {
+                            self.desktop_mode_open = false;
+                        }
+                    });
                 });
             });
-        });
     }
 
     fn draw_terminal_main_menu(&mut self, ctx: &Context) {
