@@ -3382,3 +3382,128 @@ impl eframe::App for RobcoNativeApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn session_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("native app session test lock")
+    }
+
+    #[test]
+    fn parked_session_runtime_restores_full_native_context() {
+        let _guard = session_test_guard();
+        session::clear_sessions();
+        session::take_switch_request();
+
+        let mut app = RobcoNativeApp::default();
+        let idx = session::push_session("admin");
+        session::set_active(idx);
+        app.session = Some(SessionState {
+            username: "admin".to_string(),
+            is_admin: true,
+        });
+
+        app.file_manager.open = true;
+        app.file_manager.cwd = PathBuf::from("/tmp");
+        app.file_manager.selected = Some(PathBuf::from("/tmp/demo.txt"));
+        app.editor.open = true;
+        app.editor.path = Some(PathBuf::from("/tmp/doc.txt"));
+        app.editor.text = "hello".to_string();
+        app.editor.dirty = true;
+        app.editor.status = "dirty".to_string();
+        app.settings.open = true;
+        app.settings.status = "saved".to_string();
+        app.settings.draft.theme = CUSTOM_THEME_NAME.to_string();
+        app.applications.open = true;
+        app.applications.status = "apps".to_string();
+        app.terminal_mode.open = true;
+        app.terminal_mode.status = "term".to_string();
+        app.desktop_mode_open = true;
+        app.start_open = false;
+        app.main_menu_idx = 3;
+        app.terminal_screen = TerminalScreen::Connections;
+        app.terminal_settings_idx = 2;
+        app.terminal_user_management_idx = 4;
+        app.session_leader_until = Some(Instant::now() + Duration::from_millis(500));
+        app.shell_status = "status".to_string();
+        app.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Input,
+            title: "t".to_string(),
+            prompt: "p".to_string(),
+            buffer: "buf".to_string(),
+            confirm_yes: true,
+            action: TerminalPromptAction::Noop,
+        });
+        app.terminal_flash = Some(TerminalFlash {
+            message: "flash".to_string(),
+            until: Instant::now() + Duration::from_millis(500),
+            action: FlashAction::ExitApp,
+        });
+
+        app.park_active_session_runtime();
+
+        app.file_manager.open = false;
+        app.file_manager.cwd = PathBuf::from(".");
+        app.file_manager.selected = None;
+        app.editor.open = false;
+        app.editor.path = None;
+        app.editor.text.clear();
+        app.editor.dirty = false;
+        app.editor.status.clear();
+        app.settings.open = false;
+        app.settings.status.clear();
+        app.settings.draft.theme = "Green (Default)".to_string();
+        app.applications.open = false;
+        app.applications.status.clear();
+        app.terminal_mode.open = false;
+        app.terminal_mode.status.clear();
+        app.desktop_mode_open = false;
+        app.start_open = true;
+        app.main_menu_idx = 0;
+        app.terminal_screen = TerminalScreen::MainMenu;
+        app.terminal_settings_idx = 0;
+        app.terminal_user_management_idx = 0;
+        app.session_leader_until = None;
+        app.shell_status.clear();
+        app.terminal_prompt = None;
+        app.terminal_flash = None;
+
+        assert!(app.restore_active_session_runtime_if_any());
+
+        assert!(app.file_manager.open);
+        assert_eq!(app.file_manager.cwd, PathBuf::from("/tmp"));
+        assert_eq!(
+            app.file_manager.selected,
+            Some(PathBuf::from("/tmp/demo.txt"))
+        );
+        assert!(app.editor.open);
+        assert_eq!(app.editor.path, Some(PathBuf::from("/tmp/doc.txt")));
+        assert_eq!(app.editor.text, "hello");
+        assert!(app.editor.dirty);
+        assert_eq!(app.editor.status, "dirty");
+        assert!(app.settings.open);
+        assert_eq!(app.settings.status, "saved");
+        assert_eq!(app.settings.draft.theme, CUSTOM_THEME_NAME);
+        assert!(app.applications.open);
+        assert_eq!(app.applications.status, "apps");
+        assert!(app.terminal_mode.open);
+        assert_eq!(app.terminal_mode.status, "term");
+        assert!(app.desktop_mode_open);
+        assert!(!app.start_open);
+        assert_eq!(app.main_menu_idx, 3);
+        assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
+        assert_eq!(app.terminal_settings_idx, 2);
+        assert_eq!(app.terminal_user_management_idx, 4);
+        assert!(app.session_leader_until.is_some());
+        assert_eq!(app.shell_status, "status");
+        assert!(app.terminal_prompt.is_some());
+        assert!(app.terminal_flash.is_some());
+        assert!(!app.session_runtime.contains_key(&idx));
+    }
+}

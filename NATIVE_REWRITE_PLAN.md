@@ -92,6 +92,7 @@ The rewrite is a new native application layer, not a replacement of the current 
   - file manager/editor/settings/app window state
   - terminal prompt/flash/session-leader transient state
   - active user identity is synchronized before parked-state restore
+  - parity coverage now includes a native app test asserting full context restore on park/restore
 
 ## Next parity targets
 
