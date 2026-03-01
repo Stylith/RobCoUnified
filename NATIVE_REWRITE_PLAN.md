@@ -97,6 +97,7 @@ The rewrite is a new native application layer, not a replacement of the current 
     - switch between sessions and restore each screen/context
     - close active session and restore previous session context after index remap
     - separator/non-selectable row mapping stability in native terminal menus
+    - sweep coverage across every terminal submenu to verify switch/restore parity
 - Terminal-first visual parity hardening continued (non-hacking):
   - selectable row highlight width now follows terminal cell geometry for consistent menu behavior
 - Desktop-only expansion pass landed:
@@ -108,6 +109,5 @@ The rewrite is a new native application layer, not a replacement of the current 
 
 ## Next parity targets
 
-- Verify session-switch behavior inside every terminal-style submenu without adding persistent hint clutter.
 - Preserve deeper per-session runtime state (screen/selection context), not only user/snapshot restoration.
 - Continue terminal-first parity hardening before broad desktop-only expansion.

@@ -3818,4 +3818,69 @@ mod tests {
         assert_eq!(app.editor.text, "u2");
         assert_eq!(app.shell_status, "Closed session 3.");
     }
+
+    fn terminal_submenu_screens() -> [TerminalScreen; 12] {
+        [
+            TerminalScreen::Applications,
+            TerminalScreen::Documents,
+            TerminalScreen::Network,
+            TerminalScreen::Games,
+            TerminalScreen::ProgramInstaller,
+            TerminalScreen::Logs,
+            TerminalScreen::DocumentBrowser,
+            TerminalScreen::Settings,
+            TerminalScreen::EditMenus,
+            TerminalScreen::Connections,
+            TerminalScreen::DefaultApps,
+            TerminalScreen::UserManagement,
+        ]
+    }
+
+    #[test]
+    fn session_switch_restores_every_terminal_submenu_context() {
+        let _guard = session_test_guard();
+        let _users = install_test_users(&["u1", "u2"]);
+
+        for (idx, screen) in terminal_submenu_screens().into_iter().enumerate() {
+            session::clear_sessions();
+            session::take_switch_request();
+
+            let mut app = RobcoNativeApp::default();
+            let s1 = session::push_session("u1");
+            let s2 = session::push_session("u2");
+
+            session::set_active(s1);
+            assert!(app.sync_active_session_identity());
+            set_runtime_marker(&mut app, screen, idx + 1, &format!("u1-{idx}"));
+            app.park_active_session_runtime();
+
+            session::set_active(s2);
+            assert!(app.sync_active_session_identity());
+            set_runtime_marker(
+                &mut app,
+                TerminalScreen::MainMenu,
+                idx + 100,
+                &format!("u2-{idx}"),
+            );
+            app.park_active_session_runtime();
+
+            session::set_active(s1);
+            assert!(app.sync_active_session_identity());
+            assert!(app.restore_active_session_runtime_if_any());
+            assert_eq!(app.terminal_screen, screen);
+            assert_eq!(app.editor.text, format!("u1-{idx}"));
+
+            session::request_switch(s2);
+            app.apply_pending_session_switch();
+            assert_eq!(session::active_idx(), s2);
+            assert!(matches!(app.terminal_screen, TerminalScreen::MainMenu));
+            assert_eq!(app.editor.text, format!("u2-{idx}"));
+
+            session::request_switch(s1);
+            app.apply_pending_session_switch();
+            assert_eq!(session::active_idx(), s1);
+            assert_eq!(app.terminal_screen, screen);
+            assert_eq!(app.editor.text, format!("u1-{idx}"));
+        }
+    }
 }

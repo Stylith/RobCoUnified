@@ -192,8 +192,8 @@ impl RetroScreen {
     }
 
     pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
-        let text = "=".repeat(self.cols.max(1));
-        self.text(painter, 0, row, &text, palette.dim);
+        let text = "=".repeat(self.cols.saturating_sub(6).max(1));
+        self.centered_text(painter, row, &text, palette.dim, false);
     }
 
     pub fn row_rect(&self, col: usize, row: usize, width_chars: usize) -> Rect {
