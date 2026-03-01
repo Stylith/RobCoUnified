@@ -330,12 +330,24 @@ impl RetroScreen {
         w: usize,
         h: usize,
     ) {
-        let rect = self.row_rect(col, row, w);
-        let rect = Rect::from_min_size(
-            rect.min,
-            egui::vec2(w as f32 * self.cell.x, h as f32 * self.cell.y),
-        );
+        let rect = self.panel_rect(col, row, w, h);
+        painter.rect_filled(rect, 0.0, palette.bg);
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, palette.fg));
+    }
+
+    pub fn panel_rect(&self, col: usize, row: usize, w: usize, h: usize) -> Rect {
+        let left = self.rect.left() + col as f32 * self.cell.x;
+        let top = self.rect.top() + row as f32 * self.cell.y;
+        let right = if col.saturating_add(w) >= self.cols {
+            self.rect.right()
+        } else {
+            self.rect.left() + (col + w) as f32 * self.cell.x
+        };
+        let bottom = (self.rect.top() + (row + h) as f32 * self.cell.y).min(self.rect.bottom());
+        Rect::from_min_max(
+            Pos2::new(left.min(self.rect.right()), top.min(self.rect.bottom())),
+            Pos2::new(right.max(left), bottom.max(top)),
+        )
     }
 }
 

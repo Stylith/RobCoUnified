@@ -290,6 +290,7 @@ pub struct RobcoNativeApp {
     terminal_user_management_mode: UserManagementMode,
     terminal_settings_choice: Option<SettingsChoiceOverlay>,
     terminal_prompt: Option<TerminalPrompt>,
+    suppress_next_menu_submit: bool,
     terminal_flash: Option<TerminalFlash>,
     shell_status: String,
 }
@@ -346,6 +347,7 @@ impl Default for RobcoNativeApp {
             terminal_user_management_mode: UserManagementMode::Root,
             terminal_settings_choice: None,
             terminal_prompt: None,
+            suppress_next_menu_submit: false,
             terminal_flash: None,
             shell_status: String::new(),
         }
@@ -403,6 +405,7 @@ impl RobcoNativeApp {
         self.terminal_user_management_mode = UserManagementMode::Root;
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
+        self.suppress_next_menu_submit = false;
         self.terminal_flash = None;
         self.shell_status.clear();
     }
@@ -1121,6 +1124,7 @@ impl RobcoNativeApp {
                 self.terminal_user_management_mode =
                     UserManagementMode::CreateAuthMethod { username };
                 self.terminal_user_management_idx = 0;
+                self.suppress_next_menu_submit = true;
             }
             PromptOutcome::CreatePasswordFirst { username, password } => {
                 self.terminal_prompt = None;
@@ -2910,6 +2914,13 @@ impl eframe::App for RobcoNativeApp {
         } else {
             if self.terminal_prompt.is_some() {
                 self.handle_terminal_prompt_input(ctx);
+            }
+            if self.suppress_next_menu_submit {
+                ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                    i.consume_key(egui::Modifiers::NONE, Key::Space);
+                });
+                self.suppress_next_menu_submit = false;
             }
             match self.terminal_screen {
                 TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
