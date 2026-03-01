@@ -102,9 +102,12 @@ The rewrite is a new native application layer, not a replacement of the current 
 - Desktop-only expansion pass landed:
   - desktop central workspace now exposes icon-launch actions and explicit window/session state panels
   - desktop shell moved further from placeholder copy toward actionable native workbench behavior
+  - desktop taskbar now exposes quick toggles for core windows and a live clock
+  - desktop Applications now launches configured apps via embedded PTY and transitions cleanly into terminal PTY surface
+  - desktop built-in app visibility now follows the same per-user menu visibility toggles as terminal mode
 
 ## Next parity targets
 
-- Add visible session-switch UX hints (without clutter) and verify behavior inside every terminal-style submenu.
+- Verify session-switch behavior inside every terminal-style submenu without adding persistent hint clutter.
 - Preserve deeper per-session runtime state (screen/selection context), not only user/snapshot restoration.
 - Continue terminal-first parity hardening before broad desktop-only expansion.

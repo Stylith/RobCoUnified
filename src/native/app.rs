@@ -62,7 +62,7 @@ use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, Defau
 use crate::session;
 use chrono::Local;
 use eframe::egui::{
-    self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
+    self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     Modifiers, RichText, TextEdit, TextStyle, TopBottomPanel,
 };
 use serde::{Deserialize, Serialize};
@@ -2079,6 +2079,91 @@ impl RobcoNativeApp {
             });
     }
 
+    fn draw_desktop_taskbar(&mut self, ctx: &Context) {
+        let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+        TopBottomPanel::bottom("native_desktop_taskbar")
+            .exact_height(32.0)
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                let palette = current_palette();
+                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.panel);
+
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(if self.start_open {
+                            "[Start*]"
+                        } else {
+                            "[Start]"
+                        })
+                        .clicked()
+                    {
+                        self.start_open = !self.start_open;
+                    }
+                    if ui
+                        .button(if self.file_manager.open {
+                            "[Files*]"
+                        } else {
+                            "[Files]"
+                        })
+                        .clicked()
+                    {
+                        self.file_manager.open = !self.file_manager.open;
+                    }
+                    if ui
+                        .button(if self.editor.open {
+                            "[Editor*]"
+                        } else {
+                            "[Editor]"
+                        })
+                        .clicked()
+                    {
+                        if self.editor.open {
+                            self.editor.open = false;
+                        } else {
+                            self.editor.open = true;
+                            if self.editor.path.is_none() {
+                                self.new_document();
+                            }
+                        }
+                    }
+                    if ui
+                        .button(if self.settings.open {
+                            "[Settings*]"
+                        } else {
+                            "[Settings]"
+                        })
+                        .clicked()
+                    {
+                        self.settings.open = !self.settings.open;
+                    }
+                    if ui
+                        .button(if self.applications.open {
+                            "[Apps*]"
+                        } else {
+                            "[Apps]"
+                        })
+                        .clicked()
+                    {
+                        self.applications.open = !self.applications.open;
+                    }
+                    if ui
+                        .button(if self.terminal_mode.open {
+                            "[Terminal*]"
+                        } else {
+                            "[Terminal]"
+                        })
+                        .clicked()
+                    {
+                        self.terminal_mode.open = !self.terminal_mode.open;
+                    }
+
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(now);
+                    });
+                });
+            });
+    }
+
     fn draw_terminal_main_menu(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let activated = draw_main_menu_screen(
@@ -2140,12 +2225,16 @@ impl RobcoNativeApp {
                 self.terminal_screen = TerminalScreen::MainMenu;
                 self.shell_status.clear();
             } else {
-                let apps = load_apps();
-                match resolve_program_command(label, &apps) {
-                    Ok(cmd) => self.open_embedded_pty(label, &cmd, TerminalScreen::Applications),
-                    Err(err) => self.shell_status = err,
-                }
+                self.launch_configured_app_in_pty(label, TerminalScreen::Applications);
             }
+        }
+    }
+
+    fn launch_configured_app_in_pty(&mut self, name: &str, return_screen: TerminalScreen) {
+        let apps = load_apps();
+        match resolve_program_command(name, &apps) {
+            Ok(cmd) => self.open_embedded_pty(name, &cmd, return_screen),
+            Err(err) => self.shell_status = err,
         }
     }
 
@@ -3256,27 +3345,34 @@ impl RobcoNativeApp {
             return;
         }
         let mut open = self.applications.open;
+        let mut close_after_launch = false;
         egui::Window::new("Applications")
             .id(Id::new("native_applications"))
             .open(&mut open)
             .default_size([420.0, 380.0])
             .show(ctx, |ui| {
                 ui.heading("Built-in");
-                if ui.button("ROBCO Word Processor").clicked() {
+                if self.settings.draft.builtin_menu_visibility.text_editor
+                    && ui.button("ROBCO Word Processor").clicked()
+                {
                     self.editor.open = true;
                     if self.editor.path.is_none() {
                         self.new_document();
                     }
                 }
-                if ui.button("Nuke Codes").clicked() {
+                if self.settings.draft.builtin_menu_visibility.nuke_codes
+                    && ui.button("Nuke Codes").clicked()
+                {
                     self.applications.status = "Nuke Codes UI is not rewritten yet.".to_string();
                 }
                 ui.separator();
                 ui.heading("Configured Apps");
                 for name in app_names() {
                     if ui.button(&name).clicked() {
-                        self.applications.status =
-                            format!("External app launch for '{name}' is pending rewrite.");
+                        close_after_launch = true;
+                        self.start_open = false;
+                        self.desktop_mode_open = false;
+                        self.launch_configured_app_in_pty(&name, TerminalScreen::MainMenu);
                     }
                 }
                 if !self.applications.status.is_empty() {
@@ -3284,6 +3380,9 @@ impl RobcoNativeApp {
                     ui.small(&self.applications.status);
                 }
             });
+        if close_after_launch {
+            open = false;
+        }
         self.applications.open = open;
     }
 
@@ -3407,6 +3506,7 @@ impl eframe::App for RobcoNativeApp {
         if self.desktop_mode_open {
             self.draw_top_bar(ctx);
             self.draw_start_panel(ctx);
+            self.draw_desktop_taskbar(ctx);
             self.draw_desktop(ctx);
         } else {
             if self.terminal_prompt.is_some() {
