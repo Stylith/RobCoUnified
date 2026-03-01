@@ -62,7 +62,7 @@ use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, Defau
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
-    RichText, TextEdit, TextStyle, TopBottomPanel,
+    Modifiers, RichText, TextEdit, TextStyle, TopBottomPanel,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -981,17 +981,23 @@ impl RobcoNativeApp {
                     TerminalScreen::Network => self.terminal_network_idx = selected_idx,
                     TerminalScreen::Games => self.terminal_games_idx = selected_idx,
                     TerminalScreen::ProgramInstaller => {
-                        self.terminal_installer.root_idx = selected_idx
+                        self.terminal_installer.reset();
+                        self.terminal_installer.root_idx = selected_idx;
                     }
-                    TerminalScreen::Settings => self.terminal_settings_idx = selected_idx,
+                    TerminalScreen::Settings => {
+                        self.terminal_settings_idx = selected_idx;
+                        self.terminal_settings_choice = None;
+                    }
                     TerminalScreen::EditMenus => {}
                     TerminalScreen::Connections => {
-                        self.terminal_connections.root_idx = selected_idx
+                        self.terminal_connections.reset();
+                        self.terminal_connections.root_idx = selected_idx;
                     }
                     TerminalScreen::DefaultApps => self.terminal_default_apps_idx = selected_idx,
                     TerminalScreen::About => {}
                     TerminalScreen::UserManagement => {
-                        self.terminal_user_management_idx = selected_idx
+                        self.terminal_user_management_mode = UserManagementMode::Root;
+                        self.terminal_user_management_idx = selected_idx;
                     }
                     TerminalScreen::DocumentBrowser => self.terminal_browser_idx = selected_idx,
                     TerminalScreen::MainMenu => self.main_menu_idx = selected_idx,
@@ -1089,11 +1095,14 @@ impl RobcoNativeApp {
         let Some(prompt) = self.terminal_prompt.clone() else {
             return;
         };
+        let prompt_action = prompt.action.clone();
         match handle_prompt_input(ctx, prompt) {
             PromptOutcome::Cancel => {
                 self.terminal_prompt = None;
-                self.login.password.clear();
-                self.login.error.clear();
+                if matches!(prompt_action, TerminalPromptAction::LoginPassword) {
+                    self.login.password.clear();
+                    self.login.error.clear();
+                }
             }
             PromptOutcome::Continue(prompt) => {
                 self.terminal_prompt = Some(prompt);
@@ -1412,6 +1421,22 @@ impl RobcoNativeApp {
                 );
             }
         }
+    }
+
+    fn consume_terminal_prompt_keys(&self, ctx: &Context) {
+        ctx.input_mut(|i| {
+            for mods in [Modifiers::NONE, Modifiers::SHIFT] {
+                i.consume_key(mods, Key::Enter);
+                i.consume_key(mods, Key::Space);
+                i.consume_key(mods, Key::Tab);
+                i.consume_key(mods, Key::Escape);
+                i.consume_key(mods, Key::ArrowUp);
+                i.consume_key(mods, Key::ArrowDown);
+                i.consume_key(mods, Key::ArrowLeft);
+                i.consume_key(mods, Key::ArrowRight);
+                i.consume_key(mods, Key::Backspace);
+            }
+        });
     }
 
     fn connect_target(
@@ -2914,6 +2939,7 @@ impl eframe::App for RobcoNativeApp {
         } else {
             if self.terminal_prompt.is_some() {
                 self.handle_terminal_prompt_input(ctx);
+                self.consume_terminal_prompt_keys(ctx);
             }
             if self.suppress_next_menu_submit {
                 ctx.input_mut(|i| {

@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const MAX_NATIVE_PTY_COLS: usize = 80;
-const MAX_NATIVE_PTY_ROWS: usize = 25;
+const MAX_NATIVE_PTY_COLS: usize = 160;
+const MAX_NATIVE_PTY_ROWS: usize = 80;
 const PERF_ALPHA: f32 = 0.18;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -205,10 +205,12 @@ pub fn draw_embedded_pty(
     if input_activity || output_activity {
         ctx.request_repaint();
     }
-    let tick_ms = if input_activity || output_activity {
+    let tick_ms = if input_activity {
         8
+    } else if output_activity {
+        12
     } else {
-        33
+        16
     };
     ctx.request_repaint_after(Duration::from_millis(tick_ms));
 

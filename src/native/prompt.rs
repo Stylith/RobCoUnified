@@ -127,24 +127,24 @@ pub fn draw_terminal_prompt_overlay(
     screen.text(&painter, 19, 13, &prompt.prompt, palette.fg);
     match prompt.kind {
         TerminalPromptKind::Input => {
-            let line = format!("> {}", prompt.buffer);
+            let line = format!("> {}█", prompt.buffer);
             screen.text(&painter, 19, 15, &line, palette.fg);
             screen.text(
                 &painter,
                 19,
                 17,
-                "Enter apply | Esc/Tab cancel",
+                "Enter apply | Tab/Esc cancel",
                 palette.dim,
             );
         }
         TerminalPromptKind::Password => {
-            let masked = format!("> {}", "*".repeat(prompt.buffer.chars().count()));
+            let masked = format!("> {}█", "*".repeat(prompt.buffer.chars().count()));
             screen.text(&painter, 19, 15, &masked, palette.fg);
             screen.text(
                 &painter,
                 19,
                 17,
-                "Enter log in | Esc/Tab back | Backspace delete",
+                "Enter apply | Tab/Esc back | Backspace delete",
                 palette.dim,
             );
         }
