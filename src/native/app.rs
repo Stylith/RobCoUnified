@@ -549,7 +549,12 @@ impl RobcoNativeApp {
     }
 
     fn close_active_session_window(&mut self) {
-        if session::session_count() == 0 {
+        let count = session::session_count();
+        if count == 0 {
+            return;
+        }
+        if count <= 1 {
+            self.shell_status = "Cannot close the last session.".to_string();
             return;
         }
 
@@ -576,11 +581,6 @@ impl RobcoNativeApp {
             remapped.insert(new_idx, parked);
         }
         self.session_runtime = remapped;
-
-        if session::session_count() == 0 {
-            self.finish_logout();
-            return;
-        }
 
         if !self.restore_active_session_runtime_if_any() {
             if let Some(username) = session::active_username() {
