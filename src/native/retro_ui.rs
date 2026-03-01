@@ -274,47 +274,48 @@ impl RetroScreen {
         let rect = self.rect;
         painter.rect_filled(rect, 0.0, palette.selected_bg);
         let footer_font = FontId::monospace(self.font.size + 0.4);
-        let left_pos = Pos2::new(rect.left() + 4.0, rect.top());
-        let center_pos = Pos2::new(rect.center().x, rect.top());
-        let right_pos = Pos2::new(rect.right() - 4.0, rect.top());
+        let y = rect.center().y;
+        let left_pos = Pos2::new(rect.left() + 4.0, y);
+        let center_pos = Pos2::new(rect.center().x, y);
+        let right_pos = Pos2::new(rect.right() - 4.0, y);
         painter.text(
             left_pos,
-            Align2::LEFT_TOP,
+            Align2::LEFT_CENTER,
             left,
             footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             Pos2::new(left_pos.x + 0.7, left_pos.y),
-            Align2::LEFT_TOP,
+            Align2::LEFT_CENTER,
             left,
             footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             center_pos,
-            Align2::CENTER_TOP,
+            Align2::CENTER_CENTER,
             center,
             footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             Pos2::new(center_pos.x + 0.7, center_pos.y),
-            Align2::CENTER_TOP,
+            Align2::CENTER_CENTER,
             center,
             footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             right_pos,
-            Align2::RIGHT_TOP,
+            Align2::RIGHT_CENTER,
             right,
             footer_font.clone(),
             palette.selected_fg,
         );
         painter.text(
             Pos2::new(right_pos.x + 0.7, right_pos.y),
-            Align2::RIGHT_TOP,
+            Align2::RIGHT_CENTER,
             right,
             footer_font,
             palette.selected_fg,

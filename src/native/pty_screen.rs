@@ -192,8 +192,12 @@ pub fn draw_embedded_pty(
     let frame_started = Instant::now();
 
     let pty_cols = cols.clamp(1, MAX_NATIVE_PTY_COLS) as u16;
-    // Keep one terminal row as safety padding above the global footer/status bar.
-    let pty_rows = rows.saturating_sub(1).clamp(1, MAX_NATIVE_PTY_ROWS) as u16;
+    let show_top_bar = state.session.top_bar_label().is_some();
+    // Keep one row for global footer/status bar and optional one-row PTY top bar.
+    let reserved_rows = 1 + usize::from(show_top_bar);
+    let pty_rows = rows
+        .saturating_sub(reserved_rows)
+        .clamp(1, MAX_NATIVE_PTY_ROWS) as u16;
     let input_started = Instant::now();
     state.session.resize(pty_cols, pty_rows);
     let input_activity = handle_pty_input(ctx, &mut state.session);
@@ -238,8 +242,37 @@ pub fn draw_embedded_pty(
         .show(ctx, |ui| {
             let draw_started = Instant::now();
             let palette = current_palette();
-            let (screen, response) = RetroScreen::new(ui, pty_cols as usize, pty_rows as usize);
+            let render_rows = pty_rows as usize + usize::from(show_top_bar);
+            let (screen, response) = RetroScreen::new(ui, pty_cols as usize, render_rows);
             let painter = ui.painter_at(screen.rect);
+            let row_offset = usize::from(show_top_bar);
+            let content_rect = if show_top_bar {
+                let top = screen.row_rect(0, 1, 1).top();
+                Rect::from_min_max(
+                    Pos2::new(screen.rect.left(), top),
+                    Pos2::new(screen.rect.right(), screen.rect.bottom()),
+                )
+            } else {
+                screen.rect
+            };
+            if let Some(label) = state.session.top_bar_label() {
+                let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
+                painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
+                painter.text(
+                    bar_rect.center(),
+                    Align2::CENTER_CENTER,
+                    format!(" {label} "),
+                    screen.font().clone(),
+                    palette.selected_fg,
+                );
+                painter.text(
+                    Pos2::new(bar_rect.center().x + 0.7, bar_rect.center().y),
+                    Align2::CENTER_CENTER,
+                    format!(" {label} "),
+                    screen.font().clone(),
+                    palette.selected_fg,
+                );
+            }
 
             let plain_fast = state.session.prefers_plain_render();
             let plain_snapshot = if plain_fast {
@@ -250,7 +283,6 @@ pub fn draw_embedded_pty(
             } else {
                 None
             };
-            let content_rect = screen.rect;
             handle_pty_mouse(
                 ui.ctx(),
                 &response,
@@ -289,6 +321,7 @@ pub fn draw_embedded_pty(
                     ctx,
                     &content_painter,
                     &screen,
+                    content_rect,
                     &palette,
                     lines_ref,
                     dirty_rows.as_slice(),
@@ -304,7 +337,7 @@ pub fn draw_embedded_pty(
                     for (row_idx, galley) in state.plain_row_galleys.iter().enumerate() {
                         if let Some(galley) = galley {
                             content_painter.galley(
-                                screen.row_rect(0, row_idx, 1).left_top(),
+                                screen.row_rect(0, row_idx + row_offset, 1).left_top(),
                                 galley.clone(),
                                 palette.fg,
                             );
@@ -313,11 +346,11 @@ pub fn draw_embedded_pty(
                 }
                 state.prev_plain_lines = lines_ref.to_vec();
                 state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
-                let row = snap.cursor_row as usize;
+                let row = snap.cursor_row as usize + row_offset;
                 let col = snap.cursor_col as usize;
                 let cursor_rect = screen.row_rect(col, row, 1);
                 let ch = lines_ref
-                    .get(row)
+                    .get(row.saturating_sub(row_offset))
                     .and_then(|line| line.chars().nth(col))
                     .unwrap_or(' ');
                 content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
@@ -326,14 +359,6 @@ pub fn draw_embedded_pty(
                         cursor_rect.left_top(),
                         Align2::LEFT_TOP,
                         ch.to_string(),
-                        screen.font().clone(),
-                        palette.bg,
-                    );
-                } else {
-                    content_painter.text(
-                        cursor_rect.left_top(),
-                        Align2::LEFT_TOP,
-                        "_",
                         screen.font().clone(),
                         palette.bg,
                     );
@@ -374,7 +399,7 @@ pub fn draw_embedded_pty(
                             &screen,
                             &content_painter,
                             col_idx,
-                            row_idx,
+                            row_idx + row_offset,
                             &cell_to_draw,
                             border_conn,
                         );
@@ -382,12 +407,12 @@ pub fn draw_embedded_pty(
                 }
 
                 if !snapshot.cursor_hidden {
-                    let row = snapshot.cursor_row as usize;
+                    let row = snapshot.cursor_row as usize + row_offset;
                     let col = snapshot.cursor_col as usize;
                     let cursor_rect = screen.row_rect(col, row, 1);
                     let cell = snapshot
                         .cells
-                        .get(snapshot.cursor_row as usize)
+                        .get(row.saturating_sub(row_offset))
                         .and_then(|line| line.get(snapshot.cursor_col as usize))
                         .copied()
                         .unwrap_or(PtyStyledCell {
@@ -408,14 +433,6 @@ pub fn draw_embedded_pty(
                             cursor_rect.left_top(),
                             Align2::LEFT_TOP,
                             cell.ch.to_string(),
-                            screen.font().clone(),
-                            text_color,
-                        );
-                    } else {
-                        content_painter.text(
-                            cursor_rect.left_top(),
-                            Align2::LEFT_TOP,
-                            "_",
                             screen.font().clone(),
                             text_color,
                         );
@@ -687,6 +704,25 @@ mod tests {
 fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
     let mut had_input = false;
     let events = ctx.input(|i| i.events.clone());
+    let is_control_key = |key: Key| {
+        matches!(
+            key,
+            Key::ArrowUp
+                | Key::ArrowDown
+                | Key::ArrowLeft
+                | Key::ArrowRight
+                | Key::Escape
+                | Key::Tab
+                | Key::Backspace
+                | Key::Enter
+                | Key::Home
+                | Key::End
+                | Key::Insert
+                | Key::Delete
+                | Key::PageUp
+                | Key::PageDown
+        )
+    };
     for event in events {
         match event {
             egui::Event::Paste(text) => {
@@ -707,6 +743,15 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
                 modifiers,
                 ..
             } => {
+                // Printable text should flow exclusively through Event::Text.
+                // Event::Key is reserved for control/navigation and modified combos.
+                if !modifiers.ctrl
+                    && !modifiers.alt
+                    && !modifiers.command
+                    && !is_control_key(key)
+                {
+                    continue;
+                }
                 if modifiers.ctrl && key == Key::Q {
                     continue;
                 }
@@ -1029,6 +1074,7 @@ fn render_plain_texture_if_possible(
     ctx: &Context,
     painter: &egui::Painter,
     screen: &RetroScreen,
+    target_rect: Rect,
     palette: &RetroPalette,
     lines: &[String],
     dirty_rows: &[usize],
@@ -1111,7 +1157,7 @@ fn render_plain_texture_if_possible(
     };
     painter.image(
         texture.id(),
-        screen.rect,
+        target_rect,
         Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );

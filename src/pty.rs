@@ -745,6 +745,12 @@ impl PtySession {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    /// Optional PTY banner label shown above terminal content.
+    #[allow(dead_code)]
+    pub fn top_bar_label(&self) -> Option<&str> {
+        self.top_bar.as_deref()
+    }
+
     /// Returns true if new PTY output arrived since the last check.
     #[allow(dead_code)]
     pub fn take_output_activity(&mut self) -> bool {
