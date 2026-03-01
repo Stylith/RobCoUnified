@@ -53,7 +53,7 @@ use crate::config::ConnectionKind;
 use crate::config::{
     cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
     persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
-    update_settings, OpenMode, Settings, THEMES,
+    update_settings, OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
 use crate::core::auth::{load_users, read_session, save_users, UserRecord};
@@ -3085,6 +3085,21 @@ impl RobcoNativeApp {
                             }
                         });
                 });
+                if self.settings.draft.theme == CUSTOM_THEME_NAME {
+                    let mut rgb = self.settings.draft.custom_theme_rgb;
+                    changed |= ui
+                        .add(egui::Slider::new(&mut rgb[0], 0..=255).text("Custom Red"))
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut rgb[1], 0..=255).text("Custom Green"))
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut rgb[2], 0..=255).text("Custom Blue"))
+                        .changed();
+                    if rgb != self.settings.draft.custom_theme_rgb {
+                        self.settings.draft.custom_theme_rgb = rgb;
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.label("Default Open Mode");
                     changed |= ui

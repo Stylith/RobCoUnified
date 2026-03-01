@@ -77,6 +77,15 @@ The rewrite is a new native application layer, not a replacement of the current 
   - closes the active session
   - reindexes remaining sessions
   - selects the previous session when possible (legacy behavior target)
+  - close command is blocked when only one session exists
+- Session lifecycle tests expanded (close active/first/last/only cases) in shared session manager.
+- Terminal-style parity pass continued:
+  - login menu selection bounds are now normalized to selectable rows
+  - hacking grid glyph spacing/highlight geometry tightened for more stable theme-consistent rendering
+- Theme customization pass landed:
+  - `Custom` theme is now part of the same theme chooser list as built-in themes
+  - per-user custom RGB is persisted in settings and drives active terminal/native palette when selected
+  - RGB sliders/adjusters are wired in both native desktop settings and terminal-style settings flows
 
 ## Next parity targets
 

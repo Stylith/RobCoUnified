@@ -528,6 +528,8 @@ pub struct Settings {
     pub sound: bool,
     pub bootup: bool,
     pub theme: String,
+    #[serde(default = "default_custom_theme_rgb")]
+    pub custom_theme_rgb: [u8; 3],
     #[serde(default)]
     pub cli_styled_render: bool,
     #[serde(default)]
@@ -579,12 +581,17 @@ fn default_native_ui_scale() -> f32 {
     1.0
 }
 
+fn default_custom_theme_rgb() -> [u8; 3] {
+    [0, 255, 0]
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             sound: true,
             bootup: true,
             theme: "Green (Default)".into(),
+            custom_theme_rgb: default_custom_theme_rgb(),
             cli_styled_render: false,
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
@@ -738,11 +745,23 @@ mod tests {
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert!((decoded.native_ui_scale - 1.0).abs() < f32::EPSILON);
     }
+
+    #[test]
+    fn custom_theme_rgb_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("custom_theme_rgb");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert_eq!(decoded.custom_theme_rgb, [0, 255, 0]);
+    }
 }
 
 // ── Themes ────────────────────────────────────────────────────────────────────
 
 use ratatui::style::Color;
+
+pub const CUSTOM_THEME_NAME: &str = "Custom";
 
 pub const THEMES: &[(&str, Color)] = &[
     ("Green (Default)", Color::Green),
@@ -752,9 +771,14 @@ pub const THEMES: &[(&str, Color)] = &[
     ("Red", Color::Red),
     ("Purple", Color::Magenta),
     ("Light Blue", Color::Cyan),
+    (CUSTOM_THEME_NAME, Color::Green),
 ];
 
 pub fn theme_color(name: &str) -> Color {
+    if name == CUSTOM_THEME_NAME {
+        let [r, g, b] = default_custom_theme_rgb();
+        return Color::Rgb(r, g, b);
+    }
     THEMES
         .iter()
         .find(|(n, _)| *n == name)
@@ -762,8 +786,17 @@ pub fn theme_color(name: &str) -> Color {
         .unwrap_or(Color::Green)
 }
 
+pub fn theme_color_for_settings(settings: &Settings) -> Color {
+    if settings.theme == CUSTOM_THEME_NAME {
+        let [r, g, b] = settings.custom_theme_rgb;
+        return Color::Rgb(r, g, b);
+    }
+    theme_color(&settings.theme)
+}
+
 pub fn current_theme_color() -> Color {
-    theme_color(&get_settings().theme)
+    let settings = get_settings();
+    theme_color_for_settings(&settings)
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────

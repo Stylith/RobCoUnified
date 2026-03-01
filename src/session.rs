@@ -73,7 +73,9 @@ pub fn close_active_session() -> Option<usize> {
     if s.is_empty() {
         return None;
     }
-    let active = ACTIVE.load(Ordering::Relaxed).min(s.len().saturating_sub(1));
+    let active = ACTIVE
+        .load(Ordering::Relaxed)
+        .min(s.len().saturating_sub(1));
     s.remove(active);
 
     if s.is_empty() {
@@ -172,5 +174,46 @@ mod tests {
         assert_eq!(session_count(), 3);
         assert_eq!(active_idx(), 1);
         assert_eq!(active_username().as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn close_first_session_keeps_first_remaining_active() {
+        clear_sessions();
+        push_session("u1");
+        push_session("u2");
+        push_session("u3");
+        set_active(0);
+        let removed = close_active_session();
+        assert_eq!(removed, Some(0));
+        assert_eq!(session_count(), 2);
+        assert_eq!(active_idx(), 0);
+        assert_eq!(active_username().as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn close_last_session_selects_previous_index() {
+        clear_sessions();
+        push_session("u1");
+        push_session("u2");
+        push_session("u3");
+        set_active(2);
+        let removed = close_active_session();
+        assert_eq!(removed, Some(2));
+        assert_eq!(session_count(), 2);
+        assert_eq!(active_idx(), 1);
+        assert_eq!(active_username().as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn close_only_session_empties_list_and_resets_active() {
+        clear_sessions();
+        push_session("u1");
+        set_active(0);
+        let removed = close_active_session();
+        assert_eq!(removed, Some(0));
+        assert_eq!(session_count(), 0);
+        assert_eq!(active_idx(), 0);
+        assert_eq!(active_username(), None);
+        assert_eq!(close_active_session(), None);
     }
 }

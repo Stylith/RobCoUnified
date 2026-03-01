@@ -745,11 +745,7 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
             } => {
                 // Printable text should flow exclusively through Event::Text.
                 // Event::Key is reserved for control/navigation and modified combos.
-                if !modifiers.ctrl
-                    && !modifiers.alt
-                    && !modifiers.command
-                    && !is_control_key(key)
-                {
+                if !modifiers.ctrl && !modifiers.alt && !modifiers.command && !is_control_key(key) {
                     continue;
                 }
                 if modifiers.ctrl && key == Key::Q {

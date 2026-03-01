@@ -1,6 +1,6 @@
 use super::menu::{SettingsChoiceKind, SettingsChoiceOverlay};
 use super::retro_ui::{current_palette, RetroScreen};
-use crate::config::{CliAcsMode, OpenMode, Settings, HEADER_LINES, THEMES};
+use crate::config::{CliAcsMode, OpenMode, Settings, CUSTOM_THEME_NAME, HEADER_LINES, THEMES};
 use crate::connections::macos_connections_disabled;
 use eframe::egui::{self, Context};
 
@@ -22,6 +22,9 @@ enum SettingsRowId {
     Bootup,
     NavigationHints,
     Theme,
+    CustomThemeRed,
+    CustomThemeGreen,
+    CustomThemeBlue,
     BorderGlyphs,
     DefaultOpenMode,
     Connections,
@@ -79,6 +82,16 @@ pub fn run_terminal_settings_screen(
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             *selected_idx = (*selected_idx + 1).min(items.len().saturating_sub(1));
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft))
+            && adjust_settings_slider(draft, *selected_idx, is_admin, -1)
+        {
+            event = TerminalSettingsEvent::Persist;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight))
+            && adjust_settings_slider(draft, *selected_idx, is_admin, 1)
+        {
+            event = TerminalSettingsEvent::Persist;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
             event = handle_settings_activation(draft, *selected_idx, choice_overlay, is_admin);
@@ -212,6 +225,9 @@ fn handle_settings_activation(
             open_settings_choice(draft, choice_overlay, SettingsChoiceKind::Theme);
             TerminalSettingsEvent::None
         }
+        SettingsRowId::CustomThemeRed
+        | SettingsRowId::CustomThemeGreen
+        | SettingsRowId::CustomThemeBlue => TerminalSettingsEvent::None,
         SettingsRowId::BorderGlyphs => {
             draft.cli_acs_mode = match draft.cli_acs_mode {
                 CliAcsMode::Ascii => CliAcsMode::Unicode,
@@ -323,6 +339,26 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
             SettingsRowId::DefaultOpenMode,
         ),
     ];
+    if draft.theme == CUSTOM_THEME_NAME {
+        let [r, g, b] = draft.custom_theme_rgb;
+        rows.splice(
+            4..4,
+            [
+                (
+                    format!("Custom Theme Red: {r} [adjust]"),
+                    SettingsRowId::CustomThemeRed,
+                ),
+                (
+                    format!("Custom Theme Green: {g} [adjust]"),
+                    SettingsRowId::CustomThemeGreen,
+                ),
+                (
+                    format!("Custom Theme Blue: {b} [adjust]"),
+                    SettingsRowId::CustomThemeBlue,
+                ),
+            ],
+        );
+    }
     if !macos_connections_disabled() {
         rows.push(("Connections".to_string(), SettingsRowId::Connections));
     }
@@ -334,6 +370,42 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
     }
     rows.push(("Back".to_string(), SettingsRowId::Back));
     rows
+}
+
+fn adjust_settings_slider(draft: &mut Settings, idx: usize, is_admin: bool, delta: i16) -> bool {
+    let rows = terminal_settings_rows(draft, is_admin);
+    let Some((_, row_id)) = rows.get(idx) else {
+        return false;
+    };
+    match row_id {
+        SettingsRowId::CustomThemeRed => {
+            adjust_rgb_component(&mut draft.custom_theme_rgb[0], delta);
+            if draft.theme != CUSTOM_THEME_NAME {
+                draft.theme = CUSTOM_THEME_NAME.to_string();
+            }
+            true
+        }
+        SettingsRowId::CustomThemeGreen => {
+            adjust_rgb_component(&mut draft.custom_theme_rgb[1], delta);
+            if draft.theme != CUSTOM_THEME_NAME {
+                draft.theme = CUSTOM_THEME_NAME.to_string();
+            }
+            true
+        }
+        SettingsRowId::CustomThemeBlue => {
+            adjust_rgb_component(&mut draft.custom_theme_rgb[2], delta);
+            if draft.theme != CUSTOM_THEME_NAME {
+                draft.theme = CUSTOM_THEME_NAME.to_string();
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn adjust_rgb_component(value: &mut u8, delta: i16) {
+    let next = (*value as i16 + delta).clamp(0, 255);
+    *value = next as u8;
 }
 
 #[cfg(test)]

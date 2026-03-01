@@ -25,12 +25,22 @@ pub fn draw_login_screen(
     status_row: usize,
     content_col: usize,
 ) -> bool {
+    let selectable_count = rows
+        .iter()
+        .filter(|row| matches!(row, LoginMenuRow::User(_) | LoginMenuRow::Exit))
+        .count();
+    if selectable_count > 0 {
+        *selected_idx = (*selected_idx).min(selectable_count - 1);
+    } else {
+        *selected_idx = 0;
+    }
+
     if prompt.is_none() {
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             *selected_idx = selected_idx.saturating_sub(1);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-            *selected_idx = (*selected_idx + 1).min(rows.len().saturating_sub(2));
+            *selected_idx = (*selected_idx + 1).min(selectable_count.saturating_sub(1));
         }
     }
 

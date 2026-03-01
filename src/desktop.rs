@@ -24,7 +24,8 @@ use crate::config::{
     save_apps, save_categories, save_games, save_networks, update_settings, CliAcsMode,
     CliColorMode, ConnectionKind, DesktopCliProfiles, DesktopFileManagerSettings,
     DesktopIconPosition, DesktopIconStyle, DesktopPtyProfileSettings, FileManagerSortMode,
-    FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode, THEMES,
+    FileManagerTextOpenMode, FileManagerViewMode, OpenMode, WallpaperSizeMode, CUSTOM_THEME_NAME,
+    THEMES,
 };
 use crate::connections::{
     bluetooth_installer_hint, choose_discovered_connection, connect_connection,
@@ -10209,20 +10210,37 @@ fn desktop_settings_list_offset(settings: &DesktopSettingsState) -> u16 {
 fn desktop_settings_rows(settings: &DesktopSettingsState) -> Vec<String> {
     let s = get_settings();
     match &settings.panel {
-        DesktopSettingsPanel::Appearance => vec![
-            format!("Theme: {} [choose]", s.theme),
-            format!(
-                "Desktop Cursor: {} [toggle]",
-                if s.desktop_show_cursor { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Desktop Icons: {} [choose]",
-                desktop_icon_style_label(s.desktop_icon_style)
-            ),
-            "CLI Display".to_string(),
-            "Wallpapers".to_string(),
-            "Back".to_string(),
-        ],
+        DesktopSettingsPanel::Appearance => {
+            let mut rows = vec![format!("Theme: {} [choose]", s.theme)];
+            if s.theme == CUSTOM_THEME_NAME {
+                rows.push(format!(
+                    "Custom Theme Red: {} [adjust]",
+                    s.custom_theme_rgb[0]
+                ));
+                rows.push(format!(
+                    "Custom Theme Green: {} [adjust]",
+                    s.custom_theme_rgb[1]
+                ));
+                rows.push(format!(
+                    "Custom Theme Blue: {} [adjust]",
+                    s.custom_theme_rgb[2]
+                ));
+            }
+            rows.extend([
+                format!(
+                    "Desktop Cursor: {} [toggle]",
+                    if s.desktop_show_cursor { "ON" } else { "OFF" }
+                ),
+                format!(
+                    "Desktop Icons: {} [choose]",
+                    desktop_icon_style_label(s.desktop_icon_style)
+                ),
+                "CLI Display".to_string(),
+                "Wallpapers".to_string(),
+                "Back".to_string(),
+            ]);
+            rows
+        }
         DesktopSettingsPanel::DefaultApps => desktop_default_apps_rows(),
         DesktopSettingsPanel::DefaultAppSelect(slot) => desktop_default_app_select_rows(*slot),
         DesktopSettingsPanel::Connections => desktop_connections_rows(),
@@ -14155,10 +14173,52 @@ fn desktop_settings_profile_default_for_target(
     }
 }
 
+fn appearance_custom_theme_rows_enabled() -> bool {
+    get_settings().theme == CUSTOM_THEME_NAME
+}
+
+fn appearance_cursor_row() -> usize {
+    if appearance_custom_theme_rows_enabled() {
+        4
+    } else {
+        1
+    }
+}
+
+fn appearance_icon_row() -> usize {
+    if appearance_custom_theme_rows_enabled() {
+        5
+    } else {
+        2
+    }
+}
+
+fn appearance_cli_display_row() -> usize {
+    if appearance_custom_theme_rows_enabled() {
+        6
+    } else {
+        3
+    }
+}
+
+fn appearance_wallpapers_row() -> usize {
+    if appearance_custom_theme_rows_enabled() {
+        7
+    } else {
+        4
+    }
+}
+
 fn desktop_settings_row_count(state: &DesktopSettingsState) -> usize {
     match &state.panel {
         DesktopSettingsPanel::Home => desktop_settings_home_items(state).len(),
-        DesktopSettingsPanel::Appearance => 6,
+        DesktopSettingsPanel::Appearance => {
+            if appearance_custom_theme_rows_enabled() {
+                9
+            } else {
+                6
+            }
+        }
         DesktopSettingsPanel::DefaultApps => desktop_default_apps_rows().len(),
         DesktopSettingsPanel::DefaultAppSelect(slot) => {
             desktop_default_app_select_rows(*slot).len()
@@ -14219,6 +14279,20 @@ fn desktop_settings_apply_open_mode_toggle() {
 
 fn desktop_settings_toggle_desktop_cursor() {
     update_settings(|s| s.desktop_show_cursor = !s.desktop_show_cursor);
+    persist_settings();
+}
+
+fn desktop_settings_adjust_custom_theme(channel: usize, delta: i16) {
+    if channel > 2 || delta == 0 {
+        return;
+    }
+    update_settings(|s| {
+        let next = (i16::from(s.custom_theme_rgb[channel]) + delta).clamp(0, 255) as u8;
+        s.custom_theme_rgb[channel] = next;
+        if s.theme != CUSTOM_THEME_NAME {
+            s.theme = CUSTOM_THEME_NAME.to_string();
+        }
+    });
     persist_settings();
 }
 
@@ -14448,11 +14522,14 @@ fn handle_desktop_settings_activate(
                     .unwrap_or(0);
                 DesktopSettingsAction::None
             }
-            1 => {
+            idx if appearance_custom_theme_rows_enabled() && (1..=3).contains(&idx) => {
+                DesktopSettingsAction::None
+            }
+            idx if idx == appearance_cursor_row() => {
                 desktop_settings_toggle_desktop_cursor();
                 DesktopSettingsAction::None
             }
-            2 => {
+            idx if idx == appearance_icon_row() => {
                 state.panel = DesktopSettingsPanel::IconStyle;
                 state.selected = match get_settings().desktop_icon_style {
                     DesktopIconStyle::Dos => 0,
@@ -14462,12 +14539,12 @@ fn handle_desktop_settings_activate(
                 };
                 DesktopSettingsAction::None
             }
-            3 => {
+            idx if idx == appearance_cli_display_row() => {
                 state.panel = DesktopSettingsPanel::CliDisplay;
                 state.selected = 0;
                 DesktopSettingsAction::None
             }
-            4 => {
+            idx if idx == appearance_wallpapers_row() => {
                 state.panel = DesktopSettingsPanel::Wallpapers;
                 state.selected = 0;
                 DesktopSettingsAction::None
@@ -14932,19 +15009,19 @@ fn handle_desktop_settings_back(state: &mut DesktopSettingsState) -> DesktopSett
         }
         DesktopSettingsPanel::IconStyle => {
             state.panel = DesktopSettingsPanel::Appearance;
-            state.selected = 2;
+            state.selected = appearance_icon_row();
             state.hovered = None;
             DesktopSettingsAction::None
         }
         DesktopSettingsPanel::CliDisplay => {
             state.panel = DesktopSettingsPanel::Appearance;
-            state.selected = 3;
+            state.selected = appearance_cli_display_row();
             state.hovered = None;
             DesktopSettingsAction::None
         }
         DesktopSettingsPanel::Wallpapers => {
             state.panel = DesktopSettingsPanel::Appearance;
-            state.selected = 4;
+            state.selected = appearance_wallpapers_row();
             state.hovered = None;
             DesktopSettingsAction::None
         }
@@ -15126,7 +15203,12 @@ fn handle_desktop_settings_key(
             DesktopSettingsPanel::Home => {
                 state.selected = state.selected.saturating_sub(1);
             }
-            DesktopSettingsPanel::Appearance if state.selected == 1 => {
+            DesktopSettingsPanel::Appearance
+                if appearance_custom_theme_rows_enabled() && (1..=3).contains(&state.selected) =>
+            {
+                desktop_settings_adjust_custom_theme(state.selected - 1, -(step as i16))
+            }
+            DesktopSettingsPanel::Appearance if state.selected == appearance_cursor_row() => {
                 desktop_settings_toggle_desktop_cursor()
             }
             DesktopSettingsPanel::General if state.selected == 3 => {
@@ -15156,7 +15238,12 @@ fn handle_desktop_settings_key(
                 let max = desktop_settings_row_count(state).saturating_sub(1);
                 state.selected = (state.selected + 1).min(max);
             }
-            DesktopSettingsPanel::Appearance if state.selected == 1 => {
+            DesktopSettingsPanel::Appearance
+                if appearance_custom_theme_rows_enabled() && (1..=3).contains(&state.selected) =>
+            {
+                desktop_settings_adjust_custom_theme(state.selected - 1, step as i16)
+            }
+            DesktopSettingsPanel::Appearance if state.selected == appearance_cursor_row() => {
                 desktop_settings_toggle_desktop_cursor()
             }
             DesktopSettingsPanel::General if state.selected == 3 => {
@@ -16449,7 +16536,7 @@ mod tests {
     fn appearance_can_open_cli_display_and_back_returns_to_appearance() {
         let mut state = DesktopSettingsState::default();
         state.panel = DesktopSettingsPanel::Appearance;
-        state.selected = 3;
+        state.selected = appearance_cli_display_row();
 
         let action = handle_desktop_settings_activate(&mut state, false);
         assert!(matches!(action, DesktopSettingsAction::None));
@@ -16459,7 +16546,7 @@ mod tests {
         let action = handle_desktop_settings_back(&mut state);
         assert!(matches!(action, DesktopSettingsAction::None));
         assert!(matches!(state.panel, DesktopSettingsPanel::Appearance));
-        assert_eq!(state.selected, 3);
+        assert_eq!(state.selected, appearance_cli_display_row());
     }
 
     #[test]
