@@ -111,6 +111,10 @@ The rewrite is a new native application layer, not a replacement of the current 
     - top bar rethemed to compact retro desktop chrome
     - start menu moved to bottom-left popup style panel
     - desktop body simplified from debug/status columns to icon-launch layout
+  - desktop window chrome pass landed:
+    - shared retro frame/titlebar styling across native desktop windows
+    - unified close affordance via custom desktop header bars
+    - core windows now share the same chrome language (File Manager, Word Processor, Settings, Applications, Terminal Mode)
 
 ## Next parity targets
 

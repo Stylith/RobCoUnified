@@ -3079,16 +3079,51 @@ impl RobcoNativeApp {
             .show(ctx, |_ui| {});
     }
 
+    fn desktop_window_frame() -> egui::Frame {
+        let palette = current_palette();
+        egui::Frame::none()
+            .fill(palette.bg)
+            .stroke(egui::Stroke::new(1.0, palette.fg))
+            .inner_margin(egui::Margin::same(6.0))
+    }
+
+    fn draw_desktop_window_header(ui: &mut egui::Ui, title: &str) -> bool {
+        let palette = current_palette();
+        let mut close_clicked = false;
+        egui::Frame::none()
+            .fill(palette.panel)
+            .stroke(egui::Stroke::new(1.0, palette.fg))
+            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).strong());
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("[X]").clicked() {
+                            close_clicked = true;
+                        }
+                        let _ = ui.add_enabled(false, egui::Button::new("[+]"));
+                        let _ = ui.add_enabled(false, egui::Button::new("[-]"));
+                    });
+                });
+            });
+        ui.add_space(4.0);
+        close_clicked
+    }
+
     fn draw_file_manager(&mut self, ctx: &Context) {
         if !self.file_manager.open {
             return;
         }
         let mut open = self.file_manager.open;
+        let mut close_from_header = false;
         egui::Window::new("File Manager")
             .id(Id::new("native_file_manager"))
             .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
             .default_size([700.0, 480.0])
             .show(ctx, |ui| {
+                close_from_header |= Self::draw_desktop_window_header(ui, "File Manager");
                 ui.horizontal(|ui| {
                     if ui.button("Up").clicked() {
                         self.file_manager.up();
@@ -3130,6 +3165,9 @@ impl RobcoNativeApp {
                     }
                 });
             });
+        if close_from_header {
+            open = false;
+        }
         self.file_manager.open = open;
     }
 
@@ -3202,11 +3240,15 @@ impl RobcoNativeApp {
         }
 
         let mut open = self.editor.open;
+        let mut close_from_header = false;
         egui::Window::new(title)
             .id(Id::new("native_word_processor"))
             .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
             .default_size([820.0, 560.0])
             .show(ctx, |ui| {
+                close_from_header |= Self::draw_desktop_window_header(ui, "ROBCO Word Processor");
                 ui.horizontal(|ui| {
                     if ui.button("New").clicked() {
                         self.new_document();
@@ -3235,6 +3277,9 @@ impl RobcoNativeApp {
                     ui.small(&self.editor.status);
                 }
             });
+        if close_from_header {
+            open = false;
+        }
         self.editor.open = open;
     }
 
@@ -3243,11 +3288,15 @@ impl RobcoNativeApp {
             return;
         }
         let mut open = self.settings.open;
+        let mut close_from_header = false;
         egui::Window::new("Settings")
             .id(Id::new("native_settings"))
             .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
             .default_size([500.0, 360.0])
             .show(ctx, |ui| {
+                close_from_header |= Self::draw_desktop_window_header(ui, "Settings");
                 let mut changed = false;
                 changed |= ui
                     .checkbox(&mut self.settings.draft.sound, "Sound")
@@ -3319,6 +3368,9 @@ impl RobcoNativeApp {
                     ui.small(&self.settings.status);
                 }
             });
+        if close_from_header {
+            open = false;
+        }
         self.settings.open = open;
     }
 
@@ -3328,11 +3380,15 @@ impl RobcoNativeApp {
         }
         let mut open = self.applications.open;
         let mut close_after_launch = false;
+        let mut close_from_header = false;
         egui::Window::new("Applications")
             .id(Id::new("native_applications"))
             .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
             .default_size([420.0, 380.0])
             .show(ctx, |ui| {
+                close_from_header |= Self::draw_desktop_window_header(ui, "Applications");
                 ui.heading("Built-in");
                 if self.settings.draft.builtin_menu_visibility.text_editor
                     && ui.button("ROBCO Word Processor").clicked()
@@ -3368,6 +3424,9 @@ impl RobcoNativeApp {
         if close_after_launch {
             open = false;
         }
+        if close_from_header {
+            open = false;
+        }
         self.applications.open = open;
     }
 
@@ -3377,11 +3436,15 @@ impl RobcoNativeApp {
         }
         let plan = launch_plan();
         let mut open = self.terminal_mode.open;
+        let mut close_from_header = false;
         egui::Window::new("Terminal Mode")
             .id(Id::new("native_terminal_mode"))
             .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
             .default_size([480.0, 220.0])
             .show(ctx, |ui| {
+                close_from_header |= Self::draw_desktop_window_header(ui, "Terminal Mode");
                 ui.label("Terminal mode stays a first-class product mode.");
                 ui.small(
                     "The native shell launches the existing `robcos` TUI in your system terminal.",
@@ -3405,6 +3468,9 @@ impl RobcoNativeApp {
                     ui.small(&self.terminal_mode.status);
                 }
             });
+        if close_from_header {
+            open = false;
+        }
         self.terminal_mode.open = open;
     }
 }
