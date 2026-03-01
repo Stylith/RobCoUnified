@@ -548,6 +548,48 @@ impl RobcoNativeApp {
         }
     }
 
+    fn close_active_session_window(&mut self) {
+        if session::session_count() == 0 {
+            return;
+        }
+
+        self.persist_snapshot();
+        let closing_idx = session::active_idx();
+
+        if let Some(mut pty) = self.terminal_pty.take() {
+            pty.session.terminate();
+        }
+        if let Some(mut parked) = self.session_runtime.remove(&closing_idx) {
+            if let Some(mut pty) = parked.terminal_pty.take() {
+                pty.session.terminate();
+            }
+        }
+
+        let Some(removed_idx) = session::close_active_session() else {
+            return;
+        };
+
+        // Session indexes are contiguous; shift parked state keys down after removal.
+        let mut remapped = HashMap::new();
+        for (idx, parked) in self.session_runtime.drain() {
+            let new_idx = if idx > removed_idx { idx - 1 } else { idx };
+            remapped.insert(new_idx, parked);
+        }
+        self.session_runtime = remapped;
+
+        if session::session_count() == 0 {
+            self.finish_logout();
+            return;
+        }
+
+        if !self.restore_active_session_runtime_if_any() {
+            if let Some(username) = session::active_username() {
+                self.activate_session_user(&username);
+            }
+        }
+        self.shell_status = format!("Closed session {}.", removed_idx + 1);
+    }
+
     fn capture_session_switch_shortcuts(&mut self, ctx: &Context) {
         if self.session.is_none() {
             self.session_leader_until = None;
@@ -564,6 +606,7 @@ impl RobcoNativeApp {
         let events = ctx.input(|i| i.events.clone());
         let mut consumed: Vec<(Modifiers, Key)> = Vec::new();
         let mut switch_target: Option<usize> = None;
+        let mut close_active = false;
         let now = Instant::now();
 
         for event in events {
@@ -585,11 +628,17 @@ impl RobcoNativeApp {
 
             if self.session_leader_until.is_some() {
                 // Native session switching is intentionally strict:
-                // only Ctrl+Q followed by plain 1..9 is accepted.
+                // only Ctrl+Q followed by plain 1..9 (switch) or W/X (close).
                 let plain_follow = !modifiers.ctrl && !modifiers.alt && !modifiers.command;
                 if plain_follow {
                     if let Some(idx) = Self::session_idx_from_digit_key(key) {
                         switch_target = Some(idx);
+                        consumed.push((modifiers, key));
+                        self.session_leader_until = None;
+                        break;
+                    }
+                    if matches!(key, Key::W | Key::X) {
+                        close_active = true;
                         consumed.push((modifiers, key));
                         self.session_leader_until = None;
                         break;
@@ -606,6 +655,11 @@ impl RobcoNativeApp {
                     i.consume_key(*mods, *key);
                 }
             });
+        }
+
+        if close_active {
+            self.close_active_session_window();
+            return;
         }
 
         if let Some(target) = switch_target {
@@ -2801,11 +2855,7 @@ impl RobcoNativeApp {
                     .collect::<String>()
             }
         };
-        let right = if self.session.is_some() {
-            "44%".to_string()
-        } else {
-            "--%".to_string()
-        };
+        let right = crate::status::battery_status_string();
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
             .exact_height(retro_footer_height())

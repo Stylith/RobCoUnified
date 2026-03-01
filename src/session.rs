@@ -65,6 +65,26 @@ pub fn set_active(idx: usize) {
     ACTIVE.store(idx, Ordering::Relaxed);
 }
 
+/// Close the active session and return the removed index.
+/// The new active session becomes the previous one when possible.
+#[allow(dead_code)]
+pub fn close_active_session() -> Option<usize> {
+    let mut s = SESSIONS.lock().unwrap();
+    if s.is_empty() {
+        return None;
+    }
+    let active = ACTIVE.load(Ordering::Relaxed).min(s.len().saturating_sub(1));
+    s.remove(active);
+
+    if s.is_empty() {
+        ACTIVE.store(0, Ordering::Relaxed);
+    } else {
+        let new_active = active.saturating_sub(1).min(s.len().saturating_sub(1));
+        ACTIVE.store(new_active, Ordering::Relaxed);
+    }
+    Some(active)
+}
+
 pub fn active_username() -> Option<String> {
     let s = SESSIONS.lock().unwrap();
     let idx = ACTIVE.load(Ordering::Relaxed);
@@ -137,5 +157,20 @@ mod tests {
         set_active(idx);
         assert!(take_default_mode_pending_for_active());
         assert!(!take_default_mode_pending_for_active());
+    }
+
+    #[test]
+    fn close_active_session_picks_previous() {
+        clear_sessions();
+        push_session("u1");
+        push_session("u2");
+        push_session("u3");
+        push_session("u4");
+        set_active(2);
+        let removed = close_active_session();
+        assert_eq!(removed, Some(2));
+        assert_eq!(session_count(), 3);
+        assert_eq!(active_idx(), 1);
+        assert_eq!(active_username().as_deref(), Some("u2"));
     }
 }

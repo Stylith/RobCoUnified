@@ -34,6 +34,10 @@ fn battery_display() -> Option<String> {
     guard.as_ref().and_then(|c| c.display.clone())
 }
 
+pub fn battery_status_string() -> String {
+    battery_display().unwrap_or_else(|| "--%".to_string())
+}
+
 #[cfg(target_os = "macos")]
 fn read_battery() -> Option<String> {
     let out = std::process::Command::new("pmset")
@@ -135,7 +139,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect) {
 
     let ss = sel_style();
     let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
-    let batt = battery_display().unwrap_or_else(|| "--%".to_string());
+    let batt = battery_status_string();
     let sessions = crate::session::get_sessions();
     let active = crate::session::active_idx();
     let width = area.width as usize;

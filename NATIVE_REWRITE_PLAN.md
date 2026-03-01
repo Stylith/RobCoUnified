@@ -72,6 +72,11 @@ The rewrite is a new native application layer, not a replacement of the current 
   - existing native sessions now restore parked runtime state (screen/context) instead of always resetting to main menu
 - Native terminal footer now uses legacy-style session indicators (`[1*][2]...`) and no longer shows `username | terminal`.
 - Native logout now force-terminates active and parked PTY child processes to prevent background apps (e.g., music players) from continuing after logout.
+- Native footer battery indicator now uses shared live battery polling/cache (no hardcoded value).
+- Native session leader now supports closing the active session (`Ctrl+Q`, then `W` or `X`):
+  - closes the active session
+  - reindexes remaining sessions
+  - selects the previous session when possible (legacy behavior target)
 
 ## Next parity targets
 
