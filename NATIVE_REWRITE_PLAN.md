@@ -57,3 +57,24 @@ The rewrite is a new native application layer, not a replacement of the current 
 - pretending a terminal emulator wrapper is the final architecture
 - deleting terminal mode early
 - chasing full feature parity before the native shell is structurally sound
+
+## Current status (Mar 1, 2026)
+
+- Native terminal-style UI now targets old RobCo proportions as the default baseline.
+- Terminal-style login, main menu, settings, and hacking screens were rebuilt for closer legacy parity.
+- Native PTY integration is active for terminal apps (inside the app, not external windows).
+- Performance work landed for PTY repaint throttling and plain-render fast path behavior.
+- Session switching is re-enabled in native mode via shared session manager wiring:
+  - login now creates/activates a managed session entry
+  - logout clears session list and pending switch requests
+  - native input now captures switch shortcuts and applies pending session switches
+  - switch UX is currently constrained to `Ctrl+Q` then `1..9` only
+  - existing native sessions now restore parked runtime state (screen/context) instead of always resetting to main menu
+- Native terminal footer now uses legacy-style session indicators (`[1*][2]...`) and no longer shows `username | terminal`.
+- Native logout now force-terminates active and parked PTY child processes to prevent background apps (e.g., music players) from continuing after logout.
+
+## Next parity targets
+
+- Add visible session-switch UX hints (without clutter) and verify behavior inside every terminal-style submenu.
+- Preserve deeper per-session runtime state (screen/selection context), not only user/snapshot restoration.
+- Continue terminal-first parity hardening before broad desktop-only expansion.

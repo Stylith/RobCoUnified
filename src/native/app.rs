@@ -59,6 +59,7 @@ use crate::connections::{connect_connection, network_requires_password, Discover
 use crate::core::auth::{load_users, read_session, save_users, UserRecord};
 use crate::core::hacking::HackingGame;
 use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, DefaultAppSlot};
+use crate::session;
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key,
@@ -66,6 +67,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -152,6 +154,7 @@ const TERMINAL_SUBTITLE_ROW: usize = 7;
 const TERMINAL_MENU_START_ROW: usize = 9;
 const TERMINAL_STATUS_ROW: usize = 24;
 const TERMINAL_STATUS_ROW_ALT: usize = 26;
+const SESSION_LEADER_WINDOW: Duration = Duration::from_millis(1200);
 
 #[derive(Clone, Copy)]
 struct TerminalLayout {
@@ -292,6 +295,36 @@ pub struct RobcoNativeApp {
     terminal_prompt: Option<TerminalPrompt>,
     suppress_next_menu_submit: bool,
     terminal_flash: Option<TerminalFlash>,
+    session_leader_until: Option<Instant>,
+    session_runtime: HashMap<usize, ParkedSessionState>,
+    shell_status: String,
+}
+
+struct ParkedSessionState {
+    desktop_mode_open: bool,
+    start_open: bool,
+    main_menu_idx: usize,
+    terminal_screen: TerminalScreen,
+    terminal_apps_idx: usize,
+    terminal_documents_idx: usize,
+    terminal_logs_idx: usize,
+    terminal_network_idx: usize,
+    terminal_games_idx: usize,
+    terminal_pty: Option<NativePtyState>,
+    terminal_installer: TerminalInstallerState,
+    terminal_settings_idx: usize,
+    terminal_edit_menus: TerminalEditMenusState,
+    terminal_connections: TerminalConnectionsState,
+    terminal_default_apps_idx: usize,
+    terminal_default_app_choice_idx: usize,
+    terminal_default_app_slot: Option<DefaultAppSlot>,
+    terminal_browser_idx: usize,
+    terminal_browser_return: TerminalScreen,
+    terminal_user_management_idx: usize,
+    terminal_user_management_mode: UserManagementMode,
+    terminal_settings_choice: Option<SettingsChoiceOverlay>,
+    terminal_prompt: Option<TerminalPrompt>,
+    suppress_next_menu_submit: bool,
     shell_status: String,
 }
 
@@ -303,6 +336,8 @@ impl Default for RobcoNativeApp {
                 set_current_user(Some(&last_user));
             }
         }
+        session::clear_sessions();
+        session::take_switch_request();
         let settings_draft = current_settings();
         Self {
             login: LoginState::default(),
@@ -349,12 +384,235 @@ impl Default for RobcoNativeApp {
             terminal_prompt: None,
             suppress_next_menu_submit: false,
             terminal_flash: None,
+            session_leader_until: None,
+            session_runtime: HashMap::new(),
             shell_status: String::new(),
         }
     }
 }
 
 impl RobcoNativeApp {
+    fn session_idx_from_digit_key(key: Key) -> Option<usize> {
+        match key {
+            Key::Num1 => Some(0),
+            Key::Num2 => Some(1),
+            Key::Num3 => Some(2),
+            Key::Num4 => Some(3),
+            Key::Num5 => Some(4),
+            Key::Num6 => Some(5),
+            Key::Num7 => Some(6),
+            Key::Num8 => Some(7),
+            Key::Num9 => Some(8),
+            _ => None,
+        }
+    }
+
+    fn request_session_switch_if_valid(&mut self, target: usize) -> bool {
+        let count = session::session_count();
+        if target < count || (target == count && count < session::MAX_SESSIONS) {
+            session::request_switch(target);
+            return true;
+        }
+        false
+    }
+
+    fn ensure_login_session_entry(&mut self, username: &str) {
+        let existing = session::get_sessions()
+            .iter()
+            .position(|entry| entry.username == username);
+        let idx = existing.unwrap_or_else(|| session::push_session(username));
+        session::set_active(idx);
+    }
+
+    fn park_active_session_runtime(&mut self) {
+        if self.session.is_none() || session::session_count() == 0 {
+            return;
+        }
+        let idx = session::active_idx();
+        let parked = ParkedSessionState {
+            desktop_mode_open: self.desktop_mode_open,
+            start_open: self.start_open,
+            main_menu_idx: self.main_menu_idx,
+            terminal_screen: self.terminal_screen,
+            terminal_apps_idx: self.terminal_apps_idx,
+            terminal_documents_idx: self.terminal_documents_idx,
+            terminal_logs_idx: self.terminal_logs_idx,
+            terminal_network_idx: self.terminal_network_idx,
+            terminal_games_idx: self.terminal_games_idx,
+            terminal_pty: self.terminal_pty.take(),
+            terminal_installer: std::mem::take(&mut self.terminal_installer),
+            terminal_settings_idx: self.terminal_settings_idx,
+            terminal_edit_menus: std::mem::take(&mut self.terminal_edit_menus),
+            terminal_connections: std::mem::take(&mut self.terminal_connections),
+            terminal_default_apps_idx: self.terminal_default_apps_idx,
+            terminal_default_app_choice_idx: self.terminal_default_app_choice_idx,
+            terminal_default_app_slot: self.terminal_default_app_slot.take(),
+            terminal_browser_idx: self.terminal_browser_idx,
+            terminal_browser_return: self.terminal_browser_return,
+            terminal_user_management_idx: self.terminal_user_management_idx,
+            terminal_user_management_mode: self.terminal_user_management_mode.clone(),
+            terminal_settings_choice: self.terminal_settings_choice.take(),
+            terminal_prompt: self.terminal_prompt.take(),
+            suppress_next_menu_submit: self.suppress_next_menu_submit,
+            shell_status: std::mem::take(&mut self.shell_status),
+        };
+        self.session_runtime.insert(idx, parked);
+    }
+
+    fn restore_active_session_runtime_if_any(&mut self) -> bool {
+        let idx = session::active_idx();
+        let Some(parked) = self.session_runtime.remove(&idx) else {
+            return false;
+        };
+        self.desktop_mode_open = parked.desktop_mode_open;
+        self.start_open = parked.start_open;
+        self.main_menu_idx = parked.main_menu_idx;
+        self.terminal_screen = parked.terminal_screen;
+        self.terminal_apps_idx = parked.terminal_apps_idx;
+        self.terminal_documents_idx = parked.terminal_documents_idx;
+        self.terminal_logs_idx = parked.terminal_logs_idx;
+        self.terminal_network_idx = parked.terminal_network_idx;
+        self.terminal_games_idx = parked.terminal_games_idx;
+        self.terminal_pty = parked.terminal_pty;
+        self.terminal_installer = parked.terminal_installer;
+        self.terminal_settings_idx = parked.terminal_settings_idx;
+        self.terminal_edit_menus = parked.terminal_edit_menus;
+        self.terminal_connections = parked.terminal_connections;
+        self.terminal_default_apps_idx = parked.terminal_default_apps_idx;
+        self.terminal_default_app_choice_idx = parked.terminal_default_app_choice_idx;
+        self.terminal_default_app_slot = parked.terminal_default_app_slot;
+        self.terminal_browser_idx = parked.terminal_browser_idx;
+        self.terminal_browser_return = parked.terminal_browser_return;
+        self.terminal_user_management_idx = parked.terminal_user_management_idx;
+        self.terminal_user_management_mode = parked.terminal_user_management_mode;
+        self.terminal_settings_choice = parked.terminal_settings_choice;
+        self.terminal_prompt = parked.terminal_prompt;
+        self.suppress_next_menu_submit = parked.suppress_next_menu_submit;
+        self.shell_status = parked.shell_status;
+        true
+    }
+
+    fn activate_session_user(&mut self, username: &str) {
+        let users = load_users();
+        if let Some(user) = users.get(username).cloned() {
+            bind_login_session(username);
+            self.restore_for_user(username, &user);
+        } else {
+            self.shell_status = format!("Unknown user '{username}'.");
+        }
+    }
+
+    fn apply_pending_session_switch(&mut self) {
+        let Some(target) = session::take_switch_request() else {
+            return;
+        };
+
+        let count = session::session_count();
+        if target < count {
+            let current = session::active_idx();
+            if target == current {
+                return;
+            }
+            self.persist_snapshot();
+            self.park_active_session_runtime();
+            session::set_active(target);
+            if self.restore_active_session_runtime_if_any() {
+                return;
+            }
+            if let Some(username) = session::active_username() {
+                self.activate_session_user(&username);
+            }
+            return;
+        }
+
+        if target == count && count < session::MAX_SESSIONS {
+            if let Some(username) = session::active_username() {
+                self.persist_snapshot();
+                self.park_active_session_runtime();
+                let idx = session::push_session_with_default_mode(&username, false);
+                session::set_active(idx);
+                self.activate_session_user(&username);
+                self.shell_status = format!("Switched to session {}.", idx + 1);
+            }
+        }
+    }
+
+    fn terminate_all_native_pty_children(&mut self) {
+        if let Some(mut pty) = self.terminal_pty.take() {
+            pty.session.terminate();
+        }
+        for parked in self.session_runtime.values_mut() {
+            if let Some(mut pty) = parked.terminal_pty.take() {
+                pty.session.terminate();
+            }
+        }
+    }
+
+    fn capture_session_switch_shortcuts(&mut self, ctx: &Context) {
+        if self.session.is_none() {
+            self.session_leader_until = None;
+            return;
+        }
+
+        if self
+            .session_leader_until
+            .is_some_and(|deadline| Instant::now() > deadline)
+        {
+            self.session_leader_until = None;
+        }
+
+        let events = ctx.input(|i| i.events.clone());
+        let mut consumed: Vec<(Modifiers, Key)> = Vec::new();
+        let mut switch_target: Option<usize> = None;
+        let now = Instant::now();
+
+        for event in events {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+
+            if modifiers.ctrl && key == Key::Q {
+                self.session_leader_until = Some(now + SESSION_LEADER_WINDOW);
+                consumed.push((modifiers, key));
+                continue;
+            }
+
+            if self.session_leader_until.is_some() {
+                // Native session switching is intentionally strict:
+                // only Ctrl+Q followed by plain 1..9 is accepted.
+                let plain_follow = !modifiers.ctrl && !modifiers.alt && !modifiers.command;
+                if plain_follow {
+                    if let Some(idx) = Self::session_idx_from_digit_key(key) {
+                        switch_target = Some(idx);
+                        consumed.push((modifiers, key));
+                        self.session_leader_until = None;
+                        break;
+                    }
+                }
+                self.session_leader_until = None;
+                continue;
+            }
+        }
+
+        if !consumed.is_empty() {
+            ctx.input_mut(|i| {
+                for (mods, key) in &consumed {
+                    i.consume_key(*mods, *key);
+                }
+            });
+        }
+
+        if let Some(target) = switch_target {
+            self.request_session_switch_if_valid(target);
+        }
+    }
+
     fn terminal_layout(&self) -> TerminalLayout {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
     }
@@ -407,6 +665,7 @@ impl RobcoNativeApp {
         self.terminal_prompt = None;
         self.suppress_next_menu_submit = false;
         self.terminal_flash = None;
+        self.session_leader_until = None;
         self.shell_status.clear();
     }
 
@@ -478,15 +737,20 @@ impl RobcoNativeApp {
             }
         }
         self.persist_snapshot();
+        self.terminate_all_native_pty_children();
         self.terminal_prompt = None;
-        self.terminal_pty = None;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.desktop_mode_open = false;
+        self.session_leader_until = None;
         self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
     }
 
     fn finish_logout(&mut self) {
         crate::config::reload_settings();
+        self.terminate_all_native_pty_children();
+        session::clear_sessions();
+        session::take_switch_request();
+        self.session_runtime.clear();
         self.session = None;
         self.login_mode = LoginScreenMode::SelectUser;
         self.login_hacking = None;
@@ -521,6 +785,7 @@ impl RobcoNativeApp {
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
         self.terminal_flash = None;
+        self.session_leader_until = None;
         self.shell_status.clear();
     }
 
@@ -2517,15 +2782,29 @@ impl RobcoNativeApp {
         let layout = self.terminal_layout();
         let now = Local::now();
         let left = now.format("%a %Y-%m-%d %I:%M%p").to_string();
-        let mode = if self.desktop_mode_open {
-            "desktop"
-        } else {
-            "terminal"
+        let center = {
+            let sessions = session::get_sessions();
+            let active = session::active_idx();
+            if sessions.is_empty() {
+                "[*]".to_string()
+            } else {
+                sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        if i == active {
+                            format!("[{}*]", i + 1)
+                        } else {
+                            format!("[{}]", i + 1)
+                        }
+                    })
+                    .collect::<String>()
+            }
         };
-        let center = if let Some(session) = &self.session {
-            format!("[{} | {}]", session.username, mode)
+        let right = if self.session.is_some() {
+            "44%".to_string()
         } else {
-            "[*]".to_string()
+            "--%".to_string()
         };
         TopBottomPanel::bottom("native_terminal_footer")
             .resizable(false)
@@ -2540,7 +2819,7 @@ impl RobcoNativeApp {
                 let palette = current_palette();
                 let (screen, _) = RetroScreen::new(ui, layout.cols, 1);
                 let painter = ui.painter_at(screen.rect);
-                screen.footer_bar(&painter, &palette, &left, &center, "44%");
+                screen.footer_bar(&painter, &palette, &left, &center, &right);
             });
     }
 
@@ -2881,6 +3160,7 @@ impl eframe::App for RobcoNativeApp {
                     }
                     FlashAction::FinishLogout => self.finish_logout(),
                     FlashAction::FinishLogin { username, user } => {
+                        self.ensure_login_session_entry(&username);
                         self.restore_for_user(&username, &user);
                     }
                     FlashAction::StartHacking { username } => {
@@ -2920,6 +3200,11 @@ impl eframe::App for RobcoNativeApp {
             self.draw_terminal_footer_spacer(ctx);
             self.draw_login(ctx);
             return;
+        }
+
+        self.capture_session_switch_shortcuts(ctx);
+        if session::has_switch_request() {
+            self.apply_pending_session_switch();
         }
 
         if !self.desktop_mode_open
