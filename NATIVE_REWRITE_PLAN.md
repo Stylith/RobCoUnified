@@ -93,6 +93,10 @@ The rewrite is a new native application layer, not a replacement of the current 
   - terminal prompt/flash/session-leader transient state
   - active user identity is synchronized before parked-state restore
   - parity coverage now includes a native app test asserting full context restore on park/restore
+  - parity coverage now includes:
+    - switch between sessions and restore each screen/context
+    - close active session and restore previous session context after index remap
+    - separator/non-selectable row mapping stability in native terminal menus
 
 ## Next parity targets
 

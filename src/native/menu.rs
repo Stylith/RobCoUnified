@@ -122,6 +122,14 @@ pub fn selectable_menu_count() -> usize {
         .count()
 }
 
+fn selectable_row_indices(items: &[String]) -> Vec<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
+        .collect()
+}
+
 pub fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
     MAIN_MENU_ENTRIES
         .iter()
@@ -157,11 +165,7 @@ pub fn draw_terminal_menu_screen(
     content_col: usize,
     shell_status: &str,
 ) -> Option<usize> {
-    let selectable_rows: Vec<usize> = items
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
-        .collect();
+    let selectable_rows = selectable_row_indices(items);
     if selectable_rows.is_empty() {
         return None;
     }
@@ -236,4 +240,21 @@ pub fn draw_terminal_menu_screen(
         });
 
     activated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selectable_rows_skip_separators_and_keep_back_selectable() {
+        let items = vec![
+            "Applications".to_string(),
+            "---".to_string(),
+            "Settings".to_string(),
+            "Back".to_string(),
+        ];
+        let rows = selectable_row_indices(&items);
+        assert_eq!(rows, vec![0, 2, 3]);
+    }
 }

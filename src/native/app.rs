@@ -3386,6 +3386,8 @@ impl eframe::App for RobcoNativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
+    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
     fn session_test_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -3393,6 +3395,57 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("native app session test lock")
+    }
+
+    struct UsersRestore {
+        backup: HashMap<String, UserRecord>,
+    }
+
+    impl Drop for UsersRestore {
+        fn drop(&mut self) {
+            save_users(&self.backup);
+        }
+    }
+
+    fn install_test_users(usernames: &[&str]) -> UsersRestore {
+        let backup = load_users();
+        let mut db = HashMap::new();
+        for username in usernames {
+            db.insert(
+                (*username).to_string(),
+                UserRecord {
+                    password_hash: String::new(),
+                    is_admin: *username == "u1",
+                    auth_method: AuthMethod::NoPassword,
+                },
+            );
+        }
+        save_users(&db);
+        UsersRestore { backup }
+    }
+
+    fn set_runtime_marker(app: &mut RobcoNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
+        app.desktop_mode_open = false;
+        app.start_open = true;
+        app.main_menu_idx = idx;
+        app.terminal_screen = screen;
+        app.terminal_settings_idx = idx;
+        app.terminal_user_management_idx = idx;
+        app.file_manager.open = true;
+        app.file_manager.cwd = PathBuf::from(format!("/tmp/{tag}"));
+        app.file_manager.selected = Some(PathBuf::from(format!("/tmp/{tag}/selected.txt")));
+        app.editor.open = true;
+        app.editor.path = Some(PathBuf::from(format!("/tmp/{tag}/doc.txt")));
+        app.editor.text = tag.to_string();
+        app.editor.dirty = idx % 2 == 0;
+        app.editor.status = format!("status-{tag}");
+        app.settings.open = idx % 2 == 1;
+        app.settings.status = format!("settings-{tag}");
+        app.applications.open = idx % 2 == 0;
+        app.applications.status = format!("apps-{tag}");
+        app.terminal_mode.open = idx % 2 == 1;
+        app.terminal_mode.status = format!("term-{tag}");
+        app.shell_status = format!("shell-{tag}");
     }
 
     #[test]
@@ -3505,5 +3558,88 @@ mod tests {
         assert!(app.terminal_prompt.is_some());
         assert!(app.terminal_flash.is_some());
         assert!(!app.session_runtime.contains_key(&idx));
+    }
+
+    #[test]
+    fn session_switch_restores_each_sessions_screen_context() {
+        let _guard = session_test_guard();
+        let _users = install_test_users(&["u1", "u2"]);
+        session::clear_sessions();
+        session::take_switch_request();
+
+        let mut app = RobcoNativeApp::default();
+        let s1 = session::push_session("u1");
+        let s2 = session::push_session("u2");
+
+        session::set_active(s1);
+        assert!(app.sync_active_session_identity());
+        set_runtime_marker(&mut app, TerminalScreen::Settings, 2, "u1-a");
+        app.park_active_session_runtime();
+
+        session::set_active(s2);
+        assert!(app.sync_active_session_identity());
+        set_runtime_marker(&mut app, TerminalScreen::Connections, 7, "u2-b");
+        app.park_active_session_runtime();
+
+        session::set_active(s1);
+        assert!(app.sync_active_session_identity());
+        assert!(app.restore_active_session_runtime_if_any());
+        assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
+        assert_eq!(app.main_menu_idx, 2);
+        assert_eq!(app.editor.text, "u1-a");
+
+        session::request_switch(s2);
+        app.apply_pending_session_switch();
+        assert_eq!(session::active_idx(), s2);
+        assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
+        assert_eq!(app.main_menu_idx, 7);
+        assert_eq!(app.editor.text, "u2-b");
+
+        session::request_switch(s1);
+        app.apply_pending_session_switch();
+        assert_eq!(session::active_idx(), s1);
+        assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
+        assert_eq!(app.main_menu_idx, 2);
+        assert_eq!(app.editor.text, "u1-a");
+    }
+
+    #[test]
+    fn close_session_restores_previous_sessions_parked_runtime() {
+        let _guard = session_test_guard();
+        let _users = install_test_users(&["u1", "u2", "u3"]);
+        session::clear_sessions();
+        session::take_switch_request();
+
+        let mut app = RobcoNativeApp::default();
+        let s1 = session::push_session("u1");
+        let s2 = session::push_session("u2");
+        let s3 = session::push_session("u3");
+
+        session::set_active(s1);
+        assert!(app.sync_active_session_identity());
+        set_runtime_marker(&mut app, TerminalScreen::Documents, 1, "u1");
+        app.park_active_session_runtime();
+
+        session::set_active(s2);
+        assert!(app.sync_active_session_identity());
+        set_runtime_marker(&mut app, TerminalScreen::ProgramInstaller, 5, "u2");
+        app.park_active_session_runtime();
+
+        session::set_active(s3);
+        assert!(app.sync_active_session_identity());
+        set_runtime_marker(&mut app, TerminalScreen::Games, 9, "u3");
+
+        app.close_active_session_window();
+
+        assert_eq!(session::session_count(), 2);
+        assert_eq!(session::active_idx(), 1);
+        assert_eq!(session::active_username().as_deref(), Some("u2"));
+        assert!(matches!(
+            app.terminal_screen,
+            TerminalScreen::ProgramInstaller
+        ));
+        assert_eq!(app.main_menu_idx, 5);
+        assert_eq!(app.editor.text, "u2");
+        assert_eq!(app.shell_status, "Closed session 3.");
     }
 }
