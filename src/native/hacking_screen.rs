@@ -2,7 +2,7 @@ use super::retro_ui::{current_palette, RetroScreen};
 use crate::core::hacking::{
     find_bracket_at, find_word_at, HackingGame, SelectOutcome, COLS, COL_WIDTH, ROWS,
 };
-use eframe::egui::{self, Align2, Context, Pos2, Rect};
+use eframe::egui::{self, Align2, Context, Pos2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HackingScreenEvent {
@@ -142,22 +142,8 @@ pub fn draw_hacking_screen(
 
                         let char_x = (chars_x + offset as f32 * glyph_advance).floor();
                         if highlighted {
-                            let glyph_size = painter
-                                .layout_no_wrap(display.to_string(), font.clone(), palette.fg)
-                                .size();
-                            // Keep hacking highlights slightly tighter than full line height
-                            // while still fully covering glyph shapes.
-                            let glyph_h = glyph_size.y.max(1.0);
-                            let top = (text_y + glyph_h * 0.06).max(row_rect.top()).floor();
-                            let bottom = (text_y + glyph_h * 0.94)
-                                .min(row_rect.bottom())
-                                .max(top + 1.0)
-                                .floor();
-                            let width = glyph_size.x.max(1.0).ceil();
-                            let rect = Rect::from_min_max(
-                                Pos2::new(char_x, top),
-                                Pos2::new(char_x + width, bottom),
-                            );
+                            let width = glyph_advance.max(1.0).ceil();
+                            let rect = screen.text_band_rect(sy, char_x, width);
                             painter.rect_filled(rect, 0.0, palette.selected_bg);
                             painter.text(
                                 Pos2::new(char_x, text_y),

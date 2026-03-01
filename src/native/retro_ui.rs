@@ -117,6 +117,21 @@ impl RetroScreen {
         top + inset
     }
 
+    pub fn text_band_rect(&self, row: usize, left: f32, width: f32) -> Rect {
+        let row_rect = self.row_rect(0, row, self.cols.max(1));
+        let text_top = self.row_text_y(row).max(row_rect.top());
+        let text_bottom = (text_top + self.font.size)
+            .min(row_rect.bottom())
+            .max(text_top + 1.0);
+        Rect::from_min_max(
+            Pos2::new(left.clamp(row_rect.left(), row_rect.right()), text_top),
+            Pos2::new(
+                (left + width).clamp(row_rect.left(), row_rect.right()),
+                text_bottom,
+            ),
+        )
+    }
+
     fn paint_text(
         &self,
         painter: &Painter,
@@ -224,7 +239,6 @@ impl RetroScreen {
         let clipped = self.clip_text(col, text);
         let left = self.rect.left() + col as f32 * self.cell.x;
         let top = self.row_top(row);
-        let measured_h = self.font.size.max(1.0);
         let cell_chars = clipped.chars().count().max(1) as f32;
         let measured_w = cell_chars * self.cell.x;
         // Legacy TUI highlight paints exactly the selected text span.
@@ -233,12 +247,7 @@ impl RetroScreen {
             Pos2::new(left.min(self.rect.right()), top),
             Pos2::new(right.max(left), top + self.cell.y),
         );
-        let text_top = self.row_text_y(row).max(hit_rect.top());
-        let text_bottom = (text_top + measured_h).min(hit_rect.bottom());
-        let paint_rect = Rect::from_min_max(
-            Pos2::new(hit_rect.left(), text_top),
-            Pos2::new(hit_rect.right(), text_bottom.max(text_top + 1.0)),
-        );
+        let paint_rect = self.text_band_rect(row, hit_rect.left(), hit_rect.width());
         if selected {
             painter.rect_filled(paint_rect, 0.0, palette.selected_bg);
         }

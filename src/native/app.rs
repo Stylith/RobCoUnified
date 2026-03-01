@@ -1923,76 +1923,74 @@ impl RobcoNativeApp {
     }
 
     fn draw_top_bar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("native_top_bar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("RobCoOS Native");
-                if let Some(session) = &self.session {
-                    ui.separator();
-                    ui.label(format!("User: {}", session.username));
-                    if session.is_admin {
-                        ui.label(RichText::new("ADMIN").strong());
+        let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+        TopBottomPanel::top("native_top_bar")
+            .exact_height(30.0)
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                let palette = current_palette();
+                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.panel);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("ROBCO DESKTOP").strong());
+                    if let Some(session) = &self.session {
+                        ui.separator();
+                        let role = if session.is_admin { "ADMIN" } else { "USER" };
+                        ui.label(format!("[{} | {role}]", session.username));
                     }
-                }
-                ui.separator();
-                if ui.button("Start").clicked() {
-                    self.start_open = !self.start_open;
-                }
-                if ui.button("File Manager").clicked() {
-                    self.file_manager.open = true;
-                }
-                if ui.button("Word Processor").clicked() {
-                    self.editor.open = true;
-                    if self.editor.path.is_none() {
-                        self.new_document();
-                    }
-                }
-                if ui.button("Settings").clicked() {
-                    self.settings.open = true;
-                }
-                if ui.button("Apps").clicked() {
-                    self.applications.open = true;
-                }
-                if ui.button("Terminal Mode").clicked() {
-                    self.terminal_mode.open = true;
-                }
-                if ui.button("Log Out").clicked() {
-                    self.begin_logout();
-                }
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(now);
+                    });
+                });
             });
-        });
     }
 
     fn draw_start_panel(&mut self, ctx: &Context) {
         if !self.start_open {
             return;
         }
-        egui::SidePanel::left("native_start_panel")
-            .default_width(220.0)
+        egui::Area::new(Id::new("native_start_panel"))
+            .anchor(Align2::LEFT_BOTTOM, [8.0, -40.0])
+            .interactable(true)
             .show(ctx, |ui| {
-                ui.heading("Start");
-                ui.separator();
-                if ui.button("New Document").clicked() {
-                    self.new_document();
-                }
-                if ui.button("Open File Manager").clicked() {
-                    self.file_manager.open = true;
-                }
-                if ui.button("Open Settings").clicked() {
-                    self.settings.open = true;
-                }
-                if ui.button("Open Applications").clicked() {
-                    self.applications.open = true;
-                }
-                if ui.button("Launch Terminal Mode").clicked() {
-                    self.terminal_mode.open = true;
-                }
-                if ui.button("Return To Terminal Menu").clicked() {
-                    self.desktop_mode_open = false;
-                }
-                ui.separator();
-                ui.label("Rewrite target:");
-                ui.small("Native shell replacing the terminal-owned desktop.");
-                ui.small("Terminal mode stays supported as a first-class product mode.");
+                let palette = current_palette();
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .stroke(egui::Stroke::new(1.0, palette.fg))
+                    .inner_margin(egui::Margin::same(8.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(220.0);
+                        ui.label(RichText::new("Start").strong());
+                        ui.separator();
+                        if ui.button("[ New Document ]").clicked() {
+                            self.new_document();
+                            self.start_open = false;
+                        }
+                        if ui.button("[ File Manager ]").clicked() {
+                            self.file_manager.open = true;
+                            self.start_open = false;
+                        }
+                        if ui.button("[ Settings ]").clicked() {
+                            self.settings.open = true;
+                            self.start_open = false;
+                        }
+                        if ui.button("[ Applications ]").clicked() {
+                            self.applications.open = true;
+                            self.start_open = false;
+                        }
+                        if ui.button("[ Terminal Mode ]").clicked() {
+                            self.terminal_mode.open = true;
+                            self.start_open = false;
+                        }
+                        ui.separator();
+                        if ui.button("[ Return to Terminal ]").clicked() {
+                            self.desktop_mode_open = false;
+                            self.start_open = false;
+                        }
+                        if ui.button("[ Log Out ]").clicked() {
+                            self.start_open = false;
+                            self.begin_logout();
+                        }
+                    });
             });
     }
 
@@ -2005,98 +2003,27 @@ impl RobcoNativeApp {
             )
             .show(ctx, |ui| {
                 let palette = current_palette();
-                let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
-                ui.horizontal(|ui| {
-                    ui.heading("Desktop");
-                    ui.separator();
-                    ui.small("Native shell workbench");
-                    ui.separator();
-                    ui.small(now);
-                });
-                ui.add_space(8.0);
-                ui.columns(3, |cols| {
-                    cols[0].group(|ui| {
-                        ui.label(RichText::new("Desktop Icons").strong());
-                        ui.add_space(6.0);
-                        if ui.button("[ My Files ]").clicked() {
-                            self.file_manager.open = true;
+                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    if ui.button("[ My Files ]").clicked() {
+                        self.file_manager.open = true;
+                    }
+                    if ui.button("[ ROBCO Word Processor ]").clicked() {
+                        self.editor.open = true;
+                        if self.editor.path.is_none() {
+                            self.new_document();
                         }
-                        if ui.button("[ Word Processor ]").clicked() {
-                            self.editor.open = true;
-                            if self.editor.path.is_none() {
-                                self.new_document();
-                            }
-                        }
-                        if ui.button("[ Settings ]").clicked() {
-                            self.settings.open = true;
-                        }
-                        if ui.button("[ Applications ]").clicked() {
-                            self.applications.open = true;
-                        }
-                        if ui.button("[ Terminal Mode ]").clicked() {
-                            self.terminal_mode.open = true;
-                        }
-                    });
-                    cols[1].group(|ui| {
-                        ui.label(RichText::new("Workspace").strong());
-                        ui.add_space(6.0);
-                        ui.colored_label(palette.dim, "Native desktop shell frame");
-                        ui.colored_label(
-                            palette.dim,
-                            "Terminal mode remains first-class and separate.",
-                        );
-                        ui.colored_label(
-                            palette.dim,
-                            "Settings, files, and users are shared core data.",
-                        );
-                        ui.add_space(10.0);
-                        ui.label("Open windows");
-                        ui.small(format!(
-                            "File Manager: {}",
-                            if self.file_manager.open {
-                                "OPEN"
-                            } else {
-                                "closed"
-                            }
-                        ));
-                        ui.small(format!(
-                            "Word Processor: {}",
-                            if self.editor.open { "OPEN" } else { "closed" }
-                        ));
-                        ui.small(format!(
-                            "Settings: {}",
-                            if self.settings.open { "OPEN" } else { "closed" }
-                        ));
-                        ui.small(format!(
-                            "Applications: {}",
-                            if self.applications.open {
-                                "OPEN"
-                            } else {
-                                "closed"
-                            }
-                        ));
-                    });
-                    cols[2].group(|ui| {
-                        ui.label(RichText::new("Session").strong());
-                        ui.add_space(6.0);
-                        if let Some(session) = &self.session {
-                            ui.small(format!("User: {}", session.username));
-                            ui.small(if session.is_admin {
-                                "Role: admin"
-                            } else {
-                                "Role: user"
-                            });
-                        }
-                        ui.small(format!("Theme: {}", self.settings.draft.theme));
-                        ui.small(format!(
-                            "Start menu: {}",
-                            if self.start_open { "OPEN" } else { "closed" }
-                        ));
-                        ui.add_space(10.0);
-                        if ui.button("Return To Terminal Menu").clicked() {
-                            self.desktop_mode_open = false;
-                        }
-                    });
+                    }
+                    if ui.button("[ Settings ]").clicked() {
+                        self.settings.open = true;
+                    }
+                    if ui.button("[ Applications ]").clicked() {
+                        self.applications.open = true;
+                    }
+                    if ui.button("[ Terminal Mode ]").clicked() {
+                        self.terminal_mode.open = true;
+                    }
                 });
             });
     }
@@ -3941,6 +3868,53 @@ mod tests {
             assert_eq!(session::active_idx(), s1);
             assert_eq!(app.terminal_screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
+        }
+    }
+
+    #[test]
+    fn nuke_codes_screen_state_restores_across_session_switch() {
+        let _guard = session_test_guard();
+        let _users = install_test_users(&["u1", "u2"]);
+        session::clear_sessions();
+        session::take_switch_request();
+
+        let mut app = RobcoNativeApp::default();
+        let s1 = session::push_session("u1");
+        let s2 = session::push_session("u2");
+
+        session::set_active(s1);
+        assert!(app.sync_active_session_identity());
+        app.terminal_screen = TerminalScreen::NukeCodes;
+        app.terminal_nuke_codes_return = TerminalScreen::Applications;
+        app.terminal_nuke_codes =
+            NukeCodesView::Data(crate::native::nuke_codes_screen::NukeCodesData {
+                alpha: "11111111".to_string(),
+                bravo: "22222222".to_string(),
+                charlie: "33333333".to_string(),
+                source: "Test Source".to_string(),
+                fetched_at: "2026-03-01 06:00 PM".to_string(),
+            });
+        app.park_active_session_runtime();
+
+        session::set_active(s2);
+        assert!(app.sync_active_session_identity());
+        app.terminal_screen = TerminalScreen::MainMenu;
+        app.terminal_nuke_codes_return = TerminalScreen::MainMenu;
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+        app.park_active_session_runtime();
+
+        session::request_switch(s1);
+        app.apply_pending_session_switch();
+        assert_eq!(session::active_idx(), s1);
+        assert_eq!(app.terminal_screen, TerminalScreen::NukeCodes);
+        assert_eq!(app.terminal_nuke_codes_return, TerminalScreen::Applications);
+        match &app.terminal_nuke_codes {
+            NukeCodesView::Data(data) => {
+                assert_eq!(data.alpha, "11111111");
+                assert_eq!(data.bravo, "22222222");
+                assert_eq!(data.charlie, "33333333");
+            }
+            other => panic!("expected NukeCodes data, got {other:?}"),
         }
     }
 }

@@ -338,3 +338,34 @@ Checkpoint C:
   - is this terminal-mode UI or desktop-mode UI?
   - does it match the old surface’s layout language?
   - are we reusing shared logic instead of duplicating behavior again?
+
+## Audit Update (2026-03-01, terminal-first pass)
+
+Scope completed:
+
+1. Terminal visual parity sweep across current native terminal screens.
+2. Shared renderer/layout fixes only (no app-specific hacks).
+3. Session-state deepening for newly added terminal-native screen state.
+
+Findings from this pass:
+
+- Nested PTY launch for native `Nuke Codes` caused double footer/status bars and mixed renderer/color/size behavior.
+- Hacking/menu highlight vertical geometry still had subtle divergence because hacking used custom glyph-band math instead of shared retro renderer text-band geometry.
+- Session parity coverage needed explicit validation for terminal-native `Nuke Codes` screen state.
+
+Changes applied:
+
+- Replaced nested PTY `Nuke Codes` path with a native terminal-style screen (`TerminalScreen::NukeCodes`) used from both terminal and desktop application launch paths.
+- Introduced shared `RetroScreen::text_band_rect(...)` and switched selectable-row paint to that shared text-band geometry.
+- Switched hacking glyph highlight paint to the same shared text-band geometry to keep highlight height/position consistent with terminal menus.
+- Expanded session tests to include `Nuke Codes` submenu in sweep coverage and explicit `Nuke Codes` state restore validation across session switches.
+
+Current terminal parity status after this pass:
+
+- Terminal chrome and highlight behavior are more consistent across menus and hacking.
+- `Nuke Codes` now matches native terminal rendering model (single footer, single palette/scale domain).
+- No remaining native `pending rewrite` placeholders are present.
+
+Next desktop transition gate:
+
+- Terminal parity baseline is stable enough to begin desktop-focused work, while continuing to treat terminal renderer/layout regressions as blockers.

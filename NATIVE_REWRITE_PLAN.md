@@ -107,6 +107,10 @@ The rewrite is a new native application layer, not a replacement of the current 
   - desktop Applications now launches configured apps via embedded PTY and transitions cleanly into terminal PTY surface
   - desktop built-in app visibility now follows the same per-user menu visibility toggles as terminal mode
   - built-in `Nuke Codes` now uses a native terminal-style screen from both terminal Applications and native desktop Applications (no placeholder status path)
+  - desktop baseline shell framing pass started:
+    - top bar rethemed to compact retro desktop chrome
+    - start menu moved to bottom-left popup style panel
+    - desktop body simplified from debug/status columns to icon-launch layout
 
 ## Next parity targets
 
