@@ -1,9 +1,8 @@
 use super::retro_ui::{current_palette, RetroScreen};
-use crate::config::hacking_difficulty_label;
 use crate::core::hacking::{
     find_bracket_at, find_word_at, idx_to_cell, HackingGame, SelectOutcome, COLS, COL_WIDTH, ROWS,
 };
-use eframe::egui::{self, Color32, Context, Stroke};
+use eframe::egui::{self, Context};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HackingScreenEvent {
@@ -21,7 +20,7 @@ pub fn draw_hacking_screen(
     cols: usize,
     screen_rows: usize,
     status_row: usize,
-    footer_row: usize,
+    _footer_row: usize,
 ) -> HackingScreenEvent {
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
         game.move_right();
@@ -78,25 +77,17 @@ pub fn draw_hacking_screen(
             };
             screen.text(&painter, 3, 2, &warn, palette.fg);
 
-            let meta = format!(
-                "Difficulty: {} | {} candidates | {}-letter words",
-                hacking_difficulty_label(game.profile.difficulty),
-                game.grid.word_positions.len(),
-                game.profile.word_len
-            );
-            screen.text(&painter, 3, 3, &meta, palette.dim);
-
             let hover_word = find_word_at(game.cursor, &game.grid.word_positions);
             let hover_bracket = find_bracket_at(game.cursor, &game.grid.bracket_pairs);
             let body_top = 5usize;
-            let log_x = 42usize;
+            let log_x = 50usize;
 
             for col_block in 0..COLS {
                 for row in 0..ROWS {
                     let addr = game.base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
                     let sx = 3 + col_block * (COL_WIDTH + 14);
                     let sy = body_top + row;
-                    screen.text(&painter, sx, sy, &format!("0x{addr:04X}"), palette.dim);
+                    screen.text(&painter, sx, sy, &format!("0x{addr:04X}"), palette.fg);
                 }
             }
 
@@ -118,44 +109,22 @@ pub fn draw_hacking_screen(
                 if highlighted {
                     let rect = screen.row_rect(sx, sy, 1);
                     painter.rect_filled(rect, 0.0, palette.selected_bg);
-                    painter.text(
-                        rect.left_top(),
-                        egui::Align2::LEFT_TOP,
-                        display.to_string(),
-                        egui::FontId::monospace(screen_rows as f32 * 0.3),
-                        palette.selected_fg,
-                    );
+                    screen.text(&painter, sx, sy, &display.to_string(), palette.selected_fg);
                 } else {
-                    screen.text(
-                        &painter,
-                        sx,
-                        sy,
-                        &display.to_string(),
-                        if is_removed { palette.dim } else { palette.fg },
-                    );
+                    screen.text(&painter, sx, sy, &display.to_string(), palette.fg);
                 }
             }
 
-            screen.text(&painter, log_x, body_top - 1, "LOG", palette.dim);
             for (li, entry) in game.log.iter().rev().take(ROWS).enumerate() {
                 let sy = body_top + (ROWS - 1 - li);
                 screen.text(&painter, log_x, sy, entry, palette.fg);
             }
 
-            screen.text(
-                &painter,
-                3,
-                status_row,
-                "Enter select | Tab cancel | Arrows move",
-                palette.dim,
-            );
-
-            let footer = screen.row_rect(0, footer_row, cols);
-            painter.rect_filled(footer, 0.0, palette.selected_bg);
-            painter.line_segment(
-                [footer.left_top(), footer.right_top()],
-                Stroke::new(0.0, Color32::TRANSPARENT),
-            );
+            if status_row > 0 {
+                let row = status_row.saturating_sub(1);
+                let clear = screen.row_rect(0, row, cols);
+                painter.rect_filled(clear, 0.0, palette.bg);
+            }
         });
 
     HackingScreenEvent::None
@@ -166,7 +135,7 @@ pub fn draw_locked_screen(
     ctx: &Context,
     cols: usize,
     screen_rows: usize,
-    footer_row: usize,
+    _footer_row: usize,
 ) -> HackingScreenEvent {
     if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
         return HackingScreenEvent::ExitLocked;
@@ -192,8 +161,6 @@ pub fn draw_locked_screen(
                 false,
             );
             screen.centered_text(&painter, 30, "[ Press ENTER to Exit ]", palette.dim, false);
-            let footer = screen.row_rect(0, footer_row, cols);
-            painter.rect_filled(footer, 0.0, palette.selected_bg);
         });
 
     HackingScreenEvent::None

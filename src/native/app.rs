@@ -2032,11 +2032,12 @@ impl RobcoNativeApp {
         let Some(prompt) = self.terminal_prompt.as_ref() else {
             return;
         };
+        let viewport = ctx.screen_rect();
         egui::Area::new(Id::new("native_terminal_prompt_overlay"))
             .order(egui::Order::Foreground)
-            .fixed_pos([0.0, 0.0])
+            .fixed_pos(viewport.min)
             .show(ctx, |ui| {
-                ui.set_min_size(ui.max_rect().size());
+                ui.set_min_size(viewport.size());
                 let (screen, _) = RetroScreen::new(ui, layout.cols, layout.rows);
                 draw_terminal_prompt_overlay(ui, &screen, prompt);
             });
@@ -2514,6 +2515,19 @@ impl RobcoNativeApp {
             });
     }
 
+    fn draw_terminal_footer_spacer(&self, ctx: &Context) {
+        TopBottomPanel::bottom("native_terminal_footer_spacer")
+            .resizable(false)
+            .exact_height(retro_footer_height())
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(current_palette().bg)
+                    .inner_margin(0.0),
+            )
+            .show(ctx, |_ui| {});
+    }
+
     fn draw_file_manager(&mut self, ctx: &Context) {
         if !self.file_manager.open {
             return;
@@ -2853,7 +2867,11 @@ impl eframe::App for RobcoNativeApp {
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
                 let layout = self.terminal_layout();
-                self.draw_terminal_footer(ctx);
+                if self.session.is_some() {
+                    self.draw_terminal_footer(ctx);
+                } else {
+                    self.draw_terminal_footer_spacer(ctx);
+                }
                 draw_terminal_flash(
                     ctx,
                     &flash.message,
@@ -2870,7 +2888,7 @@ impl eframe::App for RobcoNativeApp {
         }
 
         if self.session.is_none() {
-            self.draw_terminal_footer(ctx);
+            self.draw_terminal_footer_spacer(ctx);
             self.draw_login(ctx);
             return;
         }

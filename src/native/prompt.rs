@@ -122,28 +122,28 @@ pub fn draw_terminal_prompt_overlay(
 ) {
     let palette = current_palette();
     let painter = ui.painter_at(screen.rect);
-    screen.boxed_panel(&painter, &palette, 23, 12, 46, 8);
-    screen.text(&painter, 26, 13, &prompt.title, palette.fg);
-    screen.text(&painter, 26, 15, &prompt.prompt, palette.fg);
+    screen.boxed_panel(&painter, &palette, 16, 10, 60, 10);
+    screen.text(&painter, 19, 11, &prompt.title, palette.fg);
+    screen.text(&painter, 19, 13, &prompt.prompt, palette.fg);
     match prompt.kind {
         TerminalPromptKind::Input => {
             let line = format!("> {}", prompt.buffer);
-            screen.text(&painter, 26, 17, &line, palette.fg);
+            screen.text(&painter, 19, 15, &line, palette.fg);
             screen.text(
                 &painter,
-                26,
                 19,
+                17,
                 "Enter apply | Esc/Tab cancel",
                 palette.dim,
             );
         }
         TerminalPromptKind::Password => {
             let masked = format!("> {}", "*".repeat(prompt.buffer.chars().count()));
-            screen.text(&painter, 26, 17, &masked, palette.fg);
+            screen.text(&painter, 19, 15, &masked, palette.fg);
             screen.text(
                 &painter,
-                26,
                 19,
+                17,
                 "Enter log in | Esc/Tab back | Backspace delete",
                 palette.dim,
             );
@@ -151,11 +151,11 @@ pub fn draw_terminal_prompt_overlay(
         TerminalPromptKind::Confirm => {
             let yes = if prompt.confirm_yes { "[Yes]" } else { " Yes " };
             let no = if prompt.confirm_yes { " No " } else { "[No]" };
-            screen.text(&painter, 26, 17, &format!("{yes}   {no}"), palette.fg);
+            screen.text(&painter, 19, 15, &format!("{yes}   {no}"), palette.fg);
             screen.text(
                 &painter,
-                26,
                 19,
+                17,
                 "Left/Right choose | Enter apply",
                 palette.dim,
             );

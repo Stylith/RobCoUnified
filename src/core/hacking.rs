@@ -99,7 +99,7 @@ pub fn hacking_profile(difficulty: HackingDifficulty) -> HackingProfile {
             difficulty,
             word_len: 4,
             num_words: 8,
-            max_tries: 5,
+            max_tries: 4,
             bracket_chance: 0.38,
             dud_remove_chance: 0.65,
         },
@@ -115,7 +115,7 @@ pub fn hacking_profile(difficulty: HackingDifficulty) -> HackingProfile {
             difficulty,
             word_len: 6,
             num_words: 11,
-            max_tries: 3,
+            max_tries: 4,
             bracket_chance: 0.22,
             dud_remove_chance: 0.35,
         },
@@ -508,5 +508,12 @@ mod tests {
         let profile = hacking_profile(HackingDifficulty::Normal);
         let grid = build_grid("POWER", profile);
         assert_eq!(count_word_occurrences(&grid.chars, "POWER"), 1);
+    }
+
+    #[test]
+    fn max_tries_is_always_four_across_difficulties() {
+        assert_eq!(hacking_profile(HackingDifficulty::Easy).max_tries, 4);
+        assert_eq!(hacking_profile(HackingDifficulty::Normal).max_tries, 4);
+        assert_eq!(hacking_profile(HackingDifficulty::Hard).max_tries, 4);
     }
 }
