@@ -115,6 +115,11 @@ The rewrite is a new native application layer, not a replacement of the current 
     - shared retro frame/titlebar styling across native desktop windows
     - unified close affordance via custom desktop header bars
     - core windows now share the same chrome language (File Manager, Word Processor, Settings, Applications, Terminal Mode)
+  - desktop taskbar/start window-state pass landed:
+    - desktop windows now use a shared open/close/active state model
+    - start launcher, desktop icons, and taskbar actions now route through the same state transitions
+    - taskbar now distinguishes active (`*`) vs open/background (`+`) windows
+    - active desktop window is rendered last for stable foreground behavior
 
 ## Next parity targets
 

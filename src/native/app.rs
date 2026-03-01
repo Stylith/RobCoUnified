@@ -144,6 +144,15 @@ struct TerminalModeWindow {
     status: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopWindow {
+    FileManager,
+    Editor,
+    Settings,
+    Applications,
+    TerminalMode,
+}
+
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 const TERMINAL_SCREEN_COLS: usize = 92;
@@ -273,6 +282,7 @@ pub struct RobcoNativeApp {
     settings: SettingsWindow,
     applications: ApplicationsWindow,
     terminal_mode: TerminalModeWindow,
+    desktop_active_window: Option<DesktopWindow>,
     start_open: bool,
     desktop_mode_open: bool,
     main_menu_idx: usize,
@@ -311,6 +321,7 @@ struct ParkedSessionState {
     settings: SettingsWindow,
     applications: ApplicationsWindow,
     terminal_mode: TerminalModeWindow,
+    desktop_active_window: Option<DesktopWindow>,
     desktop_mode_open: bool,
     start_open: bool,
     main_menu_idx: usize,
@@ -373,6 +384,7 @@ impl Default for RobcoNativeApp {
             },
             applications: ApplicationsWindow::default(),
             terminal_mode: TerminalModeWindow::default(),
+            desktop_active_window: None,
             start_open: true,
             desktop_mode_open: false,
             main_menu_idx: 0,
@@ -451,6 +463,7 @@ impl RobcoNativeApp {
             settings: self.settings.clone(),
             applications: self.applications.clone(),
             terminal_mode: self.terminal_mode.clone(),
+            desktop_active_window: self.desktop_active_window,
             desktop_mode_open: self.desktop_mode_open,
             start_open: self.start_open,
             main_menu_idx: self.main_menu_idx,
@@ -513,6 +526,7 @@ impl RobcoNativeApp {
         self.settings = parked.settings;
         self.applications = parked.applications;
         self.terminal_mode = parked.terminal_mode;
+        self.desktop_active_window = parked.desktop_active_window;
         self.desktop_mode_open = parked.desktop_mode_open;
         self.start_open = parked.start_open;
         self.main_menu_idx = parked.main_menu_idx;
@@ -730,6 +744,138 @@ impl RobcoNativeApp {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
     }
 
+    fn desktop_window_is_open(&self, window: DesktopWindow) -> bool {
+        match window {
+            DesktopWindow::FileManager => self.file_manager.open,
+            DesktopWindow::Editor => self.editor.open,
+            DesktopWindow::Settings => self.settings.open,
+            DesktopWindow::Applications => self.applications.open,
+            DesktopWindow::TerminalMode => self.terminal_mode.open,
+        }
+    }
+
+    fn set_desktop_window_open(&mut self, window: DesktopWindow, open: bool) {
+        match window {
+            DesktopWindow::FileManager => self.file_manager.open = open,
+            DesktopWindow::Editor => self.editor.open = open,
+            DesktopWindow::Settings => self.settings.open = open,
+            DesktopWindow::Applications => self.applications.open = open,
+            DesktopWindow::TerminalMode => self.terminal_mode.open = open,
+        }
+    }
+
+    fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
+        const ORDER: [DesktopWindow; 5] = [
+            DesktopWindow::FileManager,
+            DesktopWindow::Editor,
+            DesktopWindow::Settings,
+            DesktopWindow::Applications,
+            DesktopWindow::TerminalMode,
+        ];
+        ORDER
+            .into_iter()
+            .find(|window| self.desktop_window_is_open(*window))
+    }
+
+    fn sync_desktop_active_window(&mut self) {
+        if self
+            .desktop_active_window
+            .is_some_and(|window| !self.desktop_window_is_open(window))
+        {
+            self.desktop_active_window = self.first_open_desktop_window();
+            return;
+        }
+        if self.desktop_active_window.is_none() {
+            self.desktop_active_window = self.first_open_desktop_window();
+        }
+    }
+
+    fn open_desktop_window(&mut self, window: DesktopWindow) {
+        self.set_desktop_window_open(window, true);
+        self.desktop_active_window = Some(window);
+        if self.desktop_mode_open {
+            self.start_open = false;
+        }
+    }
+
+    fn close_desktop_window(&mut self, window: DesktopWindow) {
+        self.set_desktop_window_open(window, false);
+        if self.desktop_active_window == Some(window) {
+            self.desktop_active_window = self.first_open_desktop_window();
+        }
+    }
+
+    fn update_desktop_window_state(&mut self, window: DesktopWindow, open: bool) {
+        self.set_desktop_window_open(window, open);
+        if !open && self.desktop_active_window == Some(window) {
+            self.desktop_active_window = self.first_open_desktop_window();
+        }
+    }
+
+    fn handle_desktop_taskbar_window_click(&mut self, window: DesktopWindow) {
+        if !self.desktop_window_is_open(window) {
+            self.open_desktop_window(window);
+            return;
+        }
+        if self.desktop_active_window == Some(window) {
+            self.close_desktop_window(window);
+        } else {
+            self.desktop_active_window = Some(window);
+            self.start_open = false;
+        }
+    }
+
+    fn desktop_taskbar_label(&self, window: DesktopWindow) -> String {
+        let base = match window {
+            DesktopWindow::FileManager => "Files",
+            DesktopWindow::Editor => "Editor",
+            DesktopWindow::Settings => "Settings",
+            DesktopWindow::Applications => "Apps",
+            DesktopWindow::TerminalMode => "Terminal",
+        };
+        let open = self.desktop_window_is_open(window);
+        let active = self.desktop_active_window == Some(window);
+        if active {
+            format!("[{base}*]")
+        } else if open {
+            format!("[{base}+]")
+        } else {
+            format!("[{base}]")
+        }
+    }
+
+    fn draw_desktop_window_by_kind(&mut self, ctx: &Context, window: DesktopWindow) {
+        match window {
+            DesktopWindow::FileManager => self.draw_file_manager(ctx),
+            DesktopWindow::Editor => self.draw_editor(ctx),
+            DesktopWindow::Settings => self.draw_settings(ctx),
+            DesktopWindow::Applications => self.draw_applications(ctx),
+            DesktopWindow::TerminalMode => self.draw_terminal_mode(ctx),
+        }
+    }
+
+    fn draw_desktop_windows(&mut self, ctx: &Context) {
+        self.sync_desktop_active_window();
+        const ORDER: [DesktopWindow; 5] = [
+            DesktopWindow::FileManager,
+            DesktopWindow::Editor,
+            DesktopWindow::Settings,
+            DesktopWindow::Applications,
+            DesktopWindow::TerminalMode,
+        ];
+        let active = self.desktop_active_window;
+        for window in ORDER {
+            if Some(window) == active {
+                continue;
+            }
+            self.draw_desktop_window_by_kind(ctx, window);
+        }
+        if let Some(window) = active {
+            self.draw_desktop_window_by_kind(ctx, window);
+        }
+        self.sync_desktop_active_window();
+    }
+
     fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
         crate::config::reload_settings();
         let snapshot: NativeShellSnapshot = read_shell_snapshot(username);
@@ -753,6 +899,7 @@ impl RobcoNativeApp {
         self.settings.draft = current_settings();
         self.settings.status.clear();
         self.terminal_mode.status.clear();
+        self.desktop_active_window = None;
         self.start_open = true;
         self.desktop_mode_open = false;
         self.main_menu_idx = 0;
@@ -856,6 +1003,7 @@ impl RobcoNativeApp {
         self.terminal_prompt = None;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.desktop_mode_open = false;
+        self.desktop_active_window = None;
         self.session_leader_until = None;
         self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
     }
@@ -878,6 +1026,7 @@ impl RobcoNativeApp {
         self.settings.open = false;
         self.applications.open = false;
         self.terminal_mode.open = false;
+        self.desktop_active_window = None;
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_apps_idx = 0;
@@ -1067,12 +1216,12 @@ impl RobcoNativeApp {
                 self.editor.path = Some(path);
                 self.editor.text = text;
                 self.editor.dirty = false;
-                self.editor.open = true;
+                self.open_desktop_window(DesktopWindow::Editor);
                 self.editor.status = "Opened document.".to_string();
             }
             Err(err) => {
                 self.editor.status = format!("Open failed: {err}");
-                self.editor.open = true;
+                self.open_desktop_window(DesktopWindow::Editor);
             }
         }
     }
@@ -1098,7 +1247,7 @@ impl RobcoNativeApp {
         self.editor.path = Some(path);
         self.editor.text.clear();
         self.editor.dirty = false;
-        self.editor.open = true;
+        self.open_desktop_window(DesktopWindow::Editor);
         self.editor.status = "New document.".to_string();
     }
 
@@ -1304,7 +1453,7 @@ impl RobcoNativeApp {
         self.editor.path = Some(path);
         self.editor.text = existing;
         self.editor.dirty = false;
-        self.editor.open = true;
+        self.open_desktop_window(DesktopWindow::Editor);
         self.editor.status = "Opened log.".to_string();
         self.shell_status = "Opened log editor.".to_string();
     }
@@ -1395,6 +1544,7 @@ impl RobcoNativeApp {
             }
             MainMenuSelectionAction::EnterDesktopMode => {
                 self.desktop_mode_open = true;
+                self.sync_desktop_active_window();
                 self.shell_status = "Entered Desktop Mode.".to_string();
             }
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
@@ -1966,20 +2116,16 @@ impl RobcoNativeApp {
                             self.start_open = false;
                         }
                         if ui.button("[ File Manager ]").clicked() {
-                            self.file_manager.open = true;
-                            self.start_open = false;
+                            self.open_desktop_window(DesktopWindow::FileManager);
                         }
                         if ui.button("[ Settings ]").clicked() {
-                            self.settings.open = true;
-                            self.start_open = false;
+                            self.open_desktop_window(DesktopWindow::Settings);
                         }
                         if ui.button("[ Applications ]").clicked() {
-                            self.applications.open = true;
-                            self.start_open = false;
+                            self.open_desktop_window(DesktopWindow::Applications);
                         }
                         if ui.button("[ Terminal Mode ]").clicked() {
-                            self.terminal_mode.open = true;
-                            self.start_open = false;
+                            self.open_desktop_window(DesktopWindow::TerminalMode);
                         }
                         ui.separator();
                         if ui.button("[ Return to Terminal ]").clicked() {
@@ -2007,22 +2153,23 @@ impl RobcoNativeApp {
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
                     if ui.button("[ My Files ]").clicked() {
-                        self.file_manager.open = true;
+                        self.open_desktop_window(DesktopWindow::FileManager);
                     }
                     if ui.button("[ ROBCO Word Processor ]").clicked() {
-                        self.editor.open = true;
                         if self.editor.path.is_none() {
                             self.new_document();
+                        } else {
+                            self.open_desktop_window(DesktopWindow::Editor);
                         }
                     }
                     if ui.button("[ Settings ]").clicked() {
-                        self.settings.open = true;
+                        self.open_desktop_window(DesktopWindow::Settings);
                     }
                     if ui.button("[ Applications ]").clicked() {
-                        self.applications.open = true;
+                        self.open_desktop_window(DesktopWindow::Applications);
                     }
                     if ui.button("[ Terminal Mode ]").clicked() {
-                        self.terminal_mode.open = true;
+                        self.open_desktop_window(DesktopWindow::TerminalMode);
                     }
                 });
             });
@@ -2048,62 +2195,23 @@ impl RobcoNativeApp {
                     {
                         self.start_open = !self.start_open;
                     }
-                    if ui
-                        .button(if self.file_manager.open {
-                            "[Files*]"
-                        } else {
-                            "[Files]"
-                        })
-                        .clicked()
-                    {
-                        self.file_manager.open = !self.file_manager.open;
-                    }
-                    if ui
-                        .button(if self.editor.open {
-                            "[Editor*]"
-                        } else {
-                            "[Editor]"
-                        })
-                        .clicked()
-                    {
-                        if self.editor.open {
-                            self.editor.open = false;
-                        } else {
-                            self.editor.open = true;
-                            if self.editor.path.is_none() {
+                    for window in [
+                        DesktopWindow::FileManager,
+                        DesktopWindow::Editor,
+                        DesktopWindow::Settings,
+                        DesktopWindow::Applications,
+                        DesktopWindow::TerminalMode,
+                    ] {
+                        if ui.button(self.desktop_taskbar_label(window)).clicked() {
+                            let opening_editor = window == DesktopWindow::Editor
+                                && !self.desktop_window_is_open(DesktopWindow::Editor)
+                                && self.editor.path.is_none();
+                            if opening_editor {
                                 self.new_document();
+                            } else {
+                                self.handle_desktop_taskbar_window_click(window);
                             }
                         }
-                    }
-                    if ui
-                        .button(if self.settings.open {
-                            "[Settings*]"
-                        } else {
-                            "[Settings]"
-                        })
-                        .clicked()
-                    {
-                        self.settings.open = !self.settings.open;
-                    }
-                    if ui
-                        .button(if self.applications.open {
-                            "[Apps*]"
-                        } else {
-                            "[Apps]"
-                        })
-                        .clicked()
-                    {
-                        self.applications.open = !self.applications.open;
-                    }
-                    if ui
-                        .button(if self.terminal_mode.open {
-                            "[Terminal*]"
-                        } else {
-                            "[Terminal]"
-                        })
-                        .clicked()
-                    {
-                        self.terminal_mode.open = !self.terminal_mode.open;
                     }
 
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3168,7 +3276,7 @@ impl RobcoNativeApp {
         if close_from_header {
             open = false;
         }
-        self.file_manager.open = open;
+        self.update_desktop_window_state(DesktopWindow::FileManager, open);
     }
 
     fn draw_editor(&mut self, ctx: &Context) {
@@ -3193,7 +3301,7 @@ impl RobcoNativeApp {
                     || i.key_pressed(Key::Tab)
                     || (i.modifiers.ctrl && i.key_pressed(Key::Q))
             }) {
-                self.editor.open = false;
+                self.update_desktop_window_state(DesktopWindow::Editor, false);
                 return;
             }
             egui::CentralPanel::default()
@@ -3213,10 +3321,10 @@ impl RobcoNativeApp {
                             self.save_editor();
                         }
                         if ui.button("Open File Manager").clicked() {
-                            self.file_manager.open = true;
+                            self.open_desktop_window(DesktopWindow::FileManager);
                         }
                         if ui.button("Close").clicked() {
-                            self.editor.open = false;
+                            self.update_desktop_window_state(DesktopWindow::Editor, false);
                         }
                     });
                     if let Some(path) = &self.editor.path {
@@ -3257,7 +3365,7 @@ impl RobcoNativeApp {
                         self.save_editor();
                     }
                     if ui.button("Open File Manager").clicked() {
-                        self.file_manager.open = true;
+                        self.open_desktop_window(DesktopWindow::FileManager);
                     }
                     if let Some(path) = &self.editor.path {
                         ui.label(path.display().to_string());
@@ -3280,7 +3388,7 @@ impl RobcoNativeApp {
         if close_from_header {
             open = false;
         }
-        self.editor.open = open;
+        self.update_desktop_window_state(DesktopWindow::Editor, open);
     }
 
     fn draw_settings(&mut self, ctx: &Context) {
@@ -3371,7 +3479,7 @@ impl RobcoNativeApp {
         if close_from_header {
             open = false;
         }
-        self.settings.open = open;
+        self.update_desktop_window_state(DesktopWindow::Settings, open);
     }
 
     fn draw_applications(&mut self, ctx: &Context) {
@@ -3393,9 +3501,10 @@ impl RobcoNativeApp {
                 if self.settings.draft.builtin_menu_visibility.text_editor
                     && ui.button("ROBCO Word Processor").clicked()
                 {
-                    self.editor.open = true;
                     if self.editor.path.is_none() {
                         self.new_document();
+                    } else {
+                        self.open_desktop_window(DesktopWindow::Editor);
                     }
                 }
                 if self.settings.draft.builtin_menu_visibility.nuke_codes
@@ -3427,7 +3536,7 @@ impl RobcoNativeApp {
         if close_from_header {
             open = false;
         }
-        self.applications.open = open;
+        self.update_desktop_window_state(DesktopWindow::Applications, open);
     }
 
     fn draw_terminal_mode(&mut self, ctx: &Context) {
@@ -3471,7 +3580,7 @@ impl RobcoNativeApp {
         if close_from_header {
             open = false;
         }
-        self.terminal_mode.open = open;
+        self.update_desktop_window_state(DesktopWindow::TerminalMode, open);
     }
 }
 
@@ -3591,11 +3700,15 @@ impl eframe::App for RobcoNativeApp {
             }
             self.draw_terminal_prompt_overlay_global(ctx);
         }
-        self.draw_file_manager(ctx);
-        self.draw_editor(ctx);
-        self.draw_settings(ctx);
-        self.draw_applications(ctx);
-        self.draw_terminal_mode(ctx);
+        if self.desktop_mode_open {
+            self.draw_desktop_windows(ctx);
+        } else {
+            self.draw_file_manager(ctx);
+            self.draw_editor(ctx);
+            self.draw_settings(ctx);
+            self.draw_applications(ctx);
+            self.draw_terminal_mode(ctx);
+        }
 
         if ctx.input(|i| i.viewport().close_requested()) {
             self.persist_snapshot();
