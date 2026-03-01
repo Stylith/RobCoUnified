@@ -113,7 +113,7 @@ struct LoginHackingState {
     game: HackingGame,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct EditorWindow {
     open: bool,
     path: Option<PathBuf>,
@@ -122,20 +122,20 @@ struct EditorWindow {
     status: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SettingsWindow {
     open: bool,
     draft: Settings,
     status: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ApplicationsWindow {
     open: bool,
     status: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct TerminalModeWindow {
     open: bool,
     status: String,
@@ -301,6 +301,11 @@ pub struct RobcoNativeApp {
 }
 
 struct ParkedSessionState {
+    file_manager: NativeFileManagerState,
+    editor: EditorWindow,
+    settings: SettingsWindow,
+    applications: ApplicationsWindow,
+    terminal_mode: TerminalModeWindow,
     desktop_mode_open: bool,
     start_open: bool,
     main_menu_idx: usize,
@@ -324,6 +329,8 @@ struct ParkedSessionState {
     terminal_user_management_mode: UserManagementMode,
     terminal_settings_choice: Option<SettingsChoiceOverlay>,
     terminal_prompt: Option<TerminalPrompt>,
+    terminal_flash: Option<TerminalFlash>,
+    session_leader_until: Option<Instant>,
     suppress_next_menu_submit: bool,
     shell_status: String,
 }
@@ -430,6 +437,11 @@ impl RobcoNativeApp {
         }
         let idx = session::active_idx();
         let parked = ParkedSessionState {
+            file_manager: self.file_manager.clone(),
+            editor: self.editor.clone(),
+            settings: self.settings.clone(),
+            applications: self.applications.clone(),
+            terminal_mode: self.terminal_mode.clone(),
             desktop_mode_open: self.desktop_mode_open,
             start_open: self.start_open,
             main_menu_idx: self.main_menu_idx,
@@ -453,10 +465,31 @@ impl RobcoNativeApp {
             terminal_user_management_mode: self.terminal_user_management_mode.clone(),
             terminal_settings_choice: self.terminal_settings_choice.take(),
             terminal_prompt: self.terminal_prompt.take(),
+            terminal_flash: self.terminal_flash.take(),
+            session_leader_until: self.session_leader_until.take(),
             suppress_next_menu_submit: self.suppress_next_menu_submit,
             shell_status: std::mem::take(&mut self.shell_status),
         };
         self.session_runtime.insert(idx, parked);
+    }
+
+    fn sync_active_session_identity(&mut self) -> bool {
+        let Some(username) = session::active_username() else {
+            self.session = None;
+            return false;
+        };
+        let users = load_users();
+        let Some(user) = users.get(&username) else {
+            self.session = None;
+            self.shell_status = format!("Unknown user '{username}'.");
+            return false;
+        };
+        bind_login_session(&username);
+        self.session = Some(SessionState {
+            username,
+            is_admin: user.is_admin,
+        });
+        true
     }
 
     fn restore_active_session_runtime_if_any(&mut self) -> bool {
@@ -464,6 +497,11 @@ impl RobcoNativeApp {
         let Some(parked) = self.session_runtime.remove(&idx) else {
             return false;
         };
+        self.file_manager = parked.file_manager;
+        self.editor = parked.editor;
+        self.settings = parked.settings;
+        self.applications = parked.applications;
+        self.terminal_mode = parked.terminal_mode;
         self.desktop_mode_open = parked.desktop_mode_open;
         self.start_open = parked.start_open;
         self.main_menu_idx = parked.main_menu_idx;
@@ -487,6 +525,8 @@ impl RobcoNativeApp {
         self.terminal_user_management_mode = parked.terminal_user_management_mode;
         self.terminal_settings_choice = parked.terminal_settings_choice;
         self.terminal_prompt = parked.terminal_prompt;
+        self.terminal_flash = parked.terminal_flash;
+        self.session_leader_until = parked.session_leader_until;
         self.suppress_next_menu_submit = parked.suppress_next_menu_submit;
         self.shell_status = parked.shell_status;
         true
@@ -516,6 +556,9 @@ impl RobcoNativeApp {
             self.persist_snapshot();
             self.park_active_session_runtime();
             session::set_active(target);
+            if !self.sync_active_session_identity() {
+                return;
+            }
             if self.restore_active_session_runtime_if_any() {
                 return;
             }
@@ -582,6 +625,9 @@ impl RobcoNativeApp {
         }
         self.session_runtime = remapped;
 
+        if !self.sync_active_session_identity() {
+            return;
+        }
         if !self.restore_active_session_runtime_if_any() {
             if let Some(username) = session::active_username() {
                 self.activate_session_user(&username);

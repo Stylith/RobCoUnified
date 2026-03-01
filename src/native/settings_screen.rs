@@ -515,4 +515,47 @@ mod tests {
         ));
         assert_ne!(draft.cli_acs_mode, before);
     }
+
+    #[test]
+    fn custom_rgb_rows_show_only_for_custom_theme() {
+        let mut draft = get_settings();
+        draft.theme = "Green (Default)".to_string();
+        let base_rows = terminal_settings_rows(&draft, false);
+        assert!(!base_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed)));
+        assert!(!base_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeGreen)));
+        assert!(!base_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeBlue)));
+
+        draft.theme = CUSTOM_THEME_NAME.to_string();
+        let custom_rows = terminal_settings_rows(&draft, false);
+        assert!(custom_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed)));
+        assert!(custom_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeGreen)));
+        assert!(custom_rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeBlue)));
+    }
+
+    #[test]
+    fn custom_rgb_row_adjusts_value_and_keeps_custom_theme() {
+        let mut draft = get_settings();
+        draft.theme = CUSTOM_THEME_NAME.to_string();
+        draft.custom_theme_rgb = [10, 20, 30];
+        let rows = terminal_settings_rows(&draft, false);
+        let red_idx = rows
+            .iter()
+            .position(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed))
+            .expect("red row");
+        assert!(adjust_settings_slider(&mut draft, red_idx, false, 5));
+        assert_eq!(draft.custom_theme_rgb[0], 15);
+        assert_eq!(draft.theme, CUSTOM_THEME_NAME);
+    }
 }

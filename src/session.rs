@@ -141,9 +141,18 @@ pub fn has_switch_request() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn session_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("session test lock")
+    }
 
     #[test]
     fn switch_request_roundtrip() {
+        let _guard = session_test_guard();
         clear_sessions();
         request_switch(3);
         assert!(has_switch_request());
@@ -154,6 +163,7 @@ mod tests {
 
     #[test]
     fn default_mode_pending_consumed_once() {
+        let _guard = session_test_guard();
         clear_sessions();
         let idx = push_session_with_default_mode("admin", true);
         set_active(idx);
@@ -163,6 +173,7 @@ mod tests {
 
     #[test]
     fn close_active_session_picks_previous() {
+        let _guard = session_test_guard();
         clear_sessions();
         push_session("u1");
         push_session("u2");
@@ -178,6 +189,7 @@ mod tests {
 
     #[test]
     fn close_first_session_keeps_first_remaining_active() {
+        let _guard = session_test_guard();
         clear_sessions();
         push_session("u1");
         push_session("u2");
@@ -192,6 +204,7 @@ mod tests {
 
     #[test]
     fn close_last_session_selects_previous_index() {
+        let _guard = session_test_guard();
         clear_sessions();
         push_session("u1");
         push_session("u2");
@@ -206,6 +219,7 @@ mod tests {
 
     #[test]
     fn close_only_session_empties_list_and_resets_active() {
+        let _guard = session_test_guard();
         clear_sessions();
         push_session("u1");
         set_active(0);

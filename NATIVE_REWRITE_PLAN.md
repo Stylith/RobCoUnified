@@ -86,6 +86,12 @@ The rewrite is a new native application layer, not a replacement of the current 
   - `Custom` theme is now part of the same theme chooser list as built-in themes
   - per-user custom RGB is persisted in settings and drives active terminal/native palette when selected
   - RGB sliders/adjusters are wired in both native desktop settings and terminal-style settings flows
+  - RGB controls are now shown only when theme selection is `Custom`
+- Session runtime parking now preserves full native UI context across session switches:
+  - terminal screen/menu state
+  - file manager/editor/settings/app window state
+  - terminal prompt/flash/session-leader transient state
+  - active user identity is synchronized before parked-state restore
 
 ## Next parity targets
 
