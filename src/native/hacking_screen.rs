@@ -1,8 +1,8 @@
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::core::hacking::{
-    find_bracket_at, find_word_at, idx_to_cell, HackingGame, SelectOutcome, COLS, COL_WIDTH, ROWS,
+    find_bracket_at, find_word_at, HackingGame, SelectOutcome, COLS, COL_WIDTH, ROWS,
 };
-use eframe::egui::{self, Context};
+use eframe::egui::{self, Align2, Context, Pos2, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HackingScreenEvent {
@@ -81,37 +81,101 @@ pub fn draw_hacking_screen(
             let hover_bracket = find_bracket_at(game.cursor, &game.grid.bracket_pairs);
             let body_top = 5usize;
             let log_x = 50usize;
-
-            for col_block in 0..COLS {
-                for row in 0..ROWS {
-                    let addr = game.base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
-                    let sx = 3 + col_block * (COL_WIDTH + 14);
-                    let sy = body_top + row;
-                    screen.text(&painter, sx, sy, &format!("0x{addr:04X}"), palette.fg);
+            let font = screen.font().clone();
+            let row_cell = screen.row_rect(0, body_top, 1);
+            let row_height = row_cell.height();
+            let text_inset = ((row_height - font.size).max(0.0) * 0.5).floor();
+            let glyph_advance = painter
+                .layout_no_wrap("W".to_string(), font.clone(), palette.fg)
+                .size()
+                .x
+                .max(1.0);
+            let addr_width = painter
+                .layout_no_wrap("0xF000".to_string(), font.clone(), palette.dim)
+                .size()
+                .x
+                .max(1.0);
+            let addr_gap = (row_cell.width() * 0.70).max(4.0);
+            let mut removed = vec![false; game.grid.chars.len()];
+            for wp in &game.grid.word_positions {
+                if game.removed_duds.contains(&wp.word) {
+                    let len = wp.word.chars().count();
+                    for idx in wp.start..wp.start + len {
+                        if let Some(cell) = removed.get_mut(idx) {
+                            *cell = true;
+                        }
+                    }
                 }
             }
 
-            for (i, &ch) in game.grid.chars.iter().enumerate() {
-                let (row_off, col_off) = idx_to_cell(i);
-                let sy = body_top + row_off;
-                let sx = 3 + col_off;
-                let is_removed = game.grid.word_positions.iter().any(|wp| {
-                    game.removed_duds.contains(&wp.word)
-                        && i >= wp.start
-                        && i < wp.start + wp.word.chars().count()
-                });
-                let highlighted = hover_word
-                    .is_some_and(|hw| i >= hw.start && i < hw.start + hw.word.chars().count())
-                    || hover_bracket.is_some_and(|hb| i >= hb.open && i <= hb.close)
-                    || i == game.cursor;
+            for col_block in 0..COLS {
+                let addr_col = 3 + col_block * (COL_WIDTH + 14);
+                let addr_x = screen.row_rect(addr_col, body_top, 1).left();
+                let chars_x = addr_x + addr_width + addr_gap;
+                for row in 0..ROWS {
+                    let sy = body_top + row;
+                    let row_rect = screen.row_rect(addr_col, sy, 1);
+                    let text_y = row_rect.top() + text_inset;
+                    let addr = game.base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
+                    painter.text(
+                        Pos2::new(addr_x, text_y),
+                        Align2::LEFT_TOP,
+                        format!("0x{addr:04X}"),
+                        font.clone(),
+                        palette.dim,
+                    );
 
-                let display = if is_removed { '.' } else { ch };
-                if highlighted {
-                    let rect = screen.row_rect(sx, sy, 1);
-                    painter.rect_filled(rect, 0.0, palette.selected_bg);
-                    screen.text(&painter, sx, sy, &display.to_string(), palette.selected_fg);
-                } else {
-                    screen.text(&painter, sx, sy, &display.to_string(), palette.fg);
+                    let row_start = col_block * ROWS * COL_WIDTH + row * COL_WIDTH;
+                    for offset in 0..COL_WIDTH {
+                        let idx = row_start + offset;
+                        let display = if removed[idx] {
+                            '.'
+                        } else {
+                            game.grid.chars[idx]
+                        };
+
+                        let highlighted = hover_word.is_some_and(|hw| {
+                            idx >= hw.start && idx < hw.start + hw.word.chars().count()
+                        }) || hover_bracket
+                            .is_some_and(|hb| idx >= hb.open && idx <= hb.close)
+                            || idx == game.cursor;
+
+                        let char_x = (chars_x + offset as f32 * glyph_advance).floor();
+                        if highlighted {
+                            let glyph_size = painter
+                                .layout_no_wrap(display.to_string(), font.clone(), palette.fg)
+                                .size();
+                            // Keep hacking highlights slightly tighter than full line height
+                            // while still fully covering glyph shapes.
+                            let glyph_h = glyph_size.y.max(1.0);
+                            let top = (text_y + glyph_h * 0.06).max(row_rect.top()).floor();
+                            let bottom = (text_y + glyph_h * 0.94)
+                                .min(row_rect.bottom())
+                                .max(top + 1.0)
+                                .floor();
+                            let width = glyph_size.x.max(1.0).ceil();
+                            let rect = Rect::from_min_max(
+                                Pos2::new(char_x, top),
+                                Pos2::new(char_x + width, bottom),
+                            );
+                            painter.rect_filled(rect, 0.0, palette.selected_bg);
+                            painter.text(
+                                Pos2::new(char_x, text_y),
+                                Align2::LEFT_TOP,
+                                display.to_string(),
+                                font.clone(),
+                                palette.selected_fg,
+                            );
+                        } else {
+                            painter.text(
+                                Pos2::new(char_x, text_y),
+                                Align2::LEFT_TOP,
+                                display.to_string(),
+                                font.clone(),
+                                palette.fg,
+                            );
+                        }
+                    }
                 }
             }
 

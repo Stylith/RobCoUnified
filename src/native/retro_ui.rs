@@ -222,13 +222,31 @@ impl RetroScreen {
         selected: bool,
     ) -> Response {
         let clipped = self.clip_text(col, text);
-        let rect = self.row_rect(col, row, clipped.chars().count());
+        let left = self.rect.left() + col as f32 * self.cell.x;
+        let top = self.row_top(row);
+        let measured = painter
+            .layout_no_wrap(clipped.clone(), self.font.clone(), palette.fg)
+            .size();
+        let measured_w = measured.x;
+        let measured_h = measured.y.max(1.0);
+        // Legacy TUI highlight paints exactly the selected text span.
+        let right = (left + measured_w).min(self.rect.right());
+        let hit_rect = Rect::from_min_max(
+            Pos2::new(left.min(self.rect.right()), top),
+            Pos2::new(right.max(left), top + self.cell.y),
+        );
+        let text_top = self.row_text_y(row).max(hit_rect.top());
+        let text_bottom = (text_top + measured_h).min(hit_rect.bottom());
+        let paint_rect = Rect::from_min_max(
+            Pos2::new(hit_rect.left(), text_top),
+            Pos2::new(hit_rect.right(), text_bottom.max(text_top + 1.0)),
+        );
         if selected {
-            painter.rect_filled(rect, 0.0, palette.selected_bg);
+            painter.rect_filled(paint_rect, 0.0, palette.selected_bg);
         }
         self.paint_text(
             painter,
-            Pos2::new(rect.left(), self.row_text_y(row)),
+            Pos2::new(hit_rect.left(), self.row_text_y(row)),
             Align2::LEFT_TOP,
             &clipped,
             if selected {
@@ -239,7 +257,7 @@ impl RetroScreen {
             selected,
         );
         ui.interact(
-            rect,
+            hit_rect,
             ui.id().with(("retro_row", row, col, text)),
             Sense::click(),
         )
