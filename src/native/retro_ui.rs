@@ -130,6 +130,14 @@ impl RetroScreen {
         self.snap(top + inset)
     }
 
+    pub fn row_text_top(&self, row: usize) -> f32 {
+        self.row_text_y(row)
+    }
+
+    pub fn snap_value(&self, value: f32) -> f32 {
+        self.snap(value)
+    }
+
     pub fn text_band_rect(&self, row: usize, left: f32, width: f32) -> Rect {
         let row_rect = self.row_rect(0, row, self.cols.max(1));
         let text_top = self.row_text_y(row).max(row_rect.top());
@@ -282,7 +290,7 @@ impl RetroScreen {
             } else {
                 palette.fg
             },
-            selected,
+            false,
         );
         ui.interact(
             hit_rect,

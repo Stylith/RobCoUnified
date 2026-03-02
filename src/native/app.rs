@@ -2917,6 +2917,7 @@ impl RobcoNativeApp {
                 );
             }
             InstallerEvent::LaunchCommand { argv, status } => {
+                self.queue_terminal_flash(status.clone(), 650, FlashAction::Noop);
                 self.open_embedded_pty(
                     "Program Installer",
                     &argv,
@@ -2925,6 +2926,7 @@ impl RobcoNativeApp {
                 self.shell_status = status;
             }
             InstallerEvent::Status(status) => {
+                self.queue_terminal_flash(status.clone(), 650, FlashAction::Noop);
                 self.shell_status = status;
             }
         }
@@ -3603,6 +3605,7 @@ impl eframe::App for RobcoNativeApp {
                 let action = flash.action.clone();
                 self.terminal_flash = None;
                 match action {
+                    FlashAction::Noop => {}
                     FlashAction::ExitApp => {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }

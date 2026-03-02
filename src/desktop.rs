@@ -5850,12 +5850,11 @@ fn top_status_right_text() -> String {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect::<String>();
-    let batt_text = if batt_clean.is_empty() {
-        "--%".to_string()
+    if batt_clean.is_empty() {
+        now
     } else {
-        format!("{batt_clean}%")
-    };
-    format!("{now} | {batt_text}")
+        format!("{now} | {batt_clean}%")
+    }
 }
 
 fn top_status_spotlight_rect(area: Rect) -> Option<Rect> {
@@ -16321,7 +16320,7 @@ fn read_battery_now() -> String {
                 }
             }
         }
-        return "--%".to_string();
+        return String::new();
     }
 
     #[cfg(target_os = "linux")]
@@ -16345,7 +16344,7 @@ fn read_battery_now() -> String {
                 }
             }
         }
-        return "--%".to_string();
+        return String::new();
     }
 
     #[cfg(target_os = "windows")]
@@ -16361,12 +16360,12 @@ fn read_battery_now() -> String {
                 }
             }
         }
-        return "--%".to_string();
+        return String::new();
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        "--%".to_string()
+        String::new()
     }
 }
 

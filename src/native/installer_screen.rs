@@ -242,11 +242,45 @@ impl PackageManager {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
         let installed: HashSet<String> = self.list_installed().into_iter().collect();
+        if matches!(self, PackageManager::Pacman) {
+            let lines: Vec<&str> = out.lines().collect();
+            let mut results = Vec::new();
+            let mut idx = 0usize;
+            while idx < lines.len() {
+                let header = lines[idx];
+                let Some(pkg) = search_pkg_name(self, header) else {
+                    idx += 1;
+                    continue;
+                };
+                let desc = lines
+                    .get(idx + 1)
+                    .filter(|next| next.starts_with(' '))
+                    .map(|next| next.trim().to_string());
+                let raw = if let Some(desc) = &desc {
+                    format!("{} - {}", header.trim(), desc)
+                } else {
+                    header.trim().to_string()
+                };
+                results.push(SearchResult {
+                    raw,
+                    installed: installed.contains(&pkg),
+                    pkg,
+                });
+                idx += if desc.is_some() { 2 } else { 1 };
+            }
+            return results;
+        }
+
         out.lines()
             .filter_map(|line| {
                 let pkg = search_pkg_name(self, line)?;
+                let raw = if let Some(desc) = search_description(self, line) {
+                    format!("{pkg} - {desc}")
+                } else {
+                    line.trim().to_string()
+                };
                 Some(SearchResult {
-                    raw: line.trim().to_string(),
+                    raw,
                     installed: installed.contains(&pkg),
                     pkg,
                 })
@@ -281,6 +315,17 @@ fn search_pkg_name(pm: PackageManager, line: &str) -> Option<String> {
         return None;
     }
     Some(pkg.to_string())
+}
+
+fn search_description(pm: PackageManager, line: &str) -> Option<String> {
+    let line = line.trim();
+    match pm {
+        PackageManager::Apt => line.split_once(" - ").map(|(_, d)| d.trim().to_string()),
+        PackageManager::Dnf => line.split_once(':').map(|(_, d)| d.trim().to_string()),
+        PackageManager::Zypper => line.split('|').nth(2).map(|d| d.trim().to_string()),
+        _ => None,
+    }
+    .filter(|d| !d.is_empty())
 }
 
 fn installer_page_size(menu_start_row: usize, status_row: usize) -> usize {
@@ -565,7 +610,10 @@ fn draw_root(
             state.installed_idx = 0;
             state.installed_page = 0;
             state.view = InstallerView::Installed;
-            InstallerEvent::None
+            InstallerEvent::Status(format!(
+                "Loaded {} installed package(s).",
+                state.installed_packages.len()
+            ))
         }
         Some(2) => {
             if !which("python3") {
@@ -1035,7 +1083,10 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
         InstallerEvent::Status("No results found.".to_string())
     } else {
         state.view = InstallerView::SearchResults;
-        InstallerEvent::None
+        InstallerEvent::Status(format!(
+            "Found {} result(s).",
+            state.search_results.len()
+        ))
     }
 }
 

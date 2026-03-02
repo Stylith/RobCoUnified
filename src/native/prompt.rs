@@ -11,6 +11,7 @@ use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub enum FlashAction {
+    Noop,
     ExitApp,
     FinishLogout,
     FinishLogin { username: String, user: UserRecord },

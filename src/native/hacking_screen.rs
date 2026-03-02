@@ -83,8 +83,6 @@ pub fn draw_hacking_screen(
             let log_x = 50usize;
             let font = screen.font().clone();
             let row_cell = screen.row_rect(0, body_top, 1);
-            let row_height = row_cell.height();
-            let text_inset = ((row_height - font.size).max(0.0) * 0.5).floor();
             let glyph_advance = painter
                 .layout_no_wrap("W".to_string(), font.clone(), palette.fg)
                 .size()
@@ -114,8 +112,7 @@ pub fn draw_hacking_screen(
                 let chars_x = addr_x + addr_width + addr_gap;
                 for row in 0..ROWS {
                     let sy = body_top + row;
-                    let row_rect = screen.row_rect(addr_col, sy, 1);
-                    let text_y = row_rect.top() + text_inset;
+                    let text_y = screen.row_text_top(sy);
                     let addr = game.base_addr + ((col_block * ROWS + row) * COL_WIDTH) as u16;
                     painter.text(
                         Pos2::new(addr_x, text_y),
@@ -140,9 +137,9 @@ pub fn draw_hacking_screen(
                             .is_some_and(|hb| idx >= hb.open && idx <= hb.close)
                             || idx == game.cursor;
 
-                        let char_x = (chars_x + offset as f32 * glyph_advance).floor();
+                        let char_x = screen.snap_value(chars_x + offset as f32 * glyph_advance);
                         if highlighted {
-                            let width = glyph_advance.max(1.0).ceil();
+                            let width = screen.snap_value(glyph_advance.max(1.0).ceil());
                             let rect = screen.text_band_rect(sy, char_x, width);
                             painter.rect_filled(rect, 0.0, palette.selected_bg);
                             painter.text(

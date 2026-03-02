@@ -35,7 +35,7 @@ fn battery_display() -> Option<String> {
 }
 
 pub fn battery_status_string() -> String {
-    battery_display().unwrap_or_else(|| "--%".to_string())
+    battery_display().unwrap_or_default()
 }
 
 #[cfg(target_os = "macos")]
@@ -156,7 +156,11 @@ pub fn render_status_bar(f: &mut Frame, area: Rect) {
             }
         })
         .collect::<String>();
-    let right = format!(" {} ", batt);
+    let right = if batt.is_empty() {
+        String::new()
+    } else {
+        format!(" {} ", batt)
+    };
 
     let mut row = vec![' '; width];
     let mut occupied = vec![false; width];

@@ -159,19 +159,74 @@ impl PackageManager {
         }
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
+        if matches!(self, PackageManager::Pacman) {
+            let lines: Vec<&str> = out.lines().collect();
+            let mut results = Vec::new();
+            let mut idx = 0usize;
+            while idx < lines.len() {
+                let header = lines[idx].trim_end();
+                if header.is_empty()
+                    || header.starts_with('=')
+                    || header.starts_with("warning:")
+                    || header.starts_with("Sorting...")
+                    || header.starts_with("Full Text Search...")
+                    || header.starts_with("S | Name")
+                    || header.starts_with("--")
+                    || lines[idx].starts_with(' ')
+                {
+                    idx += 1;
+                    continue;
+                }
+                let desc = lines
+                    .get(idx + 1)
+                    .filter(|next| next.starts_with(' '))
+                    .map(|next| next.trim());
+                if let Some(desc) = desc {
+                    results.push(format!("{header} - {desc}"));
+                    idx += 2;
+                } else {
+                    results.push(header.to_string());
+                    idx += 1;
+                }
+            }
+            return results;
+        }
+
         out.lines()
-            .filter(|l| {
+            .filter_map(|l| {
                 let line = l.trim_end();
-                !line.is_empty()
-                    && !line.starts_with('=')
-                    && !line.starts_with("warning:")
-                    && !line.starts_with("Sorting...")
-                    && !line.starts_with("Full Text Search...")
-                    && !line.starts_with("S | Name")
-                    && !line.starts_with("--")
-                    && !(matches!(self, PackageManager::Pacman) && l.starts_with(' '))
+                if line.is_empty()
+                    || line.starts_with('=')
+                    || line.starts_with("warning:")
+                    || line.starts_with("Sorting...")
+                    || line.starts_with("Full Text Search...")
+                    || line.starts_with("S | Name")
+                    || line.starts_with("--")
+                {
+                    return None;
+                }
+                let pkg = line
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split_once('/')
+                    .map(|(_, p)| p)
+                    .unwrap_or_else(|| line.split_whitespace().next().unwrap_or(""));
+                let desc = if matches!(self, PackageManager::Apt) {
+                    line.split_once(" - ").map(|(_, d)| d.trim())
+                } else if matches!(self, PackageManager::Dnf) {
+                    line.split_once(':').map(|(_, d)| d.trim())
+                } else if matches!(self, PackageManager::Zypper) {
+                    line.split('|').nth(2).map(|d| d.trim())
+                } else {
+                    None
+                };
+                if let Some(desc) = desc.filter(|d| !d.is_empty()) {
+                    Some(format!("{pkg} - {desc}"))
+                } else {
+                    Some(line.to_string())
+                }
             })
-            .map(str::to_string)
             .collect()
     }
 
