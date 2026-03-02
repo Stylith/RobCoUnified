@@ -1,4 +1,5 @@
 use super::edit_menus_screen::EditMenuTarget;
+use super::menu::TerminalScreen;
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::ConnectionKind;
 use crate::config::HEADER_LINES;
@@ -16,6 +17,12 @@ pub enum FlashAction {
     FinishLogout,
     FinishLogin { username: String, user: UserRecord },
     StartHacking { username: String },
+    LaunchPty {
+        title: String,
+        argv: Vec<String>,
+        return_screen: TerminalScreen,
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone)]

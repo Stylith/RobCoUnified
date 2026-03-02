@@ -607,6 +607,7 @@ fn install_pkg_dialog(terminal: &mut Term, pm: Option<PackageManager>, pkg: &str
         return flash_message(terminal, "Error: No supported package manager found.", 800);
     };
     if confirm(terminal, &format!("Install {pkg}?"))? {
+        flash_message(terminal, &format!("Installing {pkg}..."), 650)?;
         let cmd = pm.install_cmd(pkg);
         with_suspended(terminal, || {
             Command::new(&cmd[0]).args(&cmd[1..]).status()?;
@@ -707,6 +708,7 @@ fn pkg_action_menu(
                             continue;
                         }
                         if confirm(terminal, &format!("Update {pkg}?"))? {
+                            flash_message(terminal, &format!("Updating {pkg}..."), 650)?;
                             let cmd = pm.update_cmd(pkg);
                             with_suspended(terminal, || {
                                 Command::new(&cmd[0]).args(&cmd[1..]).status()?;
@@ -719,6 +721,7 @@ fn pkg_action_menu(
                 "Uninstall" => {
                     if let Some(pm) = pm {
                         if confirm(terminal, &format!("Uninstall {pkg}?"))? {
+                            flash_message(terminal, &format!("Uninstalling {pkg}..."), 650)?;
                             let cmd = pm.remove_cmd(pkg);
                             with_suspended(terminal, || {
                                 Command::new(&cmd[0]).args(&cmd[1..]).status()?;

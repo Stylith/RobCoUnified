@@ -2917,11 +2917,15 @@ impl RobcoNativeApp {
                 );
             }
             InstallerEvent::LaunchCommand { argv, status } => {
-                self.queue_terminal_flash(status.clone(), 650, FlashAction::Noop);
-                self.open_embedded_pty(
-                    "Program Installer",
-                    &argv,
-                    TerminalScreen::ProgramInstaller,
+                self.queue_terminal_flash(
+                    status.clone(),
+                    700,
+                    FlashAction::LaunchPty {
+                        title: "Program Installer".to_string(),
+                        argv,
+                        return_screen: TerminalScreen::ProgramInstaller,
+                        status: status.clone(),
+                    },
                 );
                 self.shell_status = status;
             }
@@ -3622,6 +3626,15 @@ impl eframe::App for RobcoNativeApp {
                                 crate::config::get_settings().hacking_difficulty,
                             ),
                         });
+                    }
+                    FlashAction::LaunchPty {
+                        title,
+                        argv,
+                        return_screen,
+                        status,
+                    } => {
+                        self.open_embedded_pty(&title, &argv, return_screen);
+                        self.shell_status = status;
                     }
                 }
             } else {
