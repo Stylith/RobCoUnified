@@ -70,6 +70,7 @@ pub struct RetroScreen {
     cols: usize,
     cell: Vec2,
     font: FontId,
+    pixels_per_point: f32,
 }
 
 impl RetroScreen {
@@ -80,6 +81,7 @@ impl RetroScreen {
 
     pub fn new_sized(ui: &mut Ui, cols: usize, rows: usize, desired: Vec2) -> (Self, Response) {
         let (rect, response) = ui.allocate_exact_size(desired, Sense::hover());
+        let pixels_per_point = ui.ctx().pixels_per_point().max(1.0);
         let cell_w = (rect.width() / cols.max(1) as f32).floor().max(8.0);
         let cell_h = (rect.height() / rows.max(1) as f32).floor().max(12.0);
         // Terminal sizing is driven by the caller-provided grid (cols/rows).
@@ -87,15 +89,26 @@ impl RetroScreen {
         let target_font = (cell_h * 0.80).max(8.0);
         let height_limit = (cell_h - 3.0).max(8.0);
         let width_limit = ((cell_w - 1.0).max(7.0) / 0.53).max(8.0);
+        let font_size = (target_font.min(height_limit.min(width_limit))).max(8.0);
+        let font_size = (font_size * pixels_per_point).round() / pixels_per_point;
         (
             Self {
                 rect,
                 cols,
                 cell: egui::vec2(cell_w, cell_h),
-                font: FontId::monospace(target_font.min(height_limit.min(width_limit))),
+                font: FontId::monospace(font_size),
+                pixels_per_point,
             },
             response,
         )
+    }
+
+    fn snap(&self, value: f32) -> f32 {
+        (value * self.pixels_per_point).round() / self.pixels_per_point
+    }
+
+    fn snap_pos(&self, pos: Pos2) -> Pos2 {
+        Pos2::new(self.snap(pos.x), self.snap(pos.y))
     }
 
     fn clip_text(&self, col: usize, text: &str) -> String {
@@ -108,13 +121,13 @@ impl RetroScreen {
     }
 
     fn row_top(&self, row: usize) -> f32 {
-        self.rect.top() + row as f32 * self.cell.y
+        self.snap(self.rect.top() + row as f32 * self.cell.y)
     }
 
     fn row_text_y(&self, row: usize) -> f32 {
         let top = self.row_top(row);
         let inset = ((self.cell.y - self.font.size).max(0.0) * 0.5).floor();
-        top + inset
+        self.snap(top + inset)
     }
 
     pub fn text_band_rect(&self, row: usize, left: f32, width: f32) -> Rect {
@@ -124,10 +137,13 @@ impl RetroScreen {
             .min(row_rect.bottom())
             .max(text_top + 1.0);
         Rect::from_min_max(
-            Pos2::new(left.clamp(row_rect.left(), row_rect.right()), text_top),
+            self.snap_pos(Pos2::new(
+                left.clamp(row_rect.left(), row_rect.right()),
+                text_top,
+            )),
             Pos2::new(
-                (left + width).clamp(row_rect.left(), row_rect.right()),
-                text_bottom,
+                self.snap((left + width).clamp(row_rect.left(), row_rect.right())),
+                self.snap(text_bottom),
             ),
         )
     }
@@ -141,10 +157,12 @@ impl RetroScreen {
         color: Color32,
         faux_bold: bool,
     ) {
-        painter.text(pos, align, text, self.font.clone(), color);
+        let snapped = self.snap_pos(pos);
+        painter.text(snapped, align, text, self.font.clone(), color);
         if faux_bold {
+            let dx = 1.0 / self.pixels_per_point;
             painter.text(
-                Pos2::new(pos.x + 0.7, pos.y),
+                self.snap_pos(Pos2::new(snapped.x + dx, snapped.y)),
                 align,
                 text,
                 self.font.clone(),
@@ -159,10 +177,10 @@ impl RetroScreen {
 
     pub fn text(&self, painter: &Painter, col: usize, row: usize, text: &str, color: Color32) {
         let clipped = self.clip_text(col, text);
-        let pos = Pos2::new(
+        let pos = self.snap_pos(Pos2::new(
             self.rect.left() + col as f32 * self.cell.x,
             self.row_text_y(row),
-        );
+        ));
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
     }
 
@@ -175,19 +193,22 @@ impl RetroScreen {
         color: Color32,
     ) {
         let clipped = self.clip_text(col, text);
-        let pos = Pos2::new(
+        let pos = self.snap_pos(Pos2::new(
             self.rect.left() + col as f32 * self.cell.x,
             self.row_text_y(row),
-        );
+        ));
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
         // Force underline width to character-cell geometry so it stays stable
         // across fonts/scales and does not overshoot subtitle text.
         let width = clipped.trim_end_matches(' ').chars().count() as f32 * self.cell.x;
         if width > 0.0 {
             let row_bottom = self.row_top(row) + self.cell.y - 1.0;
-            let y = (pos.y + self.font.size + 1.0).min(row_bottom);
+            let y = self.snap((pos.y + self.font.size + 1.0).min(row_bottom));
             painter.line_segment(
-                [Pos2::new(pos.x, y), Pos2::new(pos.x + width, y)],
+                [
+                    self.snap_pos(Pos2::new(pos.x, y)),
+                    self.snap_pos(Pos2::new(pos.x + width, y)),
+                ],
                 Stroke::new(2.0, color),
             );
         }
@@ -202,7 +223,7 @@ impl RetroScreen {
         strong: bool,
     ) {
         let clipped = self.clip_text(1, text);
-        let pos = Pos2::new(self.rect.center().x, self.row_text_y(row));
+        let pos = self.snap_pos(Pos2::new(self.rect.center().x, self.row_text_y(row)));
         self.paint_text(painter, pos, Align2::CENTER_TOP, &clipped, color, strong);
     }
 
@@ -212,7 +233,7 @@ impl RetroScreen {
     }
 
     pub fn row_rect(&self, col: usize, row: usize, width_chars: usize) -> Rect {
-        let left = self.rect.left() + col as f32 * self.cell.x;
+        let left = self.snap(self.rect.left() + col as f32 * self.cell.x);
         let top = self.rect.top() + row as f32 * self.cell.y;
         let nominal_right = left + width_chars.max(1) as f32 * self.cell.x;
         let right = if col.saturating_add(width_chars.max(1)) >= self.cols {
@@ -221,8 +242,8 @@ impl RetroScreen {
             nominal_right.min(self.rect.right())
         };
         Rect::from_min_max(
-            Pos2::new(left.min(self.rect.right()), top),
-            Pos2::new(right.max(left), top + self.cell.y),
+            self.snap_pos(Pos2::new(left.min(self.rect.right()), top)),
+            self.snap_pos(Pos2::new(right.max(left), top + self.cell.y)),
         )
     }
 
@@ -237,15 +258,15 @@ impl RetroScreen {
         selected: bool,
     ) -> Response {
         let clipped = self.clip_text(col, text);
-        let left = self.rect.left() + col as f32 * self.cell.x;
+        let left = self.snap(self.rect.left() + col as f32 * self.cell.x);
         let top = self.row_top(row);
         let cell_chars = clipped.chars().count().max(1) as f32;
         let measured_w = cell_chars * self.cell.x;
         // Legacy TUI highlight paints exactly the selected text span.
         let right = (left + measured_w).min(self.rect.right());
         let hit_rect = Rect::from_min_max(
-            Pos2::new(left.min(self.rect.right()), top),
-            Pos2::new(right.max(left), top + self.cell.y),
+            self.snap_pos(Pos2::new(left.min(self.rect.right()), top)),
+            self.snap_pos(Pos2::new(right.max(left), top + self.cell.y)),
         );
         let paint_rect = self.text_band_rect(row, hit_rect.left(), hit_rect.width());
         if selected {
@@ -253,7 +274,7 @@ impl RetroScreen {
         }
         self.paint_text(
             painter,
-            Pos2::new(hit_rect.left(), self.row_text_y(row)),
+            self.snap_pos(Pos2::new(hit_rect.left(), self.row_text_y(row))),
             Align2::LEFT_TOP,
             &clipped,
             if selected {
@@ -280,11 +301,12 @@ impl RetroScreen {
     ) {
         let rect = self.rect;
         painter.rect_filled(rect, 0.0, palette.selected_bg);
-        let footer_font = FontId::monospace(self.font.size + 0.4);
-        let y = rect.center().y;
-        let left_pos = Pos2::new(rect.left() + 4.0, y);
-        let center_pos = Pos2::new(rect.center().x, y);
-        let right_pos = Pos2::new(rect.right() - 4.0, y);
+        let footer_size = self.snap(self.font.size + 0.4).max(8.0);
+        let footer_font = FontId::monospace(footer_size);
+        let y = self.snap(rect.center().y);
+        let left_pos = self.snap_pos(Pos2::new(rect.left() + 4.0, y));
+        let center_pos = self.snap_pos(Pos2::new(rect.center().x, y));
+        let right_pos = self.snap_pos(Pos2::new(rect.right() - 4.0, y));
         painter.text(
             left_pos,
             Align2::LEFT_CENTER,
@@ -293,7 +315,10 @@ impl RetroScreen {
             palette.selected_fg,
         );
         painter.text(
-            Pos2::new(left_pos.x + 0.7, left_pos.y),
+            self.snap_pos(Pos2::new(
+                left_pos.x + (1.0 / self.pixels_per_point),
+                left_pos.y,
+            )),
             Align2::LEFT_CENTER,
             left,
             footer_font.clone(),
@@ -307,7 +332,10 @@ impl RetroScreen {
             palette.selected_fg,
         );
         painter.text(
-            Pos2::new(center_pos.x + 0.7, center_pos.y),
+            self.snap_pos(Pos2::new(
+                center_pos.x + (1.0 / self.pixels_per_point),
+                center_pos.y,
+            )),
             Align2::CENTER_CENTER,
             center,
             footer_font.clone(),
@@ -321,7 +349,10 @@ impl RetroScreen {
             palette.selected_fg,
         );
         painter.text(
-            Pos2::new(right_pos.x + 0.7, right_pos.y),
+            self.snap_pos(Pos2::new(
+                right_pos.x + (1.0 / self.pixels_per_point),
+                right_pos.y,
+            )),
             Align2::RIGHT_CENTER,
             right,
             footer_font,
@@ -344,17 +375,21 @@ impl RetroScreen {
     }
 
     pub fn panel_rect(&self, col: usize, row: usize, w: usize, h: usize) -> Rect {
-        let left = self.rect.left() + col as f32 * self.cell.x;
-        let top = self.rect.top() + row as f32 * self.cell.y;
+        let left = self.snap(self.rect.left() + col as f32 * self.cell.x);
+        let top = self.snap(self.rect.top() + row as f32 * self.cell.y);
         let right = if col.saturating_add(w) >= self.cols {
             self.rect.right()
         } else {
             self.rect.left() + (col + w) as f32 * self.cell.x
         };
-        let bottom = (self.rect.top() + (row + h) as f32 * self.cell.y).min(self.rect.bottom());
+        let bottom =
+            self.snap((self.rect.top() + (row + h) as f32 * self.cell.y).min(self.rect.bottom()));
         Rect::from_min_max(
-            Pos2::new(left.min(self.rect.right()), top.min(self.rect.bottom())),
-            Pos2::new(right.max(left), bottom.max(top)),
+            self.snap_pos(Pos2::new(
+                left.min(self.rect.right()),
+                top.min(self.rect.bottom()),
+            )),
+            self.snap_pos(Pos2::new(right.max(left), bottom.max(top))),
         )
     }
 }

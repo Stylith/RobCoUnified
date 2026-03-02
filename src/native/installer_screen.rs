@@ -3,6 +3,7 @@ use crate::config::{
     get_current_user, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
 };
 use serde_json::Value;
+use std::collections::HashSet;
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +42,9 @@ pub struct TerminalInstallerState {
     view: InstallerView,
     pub root_idx: usize,
     pub search_idx: usize,
+    pub search_page: usize,
     pub installed_idx: usize,
+    pub installed_page: usize,
     pub action_idx: usize,
     pub add_menu_idx: usize,
     pub search_results: Vec<SearchResult>,
@@ -57,7 +60,9 @@ impl Default for TerminalInstallerState {
             view: InstallerView::Root,
             root_idx: 0,
             search_idx: 0,
+            search_page: 0,
             installed_idx: 0,
+            installed_page: 0,
             action_idx: 0,
             add_menu_idx: 0,
             search_results: Vec::new(),
@@ -224,35 +229,68 @@ impl PackageManager {
     }
 
     fn search(self, query: &str) -> Vec<SearchResult> {
-        let out = Command::new(self.name())
-            .args(["search", query])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
+        let out = match self {
+            PackageManager::Brew => Command::new("brew").args(["search", query]).output().ok(),
+            PackageManager::Apt => Command::new("apt-cache")
+                .args(["search", query])
+                .output()
+                .ok(),
+            PackageManager::Dnf => Command::new("dnf").args(["search", query]).output().ok(),
+            PackageManager::Pacman => Command::new("pacman").args(["-Ss", query]).output().ok(),
+            PackageManager::Zypper => Command::new("zypper").args(["se", query]).output().ok(),
+        }
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+        let installed: HashSet<String> = self.list_installed().into_iter().collect();
         out.lines()
-            .filter(|l| !l.is_empty() && !l.starts_with('='))
             .filter_map(|line| {
-                let pkg = line
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .split('/')
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                if pkg.is_empty() {
-                    return None;
-                }
+                let pkg = search_pkg_name(self, line)?;
                 Some(SearchResult {
-                    raw: line.to_string(),
-                    installed: which(&pkg),
+                    raw: line.trim().to_string(),
+                    installed: installed.contains(&pkg),
                     pkg,
                 })
             })
             .collect()
     }
+}
 
+fn search_pkg_name(pm: PackageManager, line: &str) -> Option<String> {
+    let line = line.trim_end();
+    if line.is_empty() || line.starts_with('=') || line.starts_with("warning:") {
+        return None;
+    }
+    if matches!(pm, PackageManager::Pacman) && line.starts_with(' ') {
+        // pacman descriptions are on indented lines; package header is non-indented.
+        return None;
+    }
+    if line.starts_with("Sorting...")
+        || line.starts_with("Full Text Search...")
+        || line.starts_with("S | Name")
+        || line.starts_with("--")
+    {
+        return None;
+    }
+    let token = line.split_whitespace().next()?;
+    let pkg = if let Some((_, rest)) = token.split_once('/') {
+        rest
+    } else {
+        token
+    };
+    if pkg.is_empty() {
+        return None;
+    }
+    Some(pkg.to_string())
+}
+
+fn installer_page_size(menu_start_row: usize, status_row: usize) -> usize {
+    status_row
+        .saturating_sub(menu_start_row)
+        .saturating_sub(4)
+        .max(6)
+}
+
+impl PackageManager {
     fn list_installed(self) -> Vec<String> {
         let (bin, args): (&str, &[&str]) = match self {
             PackageManager::Brew => ("brew", &["list"]),
@@ -278,7 +316,7 @@ impl PackageManager {
                             .next()
                             .unwrap_or("")
                             .split('/')
-                            .next()
+                            .next_back()
                             .unwrap_or("")
                             .to_string()
                     })
@@ -318,6 +356,13 @@ fn has_python_module(module: &str) -> bool {
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn is_admin(username: String) -> bool {
+    crate::core::auth::load_users()
+        .get(&username)
+        .map(|u| u.is_admin)
         .unwrap_or(false)
 }
 
@@ -518,6 +563,7 @@ fn draw_root(
                 .map(|p| p.list_installed())
                 .unwrap_or_default();
             state.installed_idx = 0;
+            state.installed_page = 0;
             state.view = InstallerView::Installed;
             InstallerEvent::None
         }
@@ -580,24 +626,53 @@ fn draw_search_results(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
-    let mut items: Vec<String> = state
-        .search_results
-        .iter()
-        .map(|result| {
-            format!(
-                "{} {}",
-                if result.installed {
-                    "[installed]"
-                } else {
-                    "[get]"
-                },
-                result.raw
-            )
-        })
-        .collect();
+    #[derive(Clone)]
+    enum SearchRow {
+        Package(usize),
+        Prev,
+        Next,
+        Back,
+        Ignore,
+    }
+    let total = state.search_results.len();
+    let page_size = installer_page_size(menu_start_row, status_row);
+    let total_pages = total.div_ceil(page_size).max(1);
+    state.search_page = state.search_page.min(total_pages.saturating_sub(1));
+    let start = state.search_page * page_size;
+    let end = (start + page_size).min(total);
+    let mut items: Vec<String> = Vec::new();
+    let mut row_actions: Vec<SearchRow> = Vec::new();
+    for idx in start..end {
+        let result = &state.search_results[idx];
+        items.push(format!(
+            "{} {}",
+            if result.installed {
+                "[installed]"
+            } else {
+                "[get]"
+            },
+            result.raw
+        ));
+        row_actions.push(SearchRow::Package(idx));
+    }
+    if state.search_page > 0 {
+        items.push("< Prev Page".to_string());
+        row_actions.push(SearchRow::Prev);
+    }
+    if end < total {
+        items.push("> Next Page".to_string());
+        row_actions.push(SearchRow::Next);
+    }
     items.push("---".to_string());
+    row_actions.push(SearchRow::Ignore);
     items.push("Back".to_string());
-    let subtitle = format!("Query: {}", state.search_query);
+    row_actions.push(SearchRow::Back);
+    let subtitle = format!(
+        "Query: {}  Page {}/{}",
+        state.search_query,
+        state.search_page + 1,
+        total_pages
+    );
     let activated = draw_terminal_menu_screen(
         ctx,
         "Search Results",
@@ -617,16 +692,29 @@ fn draw_search_results(
         shell_status,
     );
     match activated {
-        Some(idx) if idx < state.search_results.len() => {
-            let pkg = state.search_results[idx].pkg.clone();
-            state.action_idx = 0;
-            state.view = InstallerView::SearchActions { pkg };
-            InstallerEvent::None
-        }
-        Some(_) => {
-            state.view = InstallerView::Root;
-            InstallerEvent::None
-        }
+        Some(idx) => match row_actions.get(idx) {
+            Some(SearchRow::Package(pkg_idx)) => {
+                let pkg = state.search_results[*pkg_idx].pkg.clone();
+                state.action_idx = 0;
+                state.view = InstallerView::SearchActions { pkg };
+                InstallerEvent::None
+            }
+            Some(SearchRow::Prev) => {
+                state.search_page = state.search_page.saturating_sub(1);
+                state.search_idx = 0;
+                InstallerEvent::None
+            }
+            Some(SearchRow::Next) => {
+                state.search_page = (state.search_page + 1).min(total_pages.saturating_sub(1));
+                state.search_idx = 0;
+                InstallerEvent::None
+            }
+            Some(SearchRow::Back) => {
+                state.view = InstallerView::Root;
+                InstallerEvent::None
+            }
+            _ => InstallerEvent::None,
+        },
         None => InstallerEvent::None,
     }
 }
@@ -647,6 +735,15 @@ fn draw_installed(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
+    #[derive(Clone)]
+    enum InstalledRow {
+        Filter,
+        Package(String),
+        Prev,
+        Next,
+        Back,
+        Ignore,
+    }
     let filter_label = if state.installed_filter.is_empty() {
         "Filter...".to_string()
     } else {
@@ -662,14 +759,40 @@ fn draw_installed(
         })
         .cloned()
         .collect();
+    let total = filtered.len();
+    let page_size = installer_page_size(menu_start_row, status_row);
+    let total_pages = total.div_ceil(page_size).max(1);
+    state.installed_page = state.installed_page.min(total_pages.saturating_sub(1));
+    let start = state.installed_page * page_size;
+    let end = (start + page_size).min(total);
+
     let mut items = vec![filter_label.clone(), "---".to_string()];
-    items.extend(filtered.iter().cloned());
+    let mut row_actions = vec![InstalledRow::Filter, InstalledRow::Ignore];
+    for pkg in &filtered[start..end] {
+        items.push(pkg.clone());
+        row_actions.push(InstalledRow::Package(pkg.clone()));
+    }
+    if state.installed_page > 0 {
+        items.push("< Prev Page".to_string());
+        row_actions.push(InstalledRow::Prev);
+    }
+    if end < total {
+        items.push("> Next Page".to_string());
+        row_actions.push(InstalledRow::Next);
+    }
     items.push("---".to_string());
+    row_actions.push(InstalledRow::Ignore);
     items.push("Back".to_string());
+    row_actions.push(InstalledRow::Back);
     let activated = draw_terminal_menu_screen(
         ctx,
         "Installed Apps",
-        Some("Manage installed packages"),
+        Some(&format!(
+            "{} packages   Page {}/{}",
+            total,
+            state.installed_page + 1,
+            total_pages
+        )),
         &items,
         &mut state.installed_idx,
         cols,
@@ -685,17 +808,30 @@ fn draw_installed(
         shell_status,
     );
     match activated {
-        Some(0) => InstallerEvent::OpenFilterPrompt,
-        Some(idx) if idx > 1 && idx < filtered.len() + 2 => {
-            let pkg = filtered[idx - 2].clone();
-            state.action_idx = 0;
-            state.view = InstallerView::InstalledActions { pkg };
-            InstallerEvent::None
-        }
-        Some(_) => {
-            state.view = InstallerView::Root;
-            InstallerEvent::None
-        }
+        Some(idx) => match row_actions.get(idx) {
+            Some(InstalledRow::Filter) => InstallerEvent::OpenFilterPrompt,
+            Some(InstalledRow::Package(pkg)) => {
+                state.action_idx = 0;
+                state.view = InstallerView::InstalledActions { pkg: pkg.clone() };
+                InstallerEvent::None
+            }
+            Some(InstalledRow::Prev) => {
+                state.installed_page = state.installed_page.saturating_sub(1);
+                state.installed_idx = 0;
+                InstallerEvent::None
+            }
+            Some(InstalledRow::Next) => {
+                state.installed_page =
+                    (state.installed_page + 1).min(total_pages.saturating_sub(1));
+                state.installed_idx = 0;
+                InstallerEvent::None
+            }
+            Some(InstalledRow::Back) => {
+                state.view = InstallerView::Root;
+                InstallerEvent::None
+            }
+            _ => InstallerEvent::None,
+        },
         None => InstallerEvent::None,
     }
 }
@@ -894,6 +1030,7 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
     state.search_results = pm.search(&query);
     state.search_query = query;
     state.search_idx = 0;
+    state.search_page = 0;
     if state.search_results.is_empty() {
         InstallerEvent::Status("No results found.".to_string())
     } else {
@@ -905,6 +1042,7 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
 pub fn apply_filter(state: &mut TerminalInstallerState, filter: &str) {
     state.installed_filter = filter.trim().to_string();
     state.installed_idx = 0;
+    state.installed_page = 0;
 }
 
 pub fn build_package_command(
@@ -991,13 +1129,6 @@ pub fn add_package_to_menu(
         pkg: pkg.to_string(),
     };
     InstallerEvent::Status("Added to menu.".to_string())
-}
-
-fn is_admin(username: String) -> bool {
-    crate::core::auth::load_users()
-        .get(&username)
-        .map(|u| u.is_admin)
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

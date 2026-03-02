@@ -120,6 +120,10 @@ The rewrite is a new native application layer, not a replacement of the current 
     - start launcher, desktop icons, and taskbar actions now route through the same state transitions
     - taskbar now distinguishes active (`*`) vs open/background (`+`) windows
     - active desktop window is rendered last for stable foreground behavior
+  - program installer parity fixes landed:
+    - pacman package search now uses native pacman query flow and parses package names correctly
+    - installed/search package lists now paginate with explicit prev/next controls and page indicators
+    - prevents long installed lists from rendering below the visible terminal UI area
 
 ## Next parity targets
 

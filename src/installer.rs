@@ -147,14 +147,30 @@ impl PackageManager {
     }
 
     fn search(self, query: &str) -> Vec<String> {
-        let out = Command::new(self.name())
-            .args(["search", query])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
+        let out = match self {
+            PackageManager::Brew => Command::new("brew").args(["search", query]).output().ok(),
+            PackageManager::Apt => Command::new("apt-cache")
+                .args(["search", query])
+                .output()
+                .ok(),
+            PackageManager::Dnf => Command::new("dnf").args(["search", query]).output().ok(),
+            PackageManager::Pacman => Command::new("pacman").args(["-Ss", query]).output().ok(),
+            PackageManager::Zypper => Command::new("zypper").args(["se", query]).output().ok(),
+        }
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
         out.lines()
-            .filter(|l| !l.is_empty() && !l.starts_with('='))
+            .filter(|l| {
+                let line = l.trim_end();
+                !line.is_empty()
+                    && !line.starts_with('=')
+                    && !line.starts_with("warning:")
+                    && !line.starts_with("Sorting...")
+                    && !line.starts_with("Full Text Search...")
+                    && !line.starts_with("S | Name")
+                    && !line.starts_with("--")
+                    && !(matches!(self, PackageManager::Pacman) && l.starts_with(' '))
+            })
             .map(str::to_string)
             .collect()
     }
@@ -423,7 +439,12 @@ fn search_menu(terminal: &mut Term, pm: Option<PackageManager>) -> Result<()> {
                 page = page.saturating_sub(1);
             }
             MenuResult::Selected(s) => {
-                let pkg = s.split_whitespace().nth(1).unwrap_or("").to_string();
+                let token = s.split_whitespace().nth(1).unwrap_or("");
+                let pkg = token
+                    .split_once('/')
+                    .map(|(_, name)| name)
+                    .unwrap_or(token)
+                    .to_string();
                 install_pkg_dialog(terminal, pm, &pkg)?;
             }
         }
