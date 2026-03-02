@@ -16,6 +16,7 @@ pub use robcos::core::auth::{
 
 pub fn login_screen(terminal: &mut Term) -> Result<Option<String>> {
     loop {
+        ensure_default_admin();
         let db = load_users();
         let mut usernames: Vec<String> = db.keys().cloned().collect();
         usernames.sort();

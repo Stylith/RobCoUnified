@@ -1,6 +1,7 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
 use robcos::config::reload_settings;
+use robcos::core::auth::ensure_default_admin;
 use robcos::native::{configure_native_context, RobcoNativeApp};
 
 fn load_icon() -> Option<IconData> {
@@ -15,6 +16,7 @@ fn load_icon() -> Option<IconData> {
 }
 
 fn main() -> Result<()> {
+    ensure_default_admin();
     reload_settings();
     let mut viewport = ViewportBuilder::default()
         .with_inner_size([1360.0, 840.0])

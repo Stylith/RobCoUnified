@@ -59,7 +59,7 @@ use crate::config::{
     update_settings, OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
-use crate::core::auth::{load_users, read_session, save_users, UserRecord};
+use crate::core::auth::{ensure_default_admin, load_users, read_session, save_users, UserRecord};
 use crate::core::hacking::HackingGame;
 use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, DefaultAppSlot};
 use crate::session;
@@ -355,6 +355,7 @@ struct ParkedSessionState {
 
 impl Default for RobcoNativeApp {
     fn default() -> Self {
+        ensure_default_admin();
         // Keep pre-login terminal rendering consistent with the most recent user session.
         if let Some(last_user) = read_session() {
             if load_users().contains_key(&last_user) {
@@ -979,6 +980,7 @@ impl RobcoNativeApp {
     }
 
     fn login_usernames(&self) -> Vec<String> {
+        ensure_default_admin();
         let mut usernames: Vec<String> = load_users().keys().cloned().collect();
         usernames.sort();
         usernames
