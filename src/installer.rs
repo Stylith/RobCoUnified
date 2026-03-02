@@ -264,6 +264,98 @@ impl PackageManager {
             })
             .unwrap_or_default()
     }
+
+    fn package_description(self, pkg: &str) -> Option<String> {
+        fn split_value_after_colon(line: &str) -> Option<String> {
+            line.split_once(':')
+                .map(|(_, v)| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        }
+
+        let output = match self {
+            PackageManager::Brew => Command::new("brew")
+                .args(["info", "--json=v2", pkg])
+                .output()
+                .ok()
+                .map(|o| {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string();
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("formulae")
+                                .and_then(|arr| arr.get(0))
+                                .and_then(|f| f.get("desc"))
+                                .and_then(|d| d.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default()
+                }),
+            PackageManager::Apt => Command::new("apt-cache")
+                .args(["show", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Dnf => Command::new("dnf")
+                .args(["info", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Pacman => Command::new("pacman")
+                .args(["-Si", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Zypper => Command::new("zypper")
+                .args(["info", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+        }?;
+
+        let desc = match self {
+            PackageManager::Brew => output,
+            PackageManager::Apt => output
+                .lines()
+                .find_map(|line| line.strip_prefix("Description:").map(str::trim))
+                .map(str::to_string)
+                .unwrap_or_default(),
+            PackageManager::Dnf => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Summary") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            PackageManager::Pacman => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Description") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            PackageManager::Zypper => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Summary") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+        };
+        if desc.is_empty() {
+            None
+        } else {
+            Some(desc)
+        }
+    }
 }
 
 fn which(bin: &str) -> bool {
@@ -583,7 +675,8 @@ fn installed_menu(terminal: &mut Term, pm: Option<PackageManager>) -> Result<()>
             }
             MenuResult::Selected(s) => {
                 let pkg = s.trim().to_string();
-                pkg_action_menu(terminal, pm, &pkg, &mut installed)?;
+                let description = pm.and_then(|manager| manager.package_description(&pkg));
+                pkg_action_menu(terminal, pm, &pkg, description.as_deref(), &mut installed)?;
             }
         }
     }
@@ -594,6 +687,7 @@ fn pkg_action_menu(
     terminal: &mut Term,
     pm: Option<PackageManager>,
     pkg: &str,
+    description: Option<&str>,
     installed: &mut Vec<String>,
 ) -> Result<()> {
     loop {
@@ -601,7 +695,7 @@ fn pkg_action_menu(
             terminal,
             pkg,
             &["Update", "Uninstall", "Add to Menu", "---", "Back"],
-            None,
+            description,
         )? {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {

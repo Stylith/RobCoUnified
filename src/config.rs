@@ -206,8 +206,8 @@ fn default_default_app_text_code() -> DefaultAppBinding {
 }
 
 fn default_default_app_ebook() -> DefaultAppBinding {
-    DefaultAppBinding::CustomArgv {
-        argv: vec!["epy".to_string()],
+    DefaultAppBinding::Builtin {
+        id: "robco_terminal_writer".to_string(),
     }
 }
 

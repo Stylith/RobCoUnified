@@ -189,16 +189,14 @@ fn command_exists_in_path(bin: &str) -> bool {
     false
 }
 
-pub fn default_app_choices(slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
+pub fn default_app_choices(_slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
     let mut rows = Vec::new();
-    if matches!(slot, DefaultAppSlot::TextCode) {
-        rows.push(DefaultAppChoice {
-            label: "Built-in: ROBCO Terminal Writer".to_string(),
-            action: DefaultAppChoiceAction::Set(DefaultAppBinding::Builtin {
-                id: "robco_terminal_writer".to_string(),
-            }),
-        });
-    }
+    rows.push(DefaultAppChoice {
+        label: "Built-in: ROBCO Terminal Writer".to_string(),
+        action: DefaultAppChoiceAction::Set(DefaultAppBinding::Builtin {
+            id: "robco_terminal_writer".to_string(),
+        }),
+    });
     if command_exists_in_path("epy") {
         rows.push(DefaultAppChoice {
             label: "External: epy".to_string(),
@@ -308,13 +306,11 @@ fn resolve_menu_entry(source: DefaultAppMenuSource, name: &str) -> Option<Vec<St
 
 fn resolve_binding_open(
     binding: &DefaultAppBinding,
-    slot: DefaultAppSlot,
+    _slot: DefaultAppSlot,
 ) -> Option<ResolvedDocumentOpen> {
     match binding {
         DefaultAppBinding::Builtin { id } => {
-            if matches!(slot, DefaultAppSlot::TextCode)
-                && id.eq_ignore_ascii_case("robco_terminal_writer")
-            {
+            if id.eq_ignore_ascii_case("robco_terminal_writer") {
                 Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter)
             } else if id.eq_ignore_ascii_case("epy") {
                 // Legacy compatibility for older configs.

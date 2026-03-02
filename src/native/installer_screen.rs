@@ -3,7 +3,7 @@ use crate::config::{
     get_current_user, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
 };
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +24,7 @@ pub enum InstallerPackageAction {
 pub struct SearchResult {
     pub raw: String,
     pub pkg: String,
+    pub description: Option<String>,
     pub installed: bool,
 }
 
@@ -52,6 +53,7 @@ pub struct TerminalInstallerState {
     pub installed_packages: Vec<String>,
     pub installed_filter: String,
     package_manager: Option<PackageManager>,
+    package_descriptions: HashMap<String, Option<String>>,
 }
 
 impl Default for TerminalInstallerState {
@@ -70,6 +72,7 @@ impl Default for TerminalInstallerState {
             installed_packages: Vec::new(),
             installed_filter: String::new(),
             package_manager: PackageManager::detect(),
+            package_descriptions: HashMap::new(),
         }
     }
 }
@@ -263,6 +266,7 @@ impl PackageManager {
                 };
                 results.push(SearchResult {
                     raw,
+                    description: desc.clone(),
                     installed: installed.contains(&pkg),
                     pkg,
                 });
@@ -281,6 +285,7 @@ impl PackageManager {
                 };
                 Some(SearchResult {
                     raw,
+                    description: search_description(self, line),
                     installed: installed.contains(&pkg),
                     pkg,
                 })
@@ -370,6 +375,98 @@ impl PackageManager {
             })
             .unwrap_or_default()
     }
+
+    fn package_description(self, pkg: &str) -> Option<String> {
+        fn split_value_after_colon(line: &str) -> Option<String> {
+            line.split_once(':')
+                .map(|(_, v)| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        }
+
+        let output = match self {
+            PackageManager::Brew => Command::new("brew")
+                .args(["info", "--json=v2", pkg])
+                .output()
+                .ok()
+                .map(|o| {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string();
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("formulae")
+                                .and_then(|arr| arr.get(0))
+                                .and_then(|f| f.get("desc"))
+                                .and_then(|d| d.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .unwrap_or_default()
+                }),
+            PackageManager::Apt => Command::new("apt-cache")
+                .args(["show", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Dnf => Command::new("dnf")
+                .args(["info", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Pacman => Command::new("pacman")
+                .args(["-Si", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Zypper => Command::new("zypper")
+                .args(["info", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+        }?;
+
+        let desc = match self {
+            PackageManager::Brew => output,
+            PackageManager::Apt => output
+                .lines()
+                .find_map(|line| line.strip_prefix("Description:").map(str::trim))
+                .map(str::to_string)
+                .unwrap_or_default(),
+            PackageManager::Dnf => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Summary") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            PackageManager::Pacman => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Description") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+            PackageManager::Zypper => output
+                .lines()
+                .find_map(|line| {
+                    if line.trim_start().starts_with("Summary") {
+                        split_value_after_colon(line)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default(),
+        };
+        if desc.is_empty() {
+            None
+        } else {
+            Some(desc)
+        }
+    }
 }
 
 fn which(bin: &str) -> bool {
@@ -432,6 +529,30 @@ impl TerminalInstallerState {
                 false
             }
         }
+    }
+
+    fn package_description(&mut self, pkg: &str) -> Option<String> {
+        if let Some(desc) = self.package_descriptions.get(pkg) {
+            return desc.clone();
+        }
+        let fetched = self
+            .search_results
+            .iter()
+            .find(|r| r.pkg == pkg)
+            .and_then(|r| r.description.clone())
+            .or_else(|| {
+                self.package_manager
+                    .and_then(|manager| manager.package_description(pkg))
+            });
+        self.package_descriptions
+            .insert(pkg.to_string(), fetched.clone());
+        fetched
+    }
+
+    fn cached_package_description(&self, pkg: &str) -> Option<String> {
+        self.package_descriptions
+            .get(pkg)
+            .and_then(|desc| desc.clone())
     }
 }
 
@@ -832,15 +953,28 @@ fn draw_installed(
     row_actions.push(InstalledRow::Ignore);
     items.push("Back".to_string());
     row_actions.push(InstalledRow::Back);
+    let selectable_rows: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
+        .collect();
+    let mut subtitle = format!(
+        "{} packages   Page {}/{}",
+        total,
+        state.installed_page + 1,
+        total_pages
+    );
+    if let Some(raw_idx) = selectable_rows.get(state.installed_idx).copied() {
+        if let Some(InstalledRow::Package(pkg)) = row_actions.get(raw_idx) {
+            if let Some(desc) = state.cached_package_description(pkg) {
+                subtitle = format!("{subtitle} | {desc}");
+            }
+        }
+    }
     let activated = draw_terminal_menu_screen(
         ctx,
         "Installed Apps",
-        Some(&format!(
-            "{} packages   Page {}/{}",
-            total,
-            state.installed_page + 1,
-            total_pages
-        )),
+        Some(&subtitle),
         &items,
         &mut state.installed_idx,
         cols,
@@ -902,10 +1036,13 @@ fn draw_search_actions(
     content_col: usize,
 ) -> InstallerEvent {
     let items = vec!["Install".to_string(), "---".to_string(), "Back".to_string()];
+    let subtitle = state
+        .package_description(pkg)
+        .unwrap_or_else(|| "Search result actions".to_string());
     let activated = draw_terminal_menu_screen(
         ctx,
         pkg,
-        Some("Search result actions"),
+        Some(&subtitle),
         &items,
         &mut state.action_idx,
         cols,
@@ -957,10 +1094,13 @@ fn draw_installed_actions(
         "---".to_string(),
         "Back".to_string(),
     ];
+    let subtitle = state
+        .package_description(pkg)
+        .unwrap_or_else(|| "Installed package actions".to_string());
     let activated = draw_terminal_menu_screen(
         ctx,
         pkg,
-        Some("Installed package actions"),
+        Some(&subtitle),
         &items,
         &mut state.action_idx,
         cols,
