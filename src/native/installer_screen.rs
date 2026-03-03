@@ -388,7 +388,9 @@ fn search_description(pm: PackageManager, line: &str) -> Option<String> {
 fn installer_page_size(menu_start_row: usize, status_row: usize) -> usize {
     status_row
         .saturating_sub(menu_start_row)
-        .saturating_sub(4)
+        // Keep room for separators/navigation rows so "Back" never collides
+        // with the shell-status line at the bottom.
+        .saturating_sub(6)
         .max(6)
 }
 
