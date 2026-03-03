@@ -32,6 +32,7 @@ pub struct SearchResult {
 #[derive(Debug, Clone)]
 enum InstallerView {
     Root,
+    RuntimeTools,
     SearchResults,
     Installed,
     SearchActions { pkg: String },
@@ -47,6 +48,7 @@ pub struct TerminalInstallerState {
     pub search_page: usize,
     pub installed_idx: usize,
     pub installed_page: usize,
+    pub runtime_tools_idx: usize,
     pub action_idx: usize,
     pub add_menu_idx: usize,
     pub search_results: Vec<SearchResult>,
@@ -66,6 +68,7 @@ impl Default for TerminalInstallerState {
             search_page: 0,
             installed_idx: 0,
             installed_page: 0,
+            runtime_tools_idx: 0,
             action_idx: 0,
             add_menu_idx: 0,
             search_results: Vec::new(),
@@ -558,6 +561,10 @@ impl TerminalInstallerState {
                 self.view = InstallerView::Root;
                 false
             }
+            InstallerView::RuntimeTools => {
+                self.view = InstallerView::Root;
+                false
+            }
             InstallerView::SearchActions { .. } => {
                 self.view = InstallerView::SearchResults;
                 false
@@ -631,6 +638,21 @@ pub fn draw_installer_screen(
             content_col,
         ),
         InstallerView::SearchResults => draw_search_results(
+            ctx,
+            state,
+            shell_status,
+            cols,
+            rows,
+            header_start_row,
+            separator_top_row,
+            title_row,
+            separator_bottom_row,
+            subtitle_row,
+            menu_start_row,
+            status_row,
+            content_col,
+        ),
+        InstallerView::RuntimeTools => draw_runtime_tools(
             ctx,
             state,
             shell_status,
@@ -734,11 +756,8 @@ fn draw_root(
     let mut items = vec![
         "Search".to_string(),
         "Installed Apps".to_string(),
-        "Install Audio Runtime (playsound)".to_string(),
+        "Runtime Tools".to_string(),
     ];
-    if cfg!(target_os = "macos") {
-        items.push("Install Bluetooth Utility (blueutil)".to_string());
-    }
     items.push("---".to_string());
     items.push("Back".to_string());
     let activated = draw_terminal_menu_screen(
@@ -775,6 +794,57 @@ fn draw_root(
             ))
         }
         Some(2) => {
+            state.view = InstallerView::RuntimeTools;
+            state.runtime_tools_idx = 0;
+            InstallerEvent::None
+        }
+        Some(_) => InstallerEvent::BackToMainMenu,
+        None => InstallerEvent::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_runtime_tools(
+    ctx: &eframe::egui::Context,
+    state: &mut TerminalInstallerState,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> InstallerEvent {
+    let mut items = vec!["Install Audio Runtime (playsound)".to_string()];
+    if cfg!(target_os = "macos") {
+        items.push("Install Bluetooth Utility (blueutil)".to_string());
+    }
+    items.push("---".to_string());
+    items.push("Back".to_string());
+    let activated = draw_terminal_menu_screen(
+        ctx,
+        "Runtime Tools",
+        Some("Quick install helpers"),
+        &items,
+        &mut state.runtime_tools_idx,
+        cols,
+        rows,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        content_col,
+        shell_status,
+    );
+    match activated {
+        Some(0) => {
             if !which("python3") {
                 return InstallerEvent::Status(
                     "python3 not found. Install Python first.".to_string(),
@@ -791,7 +861,7 @@ fn draw_root(
                 action: InstallerPackageAction::Install,
             }
         }
-        Some(3) if cfg!(target_os = "macos") => {
+        Some(1) if cfg!(target_os = "macos") => {
             if which("blueutil") {
                 return InstallerEvent::Status("blueutil is already installed.".to_string());
             }
@@ -813,7 +883,10 @@ fn draw_root(
                 completion_message: Some("blueutil installed.".to_string()),
             }
         }
-        Some(_) => InstallerEvent::BackToMainMenu,
+        Some(_) => {
+            state.view = InstallerView::Root;
+            InstallerEvent::None
+        }
         None => InstallerEvent::None,
     }
 }
