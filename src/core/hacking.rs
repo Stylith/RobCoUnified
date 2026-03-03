@@ -243,6 +243,7 @@ impl HackingGame {
             self.log.push(format!(">{}", wp.word));
             if wp.word == self.answer {
                 self.log.push(">Exact match!".to_string());
+                self.log.push(">Logging in...".to_string());
                 self.solved = true;
                 return SelectOutcome::Success;
             }

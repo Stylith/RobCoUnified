@@ -2088,7 +2088,6 @@ impl RobcoNativeApp {
                 ) {
                     HackingScreenEvent::None => {}
                     HackingScreenEvent::Cancel => {
-                        crate::sound::play_navigate();
                         self.login_mode = LoginScreenMode::SelectUser;
                         self.login_hacking = None;
                     }
@@ -2118,7 +2117,6 @@ impl RobcoNativeApp {
                     draw_locked_screen(ctx, layout.cols, layout.rows, layout.status_row_alt),
                     HackingScreenEvent::ExitLocked
                 ) {
-                    crate::sound::play_navigate();
                     self.login_mode = LoginScreenMode::SelectUser;
                     self.login_hacking = None;
                 }
@@ -3714,6 +3712,13 @@ impl eframe::App for RobcoNativeApp {
                     self.draw_terminal_footer(ctx);
                 } else {
                     self.draw_terminal_footer_spacer(ctx);
+                }
+                let show_hacking_wait = self.session.is_none()
+                    && matches!(self.login_mode, LoginScreenMode::Hacking)
+                    && matches!(&flash.action, FlashAction::FinishLogin { .. });
+                if show_hacking_wait {
+                    self.draw_login(ctx);
+                    return;
                 }
                 if flash.boxed {
                     draw_terminal_flash_boxed(

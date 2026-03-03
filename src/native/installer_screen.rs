@@ -1224,23 +1224,28 @@ fn draw_installed(
         .enumerate()
         .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
         .collect();
-    let mut subtitle = format!(
-        "{} packages   Page {}/{}",
+    let subtitle = selectable_rows
+        .get(state.installed_idx)
+        .copied()
+        .and_then(|raw_idx| match row_actions.get(raw_idx) {
+            Some(InstalledRow::Package(pkg)) => state.cached_package_description(pkg),
+            _ => None,
+        });
+    let installed_status = format!(
+        "{} packages installed   Page {}/{}",
         total,
         state.installed_page + 1,
         total_pages
     );
-    if let Some(raw_idx) = selectable_rows.get(state.installed_idx).copied() {
-        if let Some(InstalledRow::Package(pkg)) = row_actions.get(raw_idx) {
-            if let Some(desc) = state.cached_package_description(pkg) {
-                subtitle = format!("{subtitle} | {desc}");
-            }
-        }
-    }
+    let status_line = if shell_status.is_empty() {
+        installed_status
+    } else {
+        format!("{installed_status} | {shell_status}")
+    };
     let activated = draw_terminal_menu_screen(
         ctx,
         "Installed Apps",
-        Some(&subtitle),
+        subtitle.as_deref(),
         &items,
         &mut state.installed_idx,
         cols,
@@ -1253,7 +1258,7 @@ fn draw_installed(
         menu_start_row,
         status_row,
         content_col,
-        shell_status,
+        &status_line,
     );
     match activated {
         Some(idx) => match row_actions.get(idx) {
