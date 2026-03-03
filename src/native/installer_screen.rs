@@ -64,6 +64,8 @@ pub struct TerminalInstallerState {
     pub installed_filter: String,
     package_manager: Option<PackageManager>,
     package_descriptions: HashMap<String, Option<String>>,
+    runtime_playsound_installed: Option<bool>,
+    runtime_blueutil_installed: Option<bool>,
 }
 
 impl Default for TerminalInstallerState {
@@ -84,6 +86,8 @@ impl Default for TerminalInstallerState {
             installed_filter: String::new(),
             package_manager: PackageManager::detect(),
             package_descriptions: HashMap::new(),
+            runtime_playsound_installed: None,
+            runtime_blueutil_installed: None,
         }
     }
 }
@@ -610,6 +614,31 @@ impl TerminalInstallerState {
             .get(pkg)
             .and_then(|desc| desc.clone())
     }
+
+    fn refresh_runtime_tool_cache(&mut self) {
+        if self.runtime_playsound_installed.is_none() {
+            self.runtime_playsound_installed = Some(has_python_module("playsound"));
+        }
+        if cfg!(target_os = "macos") && self.runtime_blueutil_installed.is_none() {
+            self.runtime_blueutil_installed = Some(which("blueutil"));
+        }
+    }
+
+    fn runtime_tool_installed_cached(&mut self, tool: RuntimeTool) -> bool {
+        self.refresh_runtime_tool_cache();
+        match tool {
+            RuntimeTool::PlaySound => self.runtime_playsound_installed.unwrap_or(false),
+            RuntimeTool::Blueutil => self.runtime_blueutil_installed.unwrap_or(false),
+        }
+    }
+
+    fn invalidate_runtime_tool_cache_for_pkg(&mut self, pkg: &str) {
+        match pkg {
+            "playsound" => self.runtime_playsound_installed = None,
+            "blueutil" => self.runtime_blueutil_installed = None,
+            _ => {}
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -821,6 +850,8 @@ fn draw_root(
             ))
         }
         Some(2) => {
+            state.runtime_playsound_installed = None;
+            state.runtime_blueutil_installed = None;
             state.view = InstallerView::RuntimeTools;
             state.runtime_tools_idx = 0;
             InstallerEvent::None
@@ -852,10 +883,12 @@ fn draw_runtime_tools(
         Back,
         Ignore,
     }
-    let mut items = vec![runtime_tool_menu_label(RuntimeTool::PlaySound)];
+    let playsound_installed = state.runtime_tool_installed_cached(RuntimeTool::PlaySound);
+    let mut items = vec![runtime_tool_menu_label(RuntimeTool::PlaySound, playsound_installed)];
     let mut runtime_rows = vec![RuntimeRow::Tool(RuntimeTool::PlaySound)];
     if cfg!(target_os = "macos") {
-        items.push(runtime_tool_menu_label(RuntimeTool::Blueutil));
+        let blueutil_installed = state.runtime_tool_installed_cached(RuntimeTool::Blueutil);
+        items.push(runtime_tool_menu_label(RuntimeTool::Blueutil, blueutil_installed));
         runtime_rows.push(RuntimeRow::Tool(RuntimeTool::Blueutil));
     }
     items.push("---".to_string());
@@ -925,15 +958,8 @@ fn runtime_tool_description(tool: RuntimeTool) -> &'static str {
     }
 }
 
-fn runtime_tool_installed(tool: RuntimeTool) -> bool {
-    match tool {
-        RuntimeTool::PlaySound => has_python_module("playsound"),
-        RuntimeTool::Blueutil => which("blueutil"),
-    }
-}
-
-fn runtime_tool_menu_label(tool: RuntimeTool) -> String {
-    let state = if runtime_tool_installed(tool) {
+fn runtime_tool_menu_label(tool: RuntimeTool, installed: bool) -> String {
+    let state = if installed {
         "[installed]"
     } else {
         "[not installed]"
@@ -958,7 +984,7 @@ fn draw_runtime_tool_actions(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
-    let installed = runtime_tool_installed(tool);
+    let installed = state.runtime_tool_installed_cached(tool);
     let items = if installed {
         vec![
             "Update".to_string(),
@@ -1482,7 +1508,7 @@ pub fn apply_filter(state: &mut TerminalInstallerState, filter: &str) {
 }
 
 pub fn settle_view_after_package_command(state: &mut TerminalInstallerState) {
-    match state.view {
+    match state.view.clone() {
         InstallerView::InstalledActions { .. } => {
             state.view = InstallerView::Installed;
             state.action_idx = 0;
@@ -1490,6 +1516,11 @@ pub fn settle_view_after_package_command(state: &mut TerminalInstallerState) {
         InstallerView::SearchActions { .. } => {
             state.view = InstallerView::SearchResults;
             state.action_idx = 0;
+        }
+        InstallerView::RuntimeToolActions { tool } => {
+            state.view = InstallerView::RuntimeTools;
+            state.action_idx = 0;
+            state.invalidate_runtime_tool_cache_for_pkg(runtime_tool_pkg(tool));
         }
         _ => {}
     }

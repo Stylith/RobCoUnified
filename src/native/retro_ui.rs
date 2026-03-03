@@ -206,9 +206,10 @@ impl RetroScreen {
             self.row_text_y(row),
         ));
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
-        // Force underline width to character-cell geometry so it stays stable
-        // across fonts/scales and does not overshoot subtitle text.
-        let width = clipped.trim_end_matches(' ').chars().count() as f32 * self.cell.x;
+        // Match underline width to the actual rendered glyph run so it doesn't
+        // overshoot subtitle text across font/scale combinations.
+        let galley = painter.layout_no_wrap(clipped.trim_end_matches(' ').to_string(), self.font.clone(), color);
+        let width = self.snap(galley.size().x);
         if width > 0.0 {
             let row_bottom = self.row_top(row) + self.cell.y - 1.0;
             let y = self.snap((pos.y + self.font.size + 1.0).min(row_bottom));
