@@ -4,6 +4,7 @@ use crate::config::{
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -531,6 +532,43 @@ fn which(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
+fn is_arch_linux() -> bool {
+    std::path::Path::new("/etc/arch-release").exists()
+        || std::fs::read_to_string("/etc/os-release")
+            .map(|s| {
+                let lower = s.to_lowercase();
+                lower.contains("id=arch") || lower.contains("id_like=arch")
+            })
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_arch_linux() -> bool {
+    false
+}
+
+fn arch_audio_venv_dir() -> Option<PathBuf> {
+    if !is_arch_linux() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".local/share/robcos/audio-venv"))
+}
+
+fn arch_audio_python_bin() -> Option<PathBuf> {
+    let venv = arch_audio_venv_dir()?;
+    let py3 = venv.join("bin/python3");
+    if py3.exists() {
+        return Some(py3);
+    }
+    let py = venv.join("bin/python");
+    if py.exists() {
+        return Some(py);
+    }
+    None
+}
+
 fn has_internet() -> bool {
     Command::new("curl")
         .args(["-s", "--max-time", "3", "https://www.google.com"])
@@ -542,10 +580,22 @@ fn has_internet() -> bool {
 }
 
 fn has_python_module(module: &str) -> bool {
+    let code = format!("import {module}");
+    if is_arch_linux() {
+        let Some(py) = arch_audio_python_bin() else {
+            return false;
+        };
+        return Command::new(py)
+            .args(["-c", code.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
     if !which("python3") {
         return false;
     }
-    let code = format!("import {module}");
     Command::new("python3")
         .args(["-c", code.as_str()])
         .stdout(Stdio::null())
@@ -619,7 +669,7 @@ impl TerminalInstallerState {
 
     fn refresh_runtime_tool_cache(&mut self) {
         if self.runtime_playsound_installed.is_none() {
-            self.runtime_playsound_installed = Some(has_python_module("playsound"));
+            self.runtime_playsound_installed = Some(has_python_module("playsound3"));
         }
         if cfg!(target_os = "macos") && self.runtime_blueutil_installed.is_none() {
             self.runtime_blueutil_installed = Some(which("blueutil"));
@@ -636,7 +686,7 @@ impl TerminalInstallerState {
 
     fn invalidate_runtime_tool_cache_for_pkg(&mut self, pkg: &str) {
         match pkg {
-            "playsound" => self.runtime_playsound_installed = None,
+            "playsound3" => self.runtime_playsound_installed = None,
             "blueutil" => self.runtime_blueutil_installed = None,
             _ => {}
         }
@@ -941,14 +991,14 @@ fn draw_runtime_tools(
 
 fn runtime_tool_pkg(tool: RuntimeTool) -> &'static str {
     match tool {
-        RuntimeTool::PlaySound => "playsound",
+        RuntimeTool::PlaySound => "playsound3",
         RuntimeTool::Blueutil => "blueutil",
     }
 }
 
 fn runtime_tool_title(tool: RuntimeTool) -> &'static str {
     match tool {
-        RuntimeTool::PlaySound => "Audio Runtime (playsound)",
+        RuntimeTool::PlaySound => "Audio Runtime (playsound3)",
         RuntimeTool::Blueutil => "Bluetooth Utility (blueutil)",
     }
 }
@@ -1551,11 +1601,29 @@ pub fn build_package_command(
     }
     let argv = match action {
         InstallerPackageAction::Install => {
-            if pkg == "playsound" {
+            if pkg == "playsound3" {
                 if !which("python3") {
                     return InstallerEvent::Status(
                         "python3 not found. Install Python first.".to_string(),
                     );
+                }
+                if is_arch_linux() {
+                    let Some(venv_dir) = arch_audio_venv_dir() else {
+                        return InstallerEvent::Status(
+                            "Cannot resolve ~/.local/share/robcos/audio-venv".to_string(),
+                        );
+                    };
+                    let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); v.parent.mkdir(parents=True, exist_ok=True); subprocess.check_call([sys.executable,'-m','venv',str(v)]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; subprocess.check_call([str(py),'-m','pip','install','--upgrade','pip','playsound3'])";
+                    return InstallerEvent::LaunchCommand {
+                        argv: vec![
+                            "python3".to_string(),
+                            "-c".to_string(),
+                            script.to_string(),
+                            venv_dir.to_string_lossy().to_string(),
+                        ],
+                        status: format!("Installing {pkg}..."),
+                        completion_message: Some(format!("{pkg} installed.")),
+                    };
                 }
                 vec![
                     "python3".to_string(),
@@ -1564,18 +1632,36 @@ pub fn build_package_command(
                     "install".to_string(),
                     "--user".to_string(),
                     "--upgrade".to_string(),
-                    "playsound".to_string(),
+                    "playsound3".to_string(),
                 ]
             } else {
                 pm.install_cmd(pkg)
             }
         }
         InstallerPackageAction::Reinstall => {
-            if pkg == "playsound" {
+            if pkg == "playsound3" {
                 if !which("python3") {
                     return InstallerEvent::Status(
                         "python3 not found. Install Python first.".to_string(),
                     );
+                }
+                if is_arch_linux() {
+                    let Some(venv_dir) = arch_audio_venv_dir() else {
+                        return InstallerEvent::Status(
+                            "Cannot resolve ~/.local/share/robcos/audio-venv".to_string(),
+                        );
+                    };
+                    let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); v.parent.mkdir(parents=True, exist_ok=True); subprocess.check_call([sys.executable,'-m','venv',str(v)]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; subprocess.check_call([str(py),'-m','pip','install','--upgrade','pip','--force-reinstall','playsound3'])";
+                    return InstallerEvent::LaunchCommand {
+                        argv: vec![
+                            "python3".to_string(),
+                            "-c".to_string(),
+                            script.to_string(),
+                            venv_dir.to_string_lossy().to_string(),
+                        ],
+                        status: format!("Reinstalling {pkg}..."),
+                        completion_message: Some(format!("{pkg} reinstalled.")),
+                    };
                 }
                 vec![
                     "python3".to_string(),
@@ -1585,18 +1671,36 @@ pub fn build_package_command(
                     "--user".to_string(),
                     "--upgrade".to_string(),
                     "--force-reinstall".to_string(),
-                    "playsound".to_string(),
+                    "playsound3".to_string(),
                 ]
             } else {
                 pm.reinstall_cmd(pkg)
             }
         }
         InstallerPackageAction::Update => {
-            if pkg == "playsound" {
+            if pkg == "playsound3" {
                 if !which("python3") {
                     return InstallerEvent::Status(
                         "python3 not found. Install Python first.".to_string(),
                     );
+                }
+                if is_arch_linux() {
+                    let Some(venv_dir) = arch_audio_venv_dir() else {
+                        return InstallerEvent::Status(
+                            "Cannot resolve ~/.local/share/robcos/audio-venv".to_string(),
+                        );
+                    };
+                    let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); v.parent.mkdir(parents=True, exist_ok=True); subprocess.check_call([sys.executable,'-m','venv',str(v)]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; subprocess.check_call([str(py),'-m','pip','install','--upgrade','pip','playsound3'])";
+                    return InstallerEvent::LaunchCommand {
+                        argv: vec![
+                            "python3".to_string(),
+                            "-c".to_string(),
+                            script.to_string(),
+                            venv_dir.to_string_lossy().to_string(),
+                        ],
+                        status: format!("Updating {pkg}..."),
+                        completion_message: Some(format!("{pkg} updated.")),
+                    };
                 }
                 vec![
                     "python3".to_string(),
@@ -1605,18 +1709,36 @@ pub fn build_package_command(
                     "install".to_string(),
                     "--user".to_string(),
                     "--upgrade".to_string(),
-                    "playsound".to_string(),
+                    "playsound3".to_string(),
                 ]
             } else {
                 pm.update_cmd(pkg)
             }
         }
         InstallerPackageAction::Uninstall => {
-            if pkg == "playsound" {
+            if pkg == "playsound3" {
                 if !which("python3") {
                     return InstallerEvent::Status(
                         "python3 not found. Install Python first.".to_string(),
                     );
+                }
+                if is_arch_linux() {
+                    let Some(venv_dir) = arch_audio_venv_dir() else {
+                        return InstallerEvent::Status(
+                            "Cannot resolve ~/.local/share/robcos/audio-venv".to_string(),
+                        );
+                    };
+                    let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; (subprocess.check_call([str(py),'-m','pip','uninstall','-y','playsound3']) if py.exists() else None)";
+                    return InstallerEvent::LaunchCommand {
+                        argv: vec![
+                            "python3".to_string(),
+                            "-c".to_string(),
+                            script.to_string(),
+                            venv_dir.to_string_lossy().to_string(),
+                        ],
+                        status: format!("Uninstalling {pkg}..."),
+                        completion_message: Some(format!("{pkg} uninstalled.")),
+                    };
                 }
                 vec![
                     "python3".to_string(),
@@ -1624,7 +1746,7 @@ pub fn build_package_command(
                     "pip".to_string(),
                     "uninstall".to_string(),
                     "-y".to_string(),
-                    "playsound".to_string(),
+                    "playsound3".to_string(),
                 ]
             } else {
                 pm.remove_cmd(pkg)

@@ -2196,7 +2196,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     enabled: true,
                 },
                 DesktopHubItem {
-                    label: "Install Audio Runtime (playsound)".to_string(),
+                    label: "Install Audio Runtime (playsound3)".to_string(),
                     action: DesktopHubItemAction::InstallAudioRuntime,
                     enabled: true,
                 },
@@ -12741,11 +12741,60 @@ fn desktop_has_internet() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
+fn desktop_is_arch_linux() -> bool {
+    std::path::Path::new("/etc/arch-release").exists()
+        || std::fs::read_to_string("/etc/os-release")
+            .map(|s| {
+                let lower = s.to_lowercase();
+                lower.contains("id=arch") || lower.contains("id_like=arch")
+            })
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn desktop_is_arch_linux() -> bool {
+    false
+}
+
+fn desktop_arch_audio_venv_dir() -> Option<PathBuf> {
+    if !desktop_is_arch_linux() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".local/share/robcos/audio-venv"))
+}
+
+fn desktop_arch_audio_python_bin() -> Option<PathBuf> {
+    let venv = desktop_arch_audio_venv_dir()?;
+    let py3 = venv.join("bin/python3");
+    if py3.exists() {
+        return Some(py3);
+    }
+    let py = venv.join("bin/python");
+    if py.exists() {
+        return Some(py);
+    }
+    None
+}
+
 fn desktop_has_python_module(module: &str) -> bool {
+    let code = format!("import {module}");
+    if desktop_is_arch_linux() {
+        let Some(py) = desktop_arch_audio_python_bin() else {
+            return false;
+        };
+        return Command::new(py)
+            .args(["-c", code.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
     if !desktop_which("python3") {
         return false;
     }
-    let code = format!("import {module}");
     Command::new("python3")
         .args(["-c", code.as_str()])
         .stdout(Stdio::null())
@@ -13663,36 +13712,62 @@ fn run_desktop_hub_action(
                 flash_message(terminal, "python3 not found. Install Python first.", 1200)?;
                 return Ok(());
             }
-            if desktop_has_python_module("playsound") {
-                flash_message(terminal, "playsound is already installed.", 900)?;
+            if desktop_has_python_module("playsound3") {
+                flash_message(terminal, "playsound3 is already installed.", 900)?;
                 return Ok(());
             }
             if !desktop_has_internet() {
                 flash_message(terminal, "No internet connection.", 1000)?;
                 return Ok(());
             }
-            let pip_cmd = vec![
-                "python3".to_string(),
-                "-m".to_string(),
-                "pip".to_string(),
-                "install".to_string(),
-                "--user".to_string(),
-                "--upgrade".to_string(),
-                "playsound".to_string(),
-            ];
-            let mut ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
-            if !ok {
-                let ensure_cmd = vec![
+            let ok = if desktop_is_arch_linux() {
+                let Some(venv_dir) = desktop_arch_audio_venv_dir() else {
+                    flash_message(
+                        terminal,
+                        "Cannot resolve ~/.local/share/robcos/audio-venv",
+                        1600,
+                    )?;
+                    return Ok(());
+                };
+                let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); v.parent.mkdir(parents=True, exist_ok=True); subprocess.check_call([sys.executable,'-m','venv',str(v)]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; subprocess.check_call([str(py),'-m','pip','install','--upgrade','pip','playsound3'])";
+                let cmd = vec![
+                    "python3".to_string(),
+                    "-c".to_string(),
+                    script.to_string(),
+                    venv_dir.to_string_lossy().to_string(),
+                ];
+                run_external_cmd_suspended(terminal, &cmd)?
+            } else {
+                let pip_cmd = vec![
                     "python3".to_string(),
                     "-m".to_string(),
-                    "ensurepip".to_string(),
+                    "pip".to_string(),
+                    "install".to_string(),
+                    "--user".to_string(),
                     "--upgrade".to_string(),
+                    "playsound3".to_string(),
                 ];
-                let _ = run_external_cmd_suspended(terminal, &ensure_cmd)?;
-                ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
-            }
-            if ok && desktop_has_python_module("playsound") {
-                flash_message(terminal, "playsound installed.", 1000)?;
+                let mut ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
+                if !ok {
+                    let ensure_cmd = vec![
+                        "python3".to_string(),
+                        "-m".to_string(),
+                        "ensurepip".to_string(),
+                        "--upgrade".to_string(),
+                    ];
+                    let _ = run_external_cmd_suspended(terminal, &ensure_cmd)?;
+                    ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
+                }
+                ok
+            };
+            if ok && desktop_has_python_module("playsound3") {
+                flash_message(terminal, "playsound3 installed.", 1000)?;
+            } else if desktop_is_arch_linux() {
+                flash_message(
+                    terminal,
+                    "Install failed. Expected venv: ~/.local/share/robcos/audio-venv",
+                    1800,
+                )?;
             } else {
                 flash_message(terminal, "Install completed with errors.", 1300)?;
             }

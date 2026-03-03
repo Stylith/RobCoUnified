@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::auth::is_admin;
@@ -366,6 +367,43 @@ fn which(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
+fn is_arch_linux() -> bool {
+    std::path::Path::new("/etc/arch-release").exists()
+        || std::fs::read_to_string("/etc/os-release")
+            .map(|s| {
+                let lower = s.to_lowercase();
+                lower.contains("id=arch") || lower.contains("id_like=arch")
+            })
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_arch_linux() -> bool {
+    false
+}
+
+fn arch_audio_venv_dir() -> Option<PathBuf> {
+    if !is_arch_linux() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".local/share/robcos/audio-venv"))
+}
+
+fn arch_audio_python_bin() -> Option<PathBuf> {
+    let venv = arch_audio_venv_dir()?;
+    let py3 = venv.join("bin/python3");
+    if py3.exists() {
+        return Some(py3);
+    }
+    let py = venv.join("bin/python");
+    if py.exists() {
+        return Some(py);
+    }
+    None
+}
+
 fn has_internet() -> bool {
     Command::new("curl")
         .args(["-s", "--max-time", "3", "https://www.google.com"])
@@ -377,10 +415,22 @@ fn has_internet() -> bool {
 }
 
 fn has_python_module(module: &str) -> bool {
+    let code = format!("import {module}");
+    if is_arch_linux() {
+        let Some(py) = arch_audio_python_bin() else {
+            return false;
+        };
+        return Command::new(py)
+            .args(["-c", code.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
     if !which("python3") {
         return false;
     }
-    let code = format!("import {module}");
     Command::new("python3")
         .args(["-c", code.as_str()])
         .stdout(Stdio::null())
@@ -394,19 +444,44 @@ fn install_playsound_runtime(terminal: &mut Term) -> Result<()> {
     if !which("python3") {
         return flash_message(terminal, "python3 not found. Install Python first.", 1200);
     }
-    if has_python_module("playsound") {
-        return flash_message(terminal, "playsound is already installed.", 1000);
+    if has_python_module("playsound3") {
+        return flash_message(terminal, "playsound3 is already installed.", 1000);
     }
     if !has_internet() {
         return flash_message(terminal, "Error: No internet connection.", 1000);
     }
-    if !confirm(terminal, "Install Python package: playsound?")? {
+    if !confirm(terminal, "Install Python package: playsound3?")? {
         return Ok(());
     }
 
-    let pip_args = ["-m", "pip", "install", "--user", "--upgrade", "playsound"];
     let mut install_ok = false;
     let run_result = with_suspended(terminal, || {
+        if is_arch_linux() {
+            let Some(venv_dir) = arch_audio_venv_dir() else {
+                return Ok(());
+            };
+            if let Some(parent) = venv_dir.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let create = Command::new("python3")
+                .args(["-m", "venv", venv_dir.to_string_lossy().as_ref()])
+                .status()?;
+            if !create.success() {
+                install_ok = false;
+                return Ok(());
+            }
+            let Some(py) = arch_audio_python_bin() else {
+                install_ok = false;
+                return Ok(());
+            };
+            let status = Command::new(py)
+                .args(["-m", "pip", "install", "--upgrade", "pip", "playsound3"])
+                .status()?;
+            install_ok = status.success();
+            return Ok(());
+        }
+
+        let pip_args = ["-m", "pip", "install", "--user", "--upgrade", "playsound3"];
         let first = Command::new("python3").args(pip_args).status()?;
         if first.success() {
             install_ok = true;
@@ -425,14 +500,22 @@ fn install_playsound_runtime(terminal: &mut Term) -> Result<()> {
         return flash_message(terminal, "Failed to run pip install.", 1400);
     }
 
-    if install_ok && has_python_module("playsound") {
-        box_message(terminal, "playsound installed.", 1000)?;
+    if install_ok && has_python_module("playsound3") {
+        box_message(terminal, "playsound3 installed.", 1000)?;
     } else {
-        flash_message(
-            terminal,
-            "Install completed with errors. Run: python3 -m pip install --user playsound",
-            2200,
-        )?;
+        if is_arch_linux() {
+            flash_message(
+                terminal,
+                "Install failed. Expected venv: ~/.local/share/robcos/audio-venv",
+                2400,
+            )?;
+        } else {
+            flash_message(
+                terminal,
+                "Install completed with errors. Run: python3 -m pip install --user playsound3",
+                2200,
+            )?;
+        }
     }
     Ok(())
 }
@@ -497,7 +580,7 @@ pub fn appstore_menu(terminal: &mut Term) -> Result<()> {
         let mut choices = vec![
             "Search".to_string(),
             "Installed Apps".to_string(),
-            "Install Audio Runtime (playsound)".to_string(),
+            "Install Audio Runtime (playsound3)".to_string(),
         ];
         if cfg!(target_os = "macos") {
             choices.push("Install Bluetooth Utility (blueutil)".to_string());
@@ -517,7 +600,7 @@ pub fn appstore_menu(terminal: &mut Term) -> Result<()> {
                 s if is_back_menu_label(s) => break,
                 "Search" => search_menu(terminal, pm)?,
                 "Installed Apps" => installed_menu(terminal, pm)?,
-                "Install Audio Runtime (playsound)" => install_playsound_runtime(terminal)?,
+                "Install Audio Runtime (playsound3)" => install_playsound_runtime(terminal)?,
                 "Install Bluetooth Utility (blueutil)" => install_blueutil_runtime(terminal)?,
                 _ => break,
             },

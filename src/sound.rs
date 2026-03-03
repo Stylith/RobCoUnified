@@ -78,6 +78,59 @@ fn write_temp(name: &str, bytes: &[u8]) -> PathBuf {
     p
 }
 
+#[cfg(target_os = "linux")]
+fn is_arch_linux() -> bool {
+    std::path::Path::new("/etc/arch-release").exists()
+        || std::fs::read_to_string("/etc/os-release")
+            .map(|s| {
+                let lower = s.to_lowercase();
+                lower.contains("id=arch") || lower.contains("id_like=arch")
+            })
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_arch_linux() -> bool {
+    false
+}
+
+fn command_exists(bin: &str) -> bool {
+    Command::new("which")
+        .arg(bin)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn arch_audio_python_bin() -> Option<PathBuf> {
+    if !is_arch_linux() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    let venv = PathBuf::from(home).join(".local/share/robcos/audio-venv");
+    let py3 = venv.join("bin/python3");
+    if py3.exists() {
+        return Some(py3);
+    }
+    let py = venv.join("bin/python");
+    if py.exists() {
+        return Some(py);
+    }
+    None
+}
+
+fn audio_python_executable() -> Option<String> {
+    if is_arch_linux() {
+        return arch_audio_python_bin().map(|p| p.to_string_lossy().to_string());
+    }
+    if command_exists("python3") {
+        return Some("python3".to_string());
+    }
+    None
+}
+
 fn extract_boot_click_window_pcm16_mono(
     bytes: &[u8],
     threshold: i16,
@@ -251,11 +304,15 @@ fn ensure_python_helper() {
 
     let script = r#"import sys
 try:
-    from playsound import playsound
+    from playsound3 import playsound
     backend_ok = True
 except Exception:
-    playsound = None
-    backend_ok = False
+    try:
+        from playsound import playsound
+        backend_ok = True
+    except Exception:
+        playsound = None
+        backend_ok = False
 
 if backend_ok:
     sys.stdout.write("__ROBCOS_READY__\n")
@@ -269,6 +326,11 @@ for line in sys.stdin:
         continue
     try:
         playsound(path, False)
+    except TypeError:
+        try:
+            playsound(path)
+        except Exception:
+            pass
     except Exception:
         pass
 "#;
@@ -276,7 +338,11 @@ for line in sys.stdin:
     PY_HELPER_READY.store(false, Ordering::Release);
     PY_HELPER_USABLE.store(false, Ordering::Release);
 
-    let spawn = Command::new("python3")
+    let Some(python_bin) = audio_python_executable() else {
+        return;
+    };
+
+    let spawn = Command::new(&python_bin)
         .args(["-u", "-c", script])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -41,7 +41,7 @@ RobCoOS is an application-layer shell experience, not a full standalone operatin
   - other CLI apps you add to menus
 - Optional audio backend:
   - `python3`
-  - Python module `playsound`
+  - Python module `playsound3`
 
 Platform audio fallbacks:
 
