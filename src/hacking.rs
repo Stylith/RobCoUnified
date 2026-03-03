@@ -687,6 +687,22 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                 let within = cursor % col_size;
                 let row = within / COL_WIDTH;
                 let chr = within % COL_WIDTH;
+                if let Some(wp) = find_word_at(cursor, &grid.word_positions) {
+                    let word_within = wp.start % col_size;
+                    let word_row = word_within / COL_WIDTH;
+                    if word_row == row {
+                        let word_start = word_within % COL_WIDTH;
+                        let word_end = word_start + wp.word.chars().count() - 1;
+                        let (next_cb, next_chr) = if word_end + 1 < COL_WIDTH {
+                            (cb, word_end + 1)
+                        } else {
+                            ((cb + 1) % COLS, 0)
+                        };
+                        cursor = next_cb * col_size + row * COL_WIDTH + next_chr;
+                        crate::sound::play_navigate();
+                        continue;
+                    }
+                }
                 let (next_cb, next_chr) = if chr + 1 < COL_WIDTH {
                     (cb, chr + 1)
                 } else {
@@ -701,6 +717,21 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                 let within = cursor % col_size;
                 let row = within / COL_WIDTH;
                 let chr = within % COL_WIDTH;
+                if let Some(wp) = find_word_at(cursor, &grid.word_positions) {
+                    let word_within = wp.start % col_size;
+                    let word_row = word_within / COL_WIDTH;
+                    if word_row == row {
+                        let word_start = word_within % COL_WIDTH;
+                        let (prev_cb, prev_chr) = if word_start > 0 {
+                            (cb, word_start - 1)
+                        } else {
+                            ((cb + COLS - 1) % COLS, COL_WIDTH - 1)
+                        };
+                        cursor = prev_cb * col_size + row * COL_WIDTH + prev_chr;
+                        crate::sound::play_navigate();
+                        continue;
+                    }
+                }
                 let (prev_cb, prev_chr) = if chr > 0 {
                     (cb, chr - 1)
                 } else {
@@ -764,6 +795,7 @@ pub fn run_hacking(terminal: &mut Term) -> Result<bool> {
                             let lk = likeness(&wp.word, &answer);
                             log.push(">Entry denied.".to_string());
                             log.push(format!(">{lk}/{} correct.", profile.word_len));
+                            crate::sound::play_logout();
                             attempts = attempts.saturating_sub(1);
                             if attempts == 0 {
                                 log.push(">LOCKED OUT.".to_string());

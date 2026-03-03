@@ -37,10 +37,18 @@ pub fn draw_login_screen(
 
     if prompt.is_none() {
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            let prev = *selected_idx;
             *selected_idx = selected_idx.saturating_sub(1);
+            if *selected_idx != prev {
+                crate::sound::play_navigate();
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            let prev = *selected_idx;
             *selected_idx = (*selected_idx + 1).min(selectable_count.saturating_sub(1));
+            if *selected_idx != prev {
+                crate::sound::play_navigate();
+            }
         }
     }
 
@@ -163,10 +171,18 @@ pub fn draw_main_menu_screen(
     content_col: usize,
 ) -> Option<MainMenuAction> {
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+        let prev = *selected_idx;
         *selected_idx = selected_idx.saturating_sub(1);
+        if *selected_idx != prev {
+            crate::sound::play_navigate();
+        }
     }
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+        let prev = *selected_idx;
         *selected_idx = (*selected_idx + 1).min(selectable_menu_count() - 1);
+        if *selected_idx != prev {
+            crate::sound::play_navigate();
+        }
     }
 
     let enter_pressed =

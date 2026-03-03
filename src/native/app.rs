@@ -945,7 +945,25 @@ impl RobcoNativeApp {
         }
     }
 
+    fn navigate_to_screen(&mut self, screen: TerminalScreen) {
+        if self.terminal_screen != screen {
+            crate::sound::play_navigate();
+        }
+        self.terminal_screen = screen;
+    }
+
+    fn set_user_management_mode(&mut self, mode: UserManagementMode, selected_idx: usize) {
+        let changed =
+            self.terminal_user_management_mode != mode || self.terminal_user_management_idx != selected_idx;
+        if changed {
+            crate::sound::play_navigate();
+        }
+        self.terminal_user_management_mode = mode;
+        self.terminal_user_management_idx = selected_idx;
+    }
+
     fn queue_login(&mut self, username: String, user: UserRecord) {
+        crate::sound::play_login();
         bind_login_session(&username);
         self.login.password.clear();
         self.login.error.clear();
@@ -971,12 +989,16 @@ impl RobcoNativeApp {
         self.login.error.clear();
         let username = self.login.selected_username.trim().to_string();
         if username.is_empty() {
+            crate::sound::play_error();
             self.login.error = "Select a user.".to_string();
             return;
         }
         match authenticate(&username, &self.login.password) {
             Ok(user) => self.queue_login(username, user),
-            Err(err) => self.login.error = err.to_string(),
+            Err(err) => {
+                crate::sound::play_error();
+                self.login.error = err.to_string();
+            }
         }
     }
 
@@ -1016,6 +1038,7 @@ impl RobcoNativeApp {
                 return;
             }
         }
+        crate::sound::play_logout();
         self.persist_snapshot();
         self.terminate_all_native_pty_children();
         self.terminal_prompt = None;
@@ -1074,6 +1097,7 @@ impl RobcoNativeApp {
     }
 
     fn open_password_prompt(&mut self, title: impl Into<String>, prompt: impl Into<String>) {
+        crate::sound::play_navigate();
         self.terminal_prompt = Some(TerminalPrompt {
             kind: TerminalPromptKind::Password,
             title: title.into(),
@@ -1090,6 +1114,7 @@ impl RobcoNativeApp {
         prompt: impl Into<String>,
         action: TerminalPromptAction,
     ) {
+        crate::sound::play_navigate();
         self.terminal_prompt = Some(TerminalPrompt {
             kind: TerminalPromptKind::Input,
             title: title.into(),
@@ -1106,6 +1131,7 @@ impl RobcoNativeApp {
         prompt: impl Into<String>,
         action: TerminalPromptAction,
     ) {
+        crate::sound::play_navigate();
         self.terminal_prompt = Some(TerminalPrompt {
             kind: TerminalPromptKind::Password,
             title: title.into(),
@@ -1122,6 +1148,7 @@ impl RobcoNativeApp {
         prompt: impl Into<String>,
         action: TerminalPromptAction,
     ) {
+        crate::sound::play_navigate();
         self.terminal_prompt = Some(TerminalPrompt {
             kind: TerminalPromptKind::Confirm,
             title: title.into(),
@@ -1170,7 +1197,7 @@ impl RobcoNativeApp {
         ) {
             Ok(state) => {
                 self.terminal_pty = Some(state);
-                self.terminal_screen = TerminalScreen::PtyApp;
+                self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = format!("Opened {title} in PTY.");
             }
             Err(err) => {
@@ -1216,7 +1243,7 @@ impl RobcoNativeApp {
         ) {
             Ok(state) => {
                 self.terminal_pty = Some(state);
-                self.terminal_screen = TerminalScreen::PtyApp;
+                self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = "Opened terminal shell in PTY.".to_string();
             }
             Err(err) => {
@@ -1418,7 +1445,7 @@ impl RobcoNativeApp {
         self.file_manager.selected = None;
         self.terminal_browser_idx = 0;
         self.terminal_browser_return = return_screen;
-        self.terminal_screen = TerminalScreen::DocumentBrowser;
+        self.navigate_to_screen(TerminalScreen::DocumentBrowser);
     }
 
     fn open_log_view(&mut self) {
@@ -1484,6 +1511,7 @@ impl RobcoNativeApp {
         self.login.error.clear();
         match action {
             LoginSelectionAction::Exit => {
+                crate::sound::play_logout();
                 self.queue_terminal_flash("Exiting...", 800, FlashAction::ExitApp);
             }
             LoginSelectionAction::PromptPassword { username } => {
@@ -1496,17 +1524,23 @@ impl RobcoNativeApp {
                 );
             }
             LoginSelectionAction::AuthenticateWithoutPassword { username } => {
+                crate::sound::play_navigate();
                 self.login.selected_username = username.clone();
                 match authenticate(&username, "") {
                     Ok(user) => self.queue_login(username, user),
-                    Err(err) => self.login.error = err.to_string(),
+                    Err(err) => {
+                        crate::sound::play_error();
+                        self.login.error = err.to_string();
+                    }
                 }
             }
             LoginSelectionAction::StartHacking { username } => {
+                crate::sound::play_navigate();
                 self.login.selected_username = username.clone();
                 self.queue_hacking_start(username);
             }
             LoginSelectionAction::ShowError(error) => {
+                crate::sound::play_error();
                 self.login.error = error;
             }
         }
@@ -1519,7 +1553,7 @@ impl RobcoNativeApp {
                 selected_idx,
                 clear_status,
             } => {
-                self.terminal_screen = screen;
+                self.navigate_to_screen(screen);
                 match screen {
                     TerminalScreen::Applications => self.terminal_apps_idx = selected_idx,
                     TerminalScreen::Documents => self.terminal_documents_idx = selected_idx,
@@ -1558,13 +1592,14 @@ impl RobcoNativeApp {
                 self.open_embedded_terminal_shell();
             }
             MainMenuSelectionAction::EnterDesktopMode => {
+                crate::sound::play_navigate();
                 self.desktop_mode_open = true;
                 self.sync_desktop_active_window();
                 self.shell_status = "Entered Desktop Mode.".to_string();
             }
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
                 self.settings.draft = current_settings();
-                self.terminal_screen = TerminalScreen::Settings;
+                self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
                 self.terminal_connections.reset();
                 self.terminal_default_app_slot = None;
@@ -1576,22 +1611,26 @@ impl RobcoNativeApp {
 
     fn handle_terminal_back(&mut self) {
         if self.terminal_settings_choice.is_some() {
+            crate::sound::play_navigate();
             self.terminal_settings_choice = None;
             return;
         }
         if self.terminal_default_app_slot.is_some() {
+            crate::sound::play_navigate();
             self.terminal_default_app_slot = None;
             return;
         }
         if matches!(self.terminal_screen, TerminalScreen::Connections)
             && !self.terminal_connections.back()
         {
+            crate::sound::play_navigate();
             self.shell_status.clear();
             return;
         }
         if matches!(self.terminal_screen, TerminalScreen::ProgramInstaller)
             && !self.terminal_installer.back()
         {
+            crate::sound::play_navigate();
             self.shell_status.clear();
             return;
         }
@@ -1603,25 +1642,25 @@ impl RobcoNativeApp {
             | TerminalScreen::Games
             | TerminalScreen::Settings
             | TerminalScreen::UserManagement => {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
             TerminalScreen::Logs => {
-                self.terminal_screen = TerminalScreen::Documents;
+                self.navigate_to_screen(TerminalScreen::Documents);
                 self.shell_status.clear();
             }
             TerminalScreen::PtyApp => {
                 if let Some(mut pty) = self.terminal_pty.take() {
                     pty.session.terminate();
-                    self.terminal_screen = pty.return_screen;
+                    self.navigate_to_screen(pty.return_screen);
                     self.shell_status = format!("Closed {}.", pty.title);
                 } else {
-                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.navigate_to_screen(TerminalScreen::MainMenu);
                     self.shell_status.clear();
                 }
             }
             TerminalScreen::ProgramInstaller => {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
                 self.terminal_installer.reset();
             }
@@ -1629,15 +1668,15 @@ impl RobcoNativeApp {
             | TerminalScreen::DefaultApps
             | TerminalScreen::About
             | TerminalScreen::EditMenus => {
-                self.terminal_screen = TerminalScreen::Settings;
+                self.navigate_to_screen(TerminalScreen::Settings);
                 self.shell_status.clear();
             }
             TerminalScreen::NukeCodes => {
-                self.terminal_screen = self.terminal_nuke_codes_return;
+                self.navigate_to_screen(self.terminal_nuke_codes_return);
                 self.shell_status.clear();
             }
             TerminalScreen::DocumentBrowser => {
-                self.terminal_screen = self.terminal_browser_return;
+                self.navigate_to_screen(self.terminal_browser_return);
                 self.shell_status.clear();
             }
         }
@@ -1650,6 +1689,7 @@ impl RobcoNativeApp {
         let prompt_action = prompt.action.clone();
         match handle_prompt_input(ctx, prompt) {
             PromptOutcome::Cancel => {
+                crate::sound::play_navigate();
                 self.terminal_prompt = None;
                 if matches!(prompt_action, TerminalPromptAction::LoginPassword) {
                     self.login.password.clear();
@@ -1682,9 +1722,7 @@ impl RobcoNativeApp {
                     self.shell_status = "User already exists.".to_string();
                     return;
                 }
-                self.terminal_user_management_mode =
-                    UserManagementMode::CreateAuthMethod { username };
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::CreateAuthMethod { username }, 0);
                 self.suppress_next_menu_submit = true;
             }
             PromptOutcome::CreatePasswordFirst { username, password } => {
@@ -1721,8 +1759,7 @@ impl RobcoNativeApp {
                     },
                     format!("User '{username}' created."),
                 );
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ResetPasswordFirst { username, password } => {
                 self.terminal_prompt = None;
@@ -1757,8 +1794,7 @@ impl RobcoNativeApp {
                     },
                     "Password updated.".to_string(),
                 );
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ChangeAuthPasswordFirst { username, password } => {
                 self.terminal_prompt = None;
@@ -1793,8 +1829,7 @@ impl RobcoNativeApp {
                     },
                     format!("Auth method updated for '{username}'."),
                 );
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ConfirmDeleteUser {
                 username,
@@ -1807,8 +1842,7 @@ impl RobcoNativeApp {
                     save_users(&db);
                     self.shell_status = format!("User '{username}' deleted.");
                 }
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ConfirmToggleAdmin {
                 username,
@@ -1828,8 +1862,7 @@ impl RobcoNativeApp {
                         self.shell_status = format!("Admin {label} for '{username}'.");
                     }
                 }
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
+                self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::EditMenuAddProgramName { target, name } => {
                 self.terminal_prompt = None;
@@ -2041,6 +2074,7 @@ impl RobcoNativeApp {
             }
             LoginScreenMode::Hacking => {
                 let Some(hacking) = self.login_hacking.as_mut() else {
+                    crate::sound::play_navigate();
                     self.login_mode = LoginScreenMode::SelectUser;
                     return;
                 };
@@ -2054,6 +2088,7 @@ impl RobcoNativeApp {
                 ) {
                     HackingScreenEvent::None => {}
                     HackingScreenEvent::Cancel => {
+                        crate::sound::play_navigate();
                         self.login_mode = LoginScreenMode::SelectUser;
                         self.login_hacking = None;
                     }
@@ -2063,12 +2098,15 @@ impl RobcoNativeApp {
                         if let Some(user) = db.get(&username).cloned() {
                             self.queue_login(username, user);
                         } else {
+                            crate::sound::play_error();
                             self.login.error = "Unknown user.".to_string();
+                            crate::sound::play_navigate();
                             self.login_mode = LoginScreenMode::SelectUser;
                             self.login_hacking = None;
                         }
                     }
                     HackingScreenEvent::LockedOut => {
+                        crate::sound::play_navigate();
                         self.login_mode = LoginScreenMode::Locked;
                         self.login_hacking = None;
                     }
@@ -2080,6 +2118,7 @@ impl RobcoNativeApp {
                     draw_locked_screen(ctx, layout.cols, layout.rows, layout.status_row_alt),
                     HackingScreenEvent::ExitLocked
                 ) {
+                    crate::sound::play_navigate();
                     self.login_mode = LoginScreenMode::SelectUser;
                     self.login_hacking = None;
                 }
@@ -2294,7 +2333,7 @@ impl RobcoNativeApp {
             } else if label == BUILTIN_NUKE_CODES_APP {
                 self.open_nuke_codes_screen(TerminalScreen::Applications);
             } else if label == "Back" {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             } else {
                 self.launch_configured_app_in_pty(label, TerminalScreen::Applications);
@@ -2313,7 +2352,7 @@ impl RobcoNativeApp {
     fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
         self.terminal_nuke_codes = fetch_nuke_codes();
         self.terminal_nuke_codes_return = return_screen;
-        self.terminal_screen = TerminalScreen::NukeCodes;
+        self.navigate_to_screen(TerminalScreen::NukeCodes);
         self.shell_status.clear();
     }
 
@@ -2349,12 +2388,12 @@ impl RobcoNativeApp {
             let selected = items[idx].as_str();
             match selected {
                 "Logs" => {
-                    self.terminal_screen = TerminalScreen::Logs;
+                    self.navigate_to_screen(TerminalScreen::Logs);
                     self.terminal_logs_idx = 0;
                     self.shell_status.clear();
                 }
                 "Back" => {
-                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.navigate_to_screen(TerminalScreen::MainMenu);
                     self.shell_status.clear();
                 }
                 "---" => {}
@@ -2413,7 +2452,7 @@ impl RobcoNativeApp {
                 }
                 "View Logs" => self.open_log_view(),
                 "Back" => {
-                    self.terminal_screen = TerminalScreen::Documents;
+                    self.navigate_to_screen(TerminalScreen::Documents);
                     self.shell_status.clear();
                 }
                 _ => {}
@@ -2478,32 +2517,32 @@ impl RobcoNativeApp {
             TerminalSettingsEvent::None => {}
             TerminalSettingsEvent::Persist => self.persist_native_settings(),
             TerminalSettingsEvent::Back => {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
             TerminalSettingsEvent::OpenConnections => {
-                self.terminal_screen = TerminalScreen::Connections;
+                self.navigate_to_screen(TerminalScreen::Connections);
                 self.terminal_connections.reset();
                 self.shell_status.clear();
             }
             TerminalSettingsEvent::OpenEditMenus => {
-                self.terminal_screen = TerminalScreen::EditMenus;
+                self.navigate_to_screen(TerminalScreen::EditMenus);
                 self.terminal_edit_menus.reset();
                 self.shell_status.clear();
             }
             TerminalSettingsEvent::OpenDefaultApps => {
-                self.terminal_screen = TerminalScreen::DefaultApps;
+                self.navigate_to_screen(TerminalScreen::DefaultApps);
                 self.terminal_default_apps_idx = 0;
                 self.terminal_default_app_choice_idx = 0;
                 self.terminal_default_app_slot = None;
                 self.shell_status.clear();
             }
             TerminalSettingsEvent::OpenAbout => {
-                self.terminal_screen = TerminalScreen::About;
+                self.navigate_to_screen(TerminalScreen::About);
                 self.shell_status.clear();
             }
             TerminalSettingsEvent::EnterUserManagement => {
-                self.terminal_screen = TerminalScreen::UserManagement;
+                self.navigate_to_screen(TerminalScreen::UserManagement);
                 self.terminal_user_management_mode = UserManagementMode::Root;
                 self.terminal_user_management_idx = 0;
                 self.shell_status.clear();
@@ -2543,7 +2582,7 @@ impl RobcoNativeApp {
         match event {
             EditMenusEvent::None => {}
             EditMenusEvent::BackToSettings => {
-                self.terminal_screen = TerminalScreen::Settings;
+                self.navigate_to_screen(TerminalScreen::Settings);
                 self.shell_status.clear();
             }
             EditMenusEvent::ToggleBuiltinNukeCodes => {
@@ -2597,15 +2636,17 @@ impl RobcoNativeApp {
         match event {
             ConnectionsEvent::None => {}
             ConnectionsEvent::BackToSettings => {
-                self.terminal_screen = TerminalScreen::Settings;
+                self.navigate_to_screen(TerminalScreen::Settings);
                 self.shell_status.clear();
             }
             ConnectionsEvent::OpenNetworkGroups => {
+                crate::sound::play_navigate();
                 self.terminal_connections.view =
                     super::connections_screen::ConnectionsView::NetworkGroups;
                 self.shell_status.clear();
             }
             ConnectionsEvent::OpenBluetooth => {
+                crate::sound::play_navigate();
                 self.terminal_connections.view = super::connections_screen::ConnectionsView::Kind {
                     kind: ConnectionKind::Bluetooth,
                     group: None,
@@ -2637,7 +2678,7 @@ impl RobcoNativeApp {
             ConnectionsEvent::Status(status) => {
                 if status == crate::connections::macos_connections_disabled_hint() {
                     self.shell_status = status;
-                    self.terminal_screen = TerminalScreen::Settings;
+                    self.navigate_to_screen(TerminalScreen::Settings);
                 } else {
                     self.shell_status = status;
                 }
@@ -2704,14 +2745,16 @@ impl RobcoNativeApp {
         match event {
             DefaultAppsEvent::None => {}
             DefaultAppsEvent::Back => {
-                self.terminal_screen = TerminalScreen::Settings;
+                self.navigate_to_screen(TerminalScreen::Settings);
                 self.shell_status.clear();
             }
             DefaultAppsEvent::OpenSlot(slot) => {
+                crate::sound::play_navigate();
                 self.terminal_default_app_slot = Some(slot);
                 self.terminal_default_app_choice_idx = 0;
             }
             DefaultAppsEvent::CloseSlotPicker => {
+                crate::sound::play_navigate();
                 self.terminal_default_app_slot = None;
             }
             DefaultAppsEvent::SetBinding { slot, binding } => {
@@ -2750,7 +2793,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         ) {
-            self.terminal_screen = TerminalScreen::Settings;
+            self.navigate_to_screen(TerminalScreen::Settings);
             self.shell_status.clear();
         }
     }
@@ -2780,7 +2823,7 @@ impl RobcoNativeApp {
         match event {
             ProgramMenuEvent::None => {}
             ProgramMenuEvent::Back => {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
             ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &networks) {
@@ -2815,7 +2858,7 @@ impl RobcoNativeApp {
         match event {
             ProgramMenuEvent::None => {}
             ProgramMenuEvent::Back => {
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
             ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &games) {
@@ -2845,7 +2888,7 @@ impl RobcoNativeApp {
                 self.terminal_nuke_codes = fetch_nuke_codes();
             }
             NukeCodesEvent::Back => {
-                self.terminal_screen = self.terminal_nuke_codes_return;
+                self.navigate_to_screen(self.terminal_nuke_codes_return);
                 self.shell_status.clear();
             }
         }
@@ -2854,7 +2897,7 @@ impl RobcoNativeApp {
     fn draw_terminal_pty(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let Some(state) = self.terminal_pty.as_mut() else {
-            self.terminal_screen = TerminalScreen::MainMenu;
+            self.navigate_to_screen(TerminalScreen::MainMenu);
             self.shell_status = "No embedded PTY session.".to_string();
             return;
         };
@@ -2878,7 +2921,7 @@ impl RobcoNativeApp {
             PtyScreenEvent::CloseRequested => self.handle_terminal_back(),
             PtyScreenEvent::ProcessExited => {
                 if let Some(pty) = self.terminal_pty.take() {
-                    self.terminal_screen = pty.return_screen;
+                    self.navigate_to_screen(pty.return_screen);
                     if matches!(pty.return_screen, TerminalScreen::ProgramInstaller) {
                         if let Some(msg) = pty.completion_message {
                             self.queue_terminal_flash_boxed(msg.clone(), 1600, FlashAction::Noop);
@@ -2890,7 +2933,7 @@ impl RobcoNativeApp {
                         self.shell_status = format!("{} exited.", pty.title);
                     }
                 } else {
-                    self.terminal_screen = TerminalScreen::MainMenu;
+                    self.navigate_to_screen(TerminalScreen::MainMenu);
                     self.shell_status = "PTY session exited.".to_string();
                 }
             }
@@ -2902,7 +2945,7 @@ impl RobcoNativeApp {
             InstallerEvent::None => {}
             InstallerEvent::BackToMainMenu => {
                 self.terminal_installer.reset();
-                self.terminal_screen = TerminalScreen::MainMenu;
+                self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
             InstallerEvent::OpenSearchPrompt => {
@@ -3042,11 +3085,10 @@ impl RobcoNativeApp {
                     self.shell_status = "Settings saved.".to_string();
                 }
                 UserManagementAction::SetMode { mode, selected_idx } => {
-                    self.terminal_user_management_mode = mode;
-                    self.terminal_user_management_idx = selected_idx;
+                    self.set_user_management_mode(mode, selected_idx);
                 }
                 UserManagementAction::BackToSettings => {
-                    self.terminal_screen = TerminalScreen::Settings;
+                    self.navigate_to_screen(TerminalScreen::Settings);
                     self.terminal_user_management_idx = 0;
                 }
                 UserManagementAction::CreateWithMethod { username, method } => match method {
@@ -3067,8 +3109,7 @@ impl RobcoNativeApp {
                             },
                             format!("User '{username}' created."),
                         );
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
+                        self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
                         self.save_user_and_status(
@@ -3080,8 +3121,7 @@ impl RobcoNativeApp {
                             },
                             format!("User '{username}' created."),
                         );
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
+                        self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                 },
                 UserManagementAction::ApplyCreateHacking { username } => {
@@ -3094,8 +3134,7 @@ impl RobcoNativeApp {
                         },
                         format!("User '{username}' created."),
                     );
-                    self.terminal_user_management_mode = UserManagementMode::Root;
-                    self.terminal_user_management_idx = 0;
+                    self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementAction::ConfirmDeleteUser { username } => {
                     self.open_confirm_prompt(
@@ -3128,8 +3167,7 @@ impl RobcoNativeApp {
                             },
                             format!("Auth method updated for '{username}'."),
                         );
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
+                        self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
                         self.update_user_record(
@@ -3140,8 +3178,7 @@ impl RobcoNativeApp {
                             },
                             format!("Auth method updated for '{username}'."),
                         );
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = 0;
+                        self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                 },
                 UserManagementAction::ApplyChangeAuthHacking { username } => {
@@ -3153,8 +3190,7 @@ impl RobcoNativeApp {
                         },
                         format!("Auth method updated for '{username}'."),
                     );
-                    self.terminal_user_management_mode = UserManagementMode::Root;
-                    self.terminal_user_management_idx = 0;
+                    self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementAction::ConfirmToggleAdmin { username } => {
                     self.open_confirm_prompt(
@@ -3648,6 +3684,7 @@ impl eframe::App for RobcoNativeApp {
                         self.restore_for_user(&username, &user);
                     }
                     FlashAction::StartHacking { username } => {
+                        crate::sound::play_navigate();
                         self.login_mode = LoginScreenMode::Hacking;
                         self.login_hacking = Some(LoginHackingState {
                             username,

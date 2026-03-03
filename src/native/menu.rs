@@ -172,10 +172,18 @@ pub fn draw_terminal_menu_screen(
     }
     *selected_idx = (*selected_idx).min(selectable_rows.len().saturating_sub(1));
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+        let prev = *selected_idx;
         *selected_idx = selected_idx.saturating_sub(1);
+        if *selected_idx != prev {
+            crate::sound::play_navigate();
+        }
     }
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+        let prev = *selected_idx;
         *selected_idx = (*selected_idx + 1).min(selectable_rows.len().saturating_sub(1));
+        if *selected_idx != prev {
+            crate::sound::play_navigate();
+        }
     }
 
     let enter_pressed =

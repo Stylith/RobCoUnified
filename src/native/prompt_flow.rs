@@ -100,19 +100,27 @@ pub enum PromptOutcome {
 pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptOutcome {
     match prompt.kind {
         TerminalPromptKind::Input | TerminalPromptKind::Password => {
+            let password_prompt = matches!(prompt.kind, TerminalPromptKind::Password);
             if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
                 return PromptOutcome::Cancel;
             }
             if ctx.input(|i| i.key_pressed(Key::Backspace)) {
-                prompt.buffer.pop();
+                if prompt.buffer.pop().is_some() && password_prompt {
+                    crate::sound::play_keypress();
+                }
             }
             let events = ctx.input(|i| i.events.clone());
             for event in events {
                 if let egui::Event::Text(text) = event {
+                    let mut pushed = false;
                     for ch in text.chars() {
                         if !ch.is_control() {
                             prompt.buffer.push(ch);
+                            pushed = true;
                         }
+                    }
+                    if pushed && password_prompt {
+                        crate::sound::play_keypress();
                     }
                 }
             }

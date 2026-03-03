@@ -23,25 +23,40 @@ pub fn draw_hacking_screen(
     _footer_row: usize,
 ) -> HackingScreenEvent {
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+        crate::sound::play_navigate();
         game.move_right();
     }
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+        crate::sound::play_navigate();
         game.move_left();
     }
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+        crate::sound::play_navigate();
         game.move_down();
     }
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+        crate::sound::play_navigate();
         game.move_up();
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
+        crate::sound::play_navigate();
         return HackingScreenEvent::Cancel;
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
         return match game.select() {
             SelectOutcome::Success => HackingScreenEvent::Success,
-            SelectOutcome::LockedOut => HackingScreenEvent::LockedOut,
-            _ => HackingScreenEvent::None,
+            SelectOutcome::LockedOut => {
+                crate::sound::play_error();
+                HackingScreenEvent::LockedOut
+            }
+            SelectOutcome::WordRejected { .. } => {
+                crate::sound::play_logout();
+                HackingScreenEvent::None
+            }
+            _ => {
+                crate::sound::play_navigate();
+                HackingScreenEvent::None
+            }
         };
     }
 
@@ -185,6 +200,7 @@ pub fn draw_locked_screen(
     _footer_row: usize,
 ) -> HackingScreenEvent {
     if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
+        crate::sound::play_navigate();
         return HackingScreenEvent::ExitLocked;
     }
 
