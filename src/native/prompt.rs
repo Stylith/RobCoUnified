@@ -7,7 +7,7 @@ use crate::connections::NetworkMenuGroup;
 use crate::core::auth::UserRecord;
 use crate::default_apps::DefaultAppSlot;
 use crate::native::installer_screen::{InstallerMenuTarget, InstallerPackageAction};
-use eframe::egui::{self, Context};
+use eframe::egui::{self, Align2, Context, Pos2};
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,7 @@ pub enum FlashAction {
         argv: Vec<String>,
         return_screen: TerminalScreen,
         status: String,
+        completion_message: Option<String>,
     },
 }
 
@@ -30,6 +31,7 @@ pub struct TerminalFlash {
     pub message: String,
     pub until: Instant,
     pub action: FlashAction,
+    pub boxed: bool,
 }
 
 #[allow(dead_code)]
@@ -180,7 +182,7 @@ pub fn draw_terminal_flash(
     header_start_row: usize,
     separator_top_row: usize,
     separator_bottom_row: usize,
-    status_row: usize,
+    message_row: usize,
     content_col: usize,
 ) {
     egui::CentralPanel::default()
@@ -199,6 +201,58 @@ pub fn draw_terminal_flash(
             }
             screen.separator(&painter, separator_top_row, &palette);
             screen.separator(&painter, separator_bottom_row, &palette);
-            screen.text(&painter, content_col, status_row, message, palette.fg);
+            screen.text(&painter, content_col, message_row, message, palette.fg);
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_terminal_flash_boxed(
+    ctx: &Context,
+    message: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    separator_bottom_row: usize,
+) {
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::none()
+                .fill(current_palette().bg)
+                .inner_margin(0.0),
+        )
+        .show(ctx, |ui| {
+            let palette = current_palette();
+            let (screen, _) = RetroScreen::new(ui, cols, rows);
+            let painter = ui.painter_at(screen.rect);
+            screen.paint_bg(&painter, palette.bg);
+            for (idx, line) in HEADER_LINES.iter().enumerate() {
+                screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
+            }
+            screen.separator(&painter, separator_top_row, &palette);
+            screen.separator(&painter, separator_bottom_row, &palette);
+
+            let box_w = (message.chars().count() + 10).clamp(44, 96);
+            let box_h = 7usize;
+            let box_x = cols.saturating_sub(box_w) / 2;
+            let box_y = rows.saturating_sub(box_h) / 2;
+            let rect = screen.panel_rect(box_x, box_y, box_w, box_h);
+            painter.rect_filled(rect, 0.0, palette.bg);
+            painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
+            let center = Pos2::new(screen.snap_value(rect.center().x), screen.snap_value(rect.center().y));
+            painter.text(
+                center,
+                Align2::CENTER_CENTER,
+                message,
+                screen.font().clone(),
+                palette.fg,
+            );
+            painter.text(
+                Pos2::new(center.x + 1.0, center.y),
+                Align2::CENTER_CENTER,
+                message,
+                screen.font().clone(),
+                palette.fg,
+            );
         });
 }

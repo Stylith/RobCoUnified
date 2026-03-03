@@ -33,6 +33,7 @@ use crate::ui::Term;
 pub struct PtyLaunchOptions {
     pub env: Vec<(String, String)>,
     pub top_bar: Option<String>,
+    pub force_render_mode: Option<bool>, // Some(true)=plain, Some(false)=styled
 }
 
 static SUSPENDED_PTY: OnceLock<Mutex<HashMap<usize, PtySession>>> = OnceLock::new();
@@ -341,7 +342,9 @@ impl DecSpecialGraphics {
     fn map_special(&self, c: char) -> Option<char> {
         Some(match (self.glyph_mode, c) {
             (AcsGlyphMode::Unicode, '`') => '◆',
-            (AcsGlyphMode::Unicode, 'a') => '▒',
+            // Checkerboard often renders as heavy '#' in Fixedsys variants; use
+            // a lighter glyph to preserve texture without hash-wall artifacts.
+            (AcsGlyphMode::Unicode, 'a') => '·',
             (AcsGlyphMode::Unicode, 'f') => '°',
             (AcsGlyphMode::Unicode, 'g') => '±',
             (AcsGlyphMode::Unicode, 'j') => '┘',
@@ -394,12 +397,16 @@ impl DecSpecialGraphics {
             (AcsGlyphMode::Unicode, 0xC2) => '┬',
             (AcsGlyphMode::Unicode, 0xC1) => '┴',
             (AcsGlyphMode::Unicode, 0xC5) => '┼',
+            (AcsGlyphMode::Unicode, 0xB0) => '·',
+            (AcsGlyphMode::Unicode, 0xB1) => '·',
+            (AcsGlyphMode::Unicode, 0xB2) => '·',
 
             (AcsGlyphMode::Ascii, 0xB3) => '|',
             (AcsGlyphMode::Ascii, 0xC4) => '-',
             (AcsGlyphMode::Ascii, 0xDA | 0xBF | 0xC0 | 0xD9 | 0xC3 | 0xB4 | 0xC2 | 0xC1 | 0xC5) => {
                 '+'
             }
+            (AcsGlyphMode::Ascii, 0xB0 | 0xB1 | 0xB2) => '.',
 
             _ => return None,
         })
@@ -549,6 +556,7 @@ pub struct PtyTextSnapshot {
     pub lines: Vec<String>,
     pub cursor_row: u16,
     pub cursor_col: u16,
+    pub cursor_hidden: bool,
 }
 
 #[allow(dead_code)]
@@ -606,7 +614,11 @@ impl PtySession {
         if cmd.get_env("TERM").is_none() {
             cmd.env("TERM", "xterm-256color");
         }
-        let render_mode = render_mode_for_program(program);
+        let render_mode = match options.force_render_mode {
+            Some(true) => PtyRenderMode::Plain,
+            Some(false) => PtyRenderMode::Styled,
+            None => render_mode_for_program(program),
+        };
         let color_mode = pty_color_mode();
 
         let child = pair.slave.spawn_command(cmd)?;
@@ -665,7 +677,6 @@ impl PtySession {
     /// Send raw bytes to the child's stdin (keyboard input)
     pub fn write(&mut self, data: &[u8]) {
         let _ = self.writer.write_all(data);
-        let _ = self.writer.flush();
     }
 
     /// Translate a terminal key event and send it to the PTY child.
@@ -777,6 +788,7 @@ impl PtySession {
                 lines: vec![String::new(); rows as usize],
                 cursor_row: 0,
                 cursor_col: 0,
+                cursor_hidden: false,
             };
         };
         let screen = parser.screen();
@@ -789,6 +801,7 @@ impl PtySession {
             lines,
             cursor_row: cursor_row.min(rows.saturating_sub(1)),
             cursor_col: cursor_col.min(cols.saturating_sub(1)),
+            cursor_hidden: screen.hide_cursor(),
         }
     }
 

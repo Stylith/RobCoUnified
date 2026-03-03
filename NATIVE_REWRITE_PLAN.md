@@ -124,6 +124,15 @@ The rewrite is a new native application layer, not a replacement of the current 
     - pacman package search now uses native pacman query flow and parses package names correctly
     - installed/search package lists now paginate with explicit prev/next controls and page indicators
     - prevents long installed lists from rendering below the visible terminal UI area
+- PTY stability hardening (Mar 2, 2026):
+  - plain snapshot now carries `cursor_hidden` and plain renderer respects it (prevents forced block cursor in full-screen TUIs that hide cursor)
+  - native plain PTY texture renderer is now opt-in (`ROBCOS_NATIVE_PTY_TEXTURE=1`) instead of default-on to avoid input/render jitter regressions
+  - PTY repaint cadence tuned for lower input latency (`1ms` input tick, `4ms` output tick, `10ms` idle)
+  - PTY writer path no longer flushes on every keypress to reduce interactive typing latency
+  - plain PTY fallback now renders cell-aligned glyphs (instead of galley line layout) so character spacing matches terminal menu geometry
+  - DEC/CP437 shade-glyph mapping now uses lighter fallback glyphs (`·`/`.`) to prevent hash-wall artifacts in full-screen PTY apps on Fixedsys-style fonts
+  - plain PTY fallback now renders whole lines with native glyph spacing and horizontally centers the text block when narrower than the viewport (reduces `t h i s` spacing feel and large right gutter in shell-style apps)
+  - maintenance shell PTY now explicitly forces plain render mode so shell-style apps use the spacing/centering path regardless of global styled-render toggle
 
 ## Next parity targets
 

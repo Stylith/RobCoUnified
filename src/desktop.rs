@@ -5453,6 +5453,7 @@ fn open_pty_window_named(
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect(),
         top_bar: None,
+        force_render_mode: None,
     };
     let session = spawn_desktop_pty_with_fallback(&cmd, cols, rows, &options)?;
 

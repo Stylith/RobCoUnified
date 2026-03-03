@@ -5,7 +5,6 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MAX_NATIVE_PTY_COLS: usize = 160;
@@ -23,13 +22,11 @@ struct LineConnections {
 pub struct NativePtyState {
     pub title: String,
     pub return_screen: TerminalScreen,
+    pub completion_message: Option<String>,
     pub session: PtySession,
     prev_plain_lines: Vec<String>,
     prev_plain_cursor: Option<(u16, u16)>,
     plain_texture: PlainTextureRenderer,
-    plain_row_galleys: Vec<Option<Arc<egui::Galley>>>,
-    plain_cache_font_size: f32,
-    plain_cache_fg: Color32,
     perf: PtyPerfStats,
     show_perf_overlay: bool,
 }
@@ -155,13 +152,11 @@ pub fn spawn_embedded_pty_with_options(
     Ok(NativePtyState {
         title: title.to_string(),
         return_screen,
+        completion_message: None,
         session,
         prev_plain_lines: Vec::new(),
         prev_plain_cursor: None,
         plain_texture: PlainTextureRenderer::default(),
-        plain_row_galleys: Vec::new(),
-        plain_cache_font_size: 0.0,
-        plain_cache_fg: Color32::TRANSPARENT,
         perf: PtyPerfStats::default(),
         show_perf_overlay: false,
     })
@@ -209,12 +204,13 @@ pub fn draw_embedded_pty(
     if input_activity || output_activity {
         ctx.request_repaint();
     }
+    // Favor low-latency keyboard echo while keeping idle CPU bounded.
     let tick_ms = if input_activity {
-        8
+        1
     } else if output_activity {
-        12
+        4
     } else {
-        16
+        10
     };
     ctx.request_repaint_after(Duration::from_millis(tick_ms));
 
@@ -316,52 +312,121 @@ pub fn draw_embedded_pty(
                         pty_rows as usize,
                     );
                 }
-                let texture_drawn = render_plain_texture_if_possible(
-                    state,
-                    ctx,
-                    &content_painter,
-                    &screen,
-                    content_rect,
-                    &palette,
-                    lines_ref,
-                    dirty_rows.as_slice(),
-                );
-                if !texture_drawn {
-                    ensure_plain_row_galleys(
+                let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
+                    .ok()
+                    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+                    .unwrap_or(false);
+                let texture_drawn = use_texture
+                    && render_plain_texture_if_possible(
                         state,
+                        ctx,
                         &content_painter,
-                        screen.font(),
-                        palette.fg,
+                        &screen,
+                        content_rect,
+                        &palette,
                         lines_ref,
+                        dirty_rows.as_slice(),
                     );
-                    for (row_idx, galley) in state.plain_row_galleys.iter().enumerate() {
-                        if let Some(galley) = galley {
-                            content_painter.galley(
-                                screen.row_rect(0, row_idx + row_offset, 1).left_top(),
-                                galley.clone(),
-                                palette.fg,
+                let glyph_advance = content_painter
+                    .layout_no_wrap("W".to_string(), screen.font().clone(), palette.fg)
+                    .size()
+                    .x
+                    .max(1.0);
+                let x_origin = content_rect.left();
+                // Keep plain-text layout, but re-apply highlight bands from styled snapshot.
+                let styled_snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+                for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        let (_fg, bg) = resolve_cell_colors(*cell);
+                        if bg == palette.bg {
+                            continue;
+                        }
+                        let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
+                        let rect =
+                            screen.text_band_rect(row_idx + row_offset, x, screen.snap_value(glyph_advance.ceil()));
+                        content_painter.rect_filled(rect, 0.0, bg);
+                    }
+                }
+                if !texture_drawn {
+                    for (row_idx, line) in lines_ref.iter().enumerate() {
+                        let clipped: String = line
+                            .trim_end_matches(' ')
+                            .chars()
+                            .take(pty_cols as usize)
+                            .collect();
+                        if clipped.is_empty() {
+                            continue;
+                        }
+                        let y = screen.row_text_top(row_idx + row_offset);
+                        content_painter.text(
+                            Pos2::new(x_origin, y),
+                            Align2::LEFT_TOP,
+                            clipped,
+                            screen.font().clone(),
+                            palette.fg,
+                        );
+                    }
+                }
+                for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        let (fg, bg) = resolve_cell_colors(*cell);
+                        if bg == palette.bg || cell.ch == ' ' {
+                            continue;
+                        }
+                        let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
+                        let y = screen.row_text_top(row_idx + row_offset);
+                        content_painter.text(
+                            Pos2::new(x, y),
+                            Align2::LEFT_TOP,
+                            cell.ch.to_string(),
+                            screen.font().clone(),
+                            fg,
+                        );
+                        if cell.bold {
+                            content_painter.text(
+                                Pos2::new(x + 0.7, y),
+                                Align2::LEFT_TOP,
+                                cell.ch.to_string(),
+                                screen.font().clone(),
+                                fg,
+                            );
+                        }
+                        if cell.underline {
+                            let rect = screen.text_band_rect(
+                                row_idx + row_offset,
+                                x,
+                                screen.snap_value(glyph_advance.ceil()),
+                            );
+                            let uy = rect.bottom() - 2.0;
+                            content_painter.line_segment(
+                                [Pos2::new(rect.left(), uy), Pos2::new(rect.right(), uy)],
+                                Stroke::new(1.0, fg),
                             );
                         }
                     }
                 }
                 state.prev_plain_lines = lines_ref.to_vec();
                 state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
-                let row = snap.cursor_row as usize + row_offset;
-                let col = snap.cursor_col as usize;
-                let cursor_rect = screen.row_rect(col, row, 1);
-                let ch = lines_ref
-                    .get(row.saturating_sub(row_offset))
-                    .and_then(|line| line.chars().nth(col))
-                    .unwrap_or(' ');
-                content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
-                if ch != ' ' {
-                    content_painter.text(
-                        cursor_rect.left_top(),
-                        Align2::LEFT_TOP,
-                        ch.to_string(),
-                        screen.font().clone(),
-                        palette.bg,
-                    );
+                if !snap.cursor_hidden {
+                    let row = snap.cursor_row as usize + row_offset;
+                    let col = snap.cursor_col as usize;
+                    let cursor_x = screen.snap_value(x_origin + col as f32 * glyph_advance);
+                    let cursor_rect =
+                        screen.text_band_rect(row, cursor_x, screen.snap_value(glyph_advance.ceil()));
+                    let ch = lines_ref
+                        .get(row.saturating_sub(row_offset))
+                        .and_then(|line| line.chars().nth(col))
+                        .unwrap_or(' ');
+                    content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
+                    if ch != ' ' {
+                        content_painter.text(
+                            Pos2::new(cursor_x, screen.row_text_top(row)),
+                            Align2::LEFT_TOP,
+                            ch.to_string(),
+                            screen.font().clone(),
+                            palette.bg,
+                        );
+                    }
                 }
             } else {
                 let started = Instant::now();
@@ -373,7 +438,6 @@ pub fn draw_embedded_pty(
                 }
                 state.prev_plain_lines.clear();
                 state.prev_plain_cursor = None;
-                state.plain_row_galleys.clear();
                 for (row_idx, row) in snapshot.cells.iter().enumerate() {
                     for (col_idx, cell) in row.iter().enumerate() {
                         let mut cell_to_draw = *cell;
@@ -645,6 +709,43 @@ fn color32_from_tui(color: Color) -> Color32 {
     }
 }
 
+fn scale_theme_color(base: Color32, factor: f32) -> Color32 {
+    let [r, g, b, a] = base.to_array();
+    Color32::from_rgba_unmultiplied(
+        ((r as f32) * factor).clamp(0.0, 255.0) as u8,
+        ((g as f32) * factor).clamp(0.0, 255.0) as u8,
+        ((b as f32) * factor).clamp(0.0, 255.0) as u8,
+        a,
+    )
+}
+
+fn luma01(color: Color32) -> f32 {
+    let r = color.r() as f32 / 255.0;
+    let g = color.g() as f32 / 255.0;
+    let b = color.b() as f32 / 255.0;
+    (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
+}
+
+fn theme_shade_from_source(source: Color32, is_background: bool) -> Color32 {
+    let palette = current_palette();
+    let base = palette.fg;
+    let luma = luma01(source);
+
+    if is_background {
+        if luma <= 0.03 {
+            return palette.bg;
+        }
+        let factor = 0.05 + luma * 0.30;
+        return scale_theme_color(base, factor.clamp(0.05, 0.38));
+    }
+
+    if luma <= 0.10 {
+        return palette.dim;
+    }
+    let factor = 0.40 + luma * 0.95;
+    scale_theme_color(base, factor.clamp(0.42, 1.22))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,8 +868,8 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
 }
 
 fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
-    let mut fg = color32_from_tui(cell.fg);
-    let mut bg = color32_from_tui(cell.bg);
+    let mut fg = theme_shade_from_source(color32_from_tui(cell.fg), false);
+    let mut bg = theme_shade_from_source(color32_from_tui(cell.bg), true);
     if cell.reversed {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -1233,7 +1334,7 @@ fn draw_glyph_to_image(
     let glyph_h = metrics.height as i32;
     let cell_x = (col.saturating_mul(cell_w)) as i32;
     let cell_y = (row.saturating_mul(cell_h)) as i32;
-    let x0 = cell_x + ((cell_w as i32 - glyph_w).max(0) / 2);
+    let x0 = cell_x + 1;
     let y0 = cell_y + ((cell_h as i32 - glyph_h).max(0) / 2);
     let width = image.size[0] as i32;
     let height = image.size[1] as i32;
@@ -1301,43 +1402,6 @@ fn try_load_retro_font_bytes() -> Option<Vec<u8>> {
         }
     }
     None
-}
-
-fn ensure_plain_row_galleys(
-    state: &mut NativePtyState,
-    painter: &egui::Painter,
-    font: &egui::FontId,
-    fg: Color32,
-    lines: &[String],
-) {
-    if state.plain_row_galleys.len() != lines.len() {
-        state.plain_row_galleys.resize(lines.len(), None);
-    }
-    let style_changed = (state.plain_cache_font_size - font.size).abs() > f32::EPSILON
-        || state.plain_cache_fg != fg;
-    if style_changed {
-        for galley in &mut state.plain_row_galleys {
-            *galley = None;
-        }
-        state.plain_cache_font_size = font.size;
-        state.plain_cache_fg = fg;
-    }
-    for (row_idx, line) in lines.iter().enumerate() {
-        let text_changed = state
-            .prev_plain_lines
-            .get(row_idx)
-            .map(String::as_str)
-            .unwrap_or("")
-            != line.as_str();
-        if line.is_empty() {
-            state.plain_row_galleys[row_idx] = None;
-            continue;
-        }
-        if style_changed || text_changed || state.plain_row_galleys[row_idx].is_none() {
-            state.plain_row_galleys[row_idx] =
-                Some(painter.layout_no_wrap(line.clone(), font.clone(), fg));
-        }
-    }
 }
 
 fn diff_plain_snapshot(

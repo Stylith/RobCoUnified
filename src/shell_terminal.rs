@@ -25,6 +25,7 @@ pub fn embedded_terminal(terminal: &mut Term) -> Result<()> {
             ("ZDOTDIR".into(), "/dev/null".into()),
         ],
         top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
+        force_render_mode: Some(true),
     };
 
     crate::pty::run_pty_session_with_options(terminal, &shell, args, options)

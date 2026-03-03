@@ -17,6 +17,7 @@ pub enum InstallerMenuTarget {
 pub enum InstallerPackageAction {
     Install,
     Update,
+    Reinstall,
     Uninstall,
 }
 
@@ -94,6 +95,7 @@ pub enum InstallerEvent {
     LaunchCommand {
         argv: Vec<String>,
         status: String,
+        completion_message: Option<String>,
     },
     Status(String),
 }
@@ -226,6 +228,42 @@ impl PackageManager {
                 "zypper".into(),
                 "-n".into(),
                 "update".into(),
+                pkg.into(),
+            ],
+        }
+    }
+
+    fn reinstall_cmd(self, pkg: &str) -> Vec<String> {
+        match self {
+            PackageManager::Brew => vec!["brew".into(), "reinstall".into(), pkg.into()],
+            PackageManager::Apt => vec![
+                "sudo".into(),
+                "apt".into(),
+                "install".into(),
+                "--reinstall".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            PackageManager::Dnf => vec![
+                "sudo".into(),
+                "dnf".into(),
+                "reinstall".into(),
+                "-y".into(),
+                pkg.into(),
+            ],
+            PackageManager::Pacman => vec![
+                "sudo".into(),
+                "pacman".into(),
+                "-S".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
+            PackageManager::Zypper => vec![
+                "sudo".into(),
+                "zypper".into(),
+                "-n".into(),
+                "install".into(),
+                "--force".into(),
                 pkg.into(),
             ],
         }
@@ -771,7 +809,8 @@ fn draw_root(
                     "install".to_string(),
                     "blueutil".to_string(),
                 ],
-                status: "Launching blueutil install in terminal...".to_string(),
+                status: "Installing blueutil...".to_string(),
+                completion_message: Some("blueutil installed.".to_string()),
             }
         }
         Some(_) => InstallerEvent::BackToMainMenu,
@@ -1089,6 +1128,7 @@ fn draw_installed_actions(
 ) -> InstallerEvent {
     let items = vec![
         "Update".to_string(),
+        "Reinstall".to_string(),
         "Uninstall".to_string(),
         "Add to Menu".to_string(),
         "---".to_string(),
@@ -1122,9 +1162,13 @@ fn draw_installed_actions(
         },
         Some(1) => InstallerEvent::OpenConfirmAction {
             pkg: pkg.to_string(),
+            action: InstallerPackageAction::Reinstall,
+        },
+        Some(2) => InstallerEvent::OpenConfirmAction {
+            pkg: pkg.to_string(),
             action: InstallerPackageAction::Uninstall,
         },
-        Some(2) => {
+        Some(3) => {
             state.add_menu_idx = 0;
             state.view = InstallerView::AddToMenu {
                 pkg: pkg.to_string(),
@@ -1236,6 +1280,20 @@ pub fn apply_filter(state: &mut TerminalInstallerState, filter: &str) {
     state.installed_page = 0;
 }
 
+pub fn settle_view_after_package_command(state: &mut TerminalInstallerState) {
+    match state.view {
+        InstallerView::InstalledActions { .. } => {
+            state.view = InstallerView::Installed;
+            state.action_idx = 0;
+        }
+        InstallerView::SearchActions { .. } => {
+            state.view = InstallerView::SearchResults;
+            state.action_idx = 0;
+        }
+        _ => {}
+    }
+}
+
 pub fn build_package_command(
     state: &TerminalInstallerState,
     pkg: &str,
@@ -1274,16 +1332,25 @@ pub fn build_package_command(
             }
         }
         InstallerPackageAction::Update => pm.update_cmd(pkg),
+        InstallerPackageAction::Reinstall => pm.reinstall_cmd(pkg),
         InstallerPackageAction::Uninstall => pm.remove_cmd(pkg),
     };
-    let verb = match action {
-        InstallerPackageAction::Install => "install",
-        InstallerPackageAction::Update => "update",
-        InstallerPackageAction::Uninstall => "remove",
+    let status = match action {
+        InstallerPackageAction::Install => format!("Installing {pkg}..."),
+        InstallerPackageAction::Update => format!("Updating {pkg}..."),
+        InstallerPackageAction::Reinstall => format!("Reinstalling {pkg}..."),
+        InstallerPackageAction::Uninstall => format!("Uninstalling {pkg}..."),
+    };
+    let completion_message = match action {
+        InstallerPackageAction::Install => format!("{pkg} installed."),
+        InstallerPackageAction::Update => format!("{pkg} updated."),
+        InstallerPackageAction::Reinstall => format!("{pkg} reinstalled."),
+        InstallerPackageAction::Uninstall => format!("{pkg} uninstalled."),
     };
     InstallerEvent::LaunchCommand {
         argv,
-        status: format!("Launching {verb} for {pkg} in terminal..."),
+        status,
+        completion_message: Some(completion_message),
     }
 }
 

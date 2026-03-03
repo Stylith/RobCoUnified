@@ -22,7 +22,8 @@ use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScre
 use super::installer_screen::{
     add_package_to_menu, apply_filter as apply_installer_filter,
     apply_search_query as apply_installer_search_query, build_package_command,
-    draw_installer_screen, InstallerEvent, InstallerPackageAction, TerminalInstallerState,
+    draw_installer_screen, settle_view_after_package_command, InstallerEvent,
+    InstallerPackageAction, TerminalInstallerState,
 };
 use super::menu::{
     draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
@@ -33,8 +34,8 @@ use super::nuke_codes_screen::{
 };
 use super::programs_screen::{draw_programs_menu, resolve_program_command, ProgramMenuEvent};
 use super::prompt::{
-    draw_terminal_flash, draw_terminal_prompt_overlay, FlashAction, TerminalFlash, TerminalPrompt,
-    TerminalPromptAction, TerminalPromptKind,
+    draw_terminal_flash, draw_terminal_flash_boxed, draw_terminal_prompt_overlay, FlashAction,
+    TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
 };
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
@@ -991,6 +992,21 @@ impl RobcoNativeApp {
             message: message.into(),
             until: Instant::now() + Duration::from_millis(ms),
             action,
+            boxed: false,
+        });
+    }
+
+    fn queue_terminal_flash_boxed(
+        &mut self,
+        message: impl Into<String>,
+        ms: u64,
+        action: FlashAction,
+    ) {
+        self.terminal_flash = Some(TerminalFlash {
+            message: message.into(),
+            until: Instant::now() + Duration::from_millis(ms),
+            action,
+            boxed: true,
         });
     }
 
@@ -1143,10 +1159,7 @@ impl RobcoNativeApp {
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
         let layout = self.terminal_layout();
-        let mut options = crate::pty::PtyLaunchOptions::default();
-        options
-            .env
-            .push(("ROBCOS_PTY_RENDER".into(), "plain".into()));
+        let options = crate::pty::PtyLaunchOptions::default();
         match spawn_embedded_pty_with_options(
             title,
             cmd,
@@ -1189,9 +1202,9 @@ impl RobcoNativeApp {
                 ("PS1".into(), "> ".into()),
                 ("PROMPT".into(), "> ".into()),
                 ("ZDOTDIR".into(), "/dev/null".into()),
-                ("ROBCOS_PTY_RENDER".into(), "plain".into()),
             ],
             top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
+            force_render_mode: Some(true),
         };
         match spawn_embedded_pty_with_options(
             "ROBCO MAINTENANCE TERMLINK",
@@ -2866,7 +2879,16 @@ impl RobcoNativeApp {
             PtyScreenEvent::ProcessExited => {
                 if let Some(pty) = self.terminal_pty.take() {
                     self.terminal_screen = pty.return_screen;
-                    self.shell_status = format!("{} exited.", pty.title);
+                    if matches!(pty.return_screen, TerminalScreen::ProgramInstaller) {
+                        if let Some(msg) = pty.completion_message {
+                            self.queue_terminal_flash_boxed(msg.clone(), 1600, FlashAction::Noop);
+                            self.shell_status = msg;
+                        } else {
+                            self.shell_status = format!("{} exited.", pty.title);
+                        }
+                    } else {
+                        self.shell_status = format!("{} exited.", pty.title);
+                    }
                 } else {
                     self.terminal_screen = TerminalScreen::MainMenu;
                     self.shell_status = "PTY session exited.".to_string();
@@ -2901,6 +2923,7 @@ impl RobcoNativeApp {
                 let prompt = match action {
                     InstallerPackageAction::Install => format!("Install {pkg}?"),
                     InstallerPackageAction::Update => format!("Update {pkg}?"),
+                    InstallerPackageAction::Reinstall => format!("Reinstall {pkg}?"),
                     InstallerPackageAction::Uninstall => format!("Uninstall {pkg}?"),
                 };
                 self.open_confirm_prompt(
@@ -2916,7 +2939,12 @@ impl RobcoNativeApp {
                     TerminalPromptAction::InstallerDisplayName { pkg, target },
                 );
             }
-            InstallerEvent::LaunchCommand { argv, status } => {
+            InstallerEvent::LaunchCommand {
+                argv,
+                status,
+                completion_message,
+            } => {
+                settle_view_after_package_command(&mut self.terminal_installer);
                 self.queue_terminal_flash(
                     status.clone(),
                     700,
@@ -2925,6 +2953,7 @@ impl RobcoNativeApp {
                         argv,
                         return_screen: TerminalScreen::ProgramInstaller,
                         status: status.clone(),
+                        completion_message,
                     },
                 );
                 self.shell_status = status;
@@ -3632,8 +3661,12 @@ impl eframe::App for RobcoNativeApp {
                         argv,
                         return_screen,
                         status,
+                        completion_message,
                     } => {
                         self.open_embedded_pty(&title, &argv, return_screen);
+                        if let Some(state) = self.terminal_pty.as_mut() {
+                            state.completion_message = completion_message;
+                        }
                         self.shell_status = status;
                     }
                 }
@@ -3645,17 +3678,29 @@ impl eframe::App for RobcoNativeApp {
                 } else {
                     self.draw_terminal_footer_spacer(ctx);
                 }
-                draw_terminal_flash(
-                    ctx,
-                    &flash.message,
-                    layout.cols,
-                    layout.rows,
-                    layout.header_start_row,
-                    layout.separator_top_row,
-                    layout.separator_bottom_row,
-                    layout.status_row,
-                    layout.content_col,
-                );
+                if flash.boxed {
+                    draw_terminal_flash_boxed(
+                        ctx,
+                        &flash.message,
+                        layout.cols,
+                        layout.rows,
+                        layout.header_start_row,
+                        layout.separator_top_row,
+                        layout.separator_bottom_row,
+                    );
+                } else {
+                    draw_terminal_flash(
+                        ctx,
+                        &flash.message,
+                        layout.cols,
+                        layout.rows,
+                        layout.header_start_row,
+                        layout.separator_top_row,
+                        layout.separator_bottom_row,
+                        layout.status_row,
+                        layout.content_col,
+                    );
+                }
                 return;
             }
         }
@@ -3856,6 +3901,7 @@ mod tests {
             message: "flash".to_string(),
             until: Instant::now() + Duration::from_millis(500),
             action: FlashAction::ExitApp,
+            boxed: false,
         });
 
         app.park_active_session_runtime();
