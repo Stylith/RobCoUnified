@@ -819,9 +819,13 @@ fn draw_runtime_tools(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
-    let mut items = vec!["Install Audio Runtime (playsound)".to_string()];
+    let mut items = vec![
+        "Install Audio Runtime (playsound)".to_string(),
+        "Reinstall Audio Runtime (playsound)".to_string(),
+    ];
     if cfg!(target_os = "macos") {
         items.push("Install Bluetooth Utility (blueutil)".to_string());
+        items.push("Reinstall Bluetooth Utility (blueutil)".to_string());
     }
     items.push("---".to_string());
     items.push("Back".to_string());
@@ -861,7 +865,26 @@ fn draw_runtime_tools(
                 action: InstallerPackageAction::Install,
             }
         }
-        Some(1) if cfg!(target_os = "macos") => {
+        Some(1) => {
+            if !which("python3") {
+                return InstallerEvent::Status(
+                    "python3 not found. Install Python first.".to_string(),
+                );
+            }
+            if !has_python_module("playsound") {
+                return InstallerEvent::Status(
+                    "playsound is not installed. Use install first.".to_string(),
+                );
+            }
+            if !has_internet() {
+                return InstallerEvent::Status("Error: No internet connection.".to_string());
+            }
+            InstallerEvent::OpenConfirmAction {
+                pkg: "playsound".to_string(),
+                action: InstallerPackageAction::Reinstall,
+            }
+        }
+        Some(2) if cfg!(target_os = "macos") => {
             if which("blueutil") {
                 return InstallerEvent::Status("blueutil is already installed.".to_string());
             }
@@ -873,14 +896,28 @@ fn draw_runtime_tools(
             if !has_internet() {
                 return InstallerEvent::Status("Error: No internet connection.".to_string());
             }
-            InstallerEvent::LaunchCommand {
-                argv: vec![
-                    "brew".to_string(),
-                    "install".to_string(),
-                    "blueutil".to_string(),
-                ],
-                status: "Installing blueutil...".to_string(),
-                completion_message: Some("blueutil installed.".to_string()),
+            InstallerEvent::OpenConfirmAction {
+                pkg: "blueutil".to_string(),
+                action: InstallerPackageAction::Install,
+            }
+        }
+        Some(3) if cfg!(target_os = "macos") => {
+            if !which("blueutil") {
+                return InstallerEvent::Status(
+                    "blueutil is not installed. Use install first.".to_string(),
+                );
+            }
+            if !which("brew") {
+                return InstallerEvent::Status(
+                    "Homebrew not found. Install brew first.".to_string(),
+                );
+            }
+            if !has_internet() {
+                return InstallerEvent::Status("Error: No internet connection.".to_string());
+            }
+            InstallerEvent::OpenConfirmAction {
+                pkg: "blueutil".to_string(),
+                action: InstallerPackageAction::Reinstall,
             }
         }
         Some(_) => {
@@ -1404,8 +1441,28 @@ pub fn build_package_command(
                 pm.install_cmd(pkg)
             }
         }
+        InstallerPackageAction::Reinstall => {
+            if pkg == "playsound" {
+                if !which("python3") {
+                    return InstallerEvent::Status(
+                        "python3 not found. Install Python first.".to_string(),
+                    );
+                }
+                vec![
+                    "python3".to_string(),
+                    "-m".to_string(),
+                    "pip".to_string(),
+                    "install".to_string(),
+                    "--user".to_string(),
+                    "--upgrade".to_string(),
+                    "--force-reinstall".to_string(),
+                    "playsound".to_string(),
+                ]
+            } else {
+                pm.reinstall_cmd(pkg)
+            }
+        }
         InstallerPackageAction::Update => pm.update_cmd(pkg),
-        InstallerPackageAction::Reinstall => pm.reinstall_cmd(pkg),
         InstallerPackageAction::Uninstall => pm.remove_cmd(pkg),
     };
     let status = match action {
