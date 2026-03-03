@@ -29,10 +29,17 @@ pub struct SearchResult {
     pub installed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeTool {
+    PlaySound,
+    Blueutil,
+}
+
 #[derive(Debug, Clone)]
 enum InstallerView {
     Root,
     RuntimeTools,
+    RuntimeToolActions { tool: RuntimeTool },
     SearchResults,
     Installed,
     SearchActions { pkg: String },
@@ -565,6 +572,10 @@ impl TerminalInstallerState {
                 self.view = InstallerView::Root;
                 false
             }
+            InstallerView::RuntimeToolActions { .. } => {
+                self.view = InstallerView::RuntimeTools;
+                false
+            }
             InstallerView::SearchActions { .. } => {
                 self.view = InstallerView::SearchResults;
                 false
@@ -655,6 +666,22 @@ pub fn draw_installer_screen(
         InstallerView::RuntimeTools => draw_runtime_tools(
             ctx,
             state,
+            shell_status,
+            cols,
+            rows,
+            header_start_row,
+            separator_top_row,
+            title_row,
+            separator_bottom_row,
+            subtitle_row,
+            menu_start_row,
+            status_row,
+            content_col,
+        ),
+        InstallerView::RuntimeToolActions { tool } => draw_runtime_tool_actions(
+            ctx,
+            state,
+            tool,
             shell_status,
             cols,
             rows,
@@ -819,20 +846,33 @@ fn draw_runtime_tools(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
-    let mut items = vec![
-        "Install Audio Runtime (playsound)".to_string(),
-        "Reinstall Audio Runtime (playsound)".to_string(),
-    ];
+    #[derive(Clone, Copy)]
+    enum RuntimeRow {
+        Tool(RuntimeTool),
+        Back,
+        Ignore,
+    }
+    let mut items = vec![runtime_tool_menu_label(RuntimeTool::PlaySound)];
+    let mut runtime_rows = vec![RuntimeRow::Tool(RuntimeTool::PlaySound)];
     if cfg!(target_os = "macos") {
-        items.push("Install Bluetooth Utility (blueutil)".to_string());
-        items.push("Reinstall Bluetooth Utility (blueutil)".to_string());
+        items.push(runtime_tool_menu_label(RuntimeTool::Blueutil));
+        runtime_rows.push(RuntimeRow::Tool(RuntimeTool::Blueutil));
     }
     items.push("---".to_string());
+    runtime_rows.push(RuntimeRow::Ignore);
     items.push("Back".to_string());
+    runtime_rows.push(RuntimeRow::Back);
+    let subtitle = runtime_rows
+        .get(state.runtime_tools_idx)
+        .and_then(|row| match row {
+            RuntimeRow::Tool(tool) => Some(runtime_tool_description(*tool)),
+            _ => None,
+        })
+        .unwrap_or("Choose a runtime tool");
     let activated = draw_terminal_menu_screen(
         ctx,
         "Runtime Tools",
-        Some("Quick install helpers"),
+        Some(subtitle),
         &items,
         &mut state.runtime_tools_idx,
         cols,
@@ -848,80 +888,131 @@ fn draw_runtime_tools(
         shell_status,
     );
     match activated {
-        Some(0) => {
-            if !which("python3") {
-                return InstallerEvent::Status(
-                    "python3 not found. Install Python first.".to_string(),
-                );
+        Some(idx) => match runtime_rows.get(idx) {
+            Some(RuntimeRow::Tool(tool)) => {
+                state.action_idx = 0;
+                state.view = InstallerView::RuntimeToolActions { tool: *tool };
+                InstallerEvent::None
             }
-            if has_python_module("playsound") {
-                return InstallerEvent::Status("playsound is already installed.".to_string());
+            Some(RuntimeRow::Back) => {
+                state.view = InstallerView::Root;
+                InstallerEvent::None
             }
-            if !has_internet() {
-                return InstallerEvent::Status("Error: No internet connection.".to_string());
-            }
-            InstallerEvent::OpenConfirmAction {
-                pkg: "playsound".to_string(),
-                action: InstallerPackageAction::Install,
-            }
-        }
-        Some(1) => {
-            if !which("python3") {
-                return InstallerEvent::Status(
-                    "python3 not found. Install Python first.".to_string(),
-                );
-            }
-            if !has_python_module("playsound") {
-                return InstallerEvent::Status(
-                    "playsound is not installed. Use install first.".to_string(),
-                );
-            }
-            if !has_internet() {
-                return InstallerEvent::Status("Error: No internet connection.".to_string());
-            }
-            InstallerEvent::OpenConfirmAction {
-                pkg: "playsound".to_string(),
-                action: InstallerPackageAction::Reinstall,
-            }
-        }
-        Some(2) if cfg!(target_os = "macos") => {
-            if which("blueutil") {
-                return InstallerEvent::Status("blueutil is already installed.".to_string());
-            }
-            if !which("brew") {
-                return InstallerEvent::Status(
-                    "Homebrew not found. Install brew first.".to_string(),
-                );
-            }
-            if !has_internet() {
-                return InstallerEvent::Status("Error: No internet connection.".to_string());
-            }
-            InstallerEvent::OpenConfirmAction {
-                pkg: "blueutil".to_string(),
-                action: InstallerPackageAction::Install,
-            }
-        }
-        Some(3) if cfg!(target_os = "macos") => {
-            if !which("blueutil") {
-                return InstallerEvent::Status(
-                    "blueutil is not installed. Use install first.".to_string(),
-                );
-            }
-            if !which("brew") {
-                return InstallerEvent::Status(
-                    "Homebrew not found. Install brew first.".to_string(),
-                );
-            }
-            if !has_internet() {
-                return InstallerEvent::Status("Error: No internet connection.".to_string());
-            }
-            InstallerEvent::OpenConfirmAction {
-                pkg: "blueutil".to_string(),
-                action: InstallerPackageAction::Reinstall,
-            }
-        }
+            _ => InstallerEvent::None,
+        },
+        None => InstallerEvent::None,
+    }
+}
+
+fn runtime_tool_pkg(tool: RuntimeTool) -> &'static str {
+    match tool {
+        RuntimeTool::PlaySound => "playsound",
+        RuntimeTool::Blueutil => "blueutil",
+    }
+}
+
+fn runtime_tool_title(tool: RuntimeTool) -> &'static str {
+    match tool {
+        RuntimeTool::PlaySound => "Audio Runtime (playsound)",
+        RuntimeTool::Blueutil => "Bluetooth Utility (blueutil)",
+    }
+}
+
+fn runtime_tool_description(tool: RuntimeTool) -> &'static str {
+    match tool {
+        RuntimeTool::PlaySound => "Python audio runtime (pip)",
+        RuntimeTool::Blueutil => "macOS Bluetooth utility (Homebrew)",
+    }
+}
+
+fn runtime_tool_installed(tool: RuntimeTool) -> bool {
+    match tool {
+        RuntimeTool::PlaySound => has_python_module("playsound"),
+        RuntimeTool::Blueutil => which("blueutil"),
+    }
+}
+
+fn runtime_tool_menu_label(tool: RuntimeTool) -> String {
+    let state = if runtime_tool_installed(tool) {
+        "[installed]"
+    } else {
+        "[not installed]"
+    };
+    format!("{state} {}", runtime_tool_title(tool))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_runtime_tool_actions(
+    ctx: &eframe::egui::Context,
+    state: &mut TerminalInstallerState,
+    tool: RuntimeTool,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> InstallerEvent {
+    let installed = runtime_tool_installed(tool);
+    let items = if installed {
+        vec![
+            "Update".to_string(),
+            "Reinstall".to_string(),
+            "Uninstall".to_string(),
+            "---".to_string(),
+            "Back".to_string(),
+        ]
+    } else {
+        vec!["Install".to_string(), "---".to_string(), "Back".to_string()]
+    };
+    let subtitle = format!(
+        "{} | {}",
+        runtime_tool_description(tool),
+        if installed { "Installed" } else { "Not installed" }
+    );
+    let activated = draw_terminal_menu_screen(
+        ctx,
+        runtime_tool_title(tool),
+        Some(&subtitle),
+        &items,
+        &mut state.action_idx,
+        cols,
+        rows,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        content_col,
+        shell_status,
+    );
+    let pkg = runtime_tool_pkg(tool).to_string();
+    match activated {
+        Some(0) if !installed => InstallerEvent::OpenConfirmAction {
+            pkg,
+            action: InstallerPackageAction::Install,
+        },
+        Some(0) => InstallerEvent::OpenConfirmAction {
+            pkg,
+            action: InstallerPackageAction::Update,
+        },
+        Some(1) if installed => InstallerEvent::OpenConfirmAction {
+            pkg,
+            action: InstallerPackageAction::Reinstall,
+        },
+        Some(2) if installed => InstallerEvent::OpenConfirmAction {
+            pkg,
+            action: InstallerPackageAction::Uninstall,
+        },
         Some(_) => {
-            state.view = InstallerView::Root;
+            state.view = InstallerView::RuntimeTools;
             InstallerEvent::None
         }
         None => InstallerEvent::None,
@@ -1462,8 +1553,45 @@ pub fn build_package_command(
                 pm.reinstall_cmd(pkg)
             }
         }
-        InstallerPackageAction::Update => pm.update_cmd(pkg),
-        InstallerPackageAction::Uninstall => pm.remove_cmd(pkg),
+        InstallerPackageAction::Update => {
+            if pkg == "playsound" {
+                if !which("python3") {
+                    return InstallerEvent::Status(
+                        "python3 not found. Install Python first.".to_string(),
+                    );
+                }
+                vec![
+                    "python3".to_string(),
+                    "-m".to_string(),
+                    "pip".to_string(),
+                    "install".to_string(),
+                    "--user".to_string(),
+                    "--upgrade".to_string(),
+                    "playsound".to_string(),
+                ]
+            } else {
+                pm.update_cmd(pkg)
+            }
+        }
+        InstallerPackageAction::Uninstall => {
+            if pkg == "playsound" {
+                if !which("python3") {
+                    return InstallerEvent::Status(
+                        "python3 not found. Install Python first.".to_string(),
+                    );
+                }
+                vec![
+                    "python3".to_string(),
+                    "-m".to_string(),
+                    "pip".to_string(),
+                    "uninstall".to_string(),
+                    "-y".to_string(),
+                    "playsound".to_string(),
+                ]
+            } else {
+                pm.remove_cmd(pkg)
+            }
+        }
     };
     let status = match action {
         InstallerPackageAction::Install => format!("Installing {pkg}..."),
