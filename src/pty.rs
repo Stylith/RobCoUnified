@@ -1549,15 +1549,24 @@ pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
     if cmd.is_empty() {
         return Ok(());
     }
+    let cmdline = cmd.join(" ");
     if should_prefer_shell_launch(&cmd[0]) {
         if let Some(shell_cmd) = build_shell_fallback_command(cmd) {
             let shell_program = &shell_cmd[0];
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            crate::diag::log(
+                "pty-cli",
+                &format!("Using preferred shell launch for command: {cmdline}"),
+            );
             return run_pty_session(terminal, shell_program, &shell_args);
         }
     }
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
+    crate::diag::log(
+        "pty-cli",
+        &format!("Launching command directly in PTY: {cmdline}"),
+    );
     run_pty_session(terminal, program, &args)
 }
 

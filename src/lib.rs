@@ -2,6 +2,7 @@ pub mod config;
 pub mod connections;
 pub mod core;
 pub mod default_apps;
+pub mod diag;
 pub mod launcher;
 pub mod native;
 pub mod pty;

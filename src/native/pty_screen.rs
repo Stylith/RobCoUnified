@@ -1576,6 +1576,7 @@ fn spawn_with_fallback(
     rows: u16,
     options: &PtyLaunchOptions,
 ) -> anyhow::Result<PtySession> {
+    let cmdline = cmd.join(" ");
     if cmd
         .first()
         .is_some_and(|program| should_prefer_shell_launch(program))
@@ -1585,8 +1586,16 @@ fn spawn_with_fallback(
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
             if let Ok(session) = PtySession::spawn(shell_program, &shell_args, cols, rows, options)
             {
+                crate::diag::log(
+                    "pty-native",
+                    &format!("Preferred shell launch succeeded for command: {cmdline}"),
+                );
                 return Ok(session);
             }
+            crate::diag::log(
+                "pty-native",
+                &format!("Preferred shell launch failed for command: {cmdline}"),
+            );
         }
     }
 
@@ -1595,18 +1604,32 @@ fn spawn_with_fallback(
     match PtySession::spawn(program, &args, cols, rows, options) {
         Ok(session) => Ok(session),
         Err(primary_err) => {
+            crate::diag::log(
+                "pty-native",
+                &format!("Direct PTY launch failed for '{cmdline}': {primary_err}"),
+            );
             let Some(shell_cmd) = build_shell_fallback_command(cmd) else {
                 return Err(primary_err);
             };
             let shell_program = &shell_cmd[0];
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            PtySession::spawn(shell_program, &shell_args, cols, rows, options).map_err(
-                |shell_err| {
-                    anyhow::anyhow!(
-                        "launch failed: {primary_err}; shell fallback failed: {shell_err}"
-                    )
-                },
-            )
+            PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+                .map(|session| {
+                    crate::diag::log(
+                        "pty-native",
+                        &format!("Shell fallback launch succeeded for command: {cmdline}"),
+                    );
+                    session
+                })
+                .map_err(|shell_err| {
+                    crate::diag::log(
+                        "pty-native",
+                        &format!(
+                            "Shell fallback launch failed for command '{cmdline}': {shell_err}"
+                        ),
+                    );
+                    anyhow::anyhow!("launch failed: {primary_err}; shell fallback failed: {shell_err}")
+                })
         }
     }
 }

@@ -15,6 +15,7 @@ mod config;
 mod connections;
 mod default_apps;
 mod desktop;
+mod diag;
 mod docedit;
 mod documents;
 mod hacking;

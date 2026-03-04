@@ -49,6 +49,11 @@ Platform audio fallbacks:
 - Linux: `aplay` or `paplay`
 - Windows: PowerShell `Media.SoundPlayer`
 
+Runtime diagnostics log (PTY/audio launch root-cause tracing):
+
+- Linux/macOS: `~/.local/share/robcos/diagnostics.log`
+- Override path: `ROBCOS_DIAG_PATH=/absolute/path/to/robcos.log`
+
 ## Build
 
 ```bash
