@@ -1576,6 +1576,20 @@ fn spawn_with_fallback(
     rows: u16,
     options: &PtyLaunchOptions,
 ) -> anyhow::Result<PtySession> {
+    if cmd
+        .first()
+        .is_some_and(|program| should_prefer_shell_launch(program))
+    {
+        if let Some(shell_cmd) = build_shell_fallback_command(cmd) {
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            if let Ok(session) = PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+            {
+                return Ok(session);
+            }
+        }
+    }
+
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     match PtySession::spawn(program, &args, cols, rows, options) {
@@ -1595,6 +1609,10 @@ fn spawn_with_fallback(
             )
         }
     }
+}
+
+fn should_prefer_shell_launch(program: &str) -> bool {
+    matches!(program, "spotify-player")
 }
 
 fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {

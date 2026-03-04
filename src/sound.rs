@@ -253,11 +253,23 @@ fn run_spawn(path: PathBuf) {
     let child = Command::new("afplay").arg(&path).spawn();
 
     #[cfg(target_os = "linux")]
-    let child = Command::new("aplay")
-        .arg("-q")
+    let child = Command::new("pw-play")
         .arg(&path)
         .spawn()
-        .or_else(|_| Command::new("paplay").arg(&path).spawn());
+        .or_else(|_| Command::new("paplay").arg(&path).spawn())
+        .or_else(|_| Command::new("aplay").arg("-q").arg(&path).spawn())
+        .or_else(|_| {
+            Command::new("ffplay")
+                .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
+                .arg(&path)
+                .spawn()
+        })
+        .or_else(|_| {
+            Command::new("mpv")
+                .args(["--no-terminal", "--really-quiet"])
+                .arg(&path)
+                .spawn()
+        });
 
     #[cfg(target_os = "windows")]
     let child = {
@@ -303,6 +315,9 @@ fn ensure_python_helper() {
     }
 
     let script = r#"import sys
+import threading
+import subprocess
+import shutil
 try:
     from playsound3 import playsound
     backend_ok = True
@@ -320,19 +335,46 @@ else:
     sys.stdout.write("__ROBCOS_NOBACKEND__\n")
 sys.stdout.flush()
 
-for line in sys.stdin:
-    path = line.rstrip("\r\n")
-    if not path or not backend_ok:
-        continue
-    try:
-        playsound(path, False)
-    except TypeError:
+def fallback_play(path):
+    cmds = [
+        ["pw-play", path],
+        ["paplay", path],
+        ["aplay", "-q", path],
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+        ["mpv", "--no-terminal", "--really-quiet", path],
+    ]
+    for cmd in cmds:
+        if shutil.which(cmd[0]) is None:
+            continue
         try:
-            playsound(path)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
         except Exception:
             pass
-    except Exception:
-        pass
+    return False
+
+def play_one(path):
+    if not path:
+        return
+    if backend_ok:
+        try:
+            playsound(path, False)
+            return
+        except TypeError:
+            try:
+                playsound(path)
+                return
+            except Exception:
+                pass
+        except Exception:
+            pass
+    fallback_play(path)
+
+for line in sys.stdin:
+    path = line.rstrip("\r\n")
+    if not path:
+        continue
+    threading.Thread(target=play_one, args=(path,), daemon=True).start()
 "#;
 
     PY_HELPER_READY.store(false, Ordering::Release);
