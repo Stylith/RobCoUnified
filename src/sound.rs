@@ -40,6 +40,13 @@ static PY_HELPER: OnceLock<Mutex<Option<PythonHelper>>> = OnceLock::new();
 static PY_HELPER_READY: AtomicBool = AtomicBool::new(false);
 static PY_HELPER_USABLE: AtomicBool = AtomicBool::new(false);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioBackendMode {
+    Auto,
+    Native,
+    Python,
+}
+
 pub fn stop_audio() {
     STOPPED.store(true, Ordering::SeqCst);
     if let Some(lock) = PY_HELPER.get() {
@@ -248,7 +255,7 @@ fn get_paths() -> &'static SoundPaths {
     })
 }
 
-fn run_spawn(path: PathBuf) {
+fn run_spawn(path: PathBuf) -> bool {
     #[cfg(target_os = "macos")]
     let child = {
         Command::new("afplay")
@@ -320,6 +327,7 @@ fn run_spawn(path: PathBuf) {
                 let _ = child.wait();
                 ACTIVE.fetch_sub(1, Ordering::Relaxed);
             });
+            true
         }
         Err(_) => {
             crate::diag::log(
@@ -327,6 +335,7 @@ fn run_spawn(path: PathBuf) {
                 "Native audio playback failed: no backend command could be started.",
             );
             ACTIVE.fetch_sub(1, Ordering::Relaxed);
+            false
         }
     }
 }
@@ -504,6 +513,41 @@ fn play_via_python(path: &std::path::Path) -> bool {
     false
 }
 
+fn native_backend_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return command_exists("afplay");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return command_exists("pw-play")
+            || command_exists("paplay")
+            || command_exists("aplay")
+            || command_exists("ffplay")
+            || command_exists("mpv");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return command_exists("powershell");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+fn selected_audio_mode() -> AudioBackendMode {
+    match std::env::var("ROBCOS_AUDIO_BACKEND")
+        .ok()
+        .map(|v| v.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("native") | Some("os") => AudioBackendMode::Native,
+        Some("python") | Some("playsound") => AudioBackendMode::Python,
+        _ => AudioBackendMode::Auto,
+    }
+}
+
 fn has_helper_process() -> bool {
     helper_lock().lock().map(|g| g.is_some()).unwrap_or(false)
 }
@@ -536,18 +580,55 @@ fn play_nonblocking(path: PathBuf) {
         return;
     }
 
+    let mode = selected_audio_mode();
+    crate::diag::log_once(
+        &format!("audio-mode:{mode:?}"),
+        "audio",
+        &format!(
+            "Audio backend mode: {mode:?} (native_available={})",
+            native_backend_available()
+        ),
+    );
+
+    let native_first = match mode {
+        AudioBackendMode::Native => true,
+        AudioBackendMode::Python => false,
+        AudioBackendMode::Auto => {
+            #[cfg(target_os = "linux")]
+            {
+                true
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        }
+    };
+
+    if !native_first && play_via_python(&path) {
+        return;
+    }
+
+    if native_backend_available() {
+        // Soft cap to avoid runaway process spawning on held keys.
+        let prev = ACTIVE.fetch_add(1, Ordering::Relaxed);
+        if prev < MAX_CONCURRENT && run_spawn(path.clone()) {
+            return;
+        }
+        if prev >= MAX_CONCURRENT {
+            ACTIVE.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
     if play_via_python(&path) {
         return;
     }
 
-    // Soft cap to avoid runaway process spawning on held keys.
-    let prev = ACTIVE.fetch_add(1, Ordering::Relaxed);
-    if prev >= MAX_CONCURRENT {
-        ACTIVE.fetch_sub(1, Ordering::Relaxed);
-        return;
-    }
-
-    run_spawn(path);
+    crate::diag::log_once(
+        "audio-no-usable-backend",
+        "audio",
+        "No usable audio backend succeeded (native + python failed).",
+    );
 }
 
 fn now_ms() -> u64 {
