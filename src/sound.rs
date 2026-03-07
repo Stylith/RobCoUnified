@@ -26,6 +26,8 @@ static LAST_KEYPRESS_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BOOT_KEY_MS: AtomicU64 = AtomicU64::new(0);
 static BOOT_SEQ_IDX: AtomicUsize = AtomicUsize::new(0);
 
+const SOUND_TEMP_DISABLED: bool = true;
+
 const NAVIGATE_REPEAT_GAP_MS: u64 = 210;
 const NAVIGATE_HOLD_WINDOW_MS: u64 = 180;
 const KEYPRESS_GAP_MS: u64 = 16;
@@ -72,6 +74,10 @@ struct BootShuffleState {
 }
 
 static BOOT_SHUFFLE: OnceLock<Mutex<BootShuffleState>> = OnceLock::new();
+
+fn sound_enabled() -> bool {
+    !SOUND_TEMP_DISABLED && get_settings().sound
+}
 
 fn write_temp(name: &str, bytes: &[u8]) -> PathBuf {
     let p = std::env::temp_dir().join(format!("robcos_{name}.wav"));
@@ -383,7 +389,7 @@ fn has_helper_process() -> bool {
 }
 
 pub fn wait_boot_audio_ready(timeout_ms: u64) {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
 
@@ -496,7 +502,7 @@ fn next_boot_key_index(len: usize) -> usize {
 }
 
 pub fn play_boot_key() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     if !passes_gap(&LAST_BOOT_KEY_MS, BOOT_KEY_GAP_MS) {
@@ -511,7 +517,7 @@ pub fn play_boot_key() {
 }
 
 pub fn play_navigate() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     let now = now_ms();
@@ -531,7 +537,7 @@ pub fn play_navigate() {
 }
 
 pub fn play_navigate_repeat() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     if !passes_gap(&LAST_NAV_REPEAT_MS, NAVIGATE_REPEAT_GAP_MS) {
@@ -541,21 +547,21 @@ pub fn play_navigate_repeat() {
 }
 
 pub fn play_login() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     play_nonblocking(get_paths().login.clone());
 }
 
 pub fn play_logout() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     play_nonblocking(get_paths().logout.clone());
 }
 
 pub fn play_error() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     play_nonblocking(get_paths().error.clone());
@@ -563,7 +569,7 @@ pub fn play_error() {
 
 pub fn play_startup() {
     // Warm up sound paths + helper once so first audible event has no cold-start delay.
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     let _ = get_paths();
@@ -572,7 +578,7 @@ pub fn play_startup() {
 
 #[allow(dead_code)]
 pub fn play_keypress() {
-    if !get_settings().sound {
+    if !sound_enabled() {
         return;
     }
     if !passes_gap(&LAST_KEYPRESS_MS, KEYPRESS_GAP_MS) {

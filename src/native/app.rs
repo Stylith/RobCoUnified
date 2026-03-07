@@ -154,6 +154,23 @@ enum DesktopWindow {
     TerminalMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartMenuSection {
+    Programs,
+    System,
+    Session,
+}
+
+impl StartMenuSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Programs => "Programs",
+            Self::System => "System",
+            Self::Session => "Session",
+        }
+    }
+}
+
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 const TERMINAL_SCREEN_COLS: usize = 92;
@@ -285,6 +302,7 @@ pub struct RobcoNativeApp {
     terminal_mode: TerminalModeWindow,
     desktop_active_window: Option<DesktopWindow>,
     start_open: bool,
+    start_section: StartMenuSection,
     desktop_mode_open: bool,
     main_menu_idx: usize,
     terminal_screen: TerminalScreen,
@@ -325,6 +343,7 @@ struct ParkedSessionState {
     desktop_active_window: Option<DesktopWindow>,
     desktop_mode_open: bool,
     start_open: bool,
+    start_section: StartMenuSection,
     main_menu_idx: usize,
     terminal_screen: TerminalScreen,
     terminal_apps_idx: usize,
@@ -388,6 +407,7 @@ impl Default for RobcoNativeApp {
             terminal_mode: TerminalModeWindow::default(),
             desktop_active_window: None,
             start_open: true,
+            start_section: StartMenuSection::Programs,
             desktop_mode_open: false,
             main_menu_idx: 0,
             terminal_screen: TerminalScreen::MainMenu,
@@ -468,6 +488,7 @@ impl RobcoNativeApp {
             desktop_active_window: self.desktop_active_window,
             desktop_mode_open: self.desktop_mode_open,
             start_open: self.start_open,
+            start_section: self.start_section,
             main_menu_idx: self.main_menu_idx,
             terminal_screen: self.terminal_screen,
             terminal_apps_idx: self.terminal_apps_idx,
@@ -531,6 +552,7 @@ impl RobcoNativeApp {
         self.desktop_active_window = parked.desktop_active_window;
         self.desktop_mode_open = parked.desktop_mode_open;
         self.start_open = parked.start_open;
+        self.start_section = parked.start_section;
         self.main_menu_idx = parked.main_menu_idx;
         self.terminal_screen = parked.terminal_screen;
         self.terminal_apps_idx = parked.terminal_apps_idx;
@@ -903,6 +925,7 @@ impl RobcoNativeApp {
         self.terminal_mode.status.clear();
         self.desktop_active_window = None;
         self.start_open = true;
+        self.start_section = StartMenuSection::Programs;
         self.desktop_mode_open = false;
         self.main_menu_idx = 0;
         self.terminal_screen = TerminalScreen::MainMenu;
@@ -2160,34 +2183,71 @@ impl RobcoNativeApp {
                     .stroke(egui::Stroke::new(1.0, palette.fg))
                     .inner_margin(egui::Margin::same(8.0))
                     .show(ui, |ui| {
-                        ui.set_min_width(220.0);
+                        ui.set_min_width(420.0);
                         ui.label(RichText::new("Start").strong());
                         ui.separator();
-                        if ui.button("[ New Document ]").clicked() {
-                            self.new_document();
-                            self.start_open = false;
-                        }
-                        if ui.button("[ File Manager ]").clicked() {
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                        }
-                        if ui.button("[ Settings ]").clicked() {
-                            self.open_desktop_window(DesktopWindow::Settings);
-                        }
-                        if ui.button("[ Applications ]").clicked() {
-                            self.open_desktop_window(DesktopWindow::Applications);
-                        }
-                        if ui.button("[ Terminal Mode ]").clicked() {
-                            self.open_desktop_window(DesktopWindow::TerminalMode);
-                        }
-                        ui.separator();
-                        if ui.button("[ Return to Terminal ]").clicked() {
-                            self.desktop_mode_open = false;
-                            self.start_open = false;
-                        }
-                        if ui.button("[ Log Out ]").clicked() {
-                            self.start_open = false;
-                            self.begin_logout();
-                        }
+                        ui.horizontal_top(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_min_width(150.0);
+                                for section in [
+                                    StartMenuSection::Programs,
+                                    StartMenuSection::System,
+                                    StartMenuSection::Session,
+                                ] {
+                                    let selected = self.start_section == section;
+                                    let suffix = if selected { "*" } else { ">" };
+                                    let label = format!("[ {} {} ]", section.label(), suffix);
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.start_section = section;
+                                    }
+                                }
+                            });
+
+                            ui.separator();
+
+                            ui.vertical(|ui| {
+                                ui.set_min_width(230.0);
+                                match self.start_section {
+                                    StartMenuSection::Programs => {
+                                        if ui.button("[ New Document ]").clicked() {
+                                            self.new_document();
+                                            self.start_open = false;
+                                        }
+                                        if ui.button("[ ROBCO Word Processor ]").clicked() {
+                                            if self.editor.path.is_none() {
+                                                self.new_document();
+                                            } else {
+                                                self.open_desktop_window(DesktopWindow::Editor);
+                                            }
+                                        }
+                                        if ui.button("[ File Manager ]").clicked() {
+                                            self.open_desktop_window(DesktopWindow::FileManager);
+                                        }
+                                        if ui.button("[ Applications ]").clicked() {
+                                            self.open_desktop_window(DesktopWindow::Applications);
+                                        }
+                                    }
+                                    StartMenuSection::System => {
+                                        if ui.button("[ Settings ]").clicked() {
+                                            self.open_desktop_window(DesktopWindow::Settings);
+                                        }
+                                        if ui.button("[ Terminal Mode ]").clicked() {
+                                            self.open_desktop_window(DesktopWindow::TerminalMode);
+                                        }
+                                    }
+                                    StartMenuSection::Session => {
+                                        if ui.button("[ Return to Terminal ]").clicked() {
+                                            self.desktop_mode_open = false;
+                                            self.start_open = false;
+                                        }
+                                        if ui.button("[ Log Out ]").clicked() {
+                                            self.start_open = false;
+                                            self.begin_logout();
+                                        }
+                                    }
+                                }
+                            });
+                        });
                     });
             });
     }
@@ -2246,6 +2306,9 @@ impl RobcoNativeApp {
                         .clicked()
                     {
                         self.start_open = !self.start_open;
+                        if self.start_open {
+                            self.start_section = StartMenuSection::Programs;
+                        }
                     }
                     for window in [
                         DesktopWindow::FileManager,
@@ -3873,6 +3936,11 @@ mod tests {
     fn set_runtime_marker(app: &mut RobcoNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
         app.desktop_mode_open = false;
         app.start_open = true;
+        app.start_section = match idx % 3 {
+            0 => StartMenuSection::Programs,
+            1 => StartMenuSection::System,
+            _ => StartMenuSection::Session,
+        };
         app.main_menu_idx = idx;
         app.terminal_screen = screen;
         app.terminal_settings_idx = idx;
@@ -3925,6 +3993,7 @@ mod tests {
         app.terminal_mode.status = "term".to_string();
         app.desktop_mode_open = true;
         app.start_open = false;
+        app.start_section = StartMenuSection::Session;
         app.main_menu_idx = 3;
         app.terminal_screen = TerminalScreen::Connections;
         app.terminal_settings_idx = 2;
@@ -3965,6 +4034,7 @@ mod tests {
         app.terminal_mode.status.clear();
         app.desktop_mode_open = false;
         app.start_open = true;
+        app.start_section = StartMenuSection::Programs;
         app.main_menu_idx = 0;
         app.terminal_screen = TerminalScreen::MainMenu;
         app.terminal_settings_idx = 0;
@@ -3996,6 +4066,7 @@ mod tests {
         assert_eq!(app.terminal_mode.status, "term");
         assert!(app.desktop_mode_open);
         assert!(!app.start_open);
+        assert_eq!(app.start_section, StartMenuSection::Session);
         assert_eq!(app.main_menu_idx, 3);
         assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
         assert_eq!(app.terminal_settings_idx, 2);
