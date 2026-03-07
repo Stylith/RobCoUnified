@@ -8,6 +8,7 @@ use std::io::stdout;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use crate::config::{get_settings, update_settings};
 use crate::ui::Term;
 
 /// Suspend the TUI, run a closure in normal terminal mode, then resume.
@@ -53,6 +54,46 @@ pub fn should_probe_fast_exit(cmd: &[String]) -> bool {
 
 pub fn should_retry_with_shell_after_fast_exit(cmd: &[String], elapsed: Duration) -> bool {
     should_probe_fast_exit(cmd) && elapsed <= fast_exit_retry_window()
+}
+
+fn command_launch_key(cmd: &[String]) -> Option<String> {
+    let program = cmd.first()?;
+    let base = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .trim();
+    if base.is_empty() {
+        None
+    } else {
+        Some(base.to_ascii_lowercase())
+    }
+}
+
+pub fn is_shell_preferred(cmd: &[String]) -> bool {
+    let Some(key) = command_launch_key(cmd) else {
+        return false;
+    };
+    get_settings()
+        .pty_shell_preferred
+        .get(&key)
+        .copied()
+        .unwrap_or(false)
+}
+
+pub fn remember_shell_preferred(cmd: &[String]) {
+    let Some(key) = command_launch_key(cmd) else {
+        return;
+    };
+    let mut changed = false;
+    update_settings(|s| {
+        let prev = s.pty_shell_preferred.insert(key.clone(), true);
+        changed = prev != Some(true);
+    });
+    if changed {
+        #[cfg(not(test))]
+        crate::config::persist_settings();
+    }
 }
 
 pub fn command_exists(name: &str) -> bool {
@@ -146,4 +187,53 @@ pub fn json_to_cmd(val: &serde_json::Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+
+    fn sv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn fast_exit_probe_rules() {
+        assert!(should_probe_fast_exit(&sv(&["spotify-player"])));
+        assert!(!should_probe_fast_exit(&sv(&["/usr/bin/spotify-player"])));
+        assert!(!should_probe_fast_exit(&sv(&["python3", "script.py"])));
+        assert!(!should_probe_fast_exit(&Vec::new()));
+    }
+
+    #[test]
+    fn fast_exit_retry_window_rules() {
+        let cmd = sv(&["spotify-player"]);
+        assert!(should_retry_with_shell_after_fast_exit(
+            &cmd,
+            Duration::from_millis(50)
+        ));
+        assert!(!should_retry_with_shell_after_fast_exit(
+            &cmd,
+            Duration::from_secs(2)
+        ));
+    }
+
+    #[test]
+    fn shell_preference_roundtrip_uses_normalized_key() {
+        update_settings(|s| *s = Settings::default());
+        let cmd = sv(&["/usr/bin/Spotify-Player"]);
+        assert!(!is_shell_preferred(&cmd));
+        remember_shell_preferred(&cmd);
+        assert!(is_shell_preferred(&cmd));
+        let alias = sv(&["spotify-player"]);
+        assert!(is_shell_preferred(&alias));
+    }
+
+    #[test]
+    fn shell_fallback_builder_rejects_abs_program() {
+        assert!(build_shell_fallback_command(&sv(&["/usr/bin/vim"])).is_none());
+        let built = build_shell_fallback_command(&sv(&["vim", "file.txt"]));
+        assert!(built.is_some());
+    }
 }

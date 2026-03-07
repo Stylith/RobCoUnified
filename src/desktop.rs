@@ -5491,6 +5491,16 @@ fn spawn_desktop_pty_with_fallback(
         return Err(anyhow!("empty command"));
     }
 
+    if crate::launcher::is_shell_preferred(cmd) {
+        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            if let Ok(session) = crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options) {
+                return Ok(session);
+            }
+        }
+    }
+
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     match crate::pty::PtySession::spawn(program, &args, cols, rows, options) {
@@ -5502,6 +5512,10 @@ fn spawn_desktop_pty_with_fallback(
                     let shell_program = &shell_cmd[0];
                     let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
                     return crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+                        .map(|session| {
+                            crate::launcher::remember_shell_preferred(cmd);
+                            session
+                        })
                         .map_err(|shell_err| anyhow!("launch exited quickly; shell retry failed: {shell_err}"));
                 }
             }
@@ -5514,7 +5528,12 @@ fn spawn_desktop_pty_with_fallback(
             let shell_program = &shell_cmd[0];
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
             match crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options) {
-                Ok(session) => Ok(session),
+                Ok(session) => {
+                    if crate::launcher::should_probe_fast_exit(cmd) {
+                        crate::launcher::remember_shell_preferred(cmd);
+                    }
+                    Ok(session)
+                }
                 Err(shell_err) => Err(anyhow!(
                     "launch failed: {primary_err}; shell fallback failed: {shell_err}"
                 )),

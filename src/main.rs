@@ -5,6 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::backend::CrosstermBackend;
+use std::collections::HashMap;
 use std::io::stdout;
 
 mod apps;
@@ -33,7 +34,7 @@ mod ui;
 use auth::{clear_session, ensure_default_admin, login_screen};
 use checks::{print_preflight, run_preflight};
 use config::{get_settings, set_current_user, OpenMode};
-use ui::{flash_message, run_menu, MenuResult, Term};
+use ui::{flash_message, run_menu_with_index, MenuResult, Term};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopToolMode {
@@ -95,6 +96,93 @@ fn apply_pending_switch() {
             }
         }
         // Out-of-range target: ignore, current session resumes.
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TerminalMenuRoute {
+    #[default]
+    MainMenu,
+    Applications,
+    Documents,
+    Network,
+    Games,
+    ProgramInstaller,
+    Terminal,
+    DesktopMode,
+    Settings,
+    Logout,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TerminalSessionRuntime {
+    main_menu_idx: usize,
+    route: TerminalMenuRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteOutcome {
+    Continue,
+    LoggedOut,
+    Shutdown,
+}
+
+fn route_from_menu_selection(selection: &str) -> Option<TerminalMenuRoute> {
+    Some(match selection {
+        "Applications" => TerminalMenuRoute::Applications,
+        "Documents" => TerminalMenuRoute::Documents,
+        "Network" => TerminalMenuRoute::Network,
+        "Games" => TerminalMenuRoute::Games,
+        "Program Installer" => TerminalMenuRoute::ProgramInstaller,
+        "Terminal" => TerminalMenuRoute::Terminal,
+        "Desktop Mode" => TerminalMenuRoute::DesktopMode,
+        "Settings" => TerminalMenuRoute::Settings,
+        "Logout" => TerminalMenuRoute::Logout,
+        _ => return None,
+    })
+}
+
+fn run_terminal_route(
+    route: TerminalMenuRoute,
+    terminal: &mut Term,
+    username: &str,
+) -> Result<RouteOutcome> {
+    match route {
+        TerminalMenuRoute::MainMenu => Ok(RouteOutcome::Continue),
+        TerminalMenuRoute::Applications => {
+            apps::apps_menu(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::Documents => {
+            documents::documents_menu(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::Network => {
+            apps::network_menu(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::Games => {
+            apps::games_menu(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::ProgramInstaller => {
+            installer::appstore_menu(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::Terminal => {
+            shell_terminal::embedded_terminal(terminal)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::DesktopMode => match desktop::desktop_mode(terminal, username)? {
+            desktop::DesktopExit::ReturnToTerminal => Ok(RouteOutcome::Continue),
+            desktop::DesktopExit::Logout => Ok(RouteOutcome::LoggedOut),
+            desktop::DesktopExit::Shutdown => Ok(RouteOutcome::Shutdown),
+        },
+        TerminalMenuRoute::Settings => {
+            settings::settings_menu(terminal, username)?;
+            Ok(RouteOutcome::Continue)
+        }
+        TerminalMenuRoute::Logout => Ok(RouteOutcome::LoggedOut),
     }
 }
 
@@ -162,6 +250,7 @@ fn restore_terminal(terminal: &mut Term) -> Result<()> {
 
 fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
     config::reload_settings();
+    let mut terminal_runtime: HashMap<usize, TerminalSessionRuntime> = HashMap::new();
 
     if get_settings().bootup && show_bootup {
         sound::play_startup();
@@ -178,6 +267,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                 Some(u) => {
                     let idx = session::push_session(&u);
                     session::set_active(idx);
+                    terminal_runtime.entry(idx).or_default();
                     set_current_user(Some(&u));
                 }
                 None => {
@@ -222,11 +312,17 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                 && session::take_default_mode_pending_for_active();
 
         'menu: loop {
+            let active_idx = session::active_idx();
+            terminal_runtime.entry(active_idx).or_default();
+
             if launch_default_desktop {
                 launch_default_desktop = false;
-                match desktop::desktop_mode(terminal, &username)? {
-                    desktop::DesktopExit::ReturnToTerminal => {}
-                    desktop::DesktopExit::Logout => {
+                if let Some(runtime) = terminal_runtime.get_mut(&active_idx) {
+                    runtime.route = TerminalMenuRoute::DesktopMode;
+                }
+                match run_terminal_route(TerminalMenuRoute::DesktopMode, terminal, &username)? {
+                    RouteOutcome::Continue => {}
+                    RouteOutcome::LoggedOut => {
                         sound::play_logout();
                         set_current_user(None);
                         clear_session();
@@ -234,19 +330,60 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         logged_out = true;
                         break 'menu;
                     }
-                    desktop::DesktopExit::Shutdown => {
+                    RouteOutcome::Shutdown => {
                         sound::play_logout();
                         std::thread::sleep(std::time::Duration::from_millis(450));
                         return Ok(());
                     }
                 }
+                if session::has_switch_request() {
+                    break 'menu;
+                }
+                if let Some(runtime) = terminal_runtime.get_mut(&active_idx) {
+                    runtime.route = TerminalMenuRoute::MainMenu;
+                }
+                continue;
+            }
+
+            let route = terminal_runtime
+                .get(&active_idx)
+                .map(|r| r.route)
+                .unwrap_or(TerminalMenuRoute::MainMenu);
+            if route != TerminalMenuRoute::MainMenu {
+                match run_terminal_route(route, terminal, &username)? {
+                    RouteOutcome::Continue => {}
+                    RouteOutcome::LoggedOut => {
+                        sound::play_logout();
+                        set_current_user(None);
+                        clear_session();
+                        flash_message(terminal, "Logging out...", 800)?;
+                        logged_out = true;
+                        break 'menu;
+                    }
+                    RouteOutcome::Shutdown => {
+                        sound::play_logout();
+                        std::thread::sleep(std::time::Duration::from_millis(450));
+                        return Ok(());
+                    }
+                }
+                if session::has_switch_request() {
+                    break 'menu;
+                }
+                if let Some(runtime) = terminal_runtime.get_mut(&active_idx) {
+                    runtime.route = TerminalMenuRoute::MainMenu;
+                }
+                continue;
             }
 
             if session::has_switch_request() {
                 break 'menu;
             }
 
-            let result = run_menu(
+            let mut menu_idx = terminal_runtime
+                .get(&active_idx)
+                .map(|r| r.main_menu_idx)
+                .unwrap_or(0);
+            let result = run_menu_with_index(
                 terminal,
                 "Main Menu",
                 &[
@@ -262,7 +399,9 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                     "Logout",
                 ],
                 Some("RobcOS v0.2.1"),
+                &mut menu_idx,
             )?;
+            terminal_runtime.entry(active_idx).or_default().main_menu_idx = menu_idx;
 
             match result {
                 MenuResult::Back => {
@@ -270,16 +409,16 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                         break 'menu;
                     }
                 }
-                MenuResult::Selected(s) => match s.as_str() {
-                    "Applications" => apps::apps_menu(terminal)?,
-                    "Documents" => documents::documents_menu(terminal)?,
-                    "Network" => apps::network_menu(terminal)?,
-                    "Games" => apps::games_menu(terminal)?,
-                    "Program Installer" => installer::appstore_menu(terminal)?,
-                    "Terminal" => shell_terminal::embedded_terminal(terminal)?,
-                    "Desktop Mode" => match desktop::desktop_mode(terminal, &username)? {
-                        desktop::DesktopExit::ReturnToTerminal => {}
-                        desktop::DesktopExit::Logout => {
+                MenuResult::Selected(s) => {
+                    let Some(route) = route_from_menu_selection(&s) else {
+                        continue;
+                    };
+                    if let Some(runtime) = terminal_runtime.get_mut(&active_idx) {
+                        runtime.route = route;
+                    }
+                    match run_terminal_route(route, terminal, &username)? {
+                        RouteOutcome::Continue => {}
+                        RouteOutcome::LoggedOut => {
                             sound::play_logout();
                             set_current_user(None);
                             clear_session();
@@ -287,23 +426,19 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                             logged_out = true;
                             break 'menu;
                         }
-                        desktop::DesktopExit::Shutdown => {
+                        RouteOutcome::Shutdown => {
                             sound::play_logout();
                             std::thread::sleep(std::time::Duration::from_millis(450));
                             return Ok(());
                         }
-                    },
-                    "Settings" => settings::settings_menu(terminal, &username)?,
-                    "Logout" => {
-                        sound::play_logout();
-                        set_current_user(None);
-                        clear_session();
-                        flash_message(terminal, "Logging out...", 800)?;
-                        logged_out = true;
+                    }
+                    if session::has_switch_request() {
                         break 'menu;
                     }
-                    _ => {}
-                },
+                    if let Some(runtime) = terminal_runtime.get_mut(&active_idx) {
+                        runtime.route = TerminalMenuRoute::MainMenu;
+                    }
+                }
             }
         }
 
@@ -312,6 +447,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
             pty::clear_all_suspended();
             session::clear_sessions();
             session::take_switch_request();
+            terminal_runtime.clear();
             continue 'main; // always return to login
         }
 

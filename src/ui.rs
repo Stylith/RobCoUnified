@@ -367,8 +367,23 @@ pub fn run_menu(
     choices: &[&str],
     subtitle: Option<&str>,
 ) -> Result<MenuResult> {
-    let selectable: Vec<&str> = choices.iter().copied().filter(|c| *c != "---").collect();
     let mut idx = 0usize;
+    run_menu_with_index(terminal, title, choices, subtitle, &mut idx)
+}
+
+pub fn run_menu_with_index(
+    terminal: &mut Term,
+    title: &str,
+    choices: &[&str],
+    subtitle: Option<&str>,
+    idx: &mut usize,
+) -> Result<MenuResult> {
+    let selectable: Vec<&str> = choices.iter().copied().filter(|c| *c != "---").collect();
+    if selectable.is_empty() {
+        *idx = 0;
+    } else {
+        *idx = (*idx).min(selectable.len().saturating_sub(1));
+    }
 
     loop {
         terminal.draw(|f| {
@@ -428,7 +443,7 @@ pub fn run_menu(
                     if choice == "---" {
                         return Line::from(Span::styled("---", dim_style()));
                     }
-                    let selected = selectable.get(idx).copied() == Some(choice);
+                    let selected = selectable.get(*idx).copied() == Some(choice);
                     if selected {
                         Line::from(Span::styled(format!("  > {choice}"), sel_style()))
                     } else {
@@ -455,25 +470,25 @@ pub fn run_menu(
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if !selectable.is_empty() {
-                            let prev = idx;
-                            idx = idx.saturating_sub(1);
-                            if idx != prev {
+                            let prev = *idx;
+                            *idx = (*idx).saturating_sub(1);
+                            if *idx != prev {
                                 crate::sound::play_navigate_repeat();
                             }
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if !selectable.is_empty() {
-                            let prev = idx;
-                            idx = (idx + 1).min(selectable.len() - 1);
-                            if idx != prev {
+                            let prev = *idx;
+                            *idx = (*idx + 1).min(selectable.len() - 1);
+                            if *idx != prev {
                                 crate::sound::play_navigate_repeat();
                             }
                         }
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         crate::sound::play_navigate();
-                        if let Some(&sel) = selectable.get(idx) {
+                        if let Some(&sel) = selectable.get(*idx) {
                             return Ok(MenuResult::Selected(sel.to_string()));
                         }
                     }

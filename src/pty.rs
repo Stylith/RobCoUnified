@@ -1565,6 +1565,17 @@ pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
         return Ok(());
     }
     let cmdline = cmd.join(" ");
+    if crate::launcher::is_shell_preferred(&cmd) {
+        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(&cmd) {
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            crate::diag::log(
+                "pty-cli",
+                &format!("Using saved shell launch preference for command: {cmdline}"),
+            );
+            return run_pty_session(terminal, shell_program, &shell_args);
+        }
+    }
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     crate::diag::log(
@@ -1583,7 +1594,11 @@ pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
                 "pty-cli",
                 &format!("Fast-exit retry via shell for command: {cmdline}"),
             );
-            return run_pty_session(terminal, shell_program, &shell_args);
+            let retried = run_pty_session(terminal, shell_program, &shell_args);
+            if retried.is_ok() {
+                crate::launcher::remember_shell_preferred(&cmd);
+            }
+            return retried;
         }
     }
 

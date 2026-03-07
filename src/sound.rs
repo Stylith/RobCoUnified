@@ -354,6 +354,30 @@ fn play_via_python(path: &std::path::Path) -> bool {
     false
 }
 
+fn play_via_python_oneshot(path: &std::path::Path) -> bool {
+    let script = r#"import sys
+try:
+    from playsound import playsound
+except Exception:
+    sys.exit(1)
+if len(sys.argv) < 2:
+    sys.exit(1)
+target = sys.argv[1]
+try:
+    playsound(target)
+except Exception:
+    pass
+"#;
+    Command::new("python3")
+        .args(["-u", "-c", script, path.to_string_lossy().as_ref()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| true)
+        .unwrap_or(false)
+}
+
 fn has_helper_process() -> bool {
     helper_lock().lock().map(|g| g.is_some()).unwrap_or(false)
 }
@@ -397,6 +421,9 @@ fn play_nonblocking(path: PathBuf) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
+        }
+        if play_via_python_oneshot(&path) {
+            return;
         }
     }
 

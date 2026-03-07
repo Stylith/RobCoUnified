@@ -553,6 +553,8 @@ pub struct Settings {
     pub connections: ConnectionsSettings,
     #[serde(default)]
     pub desktop_cli_profiles: DesktopCliProfiles,
+    #[serde(default)]
+    pub pty_shell_preferred: BTreeMap<String, bool>,
     #[serde(default = "default_desktop_wallpaper")]
     pub desktop_wallpaper: String,
     #[serde(default)]
@@ -603,6 +605,7 @@ impl Default for Settings {
             default_apps: DefaultAppsSettings::default(),
             connections: ConnectionsSettings::default(),
             desktop_cli_profiles: DesktopCliProfiles::default(),
+            pty_shell_preferred: BTreeMap::new(),
             desktop_wallpaper: default_desktop_wallpaper(),
             desktop_show_cursor: false,
             desktop_icon_style: DesktopIconStyle::Win95,
@@ -744,6 +747,16 @@ mod tests {
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert!((decoded.native_ui_scale - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pty_shell_preferred_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("pty_shell_preferred");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert!(decoded.pty_shell_preferred.is_empty());
     }
 
     #[test]

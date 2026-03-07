@@ -1576,6 +1576,20 @@ fn spawn_with_fallback(
     options: &PtyLaunchOptions,
 ) -> anyhow::Result<PtySession> {
     let cmdline = cmd.join(" ");
+    if crate::launcher::is_shell_preferred(cmd) {
+        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            if let Ok(session) = PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+            {
+                crate::diag::log(
+                    "pty-native",
+                    &format!("Using saved shell launch preference for command: {cmdline}"),
+                );
+                return Ok(session);
+            }
+        }
+    }
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     match PtySession::spawn(program, &args, cols, rows, options) {
@@ -1592,6 +1606,7 @@ fn spawn_with_fallback(
                     let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
                     return PtySession::spawn(shell_program, &shell_args, cols, rows, options)
                         .map(|session| {
+                            crate::launcher::remember_shell_preferred(cmd);
                             crate::diag::log(
                                 "pty-native",
                                 &format!("Fast-exit shell retry succeeded for command: {cmdline}"),
@@ -1623,6 +1638,9 @@ fn spawn_with_fallback(
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
             PtySession::spawn(shell_program, &shell_args, cols, rows, options)
                 .map(|session| {
+                    if crate::launcher::should_probe_fast_exit(cmd) {
+                        crate::launcher::remember_shell_preferred(cmd);
+                    }
                     crate::diag::log(
                         "pty-native",
                         &format!("Shell fallback launch succeeded for command: {cmdline}"),
