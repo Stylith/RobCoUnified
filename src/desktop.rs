@@ -2196,7 +2196,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                     enabled: true,
                 },
                 DesktopHubItem {
-                    label: "Install Audio Runtime (playsound3)".to_string(),
+                    label: "Install Audio Runtime (playsound)".to_string(),
                     action: DesktopHubItemAction::InstallAudioRuntime,
                     enabled: true,
                 },
@@ -5493,15 +5493,27 @@ fn spawn_desktop_pty_with_fallback(
 
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
-    match crate::pty::PtySession::spawn(program, &args, cols, rows, &options) {
-        Ok(session) => Ok(session),
+    match crate::pty::PtySession::spawn(program, &args, cols, rows, options) {
+        Ok(mut session) => {
+            if crate::launcher::should_probe_fast_exit(cmd)
+                && session.exited_within(crate::launcher::fast_exit_retry_window())
+            {
+                if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
+                    let shell_program = &shell_cmd[0];
+                    let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+                    return crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+                        .map_err(|shell_err| anyhow!("launch exited quickly; shell retry failed: {shell_err}"));
+                }
+            }
+            Ok(session)
+        }
         Err(primary_err) => {
-            let Some(shell_cmd) = build_shell_fallback_command(cmd) else {
+            let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) else {
                 return Err(primary_err);
             };
             let shell_program = &shell_cmd[0];
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            match crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, &options) {
+            match crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options) {
                 Ok(session) => Ok(session),
                 Err(shell_err) => Err(anyhow!(
                     "launch failed: {primary_err}; shell fallback failed: {shell_err}"
@@ -5519,50 +5531,11 @@ fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
     if out[0] == "rtv" && !command_exists("rtv") && command_exists("tuir") {
         out[0] = "tuir".to_string();
     }
-    out
+    crate::launcher::normalize_command_aliases(&out)
 }
 
 fn command_exists(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    if name.contains('/') {
-        return Path::new(name).is_file();
-    }
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
-}
-
-fn build_shell_fallback_command(cmd: &[String]) -> Option<Vec<String>> {
-    if cmd.is_empty() {
-        return None;
-    }
-    if cmd[0].contains('/') {
-        return None;
-    }
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/bin/sh".to_string());
-    let line = cmd
-        .iter()
-        .map(|part| shell_quote(part))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(vec![shell, "-ic".to_string(), line])
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+=,".contains(c))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
+    crate::launcher::command_exists(name)
 }
 
 fn command_title(program: &str) -> String {
@@ -12714,6 +12687,21 @@ fn desktop_which(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn desktop_is_arch_based_linux() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    std::path::Path::new("/etc/arch-release").exists()
+        || std::fs::read_to_string("/etc/os-release")
+            .map(|s| {
+                s.lines().any(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    lower.starts_with("id=arch") || lower.contains("id_like=arch")
+                })
+            })
+            .unwrap_or(false)
+}
+
 fn desktop_detect_package_manager() -> Option<DesktopPackageManager> {
     let pms: [(&str, DesktopPackageManager); 6] = [
         ("brew", DesktopPackageManager::Brew),
@@ -12741,60 +12729,11 @@ fn desktop_has_internet() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "linux")]
-fn desktop_is_arch_linux() -> bool {
-    std::path::Path::new("/etc/arch-release").exists()
-        || std::fs::read_to_string("/etc/os-release")
-            .map(|s| {
-                let lower = s.to_lowercase();
-                lower.contains("id=arch") || lower.contains("id_like=arch")
-            })
-            .unwrap_or(false)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn desktop_is_arch_linux() -> bool {
-    false
-}
-
-fn desktop_arch_audio_venv_dir() -> Option<PathBuf> {
-    if !desktop_is_arch_linux() {
-        return None;
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".local/share/robcos/audio-venv"))
-}
-
-fn desktop_arch_audio_python_bin() -> Option<PathBuf> {
-    let venv = desktop_arch_audio_venv_dir()?;
-    let py3 = venv.join("bin/python3");
-    if py3.exists() {
-        return Some(py3);
-    }
-    let py = venv.join("bin/python");
-    if py.exists() {
-        return Some(py);
-    }
-    None
-}
-
 fn desktop_has_python_module(module: &str) -> bool {
-    let code = format!("import {module}");
-    if desktop_is_arch_linux() {
-        let Some(py) = desktop_arch_audio_python_bin() else {
-            return false;
-        };
-        return Command::new(py)
-            .args(["-c", code.as_str()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-    }
     if !desktop_which("python3") {
         return false;
     }
+    let code = format!("import {module}");
     Command::new("python3")
         .args(["-c", code.as_str()])
         .stdout(Stdio::null())
@@ -13712,31 +13651,26 @@ fn run_desktop_hub_action(
                 flash_message(terminal, "python3 not found. Install Python first.", 1200)?;
                 return Ok(());
             }
-            if desktop_has_python_module("playsound3") {
-                flash_message(terminal, "playsound3 is already installed.", 900)?;
+            if desktop_has_python_module("playsound") {
+                flash_message(terminal, "playsound is already installed.", 900)?;
                 return Ok(());
             }
             if !desktop_has_internet() {
                 flash_message(terminal, "No internet connection.", 1000)?;
                 return Ok(());
             }
-            let ok = if desktop_is_arch_linux() {
-                let Some(venv_dir) = desktop_arch_audio_venv_dir() else {
-                    flash_message(
-                        terminal,
-                        "Cannot resolve ~/.local/share/robcos/audio-venv",
-                        1600,
-                    )?;
+            let ok = if desktop_is_arch_based_linux() {
+                if !desktop_which("yay") {
+                    flash_message(terminal, "yay not found. Install yay first.", 1200)?;
                     return Ok(());
-                };
-                let script = "import pathlib,subprocess,sys; v=pathlib.Path(sys.argv[1]); v.parent.mkdir(parents=True, exist_ok=True); subprocess.check_call([sys.executable,'-m','venv',str(v)]); py=v/'bin'/'python3'; py=py if py.exists() else v/'bin'/'python'; subprocess.check_call([str(py),'-m','pip','install','--upgrade','pip','playsound3'])";
-                let cmd = vec![
-                    "python3".to_string(),
-                    "-c".to_string(),
-                    script.to_string(),
-                    venv_dir.to_string_lossy().to_string(),
+                }
+                let yay_cmd = vec![
+                    "yay".to_string(),
+                    "-S".to_string(),
+                    "--noconfirm".to_string(),
+                    "python-playsound".to_string(),
                 ];
-                run_external_cmd_suspended(terminal, &cmd)?
+                run_external_cmd_suspended(terminal, &yay_cmd)?
             } else {
                 let pip_cmd = vec![
                     "python3".to_string(),
@@ -13745,7 +13679,7 @@ fn run_desktop_hub_action(
                     "install".to_string(),
                     "--user".to_string(),
                     "--upgrade".to_string(),
-                    "playsound3".to_string(),
+                    "playsound".to_string(),
                 ];
                 let mut ok = run_external_cmd_suspended(terminal, &pip_cmd)?;
                 if !ok {
@@ -13760,14 +13694,8 @@ fn run_desktop_hub_action(
                 }
                 ok
             };
-            if ok && desktop_has_python_module("playsound3") {
-                flash_message(terminal, "playsound3 installed.", 1000)?;
-            } else if desktop_is_arch_linux() {
-                flash_message(
-                    terminal,
-                    "Install failed. Expected venv: ~/.local/share/robcos/audio-venv",
-                    1800,
-                )?;
+            if ok && desktop_has_python_module("playsound") {
+                flash_message(terminal, "playsound installed.", 1000)?;
             } else {
                 flash_message(terminal, "Install completed with errors.", 1300)?;
             }

@@ -4,7 +4,6 @@ use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 const MAX_NATIVE_PTY_COLS: usize = 160;
@@ -1577,38 +1576,47 @@ fn spawn_with_fallback(
     options: &PtyLaunchOptions,
 ) -> anyhow::Result<PtySession> {
     let cmdline = cmd.join(" ");
-    if cmd
-        .first()
-        .is_some_and(|program| should_prefer_shell_launch(program))
-    {
-        if let Some(shell_cmd) = build_shell_fallback_command(cmd) {
-            let shell_program = &shell_cmd[0];
-            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            if let Ok(session) = PtySession::spawn(shell_program, &shell_args, cols, rows, options)
-            {
-                crate::diag::log(
-                    "pty-native",
-                    &format!("Preferred shell launch succeeded for command: {cmdline}"),
-                );
-                return Ok(session);
-            }
-            crate::diag::log(
-                "pty-native",
-                &format!("Preferred shell launch failed for command: {cmdline}"),
-            );
-        }
-    }
-
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     match PtySession::spawn(program, &args, cols, rows, options) {
-        Ok(session) => Ok(session),
+        Ok(mut session) => {
+            if crate::launcher::should_probe_fast_exit(cmd)
+                && session.exited_within(crate::launcher::fast_exit_retry_window())
+            {
+                crate::diag::log(
+                    "pty-native",
+                    &format!("Direct PTY launch exited quickly; retrying via shell: {cmdline}"),
+                );
+                if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
+                    let shell_program = &shell_cmd[0];
+                    let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+                    return PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+                        .map(|session| {
+                            crate::diag::log(
+                                "pty-native",
+                                &format!("Fast-exit shell retry succeeded for command: {cmdline}"),
+                            );
+                            session
+                        })
+                        .map_err(|shell_err| {
+                            crate::diag::log(
+                                "pty-native",
+                                &format!(
+                                    "Fast-exit shell retry failed for command '{cmdline}': {shell_err}"
+                                ),
+                            );
+                            anyhow::anyhow!("launch exited quickly; shell retry failed: {shell_err}")
+                        });
+                }
+            }
+            Ok(session)
+        }
         Err(primary_err) => {
             crate::diag::log(
                 "pty-native",
                 &format!("Direct PTY launch failed for '{cmdline}': {primary_err}"),
             );
-            let Some(shell_cmd) = build_shell_fallback_command(cmd) else {
+            let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) else {
                 return Err(primary_err);
             };
             let shell_program = &shell_cmd[0];
@@ -1634,57 +1642,13 @@ fn spawn_with_fallback(
     }
 }
 
-fn should_prefer_shell_launch(program: &str) -> bool {
-    matches!(program, "spotify-player")
-}
-
 fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
     if cmd.is_empty() {
         return Vec::new();
     }
     let mut out = cmd.to_vec();
-    if out[0] == "rtv" && !command_exists("rtv") && command_exists("tuir") {
+    if out[0] == "rtv" && !crate::launcher::command_exists("rtv") && crate::launcher::command_exists("tuir") {
         out[0] = "tuir".to_string();
     }
-    out
-}
-
-fn command_exists(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    if name.contains('/') {
-        return Path::new(name).is_file();
-    }
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
-}
-
-fn build_shell_fallback_command(cmd: &[String]) -> Option<Vec<String>> {
-    if cmd.is_empty() || cmd[0].contains('/') {
-        return None;
-    }
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/bin/sh".to_string());
-    let line = cmd
-        .iter()
-        .map(|part| shell_quote(part))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(vec![shell, "-ic".to_string(), line])
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "-_./:=".contains(ch))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::launcher::normalize_command_aliases(&out)
 }

@@ -756,6 +756,17 @@ impl PtySession {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    pub fn exited_within(&mut self, window: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() <= window {
+            if !self.is_alive() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        false
+    }
+
     /// Optional PTY banner label shown above terminal content.
     #[allow(dead_code)]
     pub fn top_bar_label(&self) -> Option<&str> {
@@ -1549,58 +1560,38 @@ pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
     if cmd.is_empty() {
         return Ok(());
     }
-    let cmdline = cmd.join(" ");
-    if should_prefer_shell_launch(&cmd[0]) {
-        if let Some(shell_cmd) = build_shell_fallback_command(cmd) {
-            let shell_program = &shell_cmd[0];
-            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            crate::diag::log(
-                "pty-cli",
-                &format!("Using preferred shell launch for command: {cmdline}"),
-            );
-            return run_pty_session(terminal, shell_program, &shell_args);
-        }
+    let cmd = rewrite_legacy_command(cmd);
+    if cmd.is_empty() {
+        return Ok(());
     }
+    let cmdline = cmd.join(" ");
     let program = &cmd[0];
     let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
     crate::diag::log(
         "pty-cli",
         &format!("Launching command directly in PTY: {cmdline}"),
     );
-    run_pty_session(terminal, program, &args)
+    let started = Instant::now();
+    run_pty_session(terminal, program, &args)?;
+    let elapsed = started.elapsed();
+
+    if crate::launcher::should_retry_with_shell_after_fast_exit(&cmd, elapsed) {
+        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(&cmd) {
+            let shell_program = &shell_cmd[0];
+            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
+            crate::diag::log(
+                "pty-cli",
+                &format!("Fast-exit retry via shell for command: {cmdline}"),
+            );
+            return run_pty_session(terminal, shell_program, &shell_args);
+        }
+    }
+
+    Ok(())
 }
 
-fn should_prefer_shell_launch(program: &str) -> bool {
-    matches!(program, "spotify-player")
-}
-
-fn build_shell_fallback_command(cmd: &[String]) -> Option<Vec<String>> {
-    if cmd.is_empty() || cmd[0].contains('/') {
-        return None;
-    }
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/bin/sh".to_string());
-    let line = cmd
-        .iter()
-        .map(|part| shell_quote(part))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(vec![shell, "-ic".to_string(), line])
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || "-_./:=".contains(ch))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
+fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
+    crate::launcher::normalize_command_aliases(cmd)
 }
 
 pub fn resume_suspended_for_active(terminal: &mut Term) -> Result<bool> {

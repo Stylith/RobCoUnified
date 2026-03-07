@@ -26,8 +26,8 @@ static LAST_KEYPRESS_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BOOT_KEY_MS: AtomicU64 = AtomicU64::new(0);
 static BOOT_SEQ_IDX: AtomicUsize = AtomicUsize::new(0);
 
-const NAVIGATE_GAP_MS: u64 = 0;
-const NAVIGATE_REPEAT_GAP_MS: u64 = 75;
+const NAVIGATE_REPEAT_GAP_MS: u64 = 210;
+const NAVIGATE_HOLD_WINDOW_MS: u64 = 180;
 const KEYPRESS_GAP_MS: u64 = 16;
 const BOOT_KEY_GAP_MS: u64 = 0;
 
@@ -39,13 +39,7 @@ struct PythonHelper {
 static PY_HELPER: OnceLock<Mutex<Option<PythonHelper>>> = OnceLock::new();
 static PY_HELPER_READY: AtomicBool = AtomicBool::new(false);
 static PY_HELPER_USABLE: AtomicBool = AtomicBool::new(false);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AudioBackendMode {
-    Auto,
-    Native,
-    Python,
-}
+static PY_HAS_PLAYSOUND: OnceLock<bool> = OnceLock::new();
 
 pub fn stop_audio() {
     STOPPED.store(true, Ordering::SeqCst);
@@ -83,59 +77,6 @@ fn write_temp(name: &str, bytes: &[u8]) -> PathBuf {
     let p = std::env::temp_dir().join(format!("robcos_{name}.wav"));
     let _ = std::fs::write(&p, bytes);
     p
-}
-
-#[cfg(target_os = "linux")]
-fn is_arch_linux() -> bool {
-    std::path::Path::new("/etc/arch-release").exists()
-        || std::fs::read_to_string("/etc/os-release")
-            .map(|s| {
-                let lower = s.to_lowercase();
-                lower.contains("id=arch") || lower.contains("id_like=arch")
-            })
-            .unwrap_or(false)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn is_arch_linux() -> bool {
-    false
-}
-
-fn command_exists(bin: &str) -> bool {
-    Command::new("which")
-        .arg(bin)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn arch_audio_python_bin() -> Option<PathBuf> {
-    if !is_arch_linux() {
-        return None;
-    }
-    let home = std::env::var_os("HOME")?;
-    let venv = PathBuf::from(home).join(".local/share/robcos/audio-venv");
-    let py3 = venv.join("bin/python3");
-    if py3.exists() {
-        return Some(py3);
-    }
-    let py = venv.join("bin/python");
-    if py.exists() {
-        return Some(py);
-    }
-    None
-}
-
-fn audio_python_executable() -> Option<String> {
-    if is_arch_linux() {
-        return arch_audio_python_bin().map(|p| p.to_string_lossy().to_string());
-    }
-    if command_exists("python3") {
-        return Some("python3".to_string());
-    }
-    None
 }
 
 fn extract_boot_click_window_pcm16_mono(
@@ -255,47 +196,16 @@ fn get_paths() -> &'static SoundPaths {
     })
 }
 
-fn run_spawn(path: PathBuf) -> bool {
+fn run_spawn(path: PathBuf) {
     #[cfg(target_os = "macos")]
-    let child = {
-        Command::new("afplay")
-            .arg(&path)
-            .spawn()
-            .map(|c| (c, "afplay"))
-    };
+    let child = Command::new("afplay").arg(&path).spawn();
 
     #[cfg(target_os = "linux")]
-    let child = Command::new("pw-play")
+    let child = Command::new("aplay")
+        .arg("-q")
         .arg(&path)
         .spawn()
-        .map(|c| (c, "pw-play"))
-    .or_else(|_| {
-        Command::new("paplay")
-            .arg(&path)
-            .spawn()
-            .map(|c| (c, "paplay"))
-    })
-    .or_else(|_| {
-        Command::new("aplay")
-            .arg("-q")
-            .arg(&path)
-            .spawn()
-            .map(|c| (c, "aplay"))
-    })
-    .or_else(|_| {
-        Command::new("ffplay")
-            .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
-            .arg(&path)
-            .spawn()
-            .map(|c| (c, "ffplay"))
-    })
-    .or_else(|_| {
-        Command::new("mpv")
-            .args(["--no-terminal", "--really-quiet"])
-            .arg(&path)
-            .spawn()
-            .map(|c| (c, "mpv"))
-    });
+        .or_else(|_| Command::new("paplay").arg(&path).spawn());
 
     #[cfg(target_os = "windows")]
     let child = {
@@ -306,42 +216,42 @@ fn run_spawn(path: PathBuf) -> bool {
         Command::new("powershell")
             .args(["-NoProfile", "-Command", &script])
             .spawn()
-            .map(|c| (c, "powershell-soundplayer"))
     };
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    let child: std::io::Result<(std::process::Child, &'static str)> = Err(std::io::Error::new(
+    let child: std::io::Result<std::process::Child> = Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "audio playback unsupported",
     ));
 
     match child {
-        Ok((mut child, backend_used)) => {
-            crate::diag::log_once(
-                &format!("audio-native-backend:{backend_used}"),
-                "audio",
-                &format!("Using native audio backend: {backend_used}"),
-            );
+        Ok(mut child) => {
             // Reap the child asynchronously.
             std::thread::spawn(move || {
                 let _ = child.wait();
                 ACTIVE.fetch_sub(1, Ordering::Relaxed);
             });
-            true
         }
         Err(_) => {
-            crate::diag::log(
-                "audio",
-                "Native audio playback failed: no backend command could be started.",
-            );
             ACTIVE.fetch_sub(1, Ordering::Relaxed);
-            false
         }
     }
 }
 
 fn helper_lock() -> &'static Mutex<Option<PythonHelper>> {
     PY_HELPER.get_or_init(|| Mutex::new(None))
+}
+
+fn python_has_playsound() -> bool {
+    *PY_HAS_PLAYSOUND.get_or_init(|| {
+        Command::new("python3")
+            .args(["-c", "import playsound"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 fn ensure_python_helper() {
@@ -353,89 +263,38 @@ fn ensure_python_helper() {
     }
 
     let script = r#"import sys
-import threading
-import subprocess
-import shutil
 try:
-    from playsound3 import playsound
+    from playsound import playsound
     backend_ok = True
-    backend_name = "playsound3"
 except Exception:
-    try:
-        from playsound import playsound
-        backend_ok = True
-        backend_name = "playsound"
-    except Exception:
-        playsound = None
-        backend_ok = False
-        backend_name = "none"
+    playsound = None
+    backend_ok = False
 
 if backend_ok:
-    sys.stdout.write("__ROBCOS_READY__:" + backend_name + "\n")
+    sys.stdout.write("__ROBCOS_READY__\n")
 else:
     sys.stdout.write("__ROBCOS_NOBACKEND__\n")
 sys.stdout.flush()
 
-def fallback_play(path):
-    cmds = [
-        ["pw-play", path],
-        ["paplay", path],
-        ["aplay", "-q", path],
-        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
-        ["mpv", "--no-terminal", "--really-quiet", path],
-    ]
-    for cmd in cmds:
-        if shutil.which(cmd[0]) is None:
-            continue
-        try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except Exception:
-            pass
-    return False
-
-def play_one(path):
-    if not path:
-        return
-    if backend_ok:
-        try:
-            playsound(path, False)
-            return
-        except TypeError:
-            try:
-                playsound(path)
-                return
-            except Exception:
-                pass
-        except Exception:
-            pass
-    if fallback_play(path):
-        return
-
 for line in sys.stdin:
     path = line.rstrip("\r\n")
-    if not path:
+    if not path or not backend_ok:
         continue
-    threading.Thread(target=play_one, args=(path,), daemon=True).start()
+    try:
+        playsound(path, False)
+    except TypeError:
+        try:
+            playsound(path)
+        except Exception:
+            pass
+    except Exception:
+        pass
 "#;
 
     PY_HELPER_READY.store(false, Ordering::Release);
     PY_HELPER_USABLE.store(false, Ordering::Release);
 
-    let Some(python_bin) = audio_python_executable() else {
-        crate::diag::log(
-            "audio",
-            "Python helper unavailable: no suitable python executable found.",
-        );
-        return;
-    };
-    crate::diag::log_once(
-        &format!("audio-python-bin:{python_bin}"),
-        "audio",
-        &format!("Using python executable for audio helper: {python_bin}"),
-    );
-
-    let spawn = Command::new(&python_bin)
+    let spawn = Command::new("python3")
         .args(["-u", "-c", script])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -457,19 +316,10 @@ for line in sys.stdin:
             let mut line = String::new();
             if reader.read_line(&mut line).is_ok() {
                 let msg = line.trim();
-                if let Some(backend) = msg.strip_prefix("__ROBCOS_READY__:") {
+                if msg == "__ROBCOS_READY__" {
                     PY_HELPER_USABLE.store(true, Ordering::Release);
-                    crate::diag::log_once(
-                        &format!("audio-python-backend:{backend}"),
-                        "audio",
-                        &format!("Python audio helper backend ready: {backend}"),
-                    );
-                    PY_HELPER_READY.store(true, Ordering::Release);
-                } else if msg == "__ROBCOS_NOBACKEND__" {
-                    crate::diag::log(
-                        "audio",
-                        "Python audio helper started but no supported backend import was found.",
-                    );
+                }
+                if msg == "__ROBCOS_READY__" || msg == "__ROBCOS_NOBACKEND__" {
                     PY_HELPER_READY.store(true, Ordering::Release);
                 }
             }
@@ -482,11 +332,6 @@ for line in sys.stdin:
 fn play_via_python(path: &std::path::Path) -> bool {
     ensure_python_helper();
     if !PY_HELPER_READY.load(Ordering::Acquire) || !PY_HELPER_USABLE.load(Ordering::Acquire) {
-        crate::diag::log_once(
-            "audio-python-unavailable",
-            "audio",
-            "Python audio helper not ready/usable; falling back to native command backends.",
-        );
         return false;
     }
     let Ok(mut guard) = helper_lock().lock() else {
@@ -502,50 +347,11 @@ fn play_via_python(path: &std::path::Path) -> bool {
     }
 
     // If helper died, drop it and fall back to native spawn for this event.
-    crate::diag::log(
-        "audio",
-        "Python audio helper write failed; dropping helper and falling back to native backend.",
-    );
     if let Some(mut dead) = guard.take() {
         let _ = dead.child.kill();
         let _ = dead.child.wait();
     }
     false
-}
-
-fn native_backend_available() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        return command_exists("afplay");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        return command_exists("pw-play")
-            || command_exists("paplay")
-            || command_exists("aplay")
-            || command_exists("ffplay")
-            || command_exists("mpv");
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return command_exists("powershell");
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        false
-    }
-}
-
-fn selected_audio_mode() -> AudioBackendMode {
-    match std::env::var("ROBCOS_AUDIO_BACKEND")
-        .ok()
-        .map(|v| v.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("native") | Some("os") => AudioBackendMode::Native,
-        Some("python") | Some("playsound") => AudioBackendMode::Python,
-        _ => AudioBackendMode::Auto,
-    }
 }
 
 fn has_helper_process() -> bool {
@@ -580,55 +386,28 @@ fn play_nonblocking(path: PathBuf) {
         return;
     }
 
-    let mode = selected_audio_mode();
-    crate::diag::log_once(
-        &format!("audio-mode:{mode:?}"),
-        "audio",
-        &format!(
-            "Audio backend mode: {mode:?} (native_available={})",
-            native_backend_available()
-        ),
-    );
-
-    let native_first = match mode {
-        AudioBackendMode::Native => true,
-        AudioBackendMode::Python => false,
-        AudioBackendMode::Auto => {
-            #[cfg(target_os = "linux")]
-            {
-                true
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                false
-            }
-        }
-    };
-
-    if !native_first && play_via_python(&path) {
-        return;
-    }
-
-    if native_backend_available() {
-        // Soft cap to avoid runaway process spawning on held keys.
-        let prev = ACTIVE.fetch_add(1, Ordering::Relaxed);
-        if prev < MAX_CONCURRENT && run_spawn(path.clone()) {
-            return;
-        }
-        if prev >= MAX_CONCURRENT {
-            ACTIVE.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-
     if play_via_python(&path) {
         return;
     }
 
-    crate::diag::log_once(
-        "audio-no-usable-backend",
-        "audio",
-        "No usable audio backend succeeded (native + python failed).",
-    );
+    if python_has_playsound() {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(120) {
+            if play_via_python(&path) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    // Soft cap to avoid runaway process spawning on held keys.
+    let prev = ACTIVE.fetch_add(1, Ordering::Relaxed);
+    if prev >= MAX_CONCURRENT {
+        ACTIVE.fetch_sub(1, Ordering::Relaxed);
+        return;
+    }
+
+    run_spawn(path);
 }
 
 fn now_ms() -> u64 {
@@ -708,9 +487,19 @@ pub fn play_navigate() {
     if !get_settings().sound {
         return;
     }
-    if !passes_gap(&LAST_NAVIGATE_MS, NAVIGATE_GAP_MS) {
+    let now = now_ms();
+    let prev = LAST_NAVIGATE_MS.swap(now, Ordering::Relaxed);
+
+    // Many callers emit only play_navigate() during key-hold auto-repeat.
+    // When calls bunch up, keep the same nav sound but gate it to avoid overlap.
+    if prev != 0 && now.saturating_sub(prev) <= NAVIGATE_HOLD_WINDOW_MS {
+        if !passes_gap(&LAST_NAV_REPEAT_MS, NAVIGATE_REPEAT_GAP_MS) {
+            return;
+        }
+        play_nonblocking(get_paths().navigate.clone());
         return;
     }
+
     play_nonblocking(get_paths().navigate.clone());
 }
 

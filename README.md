@@ -41,18 +41,13 @@ RobCoOS is an application-layer shell experience, not a full standalone operatin
   - other CLI apps you add to menus
 - Optional audio backend:
   - `python3`
-  - Python module `playsound3`
+  - Python module `playsound`
 
 Platform audio fallbacks:
 
 - macOS: `afplay`
 - Linux: `aplay` or `paplay`
 - Windows: PowerShell `Media.SoundPlayer`
-
-Runtime diagnostics log (PTY/audio launch root-cause tracing):
-
-- Linux/macOS: `~/.local/share/robcos/diagnostics.log`
-- Override path: `ROBCOS_DIAG_PATH=/absolute/path/to/robcos.log`
 
 ## Build
 
