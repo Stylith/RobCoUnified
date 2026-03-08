@@ -39,16 +39,18 @@ use super::prompt::{
 };
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
-    draw_embedded_pty, spawn_embedded_pty_with_options, NativePtyState, PtyScreenEvent,
+    draw_embedded_pty, draw_embedded_pty_in_ui, spawn_embedded_pty_with_options, NativePtyState,
+    PtyScreenEvent,
 };
 use super::retro_ui::{configure_visuals, current_palette, RetroScreen};
-use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
+use super::settings_screen::{
+    run_terminal_settings_screen, TerminalSettingsEvent, TerminalSettingsPanel,
+};
 use super::shell_actions::{
     resolve_login_selection, resolve_main_menu_action, LoginSelectionAction,
     MainMenuSelectionAction,
 };
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
-use super::terminal::{launch_plan, launch_terminal_mode};
 use super::user_management::{
     handle_selection as handle_user_management_selection,
     screen_for_mode as user_management_screen_for_mode, UserManagementAction,
@@ -57,12 +59,20 @@ use crate::config::ConnectionKind;
 use crate::config::{
     cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
     persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
-    update_settings, OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
+    update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopPtyProfileSettings,
+    OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
 };
-use crate::connections::{connect_connection, network_requires_password, DiscoveredConnection};
-use crate::core::auth::{ensure_default_admin, load_users, read_session, save_users, UserRecord};
+use crate::connections::{
+    connect_connection, discovered_row_label, forget_saved_connection, network_requires_password,
+    refresh_discovered_connections, saved_connections, saved_row_label, DiscoveredConnection,
+};
+use crate::core::auth::{
+    ensure_default_admin, load_users, read_session, save_users, AuthMethod, UserRecord,
+};
 use crate::core::hacking::HackingGame;
-use crate::default_apps::{parse_custom_command_line, set_binding_for_slot, DefaultAppSlot};
+use crate::default_apps::{
+    binding_label, parse_custom_command_line, set_binding_for_slot, slot_label, DefaultAppSlot,
+};
 use crate::session;
 use chrono::Local;
 use eframe::egui::{
@@ -131,6 +141,54 @@ struct SettingsWindow {
     open: bool,
     draft: Settings,
     status: String,
+    panel: NativeSettingsPanel,
+    default_app_custom_text_code: String,
+    default_app_custom_ebook: String,
+    scanned_networks: Vec<DiscoveredConnection>,
+    scanned_bluetooth: Vec<DiscoveredConnection>,
+    connection_password: String,
+    edit_target: EditMenuTarget,
+    edit_name_input: String,
+    edit_value_input: String,
+    cli_profile_slot: GuiCliProfileSlot,
+    user_selected: String,
+    user_selected_loaded_for: String,
+    user_create_username: String,
+    user_create_auth: AuthMethod,
+    user_create_password: String,
+    user_create_password_confirm: String,
+    user_edit_auth: AuthMethod,
+    user_edit_password: String,
+    user_edit_password_confirm: String,
+    user_delete_confirm: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeSettingsPanel {
+    Home,
+    General,
+    Appearance,
+    DefaultApps,
+    Connections,
+    ConnectionsNetwork,
+    ConnectionsBluetooth,
+    CliProfiles,
+    EditMenus,
+    UserManagement,
+    UserManagementViewUsers,
+    UserManagementCreateUser,
+    UserManagementEditUsers,
+    UserManagementEditCurrentUser,
+    About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiCliProfileSlot {
+    Default,
+    Calcurse,
+    SpotifyPlayer,
+    Ranger,
+    Reddit,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -145,29 +203,136 @@ struct TerminalModeWindow {
     status: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DesktopWindow {
     FileManager,
     Editor,
     Settings,
     Applications,
+    NukeCodes,
     TerminalMode,
+    PtyApp,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DesktopWindowState {
+    minimized: bool,
+    maximized: bool,
+    restore_pos: Option<[f32; 2]>,
+    restore_size: Option<[f32; 2]>,
+    apply_restore: bool,
+    generation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartMenuSection {
-    Programs,
-    System,
-    Session,
+enum DesktopHeaderAction {
+    None,
+    Minimize,
+    ToggleMaximize,
+    Close,
 }
 
-impl StartMenuSection {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Programs => "Programs",
-            Self::System => "System",
-            Self::Session => "Session",
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartSubmenu {
+    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartLeaf {
+    Applications,
+    Documents,
+    Network,
+    Games,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartSystemAction {
+    ProgramInstaller,
+    Terminal,
+    FileManager,
+    Settings,
+    Connections,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartRootAction {
+    ReturnToTerminal,
+    Logout,
+    Shutdown,
+}
+
+#[derive(Debug, Clone)]
+enum StartLeafAction {
+    None,
+    LaunchNukeCodes,
+    OpenTextEditor,
+    LaunchConfiguredApp(String),
+    OpenDocumentCategory(PathBuf),
+    LaunchNetworkProgram(String),
+    LaunchGameProgram(String),
+}
+
+#[derive(Debug, Clone)]
+struct StartLeafItem {
+    label: String,
+    action: StartLeafAction,
+}
+
+const START_ROOT_ITEMS: [&str; 8] = [
+    "Applications",
+    "Documents",
+    "Network",
+    "Games",
+    "System",
+    "Return To Terminal Mode",
+    "Logout",
+    "Shutdown",
+];
+
+const START_ROOT_VIS_ROWS: [Option<usize>; 9] = [
+    Some(0),
+    Some(1),
+    Some(2),
+    Some(3),
+    Some(4),
+    None,
+    Some(5),
+    Some(6),
+    Some(7),
+];
+
+const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 5] = [
+    ("Program Installer", StartSystemAction::ProgramInstaller),
+    ("Terminal", StartSystemAction::Terminal),
+    ("File Manager", StartSystemAction::FileManager),
+    ("Settings", StartSystemAction::Settings),
+    ("Connections", StartSystemAction::Connections),
+];
+
+fn start_root_leaf_for_idx(idx: usize) -> Option<StartLeaf> {
+    match idx {
+        0 => Some(StartLeaf::Applications),
+        1 => Some(StartLeaf::Documents),
+        2 => Some(StartLeaf::Network),
+        3 => Some(StartLeaf::Games),
+        _ => None,
+    }
+}
+
+fn start_root_submenu_for_idx(idx: usize) -> Option<StartSubmenu> {
+    if idx == 4 {
+        Some(StartSubmenu::System)
+    } else {
+        None
+    }
+}
+
+fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
+    match idx {
+        5 => Some(StartRootAction::ReturnToTerminal),
+        6 => Some(StartRootAction::Logout),
+        7 => Some(StartRootAction::Shutdown),
+        _ => None,
     }
 }
 
@@ -299,10 +464,18 @@ pub struct RobcoNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    desktop_nuke_codes_open: bool,
     terminal_mode: TerminalModeWindow,
+    desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
     desktop_active_window: Option<DesktopWindow>,
+    desktop_start_button_rect: Option<egui::Rect>,
+    start_root_panel_height: f32,
     start_open: bool,
-    start_section: StartMenuSection,
+    start_selected_root: usize,
+    start_system_selected: usize,
+    start_leaf_selected: usize,
+    start_open_submenu: Option<StartSubmenu>,
+    start_open_leaf: Option<StartLeaf>,
     desktop_mode_open: bool,
     main_menu_idx: usize,
     terminal_screen: TerminalScreen,
@@ -316,6 +489,7 @@ pub struct RobcoNativeApp {
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
+    terminal_settings_panel: TerminalSettingsPanel,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
     terminal_default_apps_idx: usize,
@@ -331,6 +505,7 @@ pub struct RobcoNativeApp {
     terminal_flash: Option<TerminalFlash>,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
+    desktop_window_generation_seed: u64,
     shell_status: String,
 }
 
@@ -339,11 +514,18 @@ struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    desktop_nuke_codes_open: bool,
     terminal_mode: TerminalModeWindow,
+    desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
     desktop_active_window: Option<DesktopWindow>,
     desktop_mode_open: bool,
+    start_root_panel_height: f32,
     start_open: bool,
-    start_section: StartMenuSection,
+    start_selected_root: usize,
+    start_system_selected: usize,
+    start_leaf_selected: usize,
+    start_open_submenu: Option<StartSubmenu>,
+    start_open_leaf: Option<StartLeaf>,
     main_menu_idx: usize,
     terminal_screen: TerminalScreen,
     terminal_apps_idx: usize,
@@ -356,6 +538,7 @@ struct ParkedSessionState {
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_settings_idx: usize,
+    terminal_settings_panel: TerminalSettingsPanel,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
     terminal_default_apps_idx: usize,
@@ -370,6 +553,7 @@ struct ParkedSessionState {
     terminal_flash: Option<TerminalFlash>,
     session_leader_until: Option<Instant>,
     suppress_next_menu_submit: bool,
+    desktop_window_generation_seed: u64,
     shell_status: String,
 }
 
@@ -402,12 +586,40 @@ impl Default for RobcoNativeApp {
                 open: false,
                 draft: settings_draft,
                 status: String::new(),
+                panel: NativeSettingsPanel::Home,
+                default_app_custom_text_code: String::new(),
+                default_app_custom_ebook: String::new(),
+                scanned_networks: Vec::new(),
+                scanned_bluetooth: Vec::new(),
+                connection_password: String::new(),
+                edit_target: EditMenuTarget::Applications,
+                edit_name_input: String::new(),
+                edit_value_input: String::new(),
+                cli_profile_slot: GuiCliProfileSlot::Default,
+                user_selected: String::new(),
+                user_selected_loaded_for: String::new(),
+                user_create_username: String::new(),
+                user_create_auth: AuthMethod::Password,
+                user_create_password: String::new(),
+                user_create_password_confirm: String::new(),
+                user_edit_auth: AuthMethod::Password,
+                user_edit_password: String::new(),
+                user_edit_password_confirm: String::new(),
+                user_delete_confirm: String::new(),
             },
             applications: ApplicationsWindow::default(),
+            desktop_nuke_codes_open: false,
             terminal_mode: TerminalModeWindow::default(),
+            desktop_window_states: HashMap::new(),
             desktop_active_window: None,
+            desktop_start_button_rect: None,
+            start_root_panel_height: 260.0,
             start_open: true,
-            start_section: StartMenuSection::Programs,
+            start_selected_root: 0,
+            start_system_selected: 0,
+            start_leaf_selected: 0,
+            start_open_submenu: None,
+            start_open_leaf: None,
             desktop_mode_open: false,
             main_menu_idx: 0,
             terminal_screen: TerminalScreen::MainMenu,
@@ -421,6 +633,7 @@ impl Default for RobcoNativeApp {
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
             terminal_settings_idx: 0,
+            terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
             terminal_default_apps_idx: 0,
@@ -436,12 +649,90 @@ impl Default for RobcoNativeApp {
             terminal_flash: None,
             session_leader_until: None,
             session_runtime: HashMap::new(),
+            desktop_window_generation_seed: 1,
             shell_status: String::new(),
         }
     }
 }
 
 impl RobcoNativeApp {
+    fn default_app_custom_value(binding: &DefaultAppBinding) -> String {
+        match binding {
+            DefaultAppBinding::CustomArgv { argv } => argv.join(" "),
+            _ => String::new(),
+        }
+    }
+
+    fn reset_desktop_settings_window(&mut self) {
+        self.settings.draft = current_settings();
+        self.settings.status.clear();
+        self.settings.panel = NativeSettingsPanel::Home;
+        self.settings.default_app_custom_text_code =
+            Self::default_app_custom_value(&self.settings.draft.default_apps.text_code);
+        self.settings.default_app_custom_ebook =
+            Self::default_app_custom_value(&self.settings.draft.default_apps.ebook);
+        self.settings.scanned_networks.clear();
+        self.settings.scanned_bluetooth.clear();
+        self.settings.connection_password.clear();
+        self.settings.edit_target = EditMenuTarget::Applications;
+        self.settings.edit_name_input.clear();
+        self.settings.edit_value_input.clear();
+        self.settings.cli_profile_slot = GuiCliProfileSlot::Default;
+        self.settings.user_create_username.clear();
+        self.settings.user_create_auth = AuthMethod::Password;
+        self.settings.user_create_password.clear();
+        self.settings.user_create_password_confirm.clear();
+        self.settings.user_edit_password.clear();
+        self.settings.user_edit_password_confirm.clear();
+        self.settings.user_delete_confirm.clear();
+        let mut users: Vec<String> = load_users().keys().cloned().collect();
+        users.sort();
+        self.settings.user_selected = self
+            .session
+            .as_ref()
+            .map(|s| s.username.clone())
+            .filter(|name| users.iter().any(|user| user == name))
+            .or_else(|| users.first().cloned())
+            .unwrap_or_default();
+        self.settings.user_selected_loaded_for.clear();
+        self.settings.user_edit_auth = AuthMethod::Password;
+    }
+
+    fn gui_cli_profile_slot_label(slot: GuiCliProfileSlot) -> &'static str {
+        match slot {
+            GuiCliProfileSlot::Default => "Default",
+            GuiCliProfileSlot::Calcurse => "Calcurse",
+            GuiCliProfileSlot::SpotifyPlayer => "Spotify Player",
+            GuiCliProfileSlot::Ranger => "Ranger",
+            GuiCliProfileSlot::Reddit => "Reddit",
+        }
+    }
+
+    fn gui_cli_profile_mut(
+        profiles: &mut crate::config::DesktopCliProfiles,
+        slot: GuiCliProfileSlot,
+    ) -> &mut DesktopPtyProfileSettings {
+        match slot {
+            GuiCliProfileSlot::Default => &mut profiles.default,
+            GuiCliProfileSlot::Calcurse => &mut profiles.calcurse,
+            GuiCliProfileSlot::SpotifyPlayer => &mut profiles.spotify_player,
+            GuiCliProfileSlot::Ranger => &mut profiles.ranger,
+            GuiCliProfileSlot::Reddit => &mut profiles.reddit,
+        }
+    }
+
+    fn apply_global_retro_menu_chrome(ctx: &Context) {
+        let palette = current_palette();
+        let stroke = egui::Stroke::new(2.0, palette.fg);
+        ctx.style_mut(|style| {
+            style.visuals.window_stroke = stroke;
+            style.visuals.window_rounding = egui::Rounding::ZERO;
+            style.visuals.menu_rounding = egui::Rounding::ZERO;
+            style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+            style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        });
+    }
+
     fn session_idx_from_digit_key(key: Key) -> Option<usize> {
         match key {
             Key::Num1 => Some(0),
@@ -484,11 +775,18 @@ impl RobcoNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             applications: self.applications.clone(),
+            desktop_nuke_codes_open: self.desktop_nuke_codes_open,
             terminal_mode: self.terminal_mode.clone(),
+            desktop_window_states: self.desktop_window_states.clone(),
             desktop_active_window: self.desktop_active_window,
             desktop_mode_open: self.desktop_mode_open,
+            start_root_panel_height: self.start_root_panel_height,
             start_open: self.start_open,
-            start_section: self.start_section,
+            start_selected_root: self.start_selected_root,
+            start_system_selected: self.start_system_selected,
+            start_leaf_selected: self.start_leaf_selected,
+            start_open_submenu: self.start_open_submenu,
+            start_open_leaf: self.start_open_leaf,
             main_menu_idx: self.main_menu_idx,
             terminal_screen: self.terminal_screen,
             terminal_apps_idx: self.terminal_apps_idx,
@@ -501,6 +799,7 @@ impl RobcoNativeApp {
             terminal_pty: self.terminal_pty.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
             terminal_settings_idx: self.terminal_settings_idx,
+            terminal_settings_panel: self.terminal_settings_panel,
             terminal_edit_menus: std::mem::take(&mut self.terminal_edit_menus),
             terminal_connections: std::mem::take(&mut self.terminal_connections),
             terminal_default_apps_idx: self.terminal_default_apps_idx,
@@ -515,6 +814,7 @@ impl RobcoNativeApp {
             terminal_flash: self.terminal_flash.take(),
             session_leader_until: self.session_leader_until.take(),
             suppress_next_menu_submit: self.suppress_next_menu_submit,
+            desktop_window_generation_seed: self.desktop_window_generation_seed,
             shell_status: std::mem::take(&mut self.shell_status),
         };
         self.session_runtime.insert(idx, parked);
@@ -548,11 +848,18 @@ impl RobcoNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.applications = parked.applications;
+        self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.terminal_mode = parked.terminal_mode;
+        self.desktop_window_states = parked.desktop_window_states;
         self.desktop_active_window = parked.desktop_active_window;
         self.desktop_mode_open = parked.desktop_mode_open;
+        self.start_root_panel_height = parked.start_root_panel_height;
         self.start_open = parked.start_open;
-        self.start_section = parked.start_section;
+        self.start_selected_root = parked.start_selected_root;
+        self.start_system_selected = parked.start_system_selected;
+        self.start_leaf_selected = parked.start_leaf_selected;
+        self.start_open_submenu = parked.start_open_submenu;
+        self.start_open_leaf = parked.start_open_leaf;
         self.main_menu_idx = parked.main_menu_idx;
         self.terminal_screen = parked.terminal_screen;
         self.terminal_apps_idx = parked.terminal_apps_idx;
@@ -565,6 +872,7 @@ impl RobcoNativeApp {
         self.terminal_pty = parked.terminal_pty;
         self.terminal_installer = parked.terminal_installer;
         self.terminal_settings_idx = parked.terminal_settings_idx;
+        self.terminal_settings_panel = parked.terminal_settings_panel;
         self.terminal_edit_menus = parked.terminal_edit_menus;
         self.terminal_connections = parked.terminal_connections;
         self.terminal_default_apps_idx = parked.terminal_default_apps_idx;
@@ -579,6 +887,7 @@ impl RobcoNativeApp {
         self.terminal_flash = parked.terminal_flash;
         self.session_leader_until = parked.session_leader_until;
         self.suppress_next_menu_submit = parked.suppress_next_menu_submit;
+        self.desktop_window_generation_seed = parked.desktop_window_generation_seed;
         self.shell_status = parked.shell_status;
         true
     }
@@ -774,37 +1083,226 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => self.editor.open,
             DesktopWindow::Settings => self.settings.open,
             DesktopWindow::Applications => self.applications.open,
+            DesktopWindow::NukeCodes => self.desktop_nuke_codes_open,
             DesktopWindow::TerminalMode => self.terminal_mode.open,
+            DesktopWindow::PtyApp => self.terminal_pty.is_some(),
         }
     }
 
+    fn desktop_window_state(&self, window: DesktopWindow) -> DesktopWindowState {
+        self.desktop_window_states
+            .get(&window)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn desktop_window_state_mut(&mut self, window: DesktopWindow) -> &mut DesktopWindowState {
+        self.desktop_window_states.entry(window).or_default()
+    }
+
+    fn desktop_window_generation(&self, window: DesktopWindow) -> u64 {
+        self.desktop_window_states
+            .get(&window)
+            .map(|state| state.generation)
+            .unwrap_or(0)
+    }
+
+    fn next_desktop_window_generation(&mut self) -> u64 {
+        let generation = self.desktop_window_generation_seed;
+        self.desktop_window_generation_seed =
+            self.desktop_window_generation_seed.wrapping_add(1).max(1);
+        generation
+    }
+
+    fn desktop_window_is_minimized(&self, window: DesktopWindow) -> bool {
+        self.desktop_window_is_open(window) && self.desktop_window_state(window).minimized
+    }
+
+    fn desktop_window_is_maximized(&self, window: DesktopWindow) -> bool {
+        self.desktop_window_is_open(window) && self.desktop_window_state(window).maximized
+    }
+
+    fn set_desktop_window_minimized(&mut self, window: DesktopWindow, minimized: bool) {
+        if !self.desktop_window_is_open(window) {
+            return;
+        }
+        let state = self.desktop_window_state_mut(window);
+        state.minimized = minimized;
+        if minimized {
+            if self.desktop_active_window == Some(window) {
+                self.desktop_active_window = self.first_open_desktop_window();
+            }
+        } else {
+            self.desktop_active_window = Some(window);
+        }
+    }
+
+    fn take_desktop_window_restore_dims(
+        &mut self,
+        window: DesktopWindow,
+    ) -> Option<(egui::Pos2, egui::Vec2)> {
+        let state = self.desktop_window_state_mut(window);
+        if state.maximized || !state.apply_restore {
+            return None;
+        }
+        state.apply_restore = false;
+        let pos = state.restore_pos?;
+        let size = state.restore_size?;
+        Some((egui::pos2(pos[0], pos[1]), egui::vec2(size[0], size[1])))
+    }
+
+    fn note_desktop_window_rect(&mut self, window: DesktopWindow, rect: egui::Rect) {
+        let state = self.desktop_window_state_mut(window);
+        state.restore_pos = Some([rect.min.x, rect.min.y]);
+        let restore_size = Self::desktop_window_restore_size(rect);
+        state.restore_size = Some([restore_size.x, restore_size.y]);
+        state.apply_restore = false;
+    }
+
+    fn toggle_desktop_window_maximized(
+        &mut self,
+        window: DesktopWindow,
+        current_rect: Option<egui::Rect>,
+    ) {
+        if !self.desktop_window_is_open(window) {
+            return;
+        }
+        let generation = self.next_desktop_window_generation();
+        let state = self.desktop_window_state_mut(window);
+        if state.maximized {
+            state.maximized = false;
+            state.apply_restore = true;
+            state.generation = generation;
+        } else {
+            if let Some(rect) = current_rect {
+                state.restore_pos = Some([rect.min.x, rect.min.y]);
+                let restore_size = Self::desktop_window_restore_size(rect);
+                state.restore_size = Some([restore_size.x, restore_size.y]);
+            }
+            state.maximized = true;
+            state.apply_restore = false;
+            state.generation = generation;
+        }
+        state.minimized = false;
+        self.desktop_active_window = Some(window);
+    }
+
+    fn desktop_window_restore_size(rect: egui::Rect) -> egui::Vec2 {
+        let margin = Self::desktop_window_frame().total_margin().sum();
+        egui::vec2(
+            (rect.width() - margin.x).max(160.0),
+            (rect.height() - margin.y).max(120.0),
+        )
+    }
+
+    fn desktop_default_window_size(window: DesktopWindow) -> egui::Vec2 {
+        match window {
+            DesktopWindow::FileManager => egui::vec2(700.0, 480.0),
+            DesktopWindow::Editor => egui::vec2(820.0, 560.0),
+            DesktopWindow::Settings => egui::vec2(760.0, 500.0),
+            DesktopWindow::Applications => egui::vec2(700.0, 480.0),
+            DesktopWindow::NukeCodes => egui::vec2(640.0, 420.0),
+            DesktopWindow::TerminalMode => egui::vec2(720.0, 500.0),
+            DesktopWindow::PtyApp => egui::vec2(720.0, 500.0),
+        }
+    }
+
+    fn desktop_default_window_pos(
+        ctx: &Context,
+        size: egui::Vec2,
+    ) -> egui::Pos2 {
+        let workspace = Self::desktop_workspace_rect(ctx);
+        let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
+        let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
+        egui::pos2(x, y)
+    }
+
+    fn desktop_clamp_window_size(
+        ctx: &Context,
+        size: egui::Vec2,
+        min_size: egui::Vec2,
+    ) -> egui::Vec2 {
+        let workspace = Self::desktop_workspace_rect(ctx);
+        egui::vec2(
+            size.x.clamp(min_size.x, workspace.width().max(min_size.x)),
+            size.y.clamp(min_size.y, workspace.height().max(min_size.y)),
+        )
+    }
+
+    fn desktop_clamp_window_pos(
+        ctx: &Context,
+        pos: egui::Pos2,
+        size: egui::Vec2,
+    ) -> egui::Pos2 {
+        let workspace = Self::desktop_workspace_rect(ctx);
+        egui::pos2(
+            pos.x.clamp(workspace.left(), (workspace.right() - size.x).max(workspace.left())),
+            pos.y.clamp(workspace.top(), (workspace.bottom() - size.y).max(workspace.top())),
+        )
+    }
+
+    fn prime_desktop_window_defaults(&mut self, window: DesktopWindow) {
+        let generation = self.next_desktop_window_generation();
+        let state = self.desktop_window_state_mut(window);
+        state.restore_pos = None;
+        state.restore_size = None;
+        state.apply_restore = false;
+        state.maximized = false;
+        state.minimized = false;
+        state.generation = generation;
+    }
+
     fn set_desktop_window_open(&mut self, window: DesktopWindow, open: bool) {
+        let was_open = self.desktop_window_is_open(window);
         match window {
             DesktopWindow::FileManager => self.file_manager.open = open,
             DesktopWindow::Editor => self.editor.open = open,
             DesktopWindow::Settings => self.settings.open = open,
             DesktopWindow::Applications => self.applications.open = open,
+            DesktopWindow::NukeCodes => self.desktop_nuke_codes_open = open,
             DesktopWindow::TerminalMode => self.terminal_mode.open = open,
+            DesktopWindow::PtyApp => {
+                if !open {
+                    if let Some(mut pty) = self.terminal_pty.take() {
+                        pty.session.terminate();
+                    }
+                }
+            }
+        }
+        if !open {
+            self.desktop_window_states.remove(&window);
+        } else if !was_open && self.desktop_window_is_open(window) {
+            let generation = self.next_desktop_window_generation();
+            let state = self.desktop_window_state_mut(window);
+            state.minimized = false;
+            state.maximized = false;
+            state.generation = generation;
+        } else {
+            self.desktop_window_states.entry(window).or_default();
         }
     }
 
     fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        const ORDER: [DesktopWindow; 5] = [
+        const ORDER: [DesktopWindow; 7] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
+            DesktopWindow::NukeCodes,
             DesktopWindow::TerminalMode,
+            DesktopWindow::PtyApp,
         ];
         ORDER
             .into_iter()
-            .find(|window| self.desktop_window_is_open(*window))
+            .find(|window| self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window))
     }
 
     fn sync_desktop_active_window(&mut self) {
         if self
             .desktop_active_window
-            .is_some_and(|window| !self.desktop_window_is_open(window))
+            .is_some_and(|window| {
+                !self.desktop_window_is_open(window) || self.desktop_window_is_minimized(window)
+            })
         {
             self.desktop_active_window = self.first_open_desktop_window();
             return;
@@ -815,10 +1313,33 @@ impl RobcoNativeApp {
     }
 
     fn open_desktop_window(&mut self, window: DesktopWindow) {
+        if matches!(window, DesktopWindow::Settings) {
+            self.reset_desktop_settings_window();
+            self.prime_desktop_window_defaults(window);
+        } else if !self.desktop_window_is_open(window)
+            && matches!(window, DesktopWindow::TerminalMode | DesktopWindow::PtyApp)
+        {
+            self.prime_desktop_window_defaults(window);
+        }
         self.set_desktop_window_open(window, true);
+        self.set_desktop_window_minimized(window, false);
         self.desktop_active_window = Some(window);
         if self.desktop_mode_open {
-            self.start_open = false;
+            self.close_start_menu();
+        }
+    }
+
+    fn maybe_activate_desktop_window_from_click(
+        &mut self,
+        ctx: &Context,
+        window: DesktopWindow,
+        contains_pointer: bool,
+    ) {
+        let clicked_inside = ctx.input(|i| {
+            (i.pointer.primary_clicked() || i.pointer.secondary_clicked()) && contains_pointer
+        });
+        if clicked_inside {
+            self.desktop_active_window = Some(window);
         }
     }
 
@@ -841,30 +1362,286 @@ impl RobcoNativeApp {
             self.open_desktop_window(window);
             return;
         }
-        if self.desktop_active_window == Some(window) {
-            self.close_desktop_window(window);
+        if self.desktop_window_is_minimized(window) {
+            self.set_desktop_window_minimized(window, false);
+            self.close_start_menu();
         } else {
             self.desktop_active_window = Some(window);
-            self.start_open = false;
+            self.close_start_menu();
         }
     }
 
     fn desktop_taskbar_label(&self, window: DesktopWindow) -> String {
-        let base = match window {
-            DesktopWindow::FileManager => "Files",
-            DesktopWindow::Editor => "Editor",
-            DesktopWindow::Settings => "Settings",
-            DesktopWindow::Applications => "Apps",
-            DesktopWindow::TerminalMode => "Terminal",
-        };
-        let open = self.desktop_window_is_open(window);
-        let active = self.desktop_active_window == Some(window);
-        if active {
-            format!("[{base}*]")
-        } else if open {
-            format!("[{base}+]")
-        } else {
-            format!("[{base}]")
+        self.desktop_window_title(window)
+    }
+
+    fn desktop_window_title(&self, window: DesktopWindow) -> String {
+        match window {
+            DesktopWindow::FileManager => "File Manager".to_string(),
+            DesktopWindow::Editor => "ROBCO Word Processor".to_string(),
+            DesktopWindow::Settings => "Settings".to_string(),
+            DesktopWindow::Applications => "Applications".to_string(),
+            DesktopWindow::NukeCodes => "Nuke Codes".to_string(),
+            DesktopWindow::TerminalMode => "Terminal".to_string(),
+            DesktopWindow::PtyApp => self
+                .terminal_pty
+                .as_ref()
+                .map(|pty| pty.title.clone())
+                .unwrap_or_else(|| "PTY App".to_string()),
+        }
+    }
+
+    fn desktop_app_menu_name(&self) -> String {
+        self.desktop_active_window
+            .map(|w| self.desktop_window_title(w))
+            .unwrap_or_else(|| "Desktop".to_string())
+    }
+
+    fn open_start_menu(&mut self) {
+        self.start_open = true;
+        self.start_selected_root = 0;
+        self.start_system_selected = 0;
+        self.start_leaf_selected = 0;
+        self.start_open_submenu = None;
+        self.start_open_leaf = None;
+    }
+
+    fn close_start_menu(&mut self) {
+        self.start_open = false;
+        self.start_open_submenu = None;
+        self.start_open_leaf = None;
+    }
+
+    fn set_start_panel_for_root(&mut self, root_idx: usize) {
+        self.start_selected_root = root_idx.min(START_ROOT_ITEMS.len().saturating_sub(1));
+        self.start_open_leaf = start_root_leaf_for_idx(self.start_selected_root);
+        self.start_open_submenu = start_root_submenu_for_idx(self.start_selected_root);
+        self.start_leaf_selected = 0;
+        self.start_system_selected = 0;
+    }
+
+    fn start_system_items(&self) -> Vec<(&'static str, StartSystemAction)> {
+        START_SYSTEM_ITEMS
+            .iter()
+            .copied()
+            .filter(|(_, action)| {
+                !matches!(action, StartSystemAction::Connections)
+                    || !crate::connections::macos_connections_disabled()
+            })
+            .collect()
+    }
+
+    fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<StartLeafItem> {
+        match leaf {
+            StartLeaf::Applications => {
+                let mut items = Vec::new();
+                if self.settings.draft.builtin_menu_visibility.nuke_codes {
+                    items.push(StartLeafItem {
+                        label: BUILTIN_NUKE_CODES_APP.to_string(),
+                        action: StartLeafAction::LaunchNukeCodes,
+                    });
+                }
+                if self.settings.draft.builtin_menu_visibility.text_editor {
+                    items.push(StartLeafItem {
+                        label: BUILTIN_TEXT_EDITOR_APP.to_string(),
+                        action: StartLeafAction::OpenTextEditor,
+                    });
+                }
+                for name in app_names() {
+                    if name == BUILTIN_NUKE_CODES_APP || name == BUILTIN_TEXT_EDITOR_APP {
+                        continue;
+                    }
+                    items.push(StartLeafItem {
+                        label: name.clone(),
+                        action: StartLeafAction::LaunchConfiguredApp(name),
+                    });
+                }
+                if items.is_empty() {
+                    items.push(StartLeafItem {
+                        label: "(No applications)".to_string(),
+                        action: StartLeafAction::None,
+                    });
+                }
+                items
+            }
+            StartLeaf::Documents => {
+                let mut items = Vec::new();
+                if let Some(session) = &self.session {
+                    items.push(StartLeafItem {
+                        label: "My Documents".to_string(),
+                        action: StartLeafAction::OpenDocumentCategory(word_processor_dir(
+                            &session.username,
+                        )),
+                    });
+                }
+                let categories = load_categories();
+                for key in Self::sorted_keys(&categories) {
+                    if let Some(path) = categories.get(&key).and_then(|v| v.as_str()) {
+                        items.push(StartLeafItem {
+                            label: key,
+                            action: StartLeafAction::OpenDocumentCategory(PathBuf::from(path)),
+                        });
+                    }
+                }
+                if items.is_empty() {
+                    items.push(StartLeafItem {
+                        label: "(No documents)".to_string(),
+                        action: StartLeafAction::None,
+                    });
+                }
+                items
+            }
+            StartLeaf::Network => {
+                let mut items = Vec::new();
+                for key in Self::sorted_keys(&load_networks()) {
+                    items.push(StartLeafItem {
+                        label: key.clone(),
+                        action: StartLeafAction::LaunchNetworkProgram(key),
+                    });
+                }
+                if items.is_empty() {
+                    items.push(StartLeafItem {
+                        label: "(No network apps)".to_string(),
+                        action: StartLeafAction::None,
+                    });
+                }
+                items
+            }
+            StartLeaf::Games => {
+                let mut items = Vec::new();
+                for key in Self::sorted_keys(&load_games()) {
+                    items.push(StartLeafItem {
+                        label: key.clone(),
+                        action: StartLeafAction::LaunchGameProgram(key),
+                    });
+                }
+                if items.is_empty() {
+                    items.push(StartLeafItem {
+                        label: "(No games installed)".to_string(),
+                        action: StartLeafAction::None,
+                    });
+                }
+                items
+            }
+        }
+    }
+
+    fn open_file_manager_at(&mut self, path: PathBuf) {
+        if !path.is_dir() {
+            self.shell_status = format!("Error: '{}' not found.", path.display());
+            return;
+        }
+        self.file_manager.set_cwd(path);
+        self.file_manager.selected = None;
+        self.open_desktop_window(DesktopWindow::FileManager);
+    }
+
+    fn launch_named_program_from_map(
+        &mut self,
+        name: &str,
+        map: &serde_json::Map<String, Value>,
+        status_label: &str,
+    ) {
+        match resolve_program_command(name, map) {
+            Ok(cmd) => self.open_desktop_pty(status_label, &cmd),
+            Err(err) => self.shell_status = err,
+        }
+    }
+
+    fn open_desktop_nuke_codes(&mut self) {
+        if matches!(self.terminal_nuke_codes, NukeCodesView::Unloaded) {
+            self.terminal_nuke_codes = fetch_nuke_codes();
+        }
+        self.open_desktop_window(DesktopWindow::NukeCodes);
+    }
+
+    fn run_start_root_action(&mut self, action: StartRootAction) {
+        match action {
+            StartRootAction::ReturnToTerminal => {
+                self.close_start_menu();
+                self.desktop_mode_open = false;
+            }
+            StartRootAction::Logout => {
+                self.close_start_menu();
+                self.begin_logout();
+            }
+            StartRootAction::Shutdown => {
+                self.close_start_menu();
+                self.queue_terminal_flash("Shutting down...", 800, FlashAction::ExitApp);
+            }
+        }
+    }
+
+    fn run_start_system_action(&mut self, action: StartSystemAction) {
+        match action {
+            StartSystemAction::ProgramInstaller => {
+                self.close_start_menu();
+                self.desktop_mode_open = false;
+                self.terminal_installer.reset();
+                self.navigate_to_screen(TerminalScreen::ProgramInstaller);
+                self.shell_status.clear();
+            }
+            StartSystemAction::Terminal => self.open_desktop_terminal_shell(),
+            StartSystemAction::FileManager => self.open_desktop_window(DesktopWindow::FileManager),
+            StartSystemAction::Settings => self.open_desktop_window(DesktopWindow::Settings),
+            StartSystemAction::Connections => {
+                if crate::connections::macos_connections_disabled() {
+                    self.shell_status =
+                        crate::connections::macos_connections_disabled_hint().to_string();
+                } else {
+                    self.close_start_menu();
+                    self.open_desktop_window(DesktopWindow::Settings);
+                    self.settings.panel = NativeSettingsPanel::Connections;
+                    self.shell_status.clear();
+                }
+            }
+        }
+    }
+
+    fn run_start_leaf_action(&mut self, action: StartLeafAction) {
+        match action {
+            StartLeafAction::None => {}
+            StartLeafAction::LaunchNukeCodes => {
+                self.close_start_menu();
+                self.open_desktop_nuke_codes();
+            }
+            StartLeafAction::OpenTextEditor => {
+                if self.editor.path.is_none() {
+                    self.new_document();
+                } else {
+                    self.open_desktop_window(DesktopWindow::Editor);
+                }
+            }
+            StartLeafAction::LaunchConfiguredApp(name) => {
+                let apps = load_apps();
+                match resolve_program_command(&name, &apps) {
+                    Ok(cmd) => self.open_desktop_pty(&name, &cmd),
+                    Err(err) => self.shell_status = err,
+                }
+            }
+            StartLeafAction::OpenDocumentCategory(path) => self.open_file_manager_at(path),
+            StartLeafAction::LaunchNetworkProgram(name) => {
+                self.launch_named_program_from_map(&name, &load_networks(), &name);
+            }
+            StartLeafAction::LaunchGameProgram(name) => {
+                self.launch_named_program_from_map(&name, &load_games(), &name);
+            }
+        }
+    }
+
+    fn open_manual_file(&mut self, path: &str, status_label: &str) {
+        let manual = PathBuf::from(path);
+        match read_text_file(&manual) {
+            Ok(text) => {
+                self.editor.path = Some(manual);
+                self.editor.text = text;
+                self.editor.dirty = false;
+                self.editor.status = format!("Opened {status_label}.");
+                self.open_desktop_window(DesktopWindow::Editor);
+            }
+            Err(err) => {
+                self.shell_status = format!("{status_label} unavailable: {err}");
+            }
         }
     }
 
@@ -874,28 +1651,37 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => self.draw_editor(ctx),
             DesktopWindow::Settings => self.draw_settings(ctx),
             DesktopWindow::Applications => self.draw_applications(ctx),
+            DesktopWindow::NukeCodes => self.draw_nuke_codes_window(ctx),
             DesktopWindow::TerminalMode => self.draw_terminal_mode(ctx),
+            DesktopWindow::PtyApp => self.draw_desktop_pty_window(ctx),
         }
     }
 
     fn draw_desktop_windows(&mut self, ctx: &Context) {
         self.sync_desktop_active_window();
-        const ORDER: [DesktopWindow; 5] = [
+        const ORDER: [DesktopWindow; 7] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
+            DesktopWindow::NukeCodes,
             DesktopWindow::TerminalMode,
+            DesktopWindow::PtyApp,
         ];
         let active = self.desktop_active_window;
         for window in ORDER {
             if Some(window) == active {
                 continue;
             }
+            if self.desktop_window_is_minimized(window) {
+                continue;
+            }
             self.draw_desktop_window_by_kind(ctx, window);
         }
         if let Some(window) = active {
-            self.draw_desktop_window_by_kind(ctx, window);
+            if !self.desktop_window_is_minimized(window) {
+                self.draw_desktop_window_by_kind(ctx, window);
+            }
         }
         self.sync_desktop_active_window();
     }
@@ -922,11 +1708,20 @@ impl RobcoNativeApp {
         self.editor.status.clear();
         self.settings.draft = current_settings();
         self.settings.status.clear();
+        self.settings.panel = NativeSettingsPanel::Home;
+        self.desktop_nuke_codes_open = false;
         self.terminal_mode.status.clear();
+        let launch_default_desktop = matches!(self.settings.draft.default_open_mode, OpenMode::Desktop)
+            && session::take_default_mode_pending_for_active();
+        self.desktop_window_states.clear();
         self.desktop_active_window = None;
-        self.start_open = true;
-        self.start_section = StartMenuSection::Programs;
-        self.desktop_mode_open = false;
+        self.start_open = !launch_default_desktop;
+        self.start_selected_root = 0;
+        self.start_system_selected = 0;
+        self.start_leaf_selected = 0;
+        self.start_open_submenu = None;
+        self.start_open_leaf = None;
+        self.desktop_mode_open = launch_default_desktop;
         self.main_menu_idx = 0;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_apps_idx = 0;
@@ -939,6 +1734,7 @@ impl RobcoNativeApp {
         self.terminal_pty = None;
         self.terminal_installer.reset();
         self.terminal_settings_idx = 0;
+        self.terminal_settings_panel = TerminalSettingsPanel::Home;
         self.terminal_edit_menus.reset();
         self.terminal_connections.reset();
         self.terminal_default_apps_idx = 0;
@@ -976,8 +1772,8 @@ impl RobcoNativeApp {
     }
 
     fn set_user_management_mode(&mut self, mode: UserManagementMode, selected_idx: usize) {
-        let changed =
-            self.terminal_user_management_mode != mode || self.terminal_user_management_idx != selected_idx;
+        let changed = self.terminal_user_management_mode != mode
+            || self.terminal_user_management_idx != selected_idx;
         if changed {
             crate::sound::play_navigate();
         }
@@ -1066,7 +1862,9 @@ impl RobcoNativeApp {
         self.terminate_all_native_pty_children();
         self.terminal_prompt = None;
         self.terminal_screen = TerminalScreen::MainMenu;
+        self.close_start_menu();
         self.desktop_mode_open = false;
+        self.desktop_nuke_codes_open = false;
         self.desktop_active_window = None;
         self.session_leader_until = None;
         self.queue_terminal_flash("Logging out...", 800, FlashAction::FinishLogout);
@@ -1088,9 +1886,17 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.editor.open = false;
         self.settings.open = false;
+        self.settings.panel = NativeSettingsPanel::Home;
         self.applications.open = false;
+        self.desktop_nuke_codes_open = false;
         self.terminal_mode.open = false;
         self.desktop_active_window = None;
+        self.start_open = true;
+        self.start_selected_root = 0;
+        self.start_system_selected = 0;
+        self.start_leaf_selected = 0;
+        self.start_open_submenu = None;
+        self.start_open_leaf = None;
         self.desktop_mode_open = false;
         self.terminal_screen = TerminalScreen::MainMenu;
         self.terminal_apps_idx = 0;
@@ -1101,6 +1907,7 @@ impl RobcoNativeApp {
         self.terminal_nuke_codes = NukeCodesView::default();
         self.terminal_nuke_codes_return = TerminalScreen::Applications;
         self.terminal_settings_idx = 0;
+        self.terminal_settings_panel = TerminalSettingsPanel::Home;
         self.terminal_default_apps_idx = 0;
         self.terminal_connections.reset();
         self.terminal_edit_menus.reset();
@@ -1229,6 +2036,35 @@ impl RobcoNativeApp {
         }
     }
 
+    fn open_desktop_pty(&mut self, title: &str, cmd: &[String]) {
+        if let Some(mut previous) = self.terminal_pty.take() {
+            previous.session.terminate();
+        }
+        let layout = self.terminal_layout();
+        let options = crate::pty::PtyLaunchOptions {
+            force_render_mode: Some(false),
+            ..crate::pty::PtyLaunchOptions::default()
+        };
+        match spawn_embedded_pty_with_options(
+            title,
+            cmd,
+            TerminalScreen::MainMenu,
+            layout.cols as u16,
+            layout.rows.saturating_sub(1) as u16,
+            options,
+        ) {
+            Ok(state) => {
+                self.terminal_pty = Some(state);
+                self.open_desktop_window(DesktopWindow::PtyApp);
+                self.desktop_window_state_mut(DesktopWindow::PtyApp).maximized = false;
+                self.shell_status = format!("Opened {title} in PTY window.");
+            }
+            Err(err) => {
+                self.shell_status = err;
+            }
+        }
+    }
+
     fn open_embedded_terminal_shell(&mut self) {
         let layout = self.terminal_layout();
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
@@ -1268,6 +2104,55 @@ impl RobcoNativeApp {
                 self.terminal_pty = Some(state);
                 self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = "Opened terminal shell in PTY.".to_string();
+            }
+            Err(err) => {
+                self.shell_status = err;
+            }
+        }
+    }
+
+    fn open_desktop_terminal_shell(&mut self) {
+        if let Some(mut previous) = self.terminal_pty.take() {
+            previous.session.terminate();
+        }
+        let layout = self.terminal_layout();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let shell_name = std::path::Path::new(&shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let mut cmd = vec![shell.clone()];
+        match shell_name {
+            "bash" => {
+                cmd.push("--noprofile".to_string());
+                cmd.push("--norc".to_string());
+            }
+            "zsh" => {
+                cmd.push("-f".to_string());
+            }
+            _ => {}
+        }
+        let options = crate::pty::PtyLaunchOptions {
+            env: vec![
+                ("PS1".into(), "> ".into()),
+                ("PROMPT".into(), "> ".into()),
+                ("ZDOTDIR".into(), "/dev/null".into()),
+            ],
+            top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
+            force_render_mode: Some(true),
+        };
+        match spawn_embedded_pty_with_options(
+            "Terminal",
+            &cmd,
+            TerminalScreen::MainMenu,
+            layout.cols as u16,
+            layout.rows.saturating_sub(1) as u16,
+            options,
+        ) {
+            Ok(state) => {
+                self.terminal_pty = Some(state);
+                self.open_desktop_window(DesktopWindow::PtyApp);
+                self.shell_status = "Opened terminal shell in PTY window.".to_string();
             }
             Err(err) => {
                 self.shell_status = err;
@@ -1590,6 +2475,7 @@ impl RobcoNativeApp {
                     }
                     TerminalScreen::Settings => {
                         self.terminal_settings_idx = selected_idx;
+                        self.terminal_settings_panel = TerminalSettingsPanel::Home;
                         self.terminal_settings_choice = None;
                     }
                     TerminalScreen::EditMenus => {}
@@ -1617,6 +2503,7 @@ impl RobcoNativeApp {
             MainMenuSelectionAction::EnterDesktopMode => {
                 crate::sound::play_navigate();
                 self.desktop_mode_open = true;
+                self.close_start_menu();
                 self.sync_desktop_active_window();
                 self.shell_status = "Entered Desktop Mode.".to_string();
             }
@@ -1624,6 +2511,7 @@ impl RobcoNativeApp {
                 self.settings.draft = current_settings();
                 self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
+                self.terminal_settings_panel = TerminalSettingsPanel::Home;
                 self.terminal_connections.reset();
                 self.terminal_default_app_slot = None;
                 self.shell_status.clear();
@@ -2148,22 +3036,181 @@ impl RobcoNativeApp {
     }
 
     fn draw_top_bar(&mut self, ctx: &Context) {
-        let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+        Self::apply_global_retro_menu_chrome(ctx);
+        let app_menu_name = self.desktop_app_menu_name();
         TopBottomPanel::top("native_top_bar")
             .exact_height(30.0)
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let palette = current_palette();
-                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.panel);
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("ROBCO DESKTOP").strong());
-                    if let Some(session) = &self.session {
-                        ui.separator();
-                        let role = if session.is_admin { "ADMIN" } else { "USER" };
-                        ui.label(format!("[{} | {role}]", session.username));
-                    }
+                    Self::apply_top_bar_menu_button_style(ui);
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    ui.menu_button(
+                        RichText::new(app_menu_name.clone())
+                            .strong()
+                            .color(Color32::BLACK),
+                        |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        if let Some(window) = self.desktop_active_window {
+                            if ui.button("Close Focused").clicked() {
+                                self.close_desktop_window(window);
+                                ui.close_menu();
+                            }
+                        } else {
+                            ui.label("No active app");
+                        }
+                        if ui.button("Minimize").clicked() {
+                            if let Some(window) = self.desktop_active_window {
+                                self.set_desktop_window_minimized(window, true);
+                            }
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_space(10.0);
+                    ui.menu_button("File", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        if ui.button("Applications").clicked() {
+                            self.open_desktop_window(DesktopWindow::Applications);
+                            ui.close_menu();
+                        }
+                        if ui.button("Documents").clicked() {
+                            if let Some(session) = &self.session {
+                                self.open_file_manager_at(word_processor_dir(&session.username));
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Logs").clicked() {
+                            self.open_file_manager_at(logs_dir());
+                            ui.close_menu();
+                        }
+                        if ui.button("Network").clicked() {
+                            self.open_start_menu();
+                            self.set_start_panel_for_root(2);
+                            ui.close_menu();
+                        }
+                        if ui.button("Games").clicked() {
+                            self.open_start_menu();
+                            self.set_start_panel_for_root(3);
+                            ui.close_menu();
+                        }
+                        if ui.button("Program Installer").clicked() {
+                            self.run_start_system_action(StartSystemAction::ProgramInstaller);
+                            ui.close_menu();
+                        }
+                        if ui.button("Settings").clicked() {
+                            self.open_desktop_window(DesktopWindow::Settings);
+                            ui.close_menu();
+                        }
+                        Self::retro_separator(ui);
+                        if ui.button("Open Start Menu").clicked() {
+                            self.open_start_menu();
+                            ui.close_menu();
+                        }
+                        if ui.button("My Computer").clicked() {
+                            self.open_desktop_window(DesktopWindow::FileManager);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Edit", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        if self.editor.open {
+                            if ui.button("Save").clicked() {
+                                self.save_editor();
+                                ui.close_menu();
+                            }
+                            if ui.button("New Document").clicked() {
+                                self.new_document();
+                                ui.close_menu();
+                            }
+                            if ui.button("Open File Manager").clicked() {
+                                self.open_desktop_window(DesktopWindow::FileManager);
+                                ui.close_menu();
+                            }
+                        } else if self.file_manager.open {
+                            if ui.button("Open Selected").clicked() {
+                                self.activate_file_manager_selection();
+                                ui.close_menu();
+                            }
+                            if ui.button("New Document").clicked() {
+                                self.new_document();
+                                ui.close_menu();
+                            }
+                        } else {
+                            let _ = ui.add_enabled(false, egui::Button::new("No edit actions"));
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        if ui.button("My Computer").clicked() {
+                            self.open_desktop_window(DesktopWindow::FileManager);
+                            ui.close_menu();
+                        }
+                        if ui.button("Toggle Start Menu").clicked() {
+                            if self.start_open {
+                                self.close_start_menu();
+                            } else {
+                                self.open_start_menu();
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Settings").clicked() {
+                            self.open_desktop_window(DesktopWindow::Settings);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("Window", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        for window in [
+                            DesktopWindow::FileManager,
+                            DesktopWindow::Editor,
+                            DesktopWindow::Settings,
+                            DesktopWindow::Applications,
+                            DesktopWindow::NukeCodes,
+                            DesktopWindow::PtyApp,
+                        ] {
+                            let open = self.desktop_window_is_open(window);
+                            let active = self.desktop_active_window == Some(window);
+                            let marker = if active {
+                                "active"
+                            } else if open {
+                                "open"
+                            } else {
+                                "closed"
+                            };
+                            let label = format!("{marker}: {}", self.desktop_window_title(window));
+                            if ui.button(label).clicked() {
+                                if window == DesktopWindow::Editor
+                                    && !self.desktop_window_is_open(DesktopWindow::Editor)
+                                    && self.editor.path.is_none()
+                                {
+                                    self.new_document();
+                                } else if !open {
+                                    self.open_desktop_window(window);
+                                } else {
+                                    self.desktop_active_window = Some(window);
+                                    self.close_start_menu();
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button("Help", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        if ui.button("App Manual").clicked() {
+                            self.open_manual_file("README.md", "App Manual");
+                            ui.close_menu();
+                        }
+                        if ui.button("User Manual").clicked() {
+                            self.open_manual_file("USER_MANUAL.md", "User Manual");
+                            ui.close_menu();
+                        }
+                    });
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(now);
+                        let now = Local::now().format("%a %d %b %H:%M").to_string();
+                        ui.label(RichText::new(now).color(Color32::BLACK));
                     });
                 });
             });
@@ -2173,83 +3220,167 @@ impl RobcoNativeApp {
         if !self.start_open {
             return;
         }
-        egui::Area::new(Id::new("native_start_panel"))
-            .anchor(Align2::LEFT_BOTTOM, [8.0, -40.0])
+        const ROOT_W: f32 = 230.0;
+        const SUB_W: f32 = 190.0;
+        const LEAF_W: f32 = 210.0;
+        const ROW_H: f32 = 22.0;
+        const TITLE_H: f32 = 42.0;
+        const PANEL_PAD_H: f32 = 16.0;
+        const TASKBAR_H: f32 = 32.0;
+        const ROOT_LEFT: f32 = 8.0;
+        const EDGE_PAD: f32 = 8.0;
+
+        let palette = current_palette();
+        let screen = ctx.screen_rect();
+        let taskbar_top = screen.bottom() - TASKBAR_H;
+        let root_x = self
+            .desktop_start_button_rect
+            .map(|rect| rect.left().max(screen.left() + ROOT_LEFT))
+            .unwrap_or(screen.left() + ROOT_LEFT);
+        let root_y = (taskbar_top - self.start_root_panel_height).max(screen.top() + EDGE_PAD);
+        let mut branch_anchor_y = screen.top() + EDGE_PAD;
+        let mut branch_x = root_x + ROOT_W - 2.0;
+        let mut root_rect: Option<egui::Rect> = None;
+
+        egui::Area::new(Id::new("native_start_root_panel"))
+            .fixed_pos([root_x, root_y])
             .interactable(true)
             .show(ctx, |ui| {
-                let palette = current_palette();
-                egui::Frame::none()
+                let frame = egui::Frame::none()
                     .fill(palette.panel)
-                    .stroke(egui::Stroke::new(1.0, palette.fg))
-                    .inner_margin(egui::Margin::same(8.0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.label(RichText::new("Start").strong());
-                        ui.separator();
-                        ui.horizontal_top(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_min_width(150.0);
-                                for section in [
-                                    StartMenuSection::Programs,
-                                    StartMenuSection::System,
-                                    StartMenuSection::Session,
-                                ] {
-                                    let selected = self.start_section == section;
-                                    let suffix = if selected { "*" } else { ">" };
-                                    let label = format!("[ {} {} ]", section.label(), suffix);
-                                    if ui.selectable_label(selected, label).clicked() {
-                                        self.start_section = section;
+                    .stroke(egui::Stroke::new(2.0, palette.fg))
+                    .inner_margin(egui::Margin::same(8.0));
+                let frame_response = frame.show(ui, |ui| {
+                    Self::apply_start_menu_highlight_style(ui);
+                    ui.set_min_width(ROOT_W);
+                    ui.set_max_width(ROOT_W);
+                    ui.label(RichText::new("Start").strong().color(palette.fg));
+                    Self::retro_separator(ui);
+
+                    for row in START_ROOT_VIS_ROWS {
+                        match row {
+                            Some(idx) => {
+                                let label = START_ROOT_ITEMS[idx];
+                                let has_panel = start_root_leaf_for_idx(idx).is_some()
+                                    || start_root_submenu_for_idx(idx).is_some();
+                                let suffix = if has_panel { " >" } else { "" };
+                                let selected = self.start_selected_root == idx;
+                                let response = ui.selectable_label(
+                                    selected,
+                                    RichText::new(format!(" {label}{suffix}")).color(if selected {
+                                        Color32::BLACK
+                                    } else {
+                                        palette.fg
+                                    }),
+                                );
+                                if response.hovered() {
+                                    self.set_start_panel_for_root(idx);
+                                }
+                                if response.clicked() {
+                                    if let Some(action) = start_root_action_for_idx(idx) {
+                                        self.run_start_root_action(action);
+                                    } else if has_panel {
+                                        self.set_start_panel_for_root(idx);
                                     }
                                 }
-                            });
-
-                            ui.separator();
-
-                            ui.vertical(|ui| {
-                                ui.set_min_width(230.0);
-                                match self.start_section {
-                                    StartMenuSection::Programs => {
-                                        if ui.button("[ New Document ]").clicked() {
-                                            self.new_document();
-                                            self.start_open = false;
-                                        }
-                                        if ui.button("[ ROBCO Word Processor ]").clicked() {
-                                            if self.editor.path.is_none() {
-                                                self.new_document();
-                                            } else {
-                                                self.open_desktop_window(DesktopWindow::Editor);
-                                            }
-                                        }
-                                        if ui.button("[ File Manager ]").clicked() {
-                                            self.open_desktop_window(DesktopWindow::FileManager);
-                                        }
-                                        if ui.button("[ Applications ]").clicked() {
-                                            self.open_desktop_window(DesktopWindow::Applications);
-                                        }
-                                    }
-                                    StartMenuSection::System => {
-                                        if ui.button("[ Settings ]").clicked() {
-                                            self.open_desktop_window(DesktopWindow::Settings);
-                                        }
-                                        if ui.button("[ Terminal Mode ]").clicked() {
-                                            self.open_desktop_window(DesktopWindow::TerminalMode);
-                                        }
-                                    }
-                                    StartMenuSection::Session => {
-                                        if ui.button("[ Return to Terminal ]").clicked() {
-                                            self.desktop_mode_open = false;
-                                            self.start_open = false;
-                                        }
-                                        if ui.button("[ Log Out ]").clicked() {
-                                            self.start_open = false;
-                                            self.begin_logout();
-                                        }
-                                    }
+                                if self.start_selected_root == idx {
+                                    branch_anchor_y = response.rect.top() - 2.0;
                                 }
-                            });
-                        });
-                    });
+                            }
+                            None => {
+                                Self::retro_separator(ui);
+                            }
+                        }
+                    }
+                });
+                root_rect = Some(frame_response.response.rect);
+                self.start_root_panel_height = frame_response.response.rect.height();
+                branch_anchor_y = frame_response.response.rect.top() + TITLE_H;
+                branch_x = frame_response.response.rect.right() - 2.0;
             });
+        let Some(root_rect) = root_rect else {
+            return;
+        };
+
+        if let Some(submenu) = self.start_open_submenu {
+            if submenu == StartSubmenu::System {
+                let items = self.start_system_items();
+                self.start_system_selected = self
+                    .start_system_selected
+                    .min(items.len().saturating_sub(1));
+                let sub_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
+                let sub_y =
+                    branch_anchor_y.clamp(screen.top() + EDGE_PAD, root_rect.bottom() - sub_h);
+                egui::Area::new(Id::new("native_start_submenu_panel"))
+                    .fixed_pos([branch_x, sub_y])
+                    .interactable(true)
+                    .show(ctx, |ui| {
+                        egui::Frame::none()
+                            .fill(palette.panel)
+                            .stroke(egui::Stroke::new(2.0, palette.fg))
+                            .inner_margin(egui::Margin::same(8.0))
+                            .show(ui, |ui| {
+                                Self::apply_start_menu_highlight_style(ui);
+                                ui.set_min_width(SUB_W);
+                                ui.set_max_width(SUB_W);
+                                for (idx, (label, action)) in items.iter().enumerate() {
+                                    let selected = self.start_system_selected == idx;
+                                    let response = ui.selectable_label(
+                                        selected,
+                                        RichText::new(format!(" {label}")).color(if selected {
+                                            Color32::BLACK
+                                        } else {
+                                            palette.fg
+                                        }),
+                                    );
+                                    if response.hovered() {
+                                        self.start_system_selected = idx;
+                                    }
+                                    if response.clicked() {
+                                        self.run_start_system_action(*action);
+                                    }
+                                }
+                            });
+                    });
+            }
+        } else if let Some(leaf) = self.start_open_leaf {
+            let items = self.start_leaf_items(leaf);
+            self.start_leaf_selected = self.start_leaf_selected.min(items.len().saturating_sub(1));
+            let leaf_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
+            let leaf_y =
+                branch_anchor_y.clamp(screen.top() + EDGE_PAD, root_rect.bottom() - leaf_h);
+            egui::Area::new(Id::new("native_start_leaf_panel"))
+                .fixed_pos([branch_x, leaf_y])
+                .interactable(true)
+                .show(ctx, |ui| {
+                    egui::Frame::none()
+                        .fill(palette.panel)
+                        .stroke(egui::Stroke::new(2.0, palette.fg))
+                        .inner_margin(egui::Margin::same(8.0))
+                        .show(ui, |ui| {
+                            Self::apply_start_menu_highlight_style(ui);
+                            ui.set_min_width(LEAF_W);
+                            ui.set_max_width(LEAF_W);
+                            for (idx, item) in items.iter().enumerate() {
+                                let selected = self.start_leaf_selected == idx;
+                                let response = ui.selectable_label(
+                                    selected,
+                                    RichText::new(format!(" {}", item.label)).color(if selected {
+                                        Color32::BLACK
+                                    } else {
+                                        palette.fg
+                                    }),
+                                );
+                                if response.hovered() {
+                                    self.start_leaf_selected = idx;
+                                }
+                                if response.clicked() {
+                                    self.run_start_leaf_action(item.action.clone());
+                                }
+                            }
+                        });
+                });
+        }
     }
 
     fn draw_desktop(&mut self, ctx: &Context) {
@@ -2261,63 +3392,63 @@ impl RobcoNativeApp {
             )
             .show(ctx, |ui| {
                 let palette = current_palette();
-                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    if ui.button("[ My Files ]").clicked() {
-                        self.open_desktop_window(DesktopWindow::FileManager);
-                    }
-                    if ui.button("[ ROBCO Word Processor ]").clicked() {
-                        if self.editor.path.is_none() {
-                            self.new_document();
-                        } else {
-                            self.open_desktop_window(DesktopWindow::Editor);
-                        }
-                    }
-                    if ui.button("[ Settings ]").clicked() {
-                        self.open_desktop_window(DesktopWindow::Settings);
-                    }
-                    if ui.button("[ Applications ]").clicked() {
-                        self.open_desktop_window(DesktopWindow::Applications);
-                    }
-                    if ui.button("[ Terminal Mode ]").clicked() {
-                        self.open_desktop_window(DesktopWindow::TerminalMode);
-                    }
-                });
+                let rect = ui.max_rect();
+                let response = ui.allocate_rect(rect, egui::Sense::click());
+                ui.painter().rect_filled(rect, 0.0, palette.bg);
+                if response.clicked() {
+                    self.close_start_menu();
+                }
             });
     }
 
     fn draw_desktop_taskbar(&mut self, ctx: &Context) {
-        let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+        const WINDOW_ORDER: [DesktopWindow; 6] = [
+            DesktopWindow::FileManager,
+            DesktopWindow::Editor,
+            DesktopWindow::Settings,
+            DesktopWindow::Applications,
+            DesktopWindow::NukeCodes,
+            DesktopWindow::PtyApp,
+        ];
+        self.sync_desktop_active_window();
         TopBottomPanel::bottom("native_desktop_taskbar")
             .exact_height(32.0)
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let palette = current_palette();
-                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.panel);
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
 
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(if self.start_open {
-                            "[Start*]"
-                        } else {
-                            "[Start]"
-                        })
-                        .clicked()
-                    {
-                        self.start_open = !self.start_open;
+                    Self::apply_desktop_panel_button_style(ui);
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let start_response = ui.add(
+                        egui::Label::new(
+                            RichText::new("[Start]")
+                                .strong()
+                                .monospace()
+                                .color(Color32::BLACK),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    self.desktop_start_button_rect = Some(start_response.rect);
+                    if start_response.clicked() {
                         if self.start_open {
-                            self.start_section = StartMenuSection::Programs;
+                            self.close_start_menu();
+                        } else {
+                            self.open_start_menu();
                         }
                     }
-                    for window in [
-                        DesktopWindow::FileManager,
-                        DesktopWindow::Editor,
-                        DesktopWindow::Settings,
-                        DesktopWindow::Applications,
-                        DesktopWindow::TerminalMode,
-                    ] {
-                        if ui.button(self.desktop_taskbar_label(window)).clicked() {
+                    ui.label(RichText::new("|").monospace().color(Color32::BLACK));
+                    ui.add_space(8.0);
+                    for window in WINDOW_ORDER {
+                        if !self.desktop_window_is_open(window) {
+                            continue;
+                        }
+                        let label = self.desktop_taskbar_label(window);
+                        // Taskbar chrome renders the "active" look in the inverse branch.
+                        let active = self.desktop_active_window != Some(window);
+                        if Self::desktop_bar_button(ui, label, active, false).clicked() {
                             let opening_editor = window == DesktopWindow::Editor
                                 && !self.desktop_window_is_open(DesktopWindow::Editor)
                                 && self.editor.path.is_none();
@@ -2328,10 +3459,6 @@ impl RobcoNativeApp {
                             }
                         }
                     }
-
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(now);
-                    });
                 });
             });
     }
@@ -2560,6 +3687,7 @@ impl RobcoNativeApp {
             ctx,
             &mut self.settings.draft,
             &mut self.terminal_settings_idx,
+            &mut self.terminal_settings_panel,
             &mut self.terminal_settings_choice,
             self.session.as_ref().is_some_and(|s| s.is_admin),
             &self.shell_status,
@@ -2644,6 +3772,8 @@ impl RobcoNativeApp {
             EditMenusEvent::None => {}
             EditMenusEvent::BackToSettings => {
                 self.navigate_to_screen(TerminalScreen::Settings);
+                self.terminal_settings_panel = TerminalSettingsPanel::Applications;
+                self.terminal_settings_idx = 0;
                 self.shell_status.clear();
             }
             EditMenusEvent::ToggleBuiltinNukeCodes => {
@@ -2698,6 +3828,8 @@ impl RobcoNativeApp {
             ConnectionsEvent::None => {}
             ConnectionsEvent::BackToSettings => {
                 self.navigate_to_screen(TerminalScreen::Settings);
+                self.terminal_settings_panel = TerminalSettingsPanel::System;
+                self.terminal_settings_idx = 0;
                 self.shell_status.clear();
             }
             ConnectionsEvent::OpenNetworkGroups => {
@@ -2807,6 +3939,8 @@ impl RobcoNativeApp {
             DefaultAppsEvent::None => {}
             DefaultAppsEvent::Back => {
                 self.navigate_to_screen(TerminalScreen::Settings);
+                self.terminal_settings_panel = TerminalSettingsPanel::Applications;
+                self.terminal_settings_idx = 0;
                 self.shell_status.clear();
             }
             DefaultAppsEvent::OpenSlot(slot) => {
@@ -2855,6 +3989,8 @@ impl RobcoNativeApp {
             layout.content_col,
         ) {
             self.navigate_to_screen(TerminalScreen::Settings);
+            self.terminal_settings_panel = TerminalSettingsPanel::System;
+            self.terminal_settings_idx = 0;
             self.shell_status.clear();
         }
     }
@@ -3150,6 +4286,8 @@ impl RobcoNativeApp {
                 }
                 UserManagementAction::BackToSettings => {
                     self.navigate_to_screen(TerminalScreen::Settings);
+                    self.terminal_settings_panel = TerminalSettingsPanel::System;
+                    self.terminal_settings_idx = 0;
                     self.terminal_user_management_idx = 0;
                 }
                 UserManagementAction::CreateWithMethod { username, method } => match method {
@@ -3321,6 +4459,15 @@ impl RobcoNativeApp {
             .show(ctx, |_ui| {});
     }
 
+    fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
+        const TOP_BAR_H: f32 = 30.0;
+        const TASKBAR_H: f32 = 32.0;
+        let screen = ctx.screen_rect();
+        let top = screen.top() + TOP_BAR_H;
+        let bottom = (screen.bottom() - TASKBAR_H).max(top + 120.0);
+        egui::Rect::from_min_max(egui::pos2(screen.left(), top), egui::pos2(screen.right(), bottom))
+    }
+
     fn desktop_window_frame() -> egui::Frame {
         let palette = current_palette();
         egui::Frame::none()
@@ -3329,43 +4476,450 @@ impl RobcoNativeApp {
             .inner_margin(egui::Margin::same(6.0))
     }
 
-    fn draw_desktop_window_header(ui: &mut egui::Ui, title: &str) -> bool {
+    fn desktop_bar_button(
+        ui: &mut egui::Ui,
+        label: impl Into<String>,
+        active: bool,
+        bold: bool,
+    ) -> egui::Response {
         let palette = current_palette();
-        let mut close_clicked = false;
+        let label = label.into();
+        let fill = if active { palette.fg } else { palette.panel };
+        let text = if active {
+            RichText::new(label.clone()).color(Color32::BLACK)
+        } else {
+            RichText::new(label.clone()).color(palette.fg)
+        };
+        let text = if bold { text.strong() } else { text };
+        let response = ui.add(
+            egui::Button::new(text)
+                .fill(fill)
+                .stroke(egui::Stroke::new(2.0, palette.fg)),
+        );
+        if active {
+            let text = if bold {
+                RichText::new(label).strong()
+            } else {
+                RichText::new(label)
+            };
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            ui.painter().text(
+                response.rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text.text(),
+                font,
+                Color32::BLACK,
+            );
+        }
+        response
+    }
+
+    fn retro_separator(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let desired = egui::vec2(ui.available_width().max(1.0), 2.0);
+        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, palette.fg);
+        ui.add_space(2.0);
+    }
+
+    fn apply_top_bar_menu_button_style(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let mut style = ui.style().as_ref().clone();
+        style.visuals.button_frame = false;
+        style.visuals.override_text_color = Some(Color32::BLACK);
+        style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.noninteractive.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.noninteractive.expansion = 0.0;
+        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.inactive.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.expansion = 0.0;
+        for visuals in [
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            visuals.bg_fill = palette.selected_bg;
+            visuals.weak_bg_fill = palette.selected_bg;
+            visuals.bg_stroke = egui::Stroke::NONE;
+            visuals.fg_stroke.color = Color32::BLACK;
+            visuals.rounding = egui::Rounding::ZERO;
+            visuals.expansion = 0.0;
+        }
+        ui.set_style(style);
+    }
+
+    fn apply_top_dropdown_menu_style(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let mut style = ui.style().as_ref().clone();
+        let stroke = egui::Stroke::new(2.0, palette.fg);
+        style.visuals.button_frame = true;
+        style.visuals.window_fill = palette.panel;
+        style.visuals.window_stroke = stroke;
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.override_text_color = None;
+        style.spacing.item_spacing.y = 0.0;
+        style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.noninteractive.fg_stroke.color = palette.fg;
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.noninteractive.expansion = 0.0;
+        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.widgets.inactive.fg_stroke.color = palette.fg;
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.expansion = 0.0;
+        for visuals in [
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            visuals.bg_fill = palette.fg;
+            visuals.weak_bg_fill = palette.fg;
+            visuals.bg_stroke = egui::Stroke::NONE;
+            visuals.fg_stroke.color = Color32::BLACK;
+            visuals.rounding = egui::Rounding::ZERO;
+            visuals.expansion = 0.0;
+        }
+        ui.set_style(style);
+    }
+
+    fn apply_desktop_panel_button_style(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let mut style = ui.style().as_ref().clone();
+        let stroke = egui::Stroke::new(2.0, palette.fg);
+        style.visuals.override_text_color = None;
+        style.visuals.window_stroke = stroke;
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.selection.bg_fill = palette.panel;
+        style.visuals.selection.stroke = stroke;
+        style.visuals.widgets.noninteractive.bg_fill = palette.panel;
+        style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
+        style.visuals.widgets.noninteractive.bg_stroke = stroke;
+        style.visuals.widgets.noninteractive.fg_stroke = stroke;
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.noninteractive.expansion = 0.0;
+        style.visuals.widgets.inactive.bg_fill = palette.panel;
+        style.visuals.widgets.inactive.weak_bg_fill = palette.panel;
+        style.visuals.widgets.inactive.bg_stroke = stroke;
+        style.visuals.widgets.inactive.fg_stroke = stroke;
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.expansion = 0.0;
+        for visuals in [
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            visuals.bg_fill = palette.panel;
+            visuals.weak_bg_fill = palette.panel;
+            visuals.bg_stroke = stroke;
+            visuals.fg_stroke = stroke;
+            visuals.rounding = egui::Rounding::ZERO;
+            visuals.expansion = 0.0;
+        }
+        ui.set_style(style);
+    }
+
+    fn apply_start_menu_highlight_style(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let mut style = ui.style().as_ref().clone();
+        let stroke = egui::Stroke::new(2.0, palette.fg);
+        style.visuals.window_stroke = stroke;
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.selection.bg_fill = palette.fg;
+        style.visuals.selection.stroke = stroke;
+        style.visuals.widgets.noninteractive.bg_fill = palette.panel;
+        style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
+        style.visuals.widgets.noninteractive.bg_stroke = stroke;
+        style.visuals.widgets.noninteractive.fg_stroke = stroke;
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.noninteractive.expansion = 0.0;
+        style.visuals.widgets.inactive.bg_fill = palette.panel;
+        style.visuals.widgets.inactive.weak_bg_fill = palette.panel;
+        style.visuals.widgets.inactive.bg_stroke = stroke;
+        style.visuals.widgets.inactive.fg_stroke = stroke;
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.expansion = 0.0;
+        style.visuals.widgets.hovered.bg_fill = palette.fg;
+        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
+        style.visuals.widgets.hovered.bg_stroke = stroke;
+        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.hovered.expansion = 0.0;
+        style.visuals.widgets.active.bg_fill = palette.fg;
+        style.visuals.widgets.active.weak_bg_fill = palette.fg;
+        style.visuals.widgets.active.bg_stroke = stroke;
+        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.active.expansion = 0.0;
+        style.visuals.widgets.open.bg_fill = palette.fg;
+        style.visuals.widgets.open.weak_bg_fill = palette.fg;
+        style.visuals.widgets.open.bg_stroke = stroke;
+        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.open.expansion = 0.0;
+        ui.set_style(style);
+    }
+
+    fn apply_settings_control_style(ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let mut style = ui.style().as_ref().clone();
+        let stroke = egui::Stroke::new(2.0, palette.fg);
+        style.visuals.override_text_color = None;
+        style.visuals.window_fill = Color32::BLACK;
+        style.visuals.panel_fill = Color32::BLACK;
+        style.visuals.faint_bg_color = Color32::BLACK;
+        style.visuals.extreme_bg_color = Color32::BLACK;
+        style.visuals.code_bg_color = Color32::BLACK;
+        style.visuals.window_stroke = stroke;
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.selection.bg_fill = palette.fg;
+        style.visuals.selection.stroke = stroke;
+        style.visuals.hyperlink_color = palette.fg;
+        style.visuals.text_cursor.stroke = stroke;
+        style.visuals.widgets.noninteractive.bg_fill = Color32::BLACK;
+        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::BLACK;
+        style.visuals.widgets.noninteractive.bg_stroke = stroke;
+        style.visuals.widgets.noninteractive.fg_stroke = stroke;
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.noninteractive.expansion = 0.0;
+        style.visuals.widgets.inactive.bg_fill = Color32::BLACK;
+        style.visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
+        style.visuals.widgets.inactive.bg_stroke = stroke;
+        style.visuals.widgets.inactive.fg_stroke = stroke;
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.expansion = 0.0;
+        style.visuals.widgets.hovered.bg_fill = palette.fg;
+        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
+        style.visuals.widgets.hovered.bg_stroke = stroke;
+        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.hovered.expansion = 0.0;
+        style.visuals.widgets.active.bg_fill = palette.fg;
+        style.visuals.widgets.active.weak_bg_fill = palette.fg;
+        style.visuals.widgets.active.bg_stroke = stroke;
+        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.active.expansion = 0.0;
+        style.visuals.widgets.open.bg_fill = palette.fg;
+        style.visuals.widgets.open.weak_bg_fill = palette.fg;
+        style.visuals.widgets.open.bg_stroke = stroke;
+        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.open.expansion = 0.0;
+        ui.set_style(style);
+    }
+
+    fn retro_choice_button(
+        ui: &mut egui::Ui,
+        label: impl Into<String>,
+        selected: bool,
+    ) -> egui::Response {
+        let palette = current_palette();
+        let label = label.into();
+        let button = if selected {
+            egui::Button::new(label.clone())
+                .fill(palette.fg)
+                .stroke(egui::Stroke::new(2.0, palette.fg))
+        } else {
+            egui::Button::new(label.clone()).stroke(egui::Stroke::new(2.0, palette.fg))
+        };
+        let response = ui.add(button);
+        if selected {
+            let font = TextStyle::Button.resolve(ui.style());
+            ui.painter().text(
+                response.rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                font,
+                Color32::BLACK,
+            );
+        }
+        response
+    }
+
+    fn retro_checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+        let marker = if *value { "[x]" } else { "[ ]" };
+        let response = ui.add(
+            egui::Button::new(format!("{marker} {label}"))
+                .stroke(egui::Stroke::new(2.0, current_palette().fg)),
+        );
+        if response.clicked() {
+            *value = !*value;
+        }
+        response
+    }
+
+    fn retro_settings_tile(
+        ui: &mut egui::Ui,
+        icon: &str,
+        label: &str,
+        enabled: bool,
+        desired: egui::Vec2,
+        icon_font_size: f32,
+        label_font_size: f32,
+    ) -> egui::Response {
+        let palette = current_palette();
+        let sense = if enabled {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(desired, sense);
+        let hovered = enabled && response.hovered();
+        if hovered {
+            ui.painter().rect_filled(rect, 0.0, palette.fg);
+        }
+        let text_color = if hovered { Color32::BLACK } else { palette.fg };
+        ui.painter().text(
+            rect.left_top() + egui::vec2(8.0, desired.y * 0.18),
+            Align2::LEFT_TOP,
+            icon,
+            FontId::new(icon_font_size, FontFamily::Monospace),
+            text_color,
+        );
+        ui.painter().text(
+            rect.left_top() + egui::vec2(8.0, desired.y * 0.52),
+            Align2::LEFT_TOP,
+            label,
+            FontId::new(label_font_size, FontFamily::Monospace),
+            text_color,
+        );
+        response
+    }
+
+    fn retro_full_width_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
+        let palette = current_palette();
+        ui.add_sized(
+            [ui.available_width().max(160.0), 0.0],
+            egui::Button::new(label.into()).stroke(egui::Stroke::new(2.0, palette.fg)),
+        )
+    }
+
+    fn responsive_input_width(
+        ui: &egui::Ui,
+        fraction: f32,
+        min: f32,
+        max: f32,
+    ) -> f32 {
+        (ui.available_width() * fraction).clamp(min, max)
+    }
+
+    fn settings_two_columns<R>(
+        ui: &mut egui::Ui,
+        add_contents: impl FnOnce(&mut egui::Ui, &mut egui::Ui) -> R,
+    ) -> R {
+        let total_w = ui.available_width();
+        let column_gap = 18.0;
+        let column_w = ((total_w - column_gap) * 0.5).max(220.0);
+        ui.columns(2, |columns| {
+            let (left_slice, right_slice) = columns.split_at_mut(1);
+            let left = &mut left_slice[0];
+            let right = &mut right_slice[0];
+            left.set_width(column_w);
+            right.set_width(column_w);
+            add_contents(left, right)
+        })
+    }
+
+    fn settings_section<R>(
+        ui: &mut egui::Ui,
+        title: &str,
+        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> R {
+        let palette = current_palette();
+        egui::Frame::none()
+            .fill(Color32::BLACK)
+            .stroke(egui::Stroke::new(2.0, palette.fg))
+            .inner_margin(egui::Margin::same(10.0))
+            .show(ui, |ui| {
+                ui.strong(title);
+                ui.add_space(8.0);
+                Self::retro_separator(ui);
+                ui.add_space(8.0);
+                add_contents(ui)
+            })
+            .inner
+    }
+
+    fn draw_desktop_window_header(ui: &mut egui::Ui, maximized: bool) -> DesktopHeaderAction {
+        let palette = current_palette();
+        let mut action = DesktopHeaderAction::None;
         egui::Frame::none()
             .fill(palette.panel)
             .stroke(egui::Stroke::new(1.0, palette.fg))
             .inner_margin(egui::Margin::symmetric(6.0, 4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).strong());
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("[X]").clicked() {
-                            close_clicked = true;
+                            action = DesktopHeaderAction::Close;
                         }
-                        let _ = ui.add_enabled(false, egui::Button::new("[+]"));
-                        let _ = ui.add_enabled(false, egui::Button::new("[-]"));
+                        if ui
+                            .small_button(if maximized { "[R]" } else { "[+]" })
+                            .clicked()
+                        {
+                            action = DesktopHeaderAction::ToggleMaximize;
+                        }
+                        if ui.small_button("[-]").clicked() {
+                            action = DesktopHeaderAction::Minimize;
+                        }
                     });
                 });
             });
         ui.add_space(4.0);
-        close_clicked
+        action
     }
 
     fn draw_file_manager(&mut self, ctx: &Context) {
-        if !self.file_manager.open {
+        if !self.file_manager.open || self.desktop_window_is_minimized(DesktopWindow::FileManager) {
             return;
         }
         let mut open = self.file_manager.open;
-        let mut close_from_header = false;
-        egui::Window::new("File Manager")
-            .id(Id::new("native_file_manager"))
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::FileManager);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::FileManager);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::FileManager);
+        let mut window = egui::Window::new("File Manager")
+            .id(Id::new(("native_file_manager", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .default_size([700.0, 480.0])
-            .show(ctx, |ui| {
-                close_from_header |= Self::draw_desktop_window_header(ui, "File Manager");
+            .resizable(true)
+            .default_size([700.0, 480.0]);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let shown = window.show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+                header_action = Self::draw_desktop_window_header(ui, maximized);
+                ui.set_min_size(ui.available_size_before_wrap());
                 ui.horizontal(|ui| {
                     if ui.button("Up").clicked() {
                         self.file_manager.up();
@@ -3387,7 +4941,22 @@ impl RobcoNativeApp {
                         } else {
                             row.label.clone()
                         };
-                        let response = ui.selectable_label(selected, label);
+                        let response = ui.add_sized(
+                            [ui.available_width(), 0.0],
+                            egui::Button::new(
+                                RichText::new(label).color(if selected {
+                                    Color32::BLACK
+                                } else {
+                                    current_palette().fg
+                                }),
+                            )
+                            .fill(if selected {
+                                current_palette().fg
+                            } else {
+                                Color32::BLACK
+                            })
+                            .stroke(egui::Stroke::new(2.0, current_palette().fg)),
+                        );
                         if response.clicked() {
                             self.file_manager.select(Some(row.path.clone()));
                         }
@@ -3407,14 +4976,36 @@ impl RobcoNativeApp {
                     }
                 });
             });
-        if close_from_header {
-            open = false;
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::FileManager,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::FileManager, rect);
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::FileManager, true),
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::FileManager, shown_rect)
+            }
         }
         self.update_desktop_window_state(DesktopWindow::FileManager, open);
     }
 
     fn draw_editor(&mut self, ctx: &Context) {
         if !self.editor.open {
+            return;
+        }
+        if self.desktop_mode_open && self.desktop_window_is_minimized(DesktopWindow::Editor) {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
@@ -3482,15 +5073,31 @@ impl RobcoNativeApp {
         }
 
         let mut open = self.editor.open;
-        let mut close_from_header = false;
-        egui::Window::new(title)
-            .id(Id::new("native_word_processor"))
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::Editor);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Editor);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::Editor);
+        let mut window = egui::Window::new(title)
+            .id(Id::new(("native_word_processor", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .default_size([820.0, 560.0])
-            .show(ctx, |ui| {
-                close_from_header |= Self::draw_desktop_window_header(ui, "ROBCO Word Processor");
+            .resizable(true)
+            .default_size([820.0, 560.0]);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let shown = window.show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+                header_action = Self::draw_desktop_window_header(ui, maximized);
+                ui.set_min_size(ui.available_size_before_wrap());
                 ui.horizontal(|ui| {
                     if ui.button("New").clicked() {
                         self.new_document();
@@ -3519,202 +5126,1592 @@ impl RobcoNativeApp {
                     ui.small(&self.editor.status);
                 }
             });
-        if close_from_header {
-            open = false;
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::Editor,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::Editor, rect);
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Editor, true),
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::Editor, shown_rect)
+            }
         }
         self.update_desktop_window_state(DesktopWindow::Editor, open);
     }
 
     fn draw_settings(&mut self, ctx: &Context) {
-        if !self.settings.open {
+        if !self.settings.open || self.desktop_window_is_minimized(DesktopWindow::Settings) {
             return;
         }
         let mut open = self.settings.open;
-        let mut close_from_header = false;
-        egui::Window::new("Settings")
-            .id(Id::new("native_settings"))
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::Settings);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Settings);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::Settings);
+        let default_size = Self::desktop_default_window_size(DesktopWindow::Settings);
+        let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let mut window = egui::Window::new("Settings")
+            .id(Id::new(("native_settings", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .default_size([500.0, 360.0])
-            .show(ctx, |ui| {
-                close_from_header |= Self::draw_desktop_window_header(ui, "Settings");
-                let mut changed = false;
-                changed |= ui
-                    .checkbox(&mut self.settings.draft.sound, "Sound")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.settings.draft.bootup, "Bootup")
-                    .changed();
-                changed |= ui
-                    .checkbox(
-                        &mut self.settings.draft.show_navigation_hints,
-                        "Show navigation hints",
-                    )
-                    .changed();
+            .resizable(true)
+            .default_pos(default_pos)
+            .default_size(default_size);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            let size = Self::desktop_clamp_window_size(ctx, size, egui::vec2(560.0, 360.0));
+            let pos = Self::desktop_clamp_window_pos(ctx, pos, size);
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let mut close_requested = false;
+        let shown = window.show(ctx, |ui| {
+            Self::apply_settings_control_style(ui);
+            header_action = Self::draw_desktop_window_header(ui, maximized);
+            let is_admin = self.session.as_ref().is_some_and(|s| s.is_admin);
+            let panel = self.settings.panel;
+            let mut changed = false;
+            let mut next_panel = None;
+
+            let panel_title = match panel {
+                NativeSettingsPanel::Home => "Settings",
+                NativeSettingsPanel::General => "General",
+                NativeSettingsPanel::Appearance => "Appearance",
+                NativeSettingsPanel::DefaultApps => "Default Apps",
+                NativeSettingsPanel::Connections => "Connections",
+                NativeSettingsPanel::ConnectionsNetwork => "Network",
+                NativeSettingsPanel::ConnectionsBluetooth => "Bluetooth",
+                NativeSettingsPanel::CliProfiles => "CLI Profiles",
+                NativeSettingsPanel::EditMenus => "Edit Menus",
+                NativeSettingsPanel::UserManagement => "User Management",
+                NativeSettingsPanel::UserManagementViewUsers => "View Users",
+                NativeSettingsPanel::UserManagementCreateUser => "Create User",
+                NativeSettingsPanel::UserManagementEditUsers => "Edit Users",
+                NativeSettingsPanel::UserManagementEditCurrentUser => "Edit Current User",
+                NativeSettingsPanel::About => "About",
+            };
+
+            ui.add_space(4.0);
+            if matches!(panel, NativeSettingsPanel::Home) {
+                ui.label(RichText::new("Settings").strong().size(28.0));
+                ui.add_space(14.0);
+            } else {
                 ui.horizontal(|ui| {
-                    ui.label("Theme");
-                    let mut current_idx = THEMES
-                        .iter()
-                        .position(|(name, _)| *name == self.settings.draft.theme)
-                        .unwrap_or(0);
-                    egui::ComboBox::from_id_salt("native_settings_theme")
-                        .selected_text(THEMES[current_idx].0)
-                        .show_ui(ui, |ui| {
-                            for (idx, (name, _)) in THEMES.iter().enumerate() {
-                                if ui.selectable_value(&mut current_idx, idx, *name).changed() {
-                                    self.settings.draft.theme = (*name).to_string();
-                                    changed = true;
-                                }
-                            }
-                        });
-                });
-                if self.settings.draft.theme == CUSTOM_THEME_NAME {
-                    let mut rgb = self.settings.draft.custom_theme_rgb;
-                    changed |= ui
-                        .add(egui::Slider::new(&mut rgb[0], 0..=255).text("Custom Red"))
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut rgb[1], 0..=255).text("Custom Green"))
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut rgb[2], 0..=255).text("Custom Blue"))
-                        .changed();
-                    if rgb != self.settings.draft.custom_theme_rgb {
-                        self.settings.draft.custom_theme_rgb = rgb;
+                    if ui.button("Back").clicked() {
+                        next_panel = Some(NativeSettingsPanel::Home);
                     }
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Default Open Mode");
-                    changed |= ui
-                        .selectable_value(
-                            &mut self.settings.draft.default_open_mode,
-                            OpenMode::Terminal,
-                            "Terminal",
-                        )
-                        .changed();
-                    changed |= ui
-                        .selectable_value(
-                            &mut self.settings.draft.default_open_mode,
-                            OpenMode::Desktop,
-                            "Desktop",
-                        )
-                        .changed();
+                    ui.strong(panel_title);
                 });
                 ui.separator();
-                if changed {
-                    save_settings(self.settings.draft.clone());
-                    self.settings.status = "Settings saved.".to_string();
+                ui.add_space(4.0);
+            }
+
+            match panel {
+                NativeSettingsPanel::Home => {
+                    let rows: [&[(NativeSettingsPanel, &str, &str, bool)]; 3] = [
+                        &[
+                            (NativeSettingsPanel::General, "General", "[*]", true),
+                            (NativeSettingsPanel::Appearance, "Appearance", "[A]", true),
+                            (NativeSettingsPanel::DefaultApps, "Default Apps", "[D]", true),
+                            (NativeSettingsPanel::Connections, "Connections", "[C]", true),
+                        ],
+                        &[
+                            (NativeSettingsPanel::CliProfiles, "CLI Profiles", "[=]", true),
+                            (NativeSettingsPanel::EditMenus, "Edit Menus", "[M]", true),
+                            (
+                                NativeSettingsPanel::UserManagement,
+                                "User Management",
+                                "[U]",
+                                is_admin,
+                            ),
+                            (NativeSettingsPanel::About, "About", "[i]", true),
+                        ],
+                        &[(NativeSettingsPanel::Home, "Close", "[X]", true)],
+                    ];
+                    let tile_w = 140.0;
+                    let tile_h = 112.0;
+                    let gap_x = 34.0;
+                    let row_gap = 24.0;
+                    let icon_font_size = 22.0;
+                    let label_font_size = 22.0;
+
+                    ui.add_space(6.0);
+
+                    for (row_idx, row) in rows.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap_x;
+                            for (panel, label, icon, enabled) in *row {
+                                let response = Self::retro_settings_tile(
+                                    ui,
+                                    icon,
+                                    label,
+                                    *enabled,
+                                    egui::vec2(tile_w, tile_h),
+                                    icon_font_size,
+                                    label_font_size,
+                                );
+                                if response.clicked() {
+                                    if *label == "Close" {
+                                        close_requested = true;
+                                    } else {
+                                        next_panel = Some(*panel);
+                                    }
+                                }
+                            }
+                            for _ in row.len()..4 {
+                                ui.add_space(tile_w);
+                            }
+                        });
+                        ui.add_space(if row_idx == rows.len() - 1 { 0.0 } else { row_gap });
+                    }
+                    if !is_admin {
+                        ui.small("User Management requires an admin session.");
+                    }
                 }
-                if !self.settings.status.is_empty() {
-                    ui.small(&self.settings.status);
+                _ => {
+                    let body_max_height = ui.available_height().max(120.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .max_height(body_max_height)
+                        .show(ui, |ui| match panel {
+                            NativeSettingsPanel::General => {
+                                Self::settings_two_columns(ui, |left, right| {
+                                    Self::settings_section(left, "Startup", |left| {
+                                        left.label("Default Open Mode");
+                                        left.horizontal(|ui| {
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Terminal",
+                                                self.settings.draft.default_open_mode
+                                                    == OpenMode::Terminal,
+                                            )
+                                            .clicked()
+                                                && self.settings.draft.default_open_mode
+                                                    != OpenMode::Terminal
+                                            {
+                                                self.settings.draft.default_open_mode =
+                                                    OpenMode::Terminal;
+                                                changed = true;
+                                            }
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Desktop",
+                                                self.settings.draft.default_open_mode
+                                                    == OpenMode::Desktop,
+                                            )
+                                            .clicked()
+                                                && self.settings.draft.default_open_mode
+                                                    != OpenMode::Desktop
+                                            {
+                                                self.settings.draft.default_open_mode =
+                                                    OpenMode::Desktop;
+                                                changed = true;
+                                            }
+                                        });
+                                        left.add_space(8.0);
+                                        left.small("Choose which interface opens first after login.");
+                                    });
+
+                                    Self::settings_section(right, "Options", |right| {
+                                        if Self::retro_checkbox_row(
+                                            right,
+                                            &mut self.settings.draft.sound,
+                                            "Enable sound",
+                                        )
+                                        .clicked()
+                                        {
+                                            changed = true;
+                                        }
+                                        if Self::retro_checkbox_row(
+                                            right,
+                                            &mut self.settings.draft.bootup,
+                                            "Play bootup on login",
+                                        )
+                                        .clicked()
+                                        {
+                                            changed = true;
+                                        }
+                                        if Self::retro_checkbox_row(
+                                            right,
+                                            &mut self.settings.draft.show_navigation_hints,
+                                            "Show navigation hints",
+                                        )
+                                        .clicked()
+                                        {
+                                            changed = true;
+                                        }
+                                    });
+                                });
+                            }
+                            NativeSettingsPanel::Appearance => {
+                                Self::settings_two_columns(ui, |left, right| {
+                                    Self::settings_section(left, "Theme", |left| {
+                                        left.horizontal(|ui| {
+                                            ui.label("Theme");
+                                            let mut current_idx = THEMES
+                                                .iter()
+                                                .position(|(name, _)| *name == self.settings.draft.theme)
+                                                .unwrap_or(0);
+                                            egui::ComboBox::from_id_salt("native_settings_theme")
+                                                .selected_text(
+                                                    RichText::new(THEMES[current_idx].0)
+                                                        .color(current_palette().fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (idx, (name, _)) in THEMES.iter().enumerate() {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            *name,
+                                                            current_idx == idx,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            current_idx = idx;
+                                                            self.settings.draft.theme =
+                                                                (*name).to_string();
+                                                            changed = true;
+                                                            ui.close_menu();
+                                                        }
+                                                    }
+                                                });
+                                        });
+                                        if self.settings.draft.theme == CUSTOM_THEME_NAME {
+                                            let mut rgb = self.settings.draft.custom_theme_rgb;
+                                            changed |= left
+                                                .add(
+                                                    egui::Slider::new(&mut rgb[0], 0..=255)
+                                                        .text("Custom Red"),
+                                                )
+                                                .changed();
+                                            changed |= left
+                                                .add(
+                                                    egui::Slider::new(&mut rgb[1], 0..=255)
+                                                        .text("Custom Green"),
+                                                )
+                                                .changed();
+                                            changed |= left
+                                                .add(
+                                                    egui::Slider::new(&mut rgb[2], 0..=255)
+                                                        .text("Custom Blue"),
+                                                )
+                                                .changed();
+                                            if rgb != self.settings.draft.custom_theme_rgb {
+                                                self.settings.draft.custom_theme_rgb = rgb;
+                                            }
+                                        }
+                                    });
+
+                                    Self::settings_section(right, "PTY Display", |right| {
+                                        if Self::retro_checkbox_row(
+                                            right,
+                                            &mut self.settings.draft.cli_styled_render,
+                                            "Styled PTY rendering",
+                                        )
+                                        .clicked()
+                                        {
+                                            changed = true;
+                                        }
+                                        right.horizontal(|ui| {
+                                            ui.label("PTY Color Mode");
+                                            let selected = match self.settings.draft.cli_color_mode {
+                                                CliColorMode::ThemeLock => "Theme Lock",
+                                                CliColorMode::PaletteMap => "Palette-map",
+                                                CliColorMode::Color => "Color",
+                                                CliColorMode::Monochrome => "Monochrome",
+                                            };
+                                            egui::ComboBox::from_id_salt("native_settings_cli_color")
+                                                .selected_text(
+                                                    RichText::new(selected)
+                                                        .color(current_palette().fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (mode, label) in [
+                                                        (CliColorMode::ThemeLock, "Theme Lock"),
+                                                        (CliColorMode::PaletteMap, "Palette-map"),
+                                                        (CliColorMode::Color, "Color"),
+                                                        (CliColorMode::Monochrome, "Monochrome"),
+                                                    ] {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            label,
+                                                            self.settings.draft.cli_color_mode == mode,
+                                                        )
+                                                        .clicked()
+                                                            && self.settings.draft.cli_color_mode != mode
+                                                        {
+                                                            self.settings.draft.cli_color_mode = mode;
+                                                            changed = true;
+                                                            ui.close_menu();
+                                                        }
+                                                    }
+                                                });
+                                        });
+                                        if right
+                                            .button(match self.settings.draft.cli_acs_mode {
+                                                CliAcsMode::Ascii => "Border Glyphs: ASCII",
+                                                CliAcsMode::Unicode => {
+                                                    "Border Glyphs: Unicode Smooth"
+                                                }
+                                            })
+                                            .clicked()
+                                        {
+                                            self.settings.draft.cli_acs_mode =
+                                                match self.settings.draft.cli_acs_mode {
+                                                    CliAcsMode::Ascii => CliAcsMode::Unicode,
+                                                    CliAcsMode::Unicode => CliAcsMode::Ascii,
+                                                };
+                                            changed = true;
+                                        }
+                                    });
+                                });
+                            }
+                            NativeSettingsPanel::DefaultApps => {
+                                changed |= self.draw_settings_default_apps_panel(ui);
+                            }
+                            NativeSettingsPanel::Connections => {
+                                ui.vertical(|ui| {
+                                    if Self::retro_full_width_button(ui, "Network").clicked() {
+                                        next_panel = Some(NativeSettingsPanel::ConnectionsNetwork);
+                                    }
+                                    if Self::retro_full_width_button(ui, "Bluetooth").clicked() {
+                                        next_panel =
+                                            Some(NativeSettingsPanel::ConnectionsBluetooth);
+                                    }
+                                });
+                            }
+                            NativeSettingsPanel::ConnectionsNetwork => {
+                                self.draw_settings_connections_kind_panel(ui, ConnectionKind::Network);
+                            }
+                            NativeSettingsPanel::ConnectionsBluetooth => {
+                                self.draw_settings_connections_kind_panel(
+                                    ui,
+                                    ConnectionKind::Bluetooth,
+                                );
+                            }
+                            NativeSettingsPanel::CliProfiles => {
+                                changed |= self.draw_settings_cli_profiles_panel(ui);
+                            }
+                            NativeSettingsPanel::EditMenus => {
+                                changed |= self.draw_settings_edit_menus_panel(ui);
+                            }
+                            NativeSettingsPanel::UserManagement => {
+                                if is_admin {
+                                    ui.vertical(|ui| {
+                                        if Self::retro_full_width_button(ui, "View Users").clicked() {
+                                            next_panel =
+                                                Some(NativeSettingsPanel::UserManagementViewUsers);
+                                        }
+                                        if Self::retro_full_width_button(ui, "Create User").clicked() {
+                                            next_panel =
+                                                Some(NativeSettingsPanel::UserManagementCreateUser);
+                                        }
+                                        if Self::retro_full_width_button(ui, "Edit Users").clicked() {
+                                            next_panel =
+                                                Some(NativeSettingsPanel::UserManagementEditUsers);
+                                        }
+                                        if Self::retro_full_width_button(
+                                            ui,
+                                            "Edit Current User",
+                                        )
+                                        .clicked()
+                                        {
+                                            next_panel = Some(
+                                                NativeSettingsPanel::UserManagementEditCurrentUser,
+                                            );
+                                        }
+                                    });
+                                } else {
+                                    ui.small("User Management requires an admin session.");
+                                }
+                            }
+                            NativeSettingsPanel::UserManagementViewUsers => {
+                                if is_admin {
+                                    self.draw_settings_user_view_panel(ui);
+                                } else {
+                                    ui.small("User Management requires an admin session.");
+                                }
+                            }
+                            NativeSettingsPanel::UserManagementCreateUser => {
+                                if is_admin {
+                                    self.draw_settings_user_create_panel(ui);
+                                } else {
+                                    ui.small("User Management requires an admin session.");
+                                }
+                            }
+                            NativeSettingsPanel::UserManagementEditUsers => {
+                                if is_admin {
+                                    self.draw_settings_user_edit_panel(ui, false);
+                                } else {
+                                    ui.small("User Management requires an admin session.");
+                                }
+                            }
+                            NativeSettingsPanel::UserManagementEditCurrentUser => {
+                                if is_admin {
+                                    self.draw_settings_user_edit_panel(ui, true);
+                                } else {
+                                    ui.small("User Management requires an admin session.");
+                                }
+                            }
+                            NativeSettingsPanel::About => {
+                                ui.label(format!("Version: v{}", env!("CARGO_PKG_VERSION")));
+                                ui.label(format!("Theme: {}", self.settings.draft.theme));
+                                ui.label(format!(
+                                    "Default Open Mode: {}",
+                                    match self.settings.draft.default_open_mode {
+                                        OpenMode::Terminal => "Terminal",
+                                        OpenMode::Desktop => "Desktop",
+                                    }
+                                ));
+                            }
+                            NativeSettingsPanel::Home => {}
+                        });
                 }
-            });
-        if close_from_header {
+            }
+
+            if let Some(panel) = next_panel {
+                self.settings.panel = panel;
+                self.settings.status.clear();
+            }
+            ui.separator();
+            if changed {
+                save_settings(self.settings.draft.clone());
+                self.settings.status = "Settings saved.".to_string();
+            }
+            if !self.settings.status.is_empty() {
+                ui.small(&self.settings.status);
+            }
+        });
+        if close_requested {
             open = false;
+        }
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::Settings,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::Settings, rect);
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Settings, true),
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::Settings, shown_rect)
+            }
         }
         self.update_desktop_window_state(DesktopWindow::Settings, open);
     }
 
+    fn draw_settings_default_apps_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for slot in [DefaultAppSlot::TextCode, DefaultAppSlot::Ebook] {
+                let current_label = match slot {
+                    DefaultAppSlot::TextCode => {
+                        binding_label(&self.settings.draft.default_apps.text_code)
+                    }
+                    DefaultAppSlot::Ebook => binding_label(&self.settings.draft.default_apps.ebook),
+                };
+                let custom_buffer = match slot {
+                    DefaultAppSlot::TextCode => &mut self.settings.default_app_custom_text_code,
+                    DefaultAppSlot::Ebook => &mut self.settings.default_app_custom_ebook,
+                };
+
+                ui.group(|ui| {
+                    Self::settings_two_columns(ui, |left, right| {
+                        Self::settings_section(
+                            left,
+                            &format!("Default App For {}", slot_label(slot)),
+                            |left| {
+                                left.label(format!("Currently selected: {current_label}"));
+                                left.small(match slot {
+                                    DefaultAppSlot::TextCode => {
+                                        "Used when opening text documents and code files."
+                                    }
+                                    DefaultAppSlot::Ebook => {
+                                        "Used when opening ebook and reader-oriented documents."
+                                    }
+                                });
+                            },
+                        );
+
+                        Self::settings_section(right, "Selection", |right| {
+                            let field_width =
+                                Self::responsive_input_width(right, 0.85, 220.0, 620.0);
+                            right.horizontal(|ui| {
+                                ui.label("Chooser");
+                                egui::ComboBox::from_id_salt(format!("native_default_app_slot_{slot:?}"))
+                                    .selected_text(
+                                        RichText::new(current_label.clone()).color(current_palette().fg),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        Self::apply_settings_control_style(ui);
+                                        for choice in crate::default_apps::default_app_choices(slot) {
+                                            if let crate::default_apps::DefaultAppChoiceAction::Set(binding) =
+                                                choice.action
+                                            {
+                                                let selected = match slot {
+                                                    DefaultAppSlot::TextCode => {
+                                                        self.settings.draft.default_apps.text_code == binding
+                                                    }
+                                                    DefaultAppSlot::Ebook => {
+                                                        self.settings.draft.default_apps.ebook == binding
+                                                    }
+                                                };
+                                                if Self::retro_choice_button(ui, choice.label, selected)
+                                                    .clicked()
+                                                {
+                                                    set_binding_for_slot(
+                                                        &mut self.settings.draft,
+                                                        slot,
+                                                        binding,
+                                                    );
+                                                    changed = true;
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        }
+                                    });
+                            });
+                            right.add_space(6.0);
+                            right.label("Custom Command");
+                            right.add(
+                                TextEdit::singleline(custom_buffer)
+                                    .desired_width(field_width)
+                                    .hint_text("epy"),
+                            );
+                            if Self::retro_full_width_button(right, "Apply Custom Command").clicked() {
+                                match parse_custom_command_line(custom_buffer.trim()) {
+                                    Some(argv) if !argv.is_empty() => {
+                                        set_binding_for_slot(
+                                            &mut self.settings.draft,
+                                            slot,
+                                            DefaultAppBinding::CustomArgv { argv },
+                                        );
+                                        changed = true;
+                                    }
+                                    _ => {
+                                        self.settings.status =
+                                            "Error: invalid command line".to_string();
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+                ui.add_space(10.0);
+            }
+        });
+        changed
+    }
+
+    fn draw_settings_connections_kind_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        kind: ConnectionKind,
+    ) {
+        if crate::connections::macos_connections_disabled() {
+            ui.small(crate::connections::macos_connections_disabled_hint());
+            return;
+        }
+
+        let (scan_label, saved_title, discovered_title, scanned_items) = match kind {
+            ConnectionKind::Network => (
+                "Scan Networks",
+                "Saved Networks",
+                "Discovered Networks",
+                &mut self.settings.scanned_networks,
+            ),
+            ConnectionKind::Bluetooth => (
+                "Scan Bluetooth",
+                "Saved Bluetooth",
+                "Discovered Bluetooth",
+                &mut self.settings.scanned_bluetooth,
+            ),
+        };
+
+        if Self::retro_full_width_button(ui, scan_label).clicked() {
+            *scanned_items = refresh_discovered_connections(kind);
+            self.settings.status = format!("Found {} items.", scanned_items.len());
+        }
+        if matches!(kind, ConnectionKind::Network) {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Network Password");
+                let field_width = Self::responsive_input_width(ui, 0.65, 220.0, 520.0);
+                ui.add(
+                    TextEdit::singleline(&mut self.settings.connection_password)
+                        .desired_width(field_width)
+                        .password(true),
+                );
+            });
+            ui.small("Used only when connecting to secured networks.");
+        }
+        ui.add_space(8.0);
+        Self::settings_two_columns(ui, |left, right| {
+            Self::settings_section(left, saved_title, |left| {
+                let saved = saved_connections(kind);
+                if saved.is_empty() {
+                    left.small("No saved items.");
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height((left.available_height() * 0.85).clamp(180.0, 420.0))
+                        .show(left, |ui| {
+                            for entry in saved {
+                                ui.horizontal(|ui| {
+                                    ui.label(saved_row_label(&entry));
+                                    if ui.button("Forget").clicked()
+                                        && forget_saved_connection(kind, &entry.name)
+                                    {
+                                        self.settings.draft = current_settings();
+                                        self.settings.status = format!("Forgot '{}'.", entry.name);
+                                    }
+                                });
+                            }
+                        });
+                }
+            });
+
+            Self::settings_section(right, discovered_title, |right| {
+                if scanned_items.is_empty() {
+                    right.small("Run a scan to populate this list.");
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height((right.available_height() * 0.85).clamp(180.0, 420.0))
+                        .show(right, |ui| {
+                            for entry in scanned_items.clone() {
+                                ui.horizontal(|ui| {
+                                    ui.label(discovered_row_label(&entry));
+                                    if ui.button("Connect").clicked() {
+                                        let password = if matches!(kind, ConnectionKind::Network)
+                                            && network_requires_password(&entry.detail)
+                                            && !self.settings.connection_password.trim().is_empty()
+                                        {
+                                            Some(self.settings.connection_password.clone())
+                                        } else {
+                                            None
+                                        };
+                                        match connect_connection(
+                                            kind,
+                                            &entry.name,
+                                            Some(&entry.detail),
+                                            password.as_deref(),
+                                        ) {
+                                            Ok(status) => {
+                                                self.settings.status = status;
+                                                self.settings.draft = current_settings();
+                                            }
+                                            Err(err) => {
+                                                self.settings.status =
+                                                    format!("Connect failed: {err}");
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                }
+            });
+        });
+    }
+
+    fn draw_settings_cli_profiles_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        let custom_profile_count = self.settings.draft.desktop_cli_profiles.custom.len();
+        let profile =
+            Self::gui_cli_profile_mut(&mut self.settings.draft.desktop_cli_profiles, self.settings.cli_profile_slot);
+        let mut min_w = profile.min_w;
+        let mut min_h = profile.min_h;
+        Self::settings_two_columns(ui, |left, right| {
+            Self::settings_section(left, "Profile", |left| {
+                left.horizontal(|ui| {
+                    ui.label("Profile");
+                    egui::ComboBox::from_id_salt("native_settings_cli_profile_slot")
+                        .selected_text(
+                            RichText::new(Self::gui_cli_profile_slot_label(
+                                self.settings.cli_profile_slot,
+                            ))
+                            .color(current_palette().fg),
+                        )
+                        .show_ui(ui, |ui| {
+                            Self::apply_settings_control_style(ui);
+                            for slot in [
+                                GuiCliProfileSlot::Default,
+                                GuiCliProfileSlot::Calcurse,
+                                GuiCliProfileSlot::SpotifyPlayer,
+                                GuiCliProfileSlot::Ranger,
+                                GuiCliProfileSlot::Reddit,
+                            ] {
+                                if Self::retro_choice_button(
+                                    ui,
+                                    Self::gui_cli_profile_slot_label(slot),
+                                    self.settings.cli_profile_slot == slot,
+                                )
+                                .clicked()
+                                {
+                                    self.settings.cli_profile_slot = slot;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                });
+                left.add_space(8.0);
+                changed |= left
+                    .add(egui::DragValue::new(&mut min_w).range(20..=240).prefix("Min W "))
+                    .changed();
+                changed |= left
+                    .add(egui::DragValue::new(&mut min_h).range(10..=120).prefix("Min H "))
+                    .changed();
+
+                let mut use_pref_w = profile.preferred_w.is_some();
+                if Self::retro_checkbox_row(left, &mut use_pref_w, "Use Preferred Width").clicked() {
+                    profile.preferred_w = if use_pref_w {
+                        Some(profile.min_w)
+                    } else {
+                        None
+                    };
+                    changed = true;
+                }
+                if let Some(preferred) = profile.preferred_w.as_mut() {
+                    changed |= left
+                        .add(
+                            egui::DragValue::new(preferred)
+                                .range(profile.min_w..=280)
+                                .prefix("Preferred W "),
+                        )
+                        .changed();
+                }
+            });
+
+            Self::settings_section(right, "Behavior", |right| {
+                let mut use_pref_h = profile.preferred_h.is_some();
+                if Self::retro_checkbox_row(right, &mut use_pref_h, "Use Preferred Height").clicked()
+                {
+                    profile.preferred_h = if use_pref_h {
+                        Some(profile.min_h)
+                    } else {
+                        None
+                    };
+                    changed = true;
+                }
+                if let Some(preferred) = profile.preferred_h.as_mut() {
+                    changed |= right
+                        .add(
+                            egui::DragValue::new(preferred)
+                                .range(profile.min_h..=140)
+                                .prefix("Preferred H "),
+                        )
+                        .changed();
+                }
+                if Self::retro_checkbox_row(right, &mut profile.mouse_passthrough, "Mouse passthrough")
+                    .clicked()
+                {
+                    changed = true;
+                }
+                if Self::retro_checkbox_row(right, &mut profile.open_fullscreen, "Open fullscreen")
+                    .clicked()
+                {
+                    changed = true;
+                }
+                right.add_space(8.0);
+                right.small(format!(
+                    "Custom profiles currently stored: {}",
+                    custom_profile_count
+                ));
+            });
+        });
+        if min_w != profile.min_w {
+            profile.min_w = min_w;
+            if let Some(preferred) = profile.preferred_w.as_mut() {
+                *preferred = (*preferred).max(profile.min_w);
+            }
+        }
+        if min_h != profile.min_h {
+            profile.min_h = min_h;
+            if let Some(preferred) = profile.preferred_h.as_mut() {
+                *preferred = (*preferred).max(profile.min_h);
+            }
+        }
+        changed
+    }
+
+    fn draw_settings_edit_menus_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Menu");
+            egui::ComboBox::from_id_salt("native_settings_edit_target")
+                .selected_text(
+                    RichText::new(self.settings.edit_target.title()).color(current_palette().fg),
+                )
+                .show_ui(ui, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    for target in [
+                        EditMenuTarget::Applications,
+                        EditMenuTarget::Documents,
+                        EditMenuTarget::Network,
+                        EditMenuTarget::Games,
+                    ] {
+                        if Self::retro_choice_button(
+                            ui,
+                            target.title(),
+                            self.settings.edit_target == target,
+                        )
+                        .clicked()
+                        {
+                            self.settings.edit_target = target;
+                            ui.close_menu();
+                        }
+                    }
+                });
+        });
+        ui.add_space(8.0);
+
+        Self::settings_two_columns(ui, |left, right| {
+            Self::settings_section(left, "Current Entries", |left| {
+                if matches!(self.settings.edit_target, EditMenuTarget::Applications) {
+                    if Self::retro_checkbox_row(
+                        left,
+                        &mut self.settings.draft.builtin_menu_visibility.text_editor,
+                        "Show ROBCO Word Processor",
+                    )
+                    .clicked()
+                    {
+                        changed = true;
+                    }
+                    if Self::retro_checkbox_row(
+                        left,
+                        &mut self.settings.draft.builtin_menu_visibility.nuke_codes,
+                        "Show Nuke Codes",
+                    )
+                    .clicked()
+                    {
+                        changed = true;
+                    }
+                }
+                egui::ScrollArea::vertical()
+                    .max_height((left.available_height() * 0.7).clamp(180.0, 380.0))
+                    .show(left, |ui| {
+                        for name in self.edit_program_entries(self.settings.edit_target) {
+                            ui.horizontal(|ui| {
+                                ui.label(&name);
+                                if ui.button("Delete").clicked() {
+                                    self.delete_program_entry(self.settings.edit_target, &name);
+                                    self.settings.status = self.shell_status.clone();
+                                }
+                            });
+                        }
+                    });
+            });
+
+            Self::settings_section(right, "Add Entry", |right| {
+                let name_width = Self::responsive_input_width(right, 0.9, 220.0, 420.0);
+                let value_width = Self::responsive_input_width(right, 0.95, 320.0, 760.0);
+                right.label("Name");
+                right.add(
+                    TextEdit::singleline(&mut self.settings.edit_name_input)
+                        .desired_width(name_width),
+                );
+                right.add_space(6.0);
+                let value_label = if matches!(self.settings.edit_target, EditMenuTarget::Documents) {
+                    "Folder Path"
+                } else {
+                    "Command"
+                };
+                right.label(value_label);
+                right.add(
+                    TextEdit::singleline(&mut self.settings.edit_value_input)
+                        .desired_width(value_width),
+                );
+                right.add_space(8.0);
+                if Self::retro_full_width_button(right, "Add Entry").clicked() {
+                    let name = self.settings.edit_name_input.trim().to_string();
+                    let value = self.settings.edit_value_input.trim().to_string();
+                    if name.is_empty() || value.is_empty() {
+                        self.settings.status = "Error: Invalid input.".to_string();
+                    } else {
+                        match self.settings.edit_target {
+                            EditMenuTarget::Documents => self.add_document_category(name, value),
+                            target => self.add_program_entry(target, name, value),
+                        }
+                        self.settings.status = self.shell_status.clone();
+                        if !self.settings.status.to_ascii_lowercase().starts_with("error") {
+                            self.settings.edit_name_input.clear();
+                            self.settings.edit_value_input.clear();
+                        }
+                    }
+                }
+            });
+        });
+        changed
+    }
+
+    fn draw_settings_user_view_panel(&mut self, ui: &mut egui::Ui) {
+        let mut users: Vec<(String, UserRecord)> = load_users().into_iter().collect();
+        users.sort_by(|a, b| a.0.cmp(&b.0));
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (name, record) in users {
+                ui.label(format!(
+                    "{} | auth: {} | admin: {}",
+                    name,
+                    match record.auth_method {
+                        AuthMethod::Password => "Password",
+                        AuthMethod::NoPassword => "No Password",
+                        AuthMethod::HackingMinigame => "Hacking Minigame",
+                    },
+                    if record.is_admin { "yes" } else { "no" }
+                ));
+            }
+        });
+    }
+
+    fn draw_settings_user_create_panel(&mut self, ui: &mut egui::Ui) {
+        let mut users: Vec<String> = load_users().keys().cloned().collect();
+        users.sort();
+        ui.group(|ui| {
+            Self::settings_two_columns(ui, |left, right| {
+                let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
+                Self::settings_section(left, "Account", |left| {
+                    left.label("Username");
+                    left.add(
+                        TextEdit::singleline(&mut self.settings.user_create_username)
+                            .desired_width(field_width),
+                    );
+                    left.add_space(6.0);
+                    left.label("Authentication");
+                    egui::ComboBox::from_id_salt("native_settings_user_create_auth")
+                        .selected_text(RichText::new(match self.settings.user_create_auth {
+                            AuthMethod::Password => "Password",
+                            AuthMethod::NoPassword => "No Password",
+                            AuthMethod::HackingMinigame => "Hacking Minigame",
+                        }).color(current_palette().fg))
+                        .show_ui(left, |ui| {
+                            Self::apply_settings_control_style(ui);
+                            for auth in [
+                                AuthMethod::Password,
+                                AuthMethod::NoPassword,
+                                AuthMethod::HackingMinigame,
+                            ] {
+                                let label = match auth {
+                                    AuthMethod::Password => "Password",
+                                    AuthMethod::NoPassword => "No Password",
+                                    AuthMethod::HackingMinigame => "Hacking Minigame",
+                                };
+                                if Self::retro_choice_button(
+                                    ui,
+                                    label,
+                                    self.settings.user_create_auth == auth,
+                                )
+                                .clicked()
+                                {
+                                    self.settings.user_create_auth = auth;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                });
+
+                let pw_width = Self::responsive_input_width(right, 0.85, 180.0, 420.0);
+                let create_clicked = Self::settings_section(right, "Credentials", |right| {
+                    if matches!(self.settings.user_create_auth, AuthMethod::Password) {
+                        right.label("Password");
+                        right.add(
+                            TextEdit::singleline(&mut self.settings.user_create_password)
+                                .desired_width(pw_width)
+                                .password(true),
+                        );
+                        right.add_space(6.0);
+                        right.label("Confirm");
+                        right.add(
+                            TextEdit::singleline(&mut self.settings.user_create_password_confirm)
+                                .desired_width(pw_width)
+                                .password(true),
+                        );
+                    } else {
+                        right.small("No password fields required for this auth method.");
+                    }
+                    right.add_space(8.0);
+                    Self::retro_full_width_button(right, "Create User").clicked()
+                });
+                if !create_clicked {
+                    return;
+                }
+                let username = self.settings.user_create_username.trim().to_string();
+                if username.is_empty() {
+                    self.settings.status = "Username cannot be empty.".to_string();
+                } else if users.iter().any(|name| name == &username) {
+                    self.settings.status = "User already exists.".to_string();
+                } else {
+                    match self.settings.user_create_auth {
+                        AuthMethod::Password => {
+                            if self.settings.user_create_password.is_empty() {
+                                self.settings.status = "Password cannot be empty.".to_string();
+                            } else if self.settings.user_create_password
+                                != self.settings.user_create_password_confirm
+                            {
+                                self.settings.status = "Passwords do not match.".to_string();
+                            } else {
+                                self.save_user_and_status(
+                                    &username,
+                                    UserRecord {
+                                        password_hash: crate::core::auth::hash_password(
+                                            &self.settings.user_create_password,
+                                        ),
+                                        is_admin: false,
+                                        auth_method: AuthMethod::Password,
+                                    },
+                                    format!("User '{username}' created."),
+                                );
+                                self.settings.status = self.shell_status.clone();
+                                self.settings.user_create_username.clear();
+                                self.settings.user_create_password.clear();
+                                self.settings.user_create_password_confirm.clear();
+                                self.settings.user_selected = username;
+                                self.settings.user_selected_loaded_for.clear();
+                            }
+                        }
+                        AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
+                            self.save_user_and_status(
+                                &username,
+                                UserRecord {
+                                    password_hash: String::new(),
+                                    is_admin: false,
+                                    auth_method: self.settings.user_create_auth.clone(),
+                                },
+                                format!("User '{username}' created."),
+                            );
+                            self.settings.status = self.shell_status.clone();
+                            self.settings.user_create_username.clear();
+                            self.settings.user_selected = username;
+                            self.settings.user_selected_loaded_for.clear();
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    fn draw_settings_user_edit_panel(&mut self, ui: &mut egui::Ui, current_only: bool) {
+        let current_username = self.session.as_ref().map(|s| s.username.clone());
+        let mut users: Vec<(String, UserRecord)> = load_users().into_iter().collect();
+        users.sort_by(|a, b| a.0.cmp(&b.0));
+        let names: Vec<String> = users.iter().map(|(name, _)| name.clone()).collect();
+        if names.is_empty() {
+            ui.small("No users found.");
+            return;
+        }
+        if current_only {
+            self.settings.user_selected = current_username.clone().unwrap_or_default();
+        } else if !names.iter().any(|name| name == &self.settings.user_selected) {
+            self.settings.user_selected = names[0].clone();
+        }
+        if self.settings.user_selected_loaded_for != self.settings.user_selected {
+            if let Some((_, record)) = users
+                .iter()
+                .find(|(name, _)| name == &self.settings.user_selected)
+            {
+                self.settings.user_edit_auth = record.auth_method.clone();
+                self.settings.user_edit_password.clear();
+                self.settings.user_edit_password_confirm.clear();
+                self.settings.user_selected_loaded_for = self.settings.user_selected.clone();
+            }
+        }
+
+        ui.group(|ui| {
+            Self::settings_two_columns(ui, |left, right| {
+                let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
+                Self::settings_section(
+                    left,
+                    if current_only { "Edit Current User" } else { "Edit User" },
+                    |left| {
+                        left.label("User");
+                        if current_only {
+                            left.label(&self.settings.user_selected);
+                        } else {
+                            egui::ComboBox::from_id_salt("native_settings_user_selected")
+                                .selected_text(
+                                    RichText::new(self.settings.user_selected.clone())
+                                        .color(current_palette().fg),
+                                )
+                                .show_ui(left, |ui| {
+                                    Self::apply_settings_control_style(ui);
+                                    for name in &names {
+                                        if Self::retro_choice_button(
+                                            ui,
+                                            name,
+                                            self.settings.user_selected == *name,
+                                        )
+                                        .clicked()
+                                        {
+                                            self.settings.user_selected = name.clone();
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                        }
+                        if let Some((_, record)) = users
+                            .iter()
+                            .find(|(name, _)| name == &self.settings.user_selected)
+                        {
+                            left.small(format!(
+                                "Current auth: {} | Admin: {}",
+                                match record.auth_method {
+                                    AuthMethod::Password => "Password",
+                                    AuthMethod::NoPassword => "No Password",
+                                    AuthMethod::HackingMinigame => "Hacking Minigame",
+                                },
+                                if record.is_admin { "yes" } else { "no" }
+                            ));
+                        }
+                        left.add_space(8.0);
+                        left.label("New Auth");
+                        egui::ComboBox::from_id_salt("native_settings_user_edit_auth")
+                            .selected_text(RichText::new(match self.settings.user_edit_auth {
+                                AuthMethod::Password => "Password",
+                                AuthMethod::NoPassword => "No Password",
+                                AuthMethod::HackingMinigame => "Hacking Minigame",
+                            }).color(current_palette().fg))
+                            .show_ui(left, |ui| {
+                                Self::apply_settings_control_style(ui);
+                                for auth in [
+                                    AuthMethod::Password,
+                                    AuthMethod::NoPassword,
+                                    AuthMethod::HackingMinigame,
+                                ] {
+                                    let label = match auth {
+                                        AuthMethod::Password => "Password",
+                                        AuthMethod::NoPassword => "No Password",
+                                        AuthMethod::HackingMinigame => "Hacking Minigame",
+                                    };
+                                    if Self::retro_choice_button(
+                                        ui,
+                                        label,
+                                        self.settings.user_edit_auth == auth,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.settings.user_edit_auth = auth;
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                    },
+                );
+
+                let apply_auth = Self::settings_section(right, "Actions", |right| {
+                    if matches!(self.settings.user_edit_auth, AuthMethod::Password) {
+                        right.label("Password");
+                        right.add(
+                            TextEdit::singleline(&mut self.settings.user_edit_password)
+                                .desired_width(field_width)
+                                .password(true),
+                        );
+                        right.add_space(6.0);
+                        right.label("Confirm");
+                        right.add(
+                            TextEdit::singleline(&mut self.settings.user_edit_password_confirm)
+                                .desired_width(field_width)
+                                .password(true),
+                        );
+                        right.add_space(8.0);
+                    }
+                    Self::retro_full_width_button(right, "Apply Auth Method").clicked()
+                });
+                if apply_auth {
+                    let username = self.settings.user_selected.clone();
+                    match self.settings.user_edit_auth {
+                        AuthMethod::Password => {
+                            if self.settings.user_edit_password.is_empty() {
+                                self.settings.status = "Password cannot be empty.".to_string();
+                            } else if self.settings.user_edit_password
+                                != self.settings.user_edit_password_confirm
+                            {
+                                self.settings.status = "Passwords do not match.".to_string();
+                            } else {
+                                let password_hash =
+                                    crate::core::auth::hash_password(&self.settings.user_edit_password);
+                                self.update_user_record(
+                                    &username,
+                                    |record| {
+                                        record.password_hash = password_hash;
+                                        record.auth_method = AuthMethod::Password;
+                                    },
+                                    format!("Auth method updated for '{username}'."),
+                                );
+                                self.settings.status = self.shell_status.clone();
+                                self.settings.user_edit_password.clear();
+                                self.settings.user_edit_password_confirm.clear();
+                                self.settings.user_selected_loaded_for.clear();
+                            }
+                        }
+                        AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
+                            let new_method = self.settings.user_edit_auth.clone();
+                            self.update_user_record(
+                                &username,
+                                |record| {
+                                    record.password_hash.clear();
+                                    record.auth_method = new_method;
+                                },
+                                format!("Auth method updated for '{username}'."),
+                            );
+                            self.settings.status = self.shell_status.clone();
+                            self.settings.user_selected_loaded_for.clear();
+                        }
+                    }
+                }
+
+                if Self::retro_full_width_button(right, "Toggle Admin").clicked() {
+                    if !current_only {
+                        let username = self.settings.user_selected.clone();
+                        let mut db = load_users();
+                        if let Some(record) = db.get_mut(&username) {
+                            record.is_admin = !record.is_admin;
+                            let label = if record.is_admin { "granted" } else { "revoked" };
+                            save_users(&db);
+                            self.settings.status = format!("Admin {label} for '{username}'.");
+                            self.settings.user_selected_loaded_for.clear();
+                        }
+                    }
+                }
+                right.add_space(8.0);
+
+                if !current_only {
+                    if right
+                        .add_enabled(
+                            current_username
+                                .as_ref()
+                                .is_none_or(|name| name != &self.settings.user_selected),
+                            egui::Button::new("Delete User"),
+                        )
+                        .clicked()
+                    {
+                        if self.settings.user_delete_confirm == self.settings.user_selected {
+                            let username = self.settings.user_selected.clone();
+                            let mut db = load_users();
+                            db.remove(&username);
+                            save_users(&db);
+                            self.settings.status = format!("User '{username}' deleted.");
+                            self.settings.user_delete_confirm.clear();
+                            self.settings.user_selected_loaded_for.clear();
+                        } else {
+                            self.settings.user_delete_confirm = self.settings.user_selected.clone();
+                            self.settings.status =
+                                "Click Delete User again to confirm.".to_string();
+                        }
+                    }
+                    if current_username
+                        .as_ref()
+                        .is_some_and(|name| name == &self.settings.user_selected)
+                    {
+                        right.small("You cannot delete the current user.");
+                    }
+                }
+            });
+        });
+    }
+
     fn draw_applications(&mut self, ctx: &Context) {
-        if !self.applications.open {
+        if !self.applications.open || self.desktop_window_is_minimized(DesktopWindow::Applications) {
             return;
         }
         let mut open = self.applications.open;
         let mut close_after_launch = false;
-        let mut close_from_header = false;
-        egui::Window::new("Applications")
-            .id(Id::new("native_applications"))
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::Applications);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Applications);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::Applications);
+        let mut window = egui::Window::new("Applications")
+            .id(Id::new(("native_applications", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .default_size([420.0, 380.0])
-            .show(ctx, |ui| {
-                close_from_header |= Self::draw_desktop_window_header(ui, "Applications");
-                ui.heading("Built-in");
-                if self.settings.draft.builtin_menu_visibility.text_editor
-                    && ui.button("ROBCO Word Processor").clicked()
-                {
-                    if self.editor.path.is_none() {
-                        self.new_document();
-                    } else {
-                        self.open_desktop_window(DesktopWindow::Editor);
+            .resizable(true)
+            .default_size([420.0, 380.0]);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let shown = window.show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+                header_action = Self::draw_desktop_window_header(ui, maximized);
+                ui.set_min_size(ui.available_size_before_wrap());
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("Built-in");
+                    if self.settings.draft.builtin_menu_visibility.text_editor
+                        && Self::retro_full_width_button(ui, "ROBCO Word Processor").clicked()
+                    {
+                        if self.editor.path.is_none() {
+                            self.new_document();
+                        } else {
+                            self.open_desktop_window(DesktopWindow::Editor);
+                        }
                     }
-                }
-                if self.settings.draft.builtin_menu_visibility.nuke_codes
-                    && ui.button("Nuke Codes").clicked()
-                {
-                    close_after_launch = true;
-                    self.start_open = false;
-                    self.desktop_mode_open = false;
-                    self.open_nuke_codes_screen(TerminalScreen::MainMenu);
-                }
-                ui.separator();
-                ui.heading("Configured Apps");
-                for name in app_names() {
-                    if ui.button(&name).clicked() {
+                    if self.settings.draft.builtin_menu_visibility.nuke_codes
+                        && Self::retro_full_width_button(ui, "Nuke Codes").clicked()
+                    {
                         close_after_launch = true;
-                        self.start_open = false;
-                        self.desktop_mode_open = false;
-                        self.launch_configured_app_in_pty(&name, TerminalScreen::MainMenu);
+                        self.open_desktop_nuke_codes();
                     }
-                }
-                if !self.applications.status.is_empty() {
                     ui.separator();
-                    ui.small(&self.applications.status);
-                }
+                    ui.heading("Configured Apps");
+                    for name in app_names() {
+                        if Self::retro_full_width_button(ui, &name).clicked() {
+                            close_after_launch = true;
+                            let apps = load_apps();
+                            match resolve_program_command(&name, &apps) {
+                                Ok(cmd) => self.open_desktop_pty(&name, &cmd),
+                                Err(err) => self.shell_status = err,
+                            }
+                        }
+                    }
+                    if !self.applications.status.is_empty() {
+                        ui.separator();
+                        ui.small(&self.applications.status);
+                    }
+                });
             });
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::Applications,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::Applications, rect);
+            }
+        }
         if close_after_launch {
             open = false;
         }
-        if close_from_header {
-            open = false;
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Applications, true),
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::Applications, shown_rect)
+            }
         }
         self.update_desktop_window_state(DesktopWindow::Applications, open);
     }
 
-    fn draw_terminal_mode(&mut self, ctx: &Context) {
-        if !self.terminal_mode.open {
+    fn draw_nuke_codes_window(&mut self, ctx: &Context) {
+        if !self.desktop_nuke_codes_open
+            || self.desktop_window_is_minimized(DesktopWindow::NukeCodes)
+        {
             return;
         }
-        let plan = launch_plan();
-        let mut open = self.terminal_mode.open;
-        let mut close_from_header = false;
-        egui::Window::new("Terminal Mode")
-            .id(Id::new("native_terminal_mode"))
+        let mut open = self.desktop_nuke_codes_open;
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::NukeCodes);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::NukeCodes);
+        let mut header_action = DesktopHeaderAction::None;
+        let mut refresh = false;
+        let generation = self.desktop_window_generation(DesktopWindow::NukeCodes);
+        let mut window = egui::Window::new("Nuke Codes")
+            .id(Id::new(("native_nuke_codes", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .default_size([480.0, 220.0])
-            .show(ctx, |ui| {
-                close_from_header |= Self::draw_desktop_window_header(ui, "Terminal Mode");
-                ui.label("Terminal mode stays a first-class product mode.");
-                ui.small(
-                    "The native shell launches the existing `robcos` TUI in your system terminal.",
-                );
+            .resizable(true)
+            .default_size([480.0, 260.0]);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let shown = window.show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+                header_action = Self::draw_desktop_window_header(ui, maximized);
+                ui.set_min_size(ui.available_size_before_wrap());
+                if Self::retro_full_width_button(ui, "Refresh").clicked() {
+                    refresh = true;
+                }
                 ui.separator();
-                ui.label(format!("Launch path: {}", plan.display));
-                ui.monospace(format!("{} {}", plan.program, plan.args.join(" ")));
-                if ui.button("Open Terminal Mode").clicked() {
-                    match launch_terminal_mode() {
-                        Ok(used) => {
-                            self.terminal_mode.status =
-                                format!("Launched terminal mode via {}.", used.display);
-                        }
-                        Err(err) => {
-                            self.terminal_mode.status = format!("Launch failed: {err}");
-                        }
+                ui.add_space((ui.available_height() * 0.04).clamp(6.0, 20.0));
+                match &self.terminal_nuke_codes {
+                    NukeCodesView::Unloaded => {
+                        ui.monospace("Codes are not loaded yet.");
+                    }
+                    NukeCodesView::Error(err) => {
+                        ui.monospace("UNABLE TO FETCH LIVE CODES");
+                        ui.small(format!("ERROR: {err}"));
+                    }
+                    NukeCodesView::Data(codes) => {
+                        ui.monospace(format!("ALPHA   : {}", codes.alpha));
+                        ui.monospace(format!("BRAVO   : {}", codes.bravo));
+                        ui.monospace(format!("CHARLIE : {}", codes.charlie));
+                        ui.add_space(6.0);
+                        ui.small(format!("Source: {}", codes.source));
+                        ui.small(format!("Fetched: {}", codes.fetched_at));
                     }
                 }
-                if !self.terminal_mode.status.is_empty() {
-                    ui.separator();
-                    ui.small(&self.terminal_mode.status);
-                }
             });
-        if close_from_header {
-            open = false;
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::NukeCodes,
+            shown_contains_pointer,
+        );
+        if refresh {
+            self.terminal_nuke_codes = fetch_nuke_codes();
         }
-        self.update_desktop_window_state(DesktopWindow::TerminalMode, open);
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::NukeCodes, rect);
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::NukeCodes, true)
+            }
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::NukeCodes, shown_rect)
+            }
+        }
+        self.update_desktop_window_state(DesktopWindow::NukeCodes, open);
+    }
+
+    fn draw_desktop_pty_window(&mut self, ctx: &Context) {
+        if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
+            return;
+        }
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::PtyApp);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::PtyApp);
+        let generation = self.desktop_window_generation(DesktopWindow::PtyApp);
+        let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
+        let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let Some(state) = self.terminal_pty.as_mut() else {
+            self.update_desktop_window_state(DesktopWindow::PtyApp, false);
+            return;
+        };
+        let mut open = true;
+        let mut header_action = DesktopHeaderAction::None;
+        let title = state.title.clone();
+        let mut event = PtyScreenEvent::None;
+        let mut window = egui::Window::new(title.clone())
+            .id(Id::new(("native_desktop_pty", generation)))
+            .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
+            .resizable(true)
+            .default_pos(default_pos)
+            .default_size(default_size);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            let size = Self::desktop_clamp_window_size(ctx, size, egui::vec2(640.0, 420.0));
+            let pos = Self::desktop_clamp_window_pos(ctx, pos, size);
+            window = window.current_pos(pos).fixed_size(size);
+        }
+        let shown = window.show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+                header_action = Self::draw_desktop_window_header(ui, maximized);
+                let available = ui.available_size();
+                let cols = ((available.x / 12.0).floor() as usize).clamp(80, 160);
+                let rows = ((available.y / 27.0).floor() as usize).clamp(24, 48);
+                ui.allocate_ui_with_layout(available, Layout::top_down(egui::Align::Min), |ui| {
+                    event = draw_embedded_pty_in_ui(ui, ctx, state, cols, rows);
+                });
+            });
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        let completion_message = state.completion_message.clone();
+        let title_for_exit = state.title.clone();
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::PtyApp,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::PtyApp, rect);
+            }
+        }
+
+        match event {
+            PtyScreenEvent::None => {}
+            PtyScreenEvent::CloseRequested => open = false,
+            PtyScreenEvent::ProcessExited => {
+                open = false;
+                if let Some(msg) = completion_message.as_ref() {
+                    self.shell_status = msg.to_string();
+                } else {
+                    self.shell_status = format!("{title_for_exit} exited.");
+                }
+            }
+        }
+
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::PtyApp, true),
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::PtyApp, shown_rect)
+            }
+        }
+        self.update_desktop_window_state(DesktopWindow::PtyApp, open);
+    }
+
+    fn draw_terminal_mode(&mut self, ctx: &Context) {
+        if !self.terminal_mode.open || self.desktop_window_is_minimized(DesktopWindow::TerminalMode) {
+            return;
+        }
+        let _ = ctx;
+        self.terminal_mode.open = false;
+        self.desktop_window_states.remove(&DesktopWindow::TerminalMode);
+        self.open_desktop_terminal_shell();
     }
 }
 
@@ -3771,11 +6768,7 @@ impl eframe::App for RobcoNativeApp {
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
                 let layout = self.terminal_layout();
-                if self.session.is_some() {
-                    self.draw_terminal_footer(ctx);
-                } else {
-                    self.draw_terminal_footer_spacer(ctx);
-                }
+                self.draw_terminal_footer_spacer(ctx);
                 let show_hacking_wait = self.session.is_none()
                     && matches!(self.login_mode, LoginScreenMode::Hacking)
                     && matches!(&flash.action, FlashAction::FinishLogin { .. });
@@ -3816,9 +6809,11 @@ impl eframe::App for RobcoNativeApp {
             return;
         }
 
-        self.capture_session_switch_shortcuts(ctx);
-        if session::has_switch_request() {
-            self.apply_pending_session_switch();
+        if self.desktop_mode_open {
+            self.capture_session_switch_shortcuts(ctx);
+            if session::has_switch_request() {
+                self.apply_pending_session_switch();
+            }
         }
 
         if !self.desktop_mode_open
@@ -3829,14 +6824,12 @@ impl eframe::App for RobcoNativeApp {
             self.handle_terminal_back();
         }
 
-        self.draw_terminal_footer(ctx);
-
         if self.desktop_mode_open {
             self.draw_top_bar(ctx);
-            self.draw_start_panel(ctx);
             self.draw_desktop_taskbar(ctx);
             self.draw_desktop(ctx);
         } else {
+            self.draw_terminal_footer_spacer(ctx);
             if self.terminal_prompt.is_some() {
                 self.handle_terminal_prompt_input(ctx);
                 self.consume_terminal_prompt_keys(ctx);
@@ -3870,6 +6863,7 @@ impl eframe::App for RobcoNativeApp {
         }
         if self.desktop_mode_open {
             self.draw_desktop_windows(ctx);
+            self.draw_start_panel(ctx);
         } else {
             self.draw_file_manager(ctx);
             self.draw_editor(ctx);
@@ -3936,10 +6930,18 @@ mod tests {
     fn set_runtime_marker(app: &mut RobcoNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
         app.desktop_mode_open = false;
         app.start_open = true;
-        app.start_section = match idx % 3 {
-            0 => StartMenuSection::Programs,
-            1 => StartMenuSection::System,
-            _ => StartMenuSection::Session,
+        app.start_selected_root = idx % START_ROOT_ITEMS.len();
+        app.start_system_selected = idx % 2;
+        app.start_leaf_selected = idx % 3;
+        app.start_open_submenu = if idx % 2 == 0 {
+            Some(StartSubmenu::System)
+        } else {
+            None
+        };
+        app.start_open_leaf = if idx % 2 == 1 {
+            Some(StartLeaf::Applications)
+        } else {
+            None
         };
         app.main_menu_idx = idx;
         app.terminal_screen = screen;
@@ -3993,7 +6995,11 @@ mod tests {
         app.terminal_mode.status = "term".to_string();
         app.desktop_mode_open = true;
         app.start_open = false;
-        app.start_section = StartMenuSection::Session;
+        app.start_selected_root = 6;
+        app.start_system_selected = 1;
+        app.start_leaf_selected = 2;
+        app.start_open_submenu = None;
+        app.start_open_leaf = Some(StartLeaf::Games);
         app.main_menu_idx = 3;
         app.terminal_screen = TerminalScreen::Connections;
         app.terminal_settings_idx = 2;
@@ -4034,7 +7040,11 @@ mod tests {
         app.terminal_mode.status.clear();
         app.desktop_mode_open = false;
         app.start_open = true;
-        app.start_section = StartMenuSection::Programs;
+        app.start_selected_root = 0;
+        app.start_system_selected = 0;
+        app.start_leaf_selected = 0;
+        app.start_open_submenu = None;
+        app.start_open_leaf = None;
         app.main_menu_idx = 0;
         app.terminal_screen = TerminalScreen::MainMenu;
         app.terminal_settings_idx = 0;
@@ -4066,7 +7076,11 @@ mod tests {
         assert_eq!(app.terminal_mode.status, "term");
         assert!(app.desktop_mode_open);
         assert!(!app.start_open);
-        assert_eq!(app.start_section, StartMenuSection::Session);
+        assert_eq!(app.start_selected_root, 6);
+        assert_eq!(app.start_system_selected, 1);
+        assert_eq!(app.start_leaf_selected, 2);
+        assert_eq!(app.start_open_submenu, None);
+        assert_eq!(app.start_open_leaf, Some(StartLeaf::Games));
         assert_eq!(app.main_menu_idx, 3);
         assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
         assert_eq!(app.terminal_settings_idx, 2);
