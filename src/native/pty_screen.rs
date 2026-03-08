@@ -177,6 +177,26 @@ pub fn draw_embedded_pty(
     _status_row: usize,
     _content_col: usize,
 ) -> PtyScreenEvent {
+    let mut event = PtyScreenEvent::None;
+    egui::CentralPanel::default()
+        .frame(
+            egui::Frame::none()
+                .fill(current_palette().bg)
+                .inner_margin(0.0),
+        )
+        .show(ctx, |ui| {
+            event = draw_embedded_pty_in_ui(ui, ctx, state, cols, rows);
+        });
+    event
+}
+
+pub fn draw_embedded_pty_in_ui(
+    ui: &mut egui::Ui,
+    ctx: &Context,
+    state: &mut NativePtyState,
+    cols: usize,
+    rows: usize,
+) -> PtyScreenEvent {
     if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
     }
@@ -187,7 +207,7 @@ pub fn draw_embedded_pty(
 
     let pty_cols = cols.clamp(1, MAX_NATIVE_PTY_COLS) as u16;
     let show_top_bar = state.session.top_bar_label().is_some();
-    // Keep one row for global footer/status bar and optional one-row PTY top bar.
+    // Keep one row for global footer/status bar and optional PTY title band.
     let reserved_rows = 1 + usize::from(show_top_bar);
     let pty_rows = rows
         .saturating_sub(reserved_rows)
@@ -221,301 +241,285 @@ pub fn draw_embedded_pty(
         crate::config::CliAcsMode::Unicode
     );
     let mut snapshot_ms = 0.0f32;
-    let mut draw_ms = 0.0f32;
     let mut dirty_stats = DirtyStats {
         total_rows: pty_rows as usize,
         total_cells: pty_rows as usize * pty_cols as usize,
         ..DirtyStats::default()
     };
 
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::none()
-                .fill(current_palette().bg)
-                .inner_margin(0.0),
+    let draw_started = Instant::now();
+    let palette = current_palette();
+    ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
+    let render_rows = pty_rows as usize + usize::from(show_top_bar);
+    let (screen, response) = RetroScreen::new(ui, pty_cols as usize, render_rows);
+    let painter = ui.painter_at(screen.rect);
+    let row_offset = usize::from(show_top_bar);
+    let content_rect = if show_top_bar {
+        let top = screen.row_rect(0, row_offset, 1).top();
+        Rect::from_min_max(
+            Pos2::new(screen.rect.left(), top),
+            Pos2::new(screen.rect.right(), screen.rect.bottom()),
         )
-        .show(ctx, |ui| {
-            let draw_started = Instant::now();
-            let palette = current_palette();
-            let render_rows = pty_rows as usize + usize::from(show_top_bar);
-            let (screen, response) = RetroScreen::new(ui, pty_cols as usize, render_rows);
-            let painter = ui.painter_at(screen.rect);
-            let row_offset = usize::from(show_top_bar);
-            let content_rect = if show_top_bar {
-                let top = screen.row_rect(0, 1, 1).top();
-                Rect::from_min_max(
-                    Pos2::new(screen.rect.left(), top),
-                    Pos2::new(screen.rect.right(), screen.rect.bottom()),
-                )
-            } else {
-                screen.rect
-            };
-            if let Some(label) = state.session.top_bar_label() {
-                let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
-                painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
-                painter.text(
-                    bar_rect.center(),
-                    Align2::CENTER_CENTER,
-                    format!(" {label} "),
-                    screen.font().clone(),
-                    palette.selected_fg,
-                );
-                painter.text(
-                    Pos2::new(bar_rect.center().x + 0.7, bar_rect.center().y),
-                    Align2::CENTER_CENTER,
-                    format!(" {label} "),
-                    screen.font().clone(),
-                    palette.selected_fg,
-                );
-            }
+    } else {
+        screen.rect
+    };
+    if let Some(label) = state.session.top_bar_label() {
+        let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
+        let bar_font = screen.font().clone();
+        painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
+        painter.text(
+            bar_rect.center(),
+            Align2::CENTER_CENTER,
+            format!(" {label} "),
+            bar_font.clone(),
+            palette.selected_fg,
+        );
+        painter.text(
+            Pos2::new(bar_rect.center().x + 0.7, bar_rect.center().y),
+            Align2::CENTER_CENTER,
+            format!(" {label} "),
+            bar_font,
+            palette.selected_fg,
+        );
+    }
 
-            let plain_fast = state.session.prefers_plain_render();
-            let plain_snapshot = if plain_fast {
-                let started = Instant::now();
-                let snap = state.session.snapshot_plain(pty_cols, pty_rows);
-                snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
-                Some(snap)
-            } else {
-                None
-            };
-            handle_pty_mouse(
-                ui.ctx(),
-                &response,
-                content_rect,
-                pty_cols,
-                pty_rows,
-                &mut state.session,
+    let plain_fast = state.session.prefers_plain_render();
+    let plain_snapshot = if plain_fast {
+        let started = Instant::now();
+        let snap = state.session.snapshot_plain(pty_cols, pty_rows);
+        snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+        Some(snap)
+    } else {
+        None
+    };
+    handle_pty_mouse(
+        ui.ctx(),
+        &response,
+        content_rect,
+        pty_cols,
+        pty_rows,
+        &mut state.session,
+    );
+    let content_painter = painter.with_clip_rect(content_rect);
+
+    if plain_fast {
+        let snap = plain_snapshot.as_ref().expect("plain snapshot present");
+        let smoothed_lines = if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
+            let mut lines = snap.lines.clone();
+            smooth_ascii_borders_in_plain_lines(&mut lines);
+            Some(lines)
+        } else {
+            None
+        };
+        let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
+        let dirty_rows = collect_dirty_rows(&state.prev_plain_lines, lines_ref, pty_rows as usize);
+        if state.show_perf_overlay {
+            dirty_stats = diff_plain_snapshot(
+                &state.prev_plain_lines,
+                lines_ref,
+                state.prev_plain_cursor,
+                (snap.cursor_row, snap.cursor_col),
+                pty_cols as usize,
+                pty_rows as usize,
             );
-            let content_painter = painter.with_clip_rect(content_rect);
-
-            if plain_fast {
-                let snap = plain_snapshot.as_ref().expect("plain snapshot present");
-                let smoothed_lines =
-                    if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
-                        let mut lines = snap.lines.clone();
-                        smooth_ascii_borders_in_plain_lines(&mut lines);
-                        Some(lines)
-                    } else {
-                        None
-                    };
-                let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
-                let dirty_rows =
-                    collect_dirty_rows(&state.prev_plain_lines, lines_ref, pty_rows as usize);
-                if state.show_perf_overlay {
-                    dirty_stats = diff_plain_snapshot(
-                        &state.prev_plain_lines,
-                        lines_ref,
-                        state.prev_plain_cursor,
-                        (snap.cursor_row, snap.cursor_col),
-                        pty_cols as usize,
-                        pty_rows as usize,
+        }
+        let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+            .unwrap_or(false);
+        let texture_drawn = use_texture
+            && render_plain_texture_if_possible(
+                state,
+                ctx,
+                &content_painter,
+                &screen,
+                content_rect,
+                &palette,
+                lines_ref,
+                dirty_rows.as_slice(),
+            );
+        let glyph_advance = content_painter
+            .layout_no_wrap("W".to_string(), screen.font().clone(), palette.fg)
+            .size()
+            .x
+            .max(1.0);
+        let x_origin = content_rect.left();
+        let styled_snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+        for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                let (_fg, bg) = resolve_cell_colors(*cell);
+                if bg == palette.bg {
+                    continue;
+                }
+                let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
+                let rect = screen.text_band_rect(
+                    row_idx + row_offset,
+                    x,
+                    screen.snap_value(glyph_advance.ceil()),
+                );
+                content_painter.rect_filled(rect, 0.0, bg);
+            }
+        }
+        if !texture_drawn {
+            for (row_idx, line) in lines_ref.iter().enumerate() {
+                let clipped: String = line
+                    .trim_end_matches(' ')
+                    .chars()
+                    .take(pty_cols as usize)
+                    .collect();
+                if clipped.is_empty() {
+                    continue;
+                }
+                let y = screen.row_text_top(row_idx + row_offset);
+                content_painter.text(
+                    Pos2::new(x_origin, y),
+                    Align2::LEFT_TOP,
+                    clipped,
+                    screen.font().clone(),
+                    palette.fg,
+                );
+            }
+        }
+        for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                let (fg, bg) = resolve_cell_colors(*cell);
+                if bg == palette.bg || cell.ch == ' ' {
+                    continue;
+                }
+                let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
+                let y = screen.row_text_top(row_idx + row_offset);
+                content_painter.text(
+                    Pos2::new(x, y),
+                    Align2::LEFT_TOP,
+                    cell.ch.to_string(),
+                    screen.font().clone(),
+                    fg,
+                );
+                if cell.bold {
+                    content_painter.text(
+                        Pos2::new(x + 0.7, y),
+                        Align2::LEFT_TOP,
+                        cell.ch.to_string(),
+                        screen.font().clone(),
+                        fg,
                     );
                 }
-                let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
-                    .ok()
-                    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
-                    .unwrap_or(false);
-                let texture_drawn = use_texture
-                    && render_plain_texture_if_possible(
-                        state,
-                        ctx,
-                        &content_painter,
-                        &screen,
-                        content_rect,
-                        &palette,
-                        lines_ref,
-                        dirty_rows.as_slice(),
+                if cell.underline {
+                    let rect = screen.text_band_rect(
+                        row_idx + row_offset,
+                        x,
+                        screen.snap_value(glyph_advance.ceil()),
                     );
-                let glyph_advance = content_painter
-                    .layout_no_wrap("W".to_string(), screen.font().clone(), palette.fg)
-                    .size()
-                    .x
-                    .max(1.0);
-                let x_origin = content_rect.left();
-                // Keep plain-text layout, but re-apply highlight bands from styled snapshot.
-                let styled_snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
-                for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
-                    for (col_idx, cell) in row.iter().enumerate() {
-                        let (_fg, bg) = resolve_cell_colors(*cell);
-                        if bg == palette.bg {
-                            continue;
-                        }
-                        let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
-                        let rect =
-                            screen.text_band_rect(row_idx + row_offset, x, screen.snap_value(glyph_advance.ceil()));
-                        content_painter.rect_filled(rect, 0.0, bg);
-                    }
-                }
-                if !texture_drawn {
-                    for (row_idx, line) in lines_ref.iter().enumerate() {
-                        let clipped: String = line
-                            .trim_end_matches(' ')
-                            .chars()
-                            .take(pty_cols as usize)
-                            .collect();
-                        if clipped.is_empty() {
-                            continue;
-                        }
-                        let y = screen.row_text_top(row_idx + row_offset);
-                        content_painter.text(
-                            Pos2::new(x_origin, y),
-                            Align2::LEFT_TOP,
-                            clipped,
-                            screen.font().clone(),
-                            palette.fg,
-                        );
-                    }
-                }
-                for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
-                    for (col_idx, cell) in row.iter().enumerate() {
-                        let (fg, bg) = resolve_cell_colors(*cell);
-                        if bg == palette.bg || cell.ch == ' ' {
-                            continue;
-                        }
-                        let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
-                        let y = screen.row_text_top(row_idx + row_offset);
-                        content_painter.text(
-                            Pos2::new(x, y),
-                            Align2::LEFT_TOP,
-                            cell.ch.to_string(),
-                            screen.font().clone(),
-                            fg,
-                        );
-                        if cell.bold {
-                            content_painter.text(
-                                Pos2::new(x + 0.7, y),
-                                Align2::LEFT_TOP,
-                                cell.ch.to_string(),
-                                screen.font().clone(),
-                                fg,
-                            );
-                        }
-                        if cell.underline {
-                            let rect = screen.text_band_rect(
-                                row_idx + row_offset,
-                                x,
-                                screen.snap_value(glyph_advance.ceil()),
-                            );
-                            let uy = rect.bottom() - 2.0;
-                            content_painter.line_segment(
-                                [Pos2::new(rect.left(), uy), Pos2::new(rect.right(), uy)],
-                                Stroke::new(1.0, fg),
-                            );
-                        }
-                    }
-                }
-                state.prev_plain_lines = lines_ref.to_vec();
-                state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
-                if !snap.cursor_hidden {
-                    let row = snap.cursor_row as usize + row_offset;
-                    let col = snap.cursor_col as usize;
-                    let cursor_x = screen.snap_value(x_origin + col as f32 * glyph_advance);
-                    let cursor_rect =
-                        screen.text_band_rect(row, cursor_x, screen.snap_value(glyph_advance.ceil()));
-                    let ch = lines_ref
-                        .get(row.saturating_sub(row_offset))
-                        .and_then(|line| line.chars().nth(col))
-                        .unwrap_or(' ');
-                    content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
-                    if ch != ' ' {
-                        content_painter.text(
-                            Pos2::new(cursor_x, screen.row_text_top(row)),
-                            Align2::LEFT_TOP,
-                            ch.to_string(),
-                            screen.font().clone(),
-                            palette.bg,
-                        );
-                    }
-                }
-            } else {
-                let started = Instant::now();
-                let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
-                snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
-                if state.show_perf_overlay {
-                    dirty_stats.changed_rows = dirty_stats.total_rows;
-                    dirty_stats.changed_cells = dirty_stats.total_cells;
-                }
-                state.prev_plain_lines.clear();
-                state.prev_plain_cursor = None;
-                for (row_idx, row) in snapshot.cells.iter().enumerate() {
-                    for (col_idx, cell) in row.iter().enumerate() {
-                        let mut cell_to_draw = *cell;
-                        if smooth_borders {
-                            cell_to_draw.ch = smooth_border_char_from_snapshot(
-                                &snapshot.cells,
-                                row_idx,
-                                col_idx,
-                                cell.ch,
-                            );
-                        }
-                        let border_conn = if smooth_borders {
-                            vector_border_connections(
-                                &snapshot.cells,
-                                row_idx,
-                                col_idx,
-                                cell_to_draw.ch,
-                            )
-                        } else {
-                            None
-                        };
-                        draw_cell(
-                            &screen,
-                            &content_painter,
-                            col_idx,
-                            row_idx + row_offset,
-                            &cell_to_draw,
-                            border_conn,
-                        );
-                    }
-                }
-
-                if !snapshot.cursor_hidden {
-                    let row = snapshot.cursor_row as usize + row_offset;
-                    let col = snapshot.cursor_col as usize;
-                    let cursor_rect = screen.row_rect(col, row, 1);
-                    let cell = snapshot
-                        .cells
-                        .get(row.saturating_sub(row_offset))
-                        .and_then(|line| line.get(snapshot.cursor_col as usize))
-                        .copied()
-                        .unwrap_or(PtyStyledCell {
-                            ch: ' ',
-                            fg: Color::White,
-                            bg: Color::Black,
-                            bold: false,
-                            italic: false,
-                            underline: false,
-                            reversed: false,
-                        });
-                    let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
-                    let fill = cursor_fg;
-                    let text_color = cursor_bg;
-                    content_painter.rect_filled(cursor_rect, 0.0, fill);
-                    if cell.ch != ' ' {
-                        content_painter.text(
-                            cursor_rect.left_top(),
-                            Align2::LEFT_TOP,
-                            cell.ch.to_string(),
-                            screen.font().clone(),
-                            text_color,
-                        );
-                    }
+                    let uy = rect.bottom() - 2.0;
+                    content_painter.line_segment(
+                        [Pos2::new(rect.left(), uy), Pos2::new(rect.right(), uy)],
+                        Stroke::new(1.0, fg),
+                    );
                 }
             }
-            draw_ms = draw_started.elapsed().as_secs_f32() * 1000.0;
-            if state.show_perf_overlay {
-                draw_perf_overlay(
+        }
+        state.prev_plain_lines = lines_ref.to_vec();
+        state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
+        if !snap.cursor_hidden {
+            let row = snap.cursor_row as usize + row_offset;
+            let col = snap.cursor_col as usize;
+            let cursor_x = screen.snap_value(x_origin + col as f32 * glyph_advance);
+            let cursor_rect =
+                screen.text_band_rect(row, cursor_x, screen.snap_value(glyph_advance.ceil()));
+            let ch = lines_ref
+                .get(row.saturating_sub(row_offset))
+                .and_then(|line| line.chars().nth(col))
+                .unwrap_or(' ');
+            content_painter.rect_filled(cursor_rect, 0.0, palette.fg);
+            if ch != ' ' {
+                content_painter.text(
+                    Pos2::new(cursor_x, screen.row_text_top(row)),
+                    Align2::LEFT_TOP,
+                    ch.to_string(),
+                    screen.font().clone(),
+                    palette.bg,
+                );
+            }
+        }
+    } else {
+        let started = Instant::now();
+        let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
+        snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+        if state.show_perf_overlay {
+            dirty_stats.changed_rows = dirty_stats.total_rows;
+            dirty_stats.changed_cells = dirty_stats.total_cells;
+        }
+        state.prev_plain_lines.clear();
+        state.prev_plain_cursor = None;
+        for (row_idx, row) in snapshot.cells.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                let mut cell_to_draw = *cell;
+                if smooth_borders {
+                    cell_to_draw.ch =
+                        smooth_border_char_from_snapshot(&snapshot.cells, row_idx, col_idx, cell.ch);
+                }
+                let border_conn = if smooth_borders {
+                    vector_border_connections(&snapshot.cells, row_idx, col_idx, cell_to_draw.ch)
+                } else {
+                    None
+                };
+                draw_cell(
                     &screen,
                     &content_painter,
-                    &palette,
-                    &state.perf,
-                    dirty_stats,
-                    input_activity,
-                    output_activity,
-                    plain_fast,
+                    col_idx,
+                    row_idx + row_offset,
+                    &cell_to_draw,
+                    border_conn,
                 );
             }
-        });
+        }
+
+        if !snapshot.cursor_hidden {
+            let row = snapshot.cursor_row as usize + row_offset;
+            let col = snapshot.cursor_col as usize;
+            let cursor_rect = screen.row_rect(col, row, 1);
+            let cell = snapshot
+                .cells
+                .get(row.saturating_sub(row_offset))
+                .and_then(|line| line.get(snapshot.cursor_col as usize))
+                .copied()
+                .unwrap_or(PtyStyledCell {
+                    ch: ' ',
+                    fg: Color::White,
+                    bg: Color::Black,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    reversed: false,
+                });
+            let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
+            let fill = cursor_fg;
+            let text_color = cursor_bg;
+            content_painter.rect_filled(cursor_rect, 0.0, fill);
+            if cell.ch != ' ' {
+                content_painter.text(
+                    cursor_rect.left_top(),
+                    Align2::LEFT_TOP,
+                    cell.ch.to_string(),
+                    screen.font().clone(),
+                    text_color,
+                );
+            }
+        }
+    }
+    let draw_ms = draw_started.elapsed().as_secs_f32() * 1000.0;
+    if state.show_perf_overlay {
+        draw_perf_overlay(
+            &screen,
+            &content_painter,
+            &palette,
+            &state.perf,
+            dirty_stats,
+            input_activity,
+            output_activity,
+            plain_fast,
+        );
+    }
 
     let frame_ms = frame_started.elapsed().as_secs_f32() * 1000.0;
     state
@@ -626,21 +630,38 @@ fn handle_pty_mouse(
                 if !content_rect.contains(pos) {
                     continue;
                 }
-                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos)
-                {
-                    let kind = if delta.y < 0.0 {
-                        Some(MouseEventKind::ScrollDown)
-                    } else if delta.y > 0.0 {
-                        Some(MouseEventKind::ScrollUp)
-                    } else if delta.x < 0.0 {
-                        Some(MouseEventKind::ScrollRight)
-                    } else if delta.x > 0.0 {
-                        Some(MouseEventKind::ScrollLeft)
+                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos) {
+                    if session.mouse_mode_enabled() {
+                        let kind = if delta.y < 0.0 {
+                            Some(MouseEventKind::ScrollDown)
+                        } else if delta.y > 0.0 {
+                            Some(MouseEventKind::ScrollUp)
+                        } else if delta.x < 0.0 {
+                            Some(MouseEventKind::ScrollRight)
+                        } else if delta.x > 0.0 {
+                            Some(MouseEventKind::ScrollLeft)
+                        } else {
+                            None
+                        };
+                        if let Some(kind) = kind {
+                            session.send_mouse_event(kind, egui_mods_to_crossterm(modifiers), col, row);
+                        }
                     } else {
-                        None
-                    };
-                    if let Some(kind) = kind {
-                        session.send_mouse_event(kind, egui_mods_to_crossterm(modifiers), col, row);
+                        let (key, amount) = if delta.y > 0.0 {
+                            (KeyCode::Up, delta.y.abs())
+                        } else if delta.y < 0.0 {
+                            (KeyCode::Down, delta.y.abs())
+                        } else if delta.x > 0.0 {
+                            (KeyCode::Right, delta.x.abs())
+                        } else if delta.x < 0.0 {
+                            (KeyCode::Left, delta.x.abs())
+                        } else {
+                            continue;
+                        };
+                        let repeats = (amount / 24.0).round().clamp(1.0, 6.0) as usize;
+                        for _ in 0..repeats {
+                            session.send_key(key, egui_mods_to_crossterm(modifiers));
+                        }
                     }
                 }
             }

@@ -733,6 +733,14 @@ impl PtySession {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn mouse_mode_enabled(&self) -> bool {
+        self.parser
+            .lock()
+            .map(|p| !matches!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None))
+            .unwrap_or(false)
+    }
+
     /// Resize the PTY and notify the child via SIGWINCH
     pub fn resize(&mut self, cols: u16, rows: u16) {
         if cols == self.cols && rows == self.rows {

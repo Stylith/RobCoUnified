@@ -2116,7 +2116,22 @@ impl RobcoNativeApp {
             previous.session.terminate();
         }
         let layout = self.terminal_layout();
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let requested_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let requested_shell_name = std::path::Path::new(&requested_shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        // fish emits a terminal capability warning in the embedded desktop PTY
+        // because this surface does not answer the DA query it expects.
+        let shell = if requested_shell_name == "fish" {
+            if std::path::Path::new("/bin/bash").exists() {
+                "/bin/bash".to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        } else {
+            requested_shell
+        };
         let shell_name = std::path::Path::new(&shell)
             .file_name()
             .and_then(|s| s.to_str())
@@ -2139,7 +2154,7 @@ impl RobcoNativeApp {
                 ("ZDOTDIR".into(), "/dev/null".into()),
             ],
             top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
-            force_render_mode: Some(true),
+            force_render_mode: Some(false),
         };
         match spawn_embedded_pty_with_options(
             "Terminal",
@@ -4405,47 +4420,6 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_terminal_footer(&self, ctx: &Context) {
-        let layout = self.terminal_layout();
-        let now = Local::now();
-        let left = now.format("%a %Y-%m-%d %I:%M%p").to_string();
-        let center = {
-            let sessions = session::get_sessions();
-            let active = session::active_idx();
-            if sessions.is_empty() {
-                "[*]".to_string()
-            } else {
-                sessions
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        if i == active {
-                            format!("[{}*]", i + 1)
-                        } else {
-                            format!("[{}]", i + 1)
-                        }
-                    })
-                    .collect::<String>()
-            }
-        };
-        let right = crate::status::battery_status_string();
-        TopBottomPanel::bottom("native_terminal_footer")
-            .resizable(false)
-            .exact_height(retro_footer_height())
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::none()
-                    .fill(current_palette().bg)
-                    .inner_margin(0.0),
-            )
-            .show(ctx, |ui| {
-                let palette = current_palette();
-                let (screen, _) = RetroScreen::new(ui, layout.cols, 1);
-                let painter = ui.painter_at(screen.rect);
-                screen.footer_bar(&painter, &palette, &left, &center, &right);
-            });
-    }
-
     fn draw_terminal_footer_spacer(&self, ctx: &Context) {
         TopBottomPanel::bottom("native_terminal_footer_spacer")
             .resizable(false)
@@ -4473,7 +4447,7 @@ impl RobcoNativeApp {
         egui::Frame::none()
             .fill(palette.bg)
             .stroke(egui::Stroke::new(1.0, palette.fg))
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::ZERO)
     }
 
     fn desktop_bar_button(
@@ -4512,6 +4486,16 @@ impl RobcoNativeApp {
             );
         }
         response
+    }
+
+    fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+        ui.add(
+            egui::Button::new(RichText::new(label).color(Color32::BLACK).monospace())
+                .frame(false)
+                .fill(Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .min_size(egui::vec2(0.0, 0.0)),
+        )
     }
 
     fn retro_separator(ui: &mut egui::Ui) {
@@ -4861,32 +4845,40 @@ impl RobcoNativeApp {
             .inner
     }
 
-    fn draw_desktop_window_header(ui: &mut egui::Ui, maximized: bool) -> DesktopHeaderAction {
+    fn draw_desktop_window_header(
+        ui: &mut egui::Ui,
+        title: &str,
+        maximized: bool,
+    ) -> DesktopHeaderAction {
         let palette = current_palette();
         let mut action = DesktopHeaderAction::None;
         egui::Frame::none()
-            .fill(palette.panel)
-            .stroke(egui::Stroke::new(1.0, palette.fg))
-            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+            .fill(palette.fg)
+            .stroke(egui::Stroke::NONE)
+            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).color(Color32::BLACK).strong());
+                    ui.add_space(6.0);
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("[X]").clicked() {
+                        if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
                             action = DesktopHeaderAction::Close;
                         }
-                        if ui
-                            .small_button(if maximized { "[R]" } else { "[+]" })
-                            .clicked()
+                        if Self::desktop_header_glyph_button(
+                            ui,
+                            if maximized { "[R]" } else { "[+]" },
+                        )
+                        .clicked()
                         {
                             action = DesktopHeaderAction::ToggleMaximize;
                         }
-                        if ui.small_button("[-]").clicked() {
+                        if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
                             action = DesktopHeaderAction::Minimize;
                         }
                     });
                 });
             });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
         action
     }
 
@@ -4918,7 +4910,7 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, maximized);
+                header_action = Self::draw_desktop_window_header(ui, "File Manager", maximized);
                 ui.set_min_size(ui.available_size_before_wrap());
                 ui.horizontal(|ui| {
                     if ui.button("Up").clicked() {
@@ -5077,7 +5069,7 @@ impl RobcoNativeApp {
         let restore = self.take_desktop_window_restore_dims(DesktopWindow::Editor);
         let mut header_action = DesktopHeaderAction::None;
         let generation = self.desktop_window_generation(DesktopWindow::Editor);
-        let mut window = egui::Window::new(title)
+        let mut window = egui::Window::new(&title)
             .id(Id::new(("native_word_processor", generation)))
             .open(&mut open)
             .title_bar(false)
@@ -5096,7 +5088,7 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, maximized);
+                header_action = Self::draw_desktop_window_header(ui, &title, maximized);
                 ui.set_min_size(ui.available_size_before_wrap());
                 ui.horizontal(|ui| {
                     if ui.button("New").clicked() {
@@ -5185,7 +5177,7 @@ impl RobcoNativeApp {
         let mut close_requested = false;
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, maximized);
+            header_action = Self::draw_desktop_window_header(ui, "Settings", maximized);
             let is_admin = self.session.as_ref().is_some_and(|s| s.is_admin);
             let panel = self.settings.panel;
             let mut changed = false;
@@ -6465,7 +6457,7 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, maximized);
+                header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
                 ui.set_min_size(ui.available_size_before_wrap());
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Built-in");
@@ -6561,7 +6553,7 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, maximized);
+                header_action = Self::draw_desktop_window_header(ui, "Nuke Codes", maximized);
                 ui.set_min_size(ui.available_size_before_wrap());
                 if Self::retro_full_width_button(ui, "Refresh").clicked() {
                     refresh = true;
@@ -6655,7 +6647,7 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, maximized);
+                header_action = Self::draw_desktop_window_header(ui, &title, maximized);
                 let available = ui.available_size();
                 let cols = ((available.x / 12.0).floor() as usize).clamp(80, 160);
                 let rows = ((available.y / 27.0).floor() as usize).clamp(24, 48);

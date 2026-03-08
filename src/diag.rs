@@ -1,9 +1,5 @@
-use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-
-static LOG_ONCE_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn diagnostics_path() -> PathBuf {
     if let Ok(path) = std::env::var("ROBCOS_DIAG_PATH") {
@@ -37,15 +33,3 @@ pub fn log(component: &str, message: &str) {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     append_line(&format!("[{now}] [{component}] {message}"));
 }
-
-pub fn log_once(key: &str, component: &str, message: &str) {
-    let lock = LOG_ONCE_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
-    let Ok(mut set) = lock.lock() else {
-        return;
-    };
-    if set.insert(key.to_string()) {
-        drop(set);
-        log(component, message);
-    }
-}
-
