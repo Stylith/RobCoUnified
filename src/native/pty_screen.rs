@@ -197,6 +197,18 @@ pub fn draw_embedded_pty_in_ui(
     cols: usize,
     rows: usize,
 ) -> PtyScreenEvent {
+    let desired = ui.available_size();
+    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired)
+}
+
+pub fn draw_embedded_pty_in_ui_sized(
+    ui: &mut egui::Ui,
+    ctx: &Context,
+    state: &mut NativePtyState,
+    cols: usize,
+    rows: usize,
+    desired: egui::Vec2,
+) -> PtyScreenEvent {
     if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
     }
@@ -251,7 +263,7 @@ pub fn draw_embedded_pty_in_ui(
     let palette = current_palette();
     ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
     let render_rows = pty_rows as usize + usize::from(show_top_bar);
-    let (screen, response) = RetroScreen::new(ui, pty_cols as usize, render_rows);
+    let (screen, response) = RetroScreen::new_sized(ui, pty_cols as usize, render_rows, desired);
     let painter = ui.painter_at(screen.rect);
     let row_offset = usize::from(show_top_bar);
     let content_rect = if show_top_bar {
