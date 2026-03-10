@@ -61,7 +61,8 @@ use crate::config::{
     cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
     persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
     update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopFileManagerSettings,
-    DesktopPtyProfileSettings, DesktopIconStyle, FileManagerSortMode, FileManagerViewMode,
+    DesktopIconSortMode, DesktopPtyProfileSettings, DesktopIconStyle, DesktopShortcut,
+    FileManagerSortMode, FileManagerViewMode,
     OpenMode, Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{
@@ -232,6 +233,7 @@ struct AssetCache {
     icon_video: TextureHandle,
     icon_archive: TextureHandle,
     icon_app: TextureHandle,
+    icon_shortcut_badge: TextureHandle,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
 }
@@ -283,6 +285,11 @@ enum ContextMenuAction {
     GenericCopy,
     GenericPaste,
     GenericSelectAll,
+    CreateShortcut(String),
+    DeleteShortcut(usize),
+    SortDesktopIcons(DesktopIconSortMode),
+    ToggleSnapToGrid,
+    LaunchShortcut(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -949,6 +956,12 @@ impl RobcoNativeApp {
                 "icon_app",
                 include_bytes!("../Icons/pixel--programming.svg"),
                 Some(ICON_SIZE),
+            ),
+            icon_shortcut_badge: Self::load_svg_icon(
+                ctx,
+                "icon_shortcut_badge",
+                include_bytes!("../Icons/pixel--external-link-solid.svg"),
+                Some(16),
             ),
             wallpaper: None,
             wallpaper_loaded_for: String::new(),
@@ -2516,6 +2529,43 @@ impl RobcoNativeApp {
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}
             ContextMenuAction::GenericSelectAll => {}
+            ContextMenuAction::CreateShortcut(app_name) => {
+                let label = app_name.clone();
+                self.settings.draft.desktop_shortcuts.push(DesktopShortcut {
+                    label,
+                    app_name,
+                    pos_x: None,
+                    pos_y: None,
+                });
+                self.persist_native_settings();
+            }
+            ContextMenuAction::DeleteShortcut(idx) => {
+                if idx < self.settings.draft.desktop_shortcuts.len() {
+                    self.settings.draft.desktop_shortcuts.remove(idx);
+                    self.persist_native_settings();
+                }
+            }
+            ContextMenuAction::SortDesktopIcons(mode) => {
+                self.settings.draft.desktop_icon_sort = mode;
+                match mode {
+                    DesktopIconSortMode::ByName => {
+                        self.settings.draft.desktop_shortcuts.sort_by(|a, b| a.label.cmp(&b.label));
+                    }
+                    DesktopIconSortMode::ByType => {
+                        self.settings.draft.desktop_shortcuts.sort_by(|a, b| a.app_name.cmp(&b.app_name));
+                    }
+                    DesktopIconSortMode::Custom => {}
+                }
+                self.settings.draft.desktop_icon_custom_positions.clear();
+                self.persist_native_settings();
+            }
+            ContextMenuAction::ToggleSnapToGrid => {
+                self.settings.draft.desktop_snap_to_grid = !self.settings.draft.desktop_snap_to_grid;
+                self.persist_native_settings();
+            }
+            ContextMenuAction::LaunchShortcut(name) => {
+                self.run_start_leaf_action(StartLeafAction::LaunchConfiguredApp(name));
+            }
         }
     }
 
@@ -2529,6 +2579,7 @@ impl RobcoNativeApp {
         response.context_menu(|ui| {
             Self::apply_context_menu_style(ui);
             ui.set_min_width(136.0);
+            ui.set_max_width(180.0);
 
             let open = if has_selection {
                 ui.button("Open")
@@ -2629,12 +2680,35 @@ impl RobcoNativeApp {
     fn attach_desktop_empty_context_menu(
         action: &mut Option<ContextMenuAction>,
         response: &egui::Response,
+        snap_to_grid: bool,
+        sort_mode: DesktopIconSortMode,
     ) {
         response.context_menu(|ui| {
             Self::apply_context_menu_style(ui);
             ui.set_min_width(136.0);
+            ui.set_max_width(180.0);
 
-            let _ = Self::retro_disabled_button(ui, "View  >").on_hover_text("Coming soon");
+            ui.menu_button("View", |ui| {
+                Self::apply_context_menu_style(ui);
+                ui.set_min_width(140.0);
+                ui.set_max_width(180.0);
+                let name_label = if sort_mode == DesktopIconSortMode::ByName { "✓ Sort by Name" } else { "  Sort by Name" };
+                let type_label = if sort_mode == DesktopIconSortMode::ByType { "✓ Sort by Type" } else { "  Sort by Type" };
+                if ui.button(name_label).clicked() {
+                    *action = Some(ContextMenuAction::SortDesktopIcons(DesktopIconSortMode::ByName));
+                    ui.close_menu();
+                }
+                if ui.button(type_label).clicked() {
+                    *action = Some(ContextMenuAction::SortDesktopIcons(DesktopIconSortMode::ByType));
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                let snap_label = if snap_to_grid { "✓ Snap to Grid" } else { "  Snap to Grid" };
+                if ui.button(snap_label).clicked() {
+                    *action = Some(ContextMenuAction::ToggleSnapToGrid);
+                    ui.close_menu();
+                }
+            });
 
             Self::retro_separator(ui);
 
@@ -2670,6 +2744,7 @@ impl RobcoNativeApp {
         response.context_menu(|ui| {
             Self::apply_context_menu_style(ui);
             ui.set_min_width(118.0);
+            ui.set_max_width(160.0);
 
             if ui.button("Copy").clicked() {
                 *action = Some(ContextMenuAction::GenericCopy);
@@ -2693,8 +2768,18 @@ impl RobcoNativeApp {
         let Some(cache) = self.asset_cache.as_ref() else {
             return;
         };
+        // Clone all needed textures upfront so we release the cache borrow
+        let tex_file_manager = cache.icon_file_manager.clone();
+        let tex_editor = cache.icon_editor.clone();
+        let tex_applications = cache.icon_applications.clone();
+        let tex_settings = cache.icon_settings.clone();
+        let tex_nuke_codes = cache.icon_nuke_codes.clone();
+        let tex_terminal = cache.icon_terminal.clone();
+        let tex_shortcut_badge = cache.icon_shortcut_badge.clone();
+
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
+        let snap = self.settings.draft.desktop_snap_to_grid;
         let workspace = Self::desktop_workspace_rect(ui.ctx());
         let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) =
             match style {
@@ -2702,32 +2787,66 @@ impl RobcoNativeApp {
             DesktopIconStyle::Win95 | DesktopIconStyle::Dos => (48.0, 18.0, 74.0, 84.0),
             DesktopIconStyle::NoIcons => return,
         };
-        let entries: [(&TextureHandle, &str, &str, DesktopWindow); 6] = [
-            (&cache.icon_file_manager, "Files", "[DIR]", DesktopWindow::FileManager),
-            (&cache.icon_editor, "Documents", "[TXT]", DesktopWindow::Editor),
-            (&cache.icon_applications, "Apps", "[APP]", DesktopWindow::Applications),
-            (&cache.icon_settings, "Settings", "[CFG]", DesktopWindow::Settings),
-            (&cache.icon_nuke_codes, "Nuke Codes", "[!]", DesktopWindow::NukeCodes),
-            (&cache.icon_terminal, "Terminal", "[_]", DesktopWindow::PtyApp),
-        ];
-        let mut open_window = None;
 
-        for (index, (texture, label, ascii, window)) in entries.iter().enumerate() {
-            let top = workspace.top() + 16.0 + index as f32 * item_height;
+        let grid_w = column_width;
+        let grid_h = item_height;
+
+        let snap_pos = |pos: egui::Pos2| -> egui::Pos2 {
+            if snap {
+                egui::pos2(
+                    (pos.x / grid_w).round() * grid_w,
+                    (pos.y / grid_h).round() * grid_h,
+                )
+            } else {
+                pos
+            }
+        };
+
+        let builtin_entries: [(TextureHandle, &str, &str, &str); 6] = [
+            (tex_file_manager, "builtin_0", "Files", "[DIR]"),
+            (tex_editor, "builtin_1", "Documents", "[TXT]"),
+            (tex_applications.clone(), "builtin_2", "Apps", "[APP]"),
+            (tex_settings, "builtin_3", "Settings", "[CFG]"),
+            (tex_nuke_codes, "builtin_4", "Nuke Codes", "[!]"),
+            (tex_terminal, "builtin_5", "Terminal", "[_]"),
+        ];
+
+        let mut open_window: Option<DesktopWindow> = None;
+        let open_windows: [DesktopWindow; 6] = [
+            DesktopWindow::FileManager,
+            DesktopWindow::Editor,
+            DesktopWindow::Applications,
+            DesktopWindow::Settings,
+            DesktopWindow::NukeCodes,
+            DesktopWindow::PtyApp,
+        ];
+        let mut shortcut_action: Option<ContextMenuAction> = None;
+        let mut needs_persist = false;
+
+        for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
+            let stored_pos = self.settings.draft.desktop_icon_custom_positions
+                .get(*key)
+                .map(|&[x, y]| egui::pos2(x, y));
+            let top_left = stored_pos.unwrap_or_else(|| egui::pos2(
+                workspace.left() + 4.0,
+                workspace.top() + 16.0 + index as f32 * item_height,
+            ));
+
             let icon_rect = egui::Rect::from_min_size(
-                egui::pos2(workspace.left() + 18.0, top),
+                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
                 egui::vec2(icon_size, icon_size),
             );
             let label_rect = egui::Rect::from_min_size(
-                egui::pos2(workspace.left() + 4.0, top + icon_size + 2.0),
+                top_left + egui::vec2(0.0, icon_size + 2.0),
                 egui::vec2(column_width, label_height.max(16.0)),
             );
             let hit_rect = if label_height > 0.0 {
-                icon_rect.union(label_rect)
+                egui::Rect::from_min_size(top_left, egui::vec2(column_width, icon_size + label_height + 2.0))
             } else {
                 icon_rect
             };
-            let response = ui.allocate_rect(hit_rect, egui::Sense::click());
+
+            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
 
             match style {
                 DesktopIconStyle::Dos => {
@@ -2755,8 +2874,140 @@ impl RobcoNativeApp {
                 );
             }
 
+            if response.dragged() {
+                let new_pos = top_left + response.drag_delta();
+                self.settings.draft.desktop_icon_custom_positions
+                    .insert(key.to_string(), [new_pos.x, new_pos.y]);
+            }
+            if response.drag_stopped() {
+                if snap {
+                    if let Some(&[x, y]) = self.settings.draft.desktop_icon_custom_positions.get(*key) {
+                        let snapped = snap_pos(egui::pos2(x, y));
+                        self.settings.draft.desktop_icon_custom_positions
+                            .insert(key.to_string(), [snapped.x, snapped.y]);
+                    }
+                }
+                needs_persist = true;
+            }
+
             if response.double_clicked() {
-                open_window = Some(*window);
+                open_window = Some(open_windows[index]);
+            }
+        }
+
+        let shortcuts = self.settings.draft.desktop_shortcuts.clone();
+        for (sidx, shortcut) in shortcuts.iter().enumerate() {
+            let key = format!("shortcut_{}", sidx);
+            let stored_pos = self.settings.draft.desktop_icon_custom_positions
+                .get(&key)
+                .map(|&[x, y]| egui::pos2(x, y));
+            let default_shortcut_pos = egui::pos2(
+                workspace.left() + 4.0 + column_width,
+                workspace.top() + 16.0 + sidx as f32 * item_height,
+            );
+            let top_left = stored_pos.unwrap_or(default_shortcut_pos);
+
+            let icon_rect = egui::Rect::from_min_size(
+                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
+                egui::vec2(icon_size, icon_size),
+            );
+            let label_rect = egui::Rect::from_min_size(
+                top_left + egui::vec2(0.0, icon_size + 2.0),
+                egui::vec2(column_width, label_height.max(16.0)),
+            );
+            let hit_rect = if label_height > 0.0 {
+                egui::Rect::from_min_size(top_left, egui::vec2(column_width, icon_size + label_height + 2.0))
+            } else {
+                icon_rect
+            };
+
+            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
+
+            match style {
+                DesktopIconStyle::Dos => {
+                    ui.painter().text(
+                        icon_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "[LNK]",
+                        FontId::new(18.0, FontFamily::Monospace),
+                        palette.fg,
+                    );
+                }
+                DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
+                    Self::paint_tinted_texture(ui.painter(), &tex_applications, icon_rect, palette.fg);
+                    let badge_size = (icon_size * 0.35).max(10.0);
+                    let badge_rect = egui::Rect::from_min_size(
+                        icon_rect.min + egui::vec2(0.0, icon_size - badge_size),
+                        egui::vec2(badge_size, badge_size),
+                    );
+                    ui.painter().rect_filled(badge_rect, 0.0, Color32::BLACK);
+                    Self::paint_tinted_texture(ui.painter(), &tex_shortcut_badge, badge_rect, Color32::WHITE);
+                }
+                DesktopIconStyle::NoIcons => {}
+            }
+
+            if label_height > 0.0 {
+                ui.painter().text(
+                    label_rect.center(),
+                    Align2::CENTER_CENTER,
+                    &shortcut.label,
+                    FontId::new(13.0, FontFamily::Monospace),
+                    palette.fg,
+                );
+            }
+
+            if response.dragged() {
+                let new_pos = top_left + response.drag_delta();
+                self.settings.draft.desktop_icon_custom_positions
+                    .insert(key.clone(), [new_pos.x, new_pos.y]);
+            }
+            if response.drag_stopped() {
+                if snap {
+                    if let Some(&[x, y]) = self.settings.draft.desktop_icon_custom_positions.get(&key) {
+                        let snapped = snap_pos(egui::pos2(x, y));
+                        self.settings.draft.desktop_icon_custom_positions
+                            .insert(key.clone(), [snapped.x, snapped.y]);
+                    }
+                }
+                needs_persist = true;
+            }
+
+            let app_name_for_menu = shortcut.app_name.clone();
+            response.context_menu(|ui| {
+                Self::apply_context_menu_style(ui);
+                ui.set_min_width(136.0);
+                ui.set_max_width(180.0);
+                if ui.button("Open").clicked() {
+                    shortcut_action = Some(ContextMenuAction::LaunchShortcut(app_name_for_menu.clone()));
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if ui.button("Delete Shortcut").clicked() {
+                    shortcut_action = Some(ContextMenuAction::DeleteShortcut(sidx));
+                    ui.close_menu();
+                }
+            });
+
+            if response.double_clicked() {
+                shortcut_action = Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
+            }
+        }
+
+        if needs_persist {
+            self.persist_native_settings();
+        }
+
+        if let Some(action) = shortcut_action {
+            match action {
+                ContextMenuAction::DeleteShortcut(idx) => {
+                    if idx < self.settings.draft.desktop_shortcuts.len() {
+                        self.settings.draft.desktop_shortcuts.remove(idx);
+                        self.persist_native_settings();
+                    }
+                }
+                _ => {
+                    self.context_menu_action = Some(action);
+                }
             }
         }
 
@@ -5203,6 +5454,7 @@ impl RobcoNativeApp {
             let leaf_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
             let leaf_y =
                 branch_anchor_y.clamp(screen.top() + EDGE_PAD, root_rect.bottom() - leaf_h);
+            let mut leaf_context_action: Option<ContextMenuAction> = None;
             egui::Area::new(Id::new("native_start_leaf_panel"))
                 .fixed_pos([branch_x, leaf_y])
                 .interactable(true)
@@ -5231,9 +5483,26 @@ impl RobcoNativeApp {
                                 if response.clicked() {
                                     self.run_start_leaf_action(item.action.clone());
                                 }
+                                if matches!(leaf, StartLeaf::Applications | StartLeaf::Games | StartLeaf::Network)
+                                    && !matches!(item.action, StartLeafAction::None)
+                                {
+                                    let app_name = item.label.clone();
+                                    response.context_menu(|ui| {
+                                        Self::apply_context_menu_style(ui);
+                                        ui.set_min_width(136.0);
+                                        ui.set_max_width(180.0);
+                                        if ui.button("Create Shortcut").clicked() {
+                                            leaf_context_action = Some(ContextMenuAction::CreateShortcut(app_name.clone()));
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
                             }
                         });
                 });
+            if let Some(action) = leaf_context_action {
+                self.context_menu_action = Some(action);
+            }
         }
     }
 
@@ -5257,7 +5526,12 @@ impl RobcoNativeApp {
                 if !matches!(self.settings.draft.desktop_icon_style, DesktopIconStyle::NoIcons) {
                     self.draw_desktop_icons(ui);
                 }
-                Self::attach_desktop_empty_context_menu(&mut self.context_menu_action, &response);
+                Self::attach_desktop_empty_context_menu(
+                    &mut self.context_menu_action,
+                    &response,
+                    self.settings.draft.desktop_snap_to_grid,
+                    self.settings.draft.desktop_icon_sort,
+                );
                 if response.clicked() {
                     self.close_start_menu();
                 }
@@ -6349,12 +6623,11 @@ impl RobcoNativeApp {
     }
 
     fn retro_disabled_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
-        let label = label.into();
-        ui.scope(|ui| {
-            ui.visuals_mut().override_text_color = Some(current_palette().dim);
-            ui.add_enabled(false, egui::Button::new(label))
-        })
-        .inner
+        let palette = current_palette();
+        ui.add(
+            egui::Button::new(egui::RichText::new(label.into()).color(palette.dim))
+                .sense(egui::Sense::hover()),
+        )
     }
 
     fn apply_top_bar_menu_button_style(ui: &mut egui::Ui) {

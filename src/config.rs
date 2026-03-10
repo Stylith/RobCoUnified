@@ -359,6 +359,25 @@ pub struct DesktopIconPositionsSettings {
     pub trash: Option<DesktopIconPosition>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopIconSortMode {
+    #[default]
+    Custom,
+    ByName,
+    ByType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopShortcut {
+    pub label: String,
+    pub app_name: String,
+    #[serde(default)]
+    pub pos_x: Option<f32>,
+    #[serde(default)]
+    pub pos_y: Option<f32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopPtyProfileSettings {
     pub min_w: u16,
@@ -573,6 +592,14 @@ pub struct Settings {
     pub desktop_wallpapers_custom: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_native_ui_scale")]
     pub native_ui_scale: f32,
+    #[serde(default)]
+    pub desktop_shortcuts: Vec<DesktopShortcut>,
+    #[serde(default)]
+    pub desktop_icon_sort: DesktopIconSortMode,
+    #[serde(default)]
+    pub desktop_snap_to_grid: bool,
+    #[serde(default)]
+    pub desktop_icon_custom_positions: BTreeMap<String, [f32; 2]>,
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -615,6 +642,10 @@ impl Default for Settings {
             desktop_icon_positions: DesktopIconPositionsSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
             native_ui_scale: default_native_ui_scale(),
+            desktop_shortcuts: Vec::new(),
+            desktop_icon_sort: DesktopIconSortMode::Custom,
+            desktop_snap_to_grid: false,
+            desktop_icon_custom_positions: BTreeMap::new(),
         }
     }
 }
