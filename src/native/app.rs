@@ -8331,9 +8331,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::Editor,
@@ -8916,9 +8916,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::Settings,
@@ -9819,9 +9819,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::Applications,
@@ -9900,9 +9900,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::DonkeyKong,
@@ -9986,9 +9986,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::NukeCodes,
@@ -10066,9 +10066,9 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        if let Some(inner) = shown.as_ref() {
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
-        }
+        // Context menus are attached to specific content widgets inside the
+        // window closure, not to the outer Area response (which causes
+        // "double use of widget" ID collisions in egui 0.29).
         let completion_message = state.completion_message.clone();
         let title_for_exit = state.title.clone();
         self.maybe_activate_desktop_window_from_click(
