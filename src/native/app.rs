@@ -2933,7 +2933,7 @@ impl RobcoNativeApp {
             (tex_terminal, "builtin_5", "Terminal", "[_]"),
         ];
 
-        let show_builtin = self.settings.draft.desktop_show_builtin_icons;
+        let hidden_icons = &self.settings.draft.desktop_hidden_builtin_icons;
         let mut open_window: Option<DesktopWindow> = None;
         let open_windows: [DesktopWindow; 6] = [
             DesktopWindow::FileManager,
@@ -2946,7 +2946,10 @@ impl RobcoNativeApp {
         let mut shortcut_action: Option<ContextMenuAction> = None;
         let mut needs_persist = false;
 
-        if show_builtin { for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
+        for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
+            if hidden_icons.contains(&key.to_string()) {
+                continue;
+            }
             let stored_pos = self.settings.draft.desktop_icon_custom_positions
                 .get(*key)
                 .map(|&[x, y]| egui::pos2(x, y));
@@ -3016,7 +3019,7 @@ impl RobcoNativeApp {
             if response.double_clicked() {
                 open_window = Some(open_windows[index]);
             }
-        } } // end if show_builtin
+        }
 
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         for (sidx, shortcut) in shortcuts.iter().enumerate() {
@@ -7712,40 +7715,35 @@ impl RobcoNativeApp {
     ) -> DesktopHeaderAction {
         let palette = current_palette();
         let mut action = DesktopHeaderAction::None;
-        let h = 28.0;
-        // allocate_exact_size advances the cursor by exactly h — no more, no less.
-        // This is the single, correct allocation for the header strip.
-        let (bg_rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), h),
-            egui::Sense::hover(),
-        );
-        ui.painter().rect_filled(bg_rect, 0.0, palette.fg);
-        // child_ui creates a sub-view INSIDE the already-allocated rect.
-        // It does NOT register a second widget with the parent placer,
-        // so there is no "double use of widget" collision.
-        let inner_rect = bg_rect.shrink2(egui::vec2(8.0, 0.0));
-        let mut child = ui.child_ui(inner_rect, Layout::left_to_right(egui::Align::Center), None);
-        child.horizontal(|ui| {
-            ui.label(RichText::new(title).color(Color32::BLACK).strong());
-            ui.add_space(6.0);
-            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
-                    action = DesktopHeaderAction::Close;
-                }
-                if Self::desktop_header_glyph_button(
-                    ui,
-                    if maximized { "[R]" } else { "[+]" },
-                )
-                .clicked()
-                {
-                    action = DesktopHeaderAction::ToggleMaximize;
-                }
-                if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
-                    action = DesktopHeaderAction::Minimize;
-                }
+        // egui::Frame handles background fill + margin in a single allocation.
+        // No manual allocate_exact_size/child_ui, so no "double use of widget".
+        egui::Frame::none()
+            .fill(palette.fg)
+            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .show(ui, |ui| {
+                ui.set_min_height(20.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).color(Color32::BLACK).strong());
+                    ui.add_space(6.0);
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(8.0);
+                        if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
+                            action = DesktopHeaderAction::Close;
+                        }
+                        if Self::desktop_header_glyph_button(
+                            ui,
+                            if maximized { "[R]" } else { "[+]" },
+                        )
+                        .clicked()
+                        {
+                            action = DesktopHeaderAction::ToggleMaximize;
+                        }
+                        if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
+                            action = DesktopHeaderAction::Minimize;
+                        }
+                    });
+                });
             });
-        });
         ui.add_space(2.0);
         action
     }
@@ -7878,14 +7876,21 @@ impl RobcoNativeApp {
                                 self.file_manager.update_search_query(search_query.clone());
                             }
                             ui.add_space(8.0);
-                            if ui.selectable_label(get_settings().desktop_file_manager.show_tree_panel, "Tree").clicked() {
-                                self.toggle_file_manager_tree_panel();
-                            }
-                            if ui.selectable_label(self.file_manager_view_mode() == FileManagerViewMode::List, "List").clicked() {
-                                self.set_file_manager_view_mode(FileManagerViewMode::List);
-                            }
-                            if ui.selectable_label(self.file_manager_view_mode() == FileManagerViewMode::Grid, "Grid").clicked() {
-                                self.set_file_manager_view_mode(FileManagerViewMode::Grid);
+                            {
+                                let tree_on = get_settings().desktop_file_manager.show_tree_panel;
+                                let list_on = self.file_manager_view_mode() == FileManagerViewMode::List;
+                                let grid_on = self.file_manager_view_mode() == FileManagerViewMode::Grid;
+                                let fg = current_palette().fg;
+                                let sel_color = |on: bool| if on { Color32::BLACK } else { fg };
+                                if ui.selectable_label(tree_on, RichText::new("Tree").color(sel_color(tree_on))).clicked() {
+                                    self.toggle_file_manager_tree_panel();
+                                }
+                                if ui.selectable_label(list_on, RichText::new("List").color(sel_color(list_on))).clicked() {
+                                    self.set_file_manager_view_mode(FileManagerViewMode::List);
+                                }
+                                if ui.selectable_label(grid_on, RichText::new("Grid").color(sel_color(grid_on))).clicked() {
+                                    self.set_file_manager_view_mode(FileManagerViewMode::Grid);
+                                }
                             }
                         });
 
@@ -8273,8 +8278,6 @@ impl RobcoNativeApp {
         }
         let text_edit_id = Id::new(("editor_text_edit", generation));
         let shown = window.show(ctx, |ui| {
-            Self::apply_settings_control_style(ui);
-
             // ── TOP PANEL: title bar + menu bar + status ──────────────────────
             egui::TopBottomPanel::top(Id::new(("editor_top", generation)))
                 .frame(egui::Frame::none())
@@ -8667,20 +8670,18 @@ impl RobcoNativeApp {
                                             });
                                             if self.settings.draft.theme == CUSTOM_THEME_NAME {
                                                 let mut rgb = self.settings.draft.custom_theme_rgb;
+                                                let preview_color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                                // Make slider rails visible: track in custom color,
+                                                // unfilled portion in dim. Without this, the rail
+                                                // is BLACK-on-BLACK (invisible) due to settings style.
+                                                ui.visuals_mut().selection.bg_fill = preview_color;
+                                                ui.visuals_mut().widgets.inactive.bg_fill = palette.dim;
                                                 changed |= ui.add(egui::Slider::new(&mut rgb[0], 0..=255).text("Red")).changed();
                                                 changed |= ui.add(egui::Slider::new(&mut rgb[1], 0..=255).text("Green")).changed();
                                                 changed |= ui.add(egui::Slider::new(&mut rgb[2], 0..=255).text("Blue")).changed();
                                                 if rgb != self.settings.draft.custom_theme_rgb {
                                                     self.settings.draft.custom_theme_rgb = rgb;
                                                 }
-                                                // Color preview bar
-                                                let preview_color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                                let (bar_rect, _) = ui.allocate_exact_size(
-                                                    egui::vec2(ui.available_width(), 24.0),
-                                                    egui::Sense::hover(),
-                                                );
-                                                ui.painter().rect_filled(bar_rect, 4.0, preview_color);
-                                                ui.painter().rect_stroke(bar_rect, 4.0, egui::Stroke::new(1.0, palette.fg));
                                             }
                                         });
                                     }
@@ -8714,9 +8715,29 @@ impl RobcoNativeApp {
                                                     });
                                             });
                                             ui.add_space(8.0);
-                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.desktop_show_builtin_icons, "Show built-in desktop icons").clicked() {
-                                                changed = true;
+                                            ui.label(RichText::new("Built-in Desktop Icons").color(palette.fg).strong());
+                                            ui.add_space(4.0);
+                                            let icon_entries: [(&str, &str); 6] = [
+                                                ("builtin_0", "Files"),
+                                                ("builtin_1", "Documents"),
+                                                ("builtin_2", "Apps"),
+                                                ("builtin_3", "Settings"),
+                                                ("builtin_4", "Nuke Codes"),
+                                                ("builtin_5", "Terminal"),
+                                            ];
+                                            for (key, label) in &icon_entries {
+                                                let key_s = key.to_string();
+                                                let mut visible = !self.settings.draft.desktop_hidden_builtin_icons.contains(&key_s);
+                                                if Self::retro_checkbox_row(ui, &mut visible, &format!("Show {label}")).clicked() {
+                                                    if visible {
+                                                        self.settings.draft.desktop_hidden_builtin_icons.remove(&key_s);
+                                                    } else {
+                                                        self.settings.draft.desktop_hidden_builtin_icons.insert(key_s);
+                                                    }
+                                                    changed = true;
+                                                }
                                             }
+                                            ui.add_space(8.0);
                                             if Self::retro_checkbox_row(ui, &mut self.settings.draft.desktop_show_cursor, "Show desktop cursor").clicked() {
                                                 changed = true;
                                             }

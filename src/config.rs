@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
@@ -610,8 +610,8 @@ pub struct Settings {
     pub desktop_snap_to_grid: bool,
     #[serde(default)]
     pub desktop_icon_custom_positions: BTreeMap<String, [f32; 2]>,
-    #[serde(default = "default_true")]
-    pub desktop_show_builtin_icons: bool,
+    #[serde(default)]
+    pub desktop_hidden_builtin_icons: BTreeSet<String>,
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -658,7 +658,7 @@ impl Default for Settings {
             desktop_icon_sort: DesktopIconSortMode::Custom,
             desktop_snap_to_grid: false,
             desktop_icon_custom_positions: BTreeMap::new(),
-            desktop_show_builtin_icons: true,
+            desktop_hidden_builtin_icons: BTreeSet::new(),
         }
     }
 }
