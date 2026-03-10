@@ -7362,9 +7362,10 @@ impl RobcoNativeApp {
         } else {
             egui::Stroke::NONE
         };
-        // Use painter_at(rect) so clip is the button rect — prevents the panel's
-        // own background paint from covering the fill or text in any frame ordering.
-        let painter = ui.painter_at(rect);
+        // CentralPanel uses Frame::none() so there is no panel background that can
+        // overpaint us. Use the ScrollArea's clip painter directly — painter_at(rect)
+        // can produce an empty clip if available_width changes between layout and paint.
+        let painter = ui.painter().clone();
         if highlighted {
             painter.rect_filled(rect, 0.0, fill);
         }
@@ -7402,7 +7403,8 @@ impl RobcoNativeApp {
         } else {
             egui::Stroke::NONE
         };
-        let painter = ui.painter_at(rect);
+        // Same reasoning as retro_file_manager_button — use the scroll area's painter directly.
+        let painter = ui.painter().clone();
         if highlighted {
             painter.rect_filled(rect, 0.0, fill);
         }
@@ -7526,6 +7528,7 @@ impl RobcoNativeApp {
             .stroke(egui::Stroke::NONE)
             .inner_margin(egui::Margin::symmetric(8.0, 3.0))
             .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(title).color(Color32::BLACK).strong());
                     ui.add_space(6.0);
@@ -7944,6 +7947,11 @@ impl RobcoNativeApp {
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::FileManager, shown_rect)
             }
+        }
+        // If the inner closure forced file_manager.open to false (e.g. Choose Icon),
+        // honour that — the local `open` bool was never updated inside the closure.
+        if !self.file_manager.open {
+            open = false;
         }
         self.update_desktop_window_state(DesktopWindow::FileManager, open);
     }
