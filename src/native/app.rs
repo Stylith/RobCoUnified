@@ -629,6 +629,13 @@ pub struct RobcoNativeApp {
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
     editor_save_as_input: Option<String>, // Some(path_string) = Save As dialog open
+    editor_show_line_numbers: bool,
+    editor_find_open: bool,
+    editor_find_replace_visible: bool,
+    editor_find_query: String,
+    editor_replace_query: String,
+    editor_find_occurrence: usize,
+    editor_text_align: u8, // 0=Left 1=Center 2=Right
 }
 
 struct ParkedSessionState {
@@ -791,6 +798,13 @@ impl Default for RobcoNativeApp {
             shortcut_icon_cache: HashMap::new(),
             appearance_tab: 0,
             editor_save_as_input: None,
+            editor_show_line_numbers: false,
+            editor_find_open: false,
+            editor_find_replace_visible: false,
+            editor_find_query: String::new(),
+            editor_replace_query: String::new(),
+            editor_find_occurrence: 0,
+            editor_text_align: 0,
         }
     }
 }
@@ -4257,11 +4271,12 @@ impl RobcoNativeApp {
     fn open_path_in_editor(&mut self, path: PathBuf) {
         match read_text_file(&path) {
             Ok(text) => {
-                self.editor.path = Some(path);
+                self.editor.path = Some(path.clone());
                 self.editor.text = text;
                 self.editor.dirty = false;
-                self.open_desktop_window(DesktopWindow::Editor);
                 self.editor.status = "Opened document.".to_string();
+                self.push_editor_recent_file(&path);
+                self.open_desktop_window(DesktopWindow::Editor);
             }
             Err(err) => {
                 self.editor.status = format!("Open failed: {err}");
@@ -4339,6 +4354,78 @@ impl RobcoNativeApp {
         self.editor.status = "New document.".to_string();
     }
 
+    fn editor_find_next(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
+        if self.editor_find_query.is_empty() { return; }
+        let text = self.editor.text.clone();
+        let query = self.editor_find_query.clone();
+        // Collect all match byte positions
+        let matches: Vec<usize> = text
+            .char_indices()
+            .filter_map(|(byte_idx, _)| {
+                if text[byte_idx..].starts_with(query.as_str()) {
+                    Some(byte_idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if matches.is_empty() {
+            self.editor.status = format!("Not found: {}", query);
+            return;
+        }
+        let idx = self.editor_find_occurrence % matches.len();
+        self.editor_find_occurrence = idx + 1;
+        let byte_start = matches[idx];
+        let byte_end = byte_start + query.len();
+        // Convert byte offsets to char counts
+        let char_start = text[..byte_start].chars().count();
+        let char_end = text[..byte_end].chars().count();
+        // Set TextEdit cursor/selection
+        let mut state = egui::text_edit::TextEditState::load(ctx, text_edit_id)
+            .unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(char_start),
+            egui::text::CCursor::new(char_end),
+        )));
+        state.store(ctx, text_edit_id);
+        ctx.memory_mut(|m| m.request_focus(text_edit_id));
+        self.editor.status = format!("Match {} of {}", idx + 1, matches.len());
+    }
+
+    fn editor_replace_one(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
+        if self.editor_find_query.is_empty() { return; }
+        let query = self.editor_find_query.clone();
+        let replacement = self.editor_replace_query.clone();
+        if let Some(pos) = self.editor.text.find(&query) {
+            self.editor.text.replace_range(pos..pos + query.len(), &replacement);
+            self.editor.dirty = true;
+        }
+        self.editor_find_next(ctx, text_edit_id);
+    }
+
+    fn editor_replace_all(&mut self) {
+        if self.editor_find_query.is_empty() { return; }
+        let query = self.editor_find_query.clone();
+        let replacement = self.editor_replace_query.clone();
+        let count = self.editor.text.matches(query.as_str()).count();
+        if count > 0 {
+            self.editor.text = self.editor.text.replace(query.as_str(), &replacement);
+            self.editor.dirty = true;
+            self.editor.status = format!("Replaced {} occurrences.", count);
+        } else {
+            self.editor.status = format!("Not found: {}", query);
+        }
+    }
+
+    fn push_editor_recent_file(&mut self, path: &std::path::Path) {
+        if let Some(s) = path.to_str() {
+            let s = s.to_string();
+            self.settings.draft.editor_recent_files.retain(|p| p != &s);
+            self.settings.draft.editor_recent_files.insert(0, s);
+            self.settings.draft.editor_recent_files.truncate(10);
+        }
+    }
+
     fn save_editor(&mut self) {
         let Some(path) = self.editor.path.clone() else {
             self.editor.status = "No document path set.".to_string();
@@ -4356,6 +4443,7 @@ impl RobcoNativeApp {
             }
             Err(err) => self.editor.status = format!("Save failed: {err}"),
         }
+        self.push_editor_recent_file(&path);
     }
 
     fn terminal_app_items(&self) -> Vec<String> {
@@ -5356,6 +5444,25 @@ impl RobcoNativeApp {
                                 self.open_desktop_window(DesktopWindow::FileManager);
                                 ui.close_menu();
                             }
+                            if !self.settings.draft.editor_recent_files.is_empty() {
+                                ui.menu_button("Open Recent…", |ui| {
+                                    Self::apply_top_dropdown_menu_style(ui);
+                                    ui.set_min_width(220.0);
+                                    ui.set_max_width(360.0);
+                                    let recents = self.settings.draft.editor_recent_files.clone();
+                                    for path_str in &recents {
+                                        let label = std::path::Path::new(path_str)
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or(path_str.as_str());
+                                        if ui.button(label).clicked() {
+                                            let path = std::path::PathBuf::from(path_str);
+                                            self.open_path_in_editor(path);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                            }
                             Self::retro_separator(ui);
                         }
                         if file_manager_active {
@@ -5537,6 +5644,15 @@ impl RobcoNativeApp {
                             self.open_desktop_window(DesktopWindow::Settings);
                             ui.close_menu();
                         }
+                        Self::retro_separator(ui);
+                        if ui.button("Exit All").clicked() {
+                            for w in [DesktopWindow::FileManager, DesktopWindow::Editor, DesktopWindow::Settings,
+                                      DesktopWindow::Applications, DesktopWindow::NukeCodes, DesktopWindow::PtyApp,
+                                      DesktopWindow::DonkeyKong] {
+                                self.close_desktop_window(w);
+                            }
+                            ui.close_menu();
+                        }
                     });
                     ui.menu_button("Edit", |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
@@ -5577,6 +5693,19 @@ impl RobcoNativeApp {
                             Self::retro_separator(ui);
                             if ui.button("Select All   Ctrl+A").clicked() {
                                 inject_key(ctx, egui::Key::A, egui::Modifiers::COMMAND);
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                            if ui.button("Find          Ctrl+F").clicked() {
+                                self.editor_find_open = true;
+                                self.editor_find_replace_visible = false;
+                                self.editor_find_occurrence = 0;
+                                ui.close_menu();
+                            }
+                            if ui.button("Find & Replace Ctrl+H").clicked() {
+                                self.editor_find_open = true;
+                                self.editor_find_replace_visible = true;
+                                self.editor_find_occurrence = 0;
                                 ui.close_menu();
                             }
                         } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
@@ -5688,10 +5817,42 @@ impl RobcoNativeApp {
                                 self.editor.font_size = 16.0;
                                 ui.close_menu();
                             }
+                            Self::retro_separator(ui);
+                            let editor_text_align = self.editor_text_align;
+                            ui.menu_button("Align Text ▶", |ui| {
+                                Self::apply_top_dropdown_menu_style(ui);
+                                ui.set_min_width(120.0);
+                                ui.set_max_width(160.0);
+                                let a = editor_text_align;
+                                let marker_left = if a == 0 { "[x] " } else { "[ ] " };
+                                let marker_center = if a == 1 { "[x] " } else { "[ ] " };
+                                let marker_right = if a == 2 { "[x] " } else { "[ ] " };
+                                if ui.button(format!("{marker_left}Left")).clicked() {
+                                    self.editor_text_align = 0;
+                                    ui.close_menu();
+                                }
+                                if ui.button(format!("{marker_center}Center")).clicked() {
+                                    self.editor_text_align = 1;
+                                    ui.close_menu();
+                                }
+                                if ui.button(format!("{marker_right}Right")).clicked() {
+                                    self.editor_text_align = 2;
+                                    ui.close_menu();
+                                }
+                            });
                         });
                     }
                     ui.menu_button("View", |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
+                        let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
+                        if editor_active {
+                            let ln_label = if self.editor_show_line_numbers { "[x] Line Numbers" } else { "[ ] Line Numbers" };
+                            if ui.button(ln_label).clicked() {
+                                self.editor_show_line_numbers = !self.editor_show_line_numbers;
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                        }
                         let file_manager_active =
                             self.desktop_active_window == Some(DesktopWindow::FileManager);
                         if file_manager_active {
@@ -7131,7 +7292,7 @@ impl RobcoNativeApp {
         egui::Frame::none()
             .fill(palette.bg)
             .stroke(egui::Stroke::new(1.0, palette.fg))
-            .inner_margin(egui::Margin::ZERO)
+            .inner_margin(egui::Margin::same(1.0))
     }
 
     fn desktop_bar_button(
@@ -8191,6 +8352,19 @@ impl RobcoNativeApp {
         if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
             self.save_editor();
         }
+        if ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command) {
+            self.editor_find_open = true;
+            self.editor_find_replace_visible = false;
+            self.editor_find_occurrence = 0;
+        }
+        if ctx.input(|i| i.key_pressed(Key::H) && i.modifiers.command) {
+            self.editor_find_open = true;
+            self.editor_find_replace_visible = true;
+            self.editor_find_occurrence = 0;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.editor_find_open {
+            self.editor_find_open = false;
+        }
         let title = self
             .editor
             .path
@@ -8292,6 +8466,85 @@ impl RobcoNativeApp {
                         ui.small(self.editor.status.clone());
                     }
                 });
+
+            // ── FIND/REPLACE BAR (bottom, shown when editor_find_open) ─────────
+            if self.editor_find_open {
+                let gen = generation;
+                egui::TopBottomPanel::bottom(Id::new(("editor_find", gen)))
+                    .exact_height(if self.editor_find_replace_visible { 60.0 } else { 32.0 })
+                    .frame(egui::Frame::none().fill(current_palette().panel))
+                    .show_inside(ui, |ui| {
+                        let palette = current_palette();
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Find:").color(palette.dim));
+                            ui.add_space(4.0);
+                            let find_resp = ui.add(
+                                TextEdit::singleline(&mut self.editor_find_query)
+                                    .desired_width(180.0)
+                                    .hint_text("search text"),
+                            );
+                            if find_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                self.editor_find_next(ctx, text_edit_id);
+                            }
+                            if ui.button("Find Next").clicked() {
+                                self.editor_find_next(ctx, text_edit_id);
+                            }
+                            if self.editor_find_replace_visible {
+                                ui.separator();
+                                ui.label(RichText::new("Replace:").color(palette.dim));
+                                ui.add(
+                                    TextEdit::singleline(&mut self.editor_replace_query)
+                                        .desired_width(180.0)
+                                        .hint_text("replacement"),
+                                );
+                                if ui.button("Replace").clicked() {
+                                    self.editor_replace_one(ctx, text_edit_id);
+                                }
+                                if ui.button("Replace All").clicked() {
+                                    self.editor_replace_all();
+                                }
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("[X]").clicked() {
+                                    self.editor_find_open = false;
+                                }
+                            });
+                        });
+                        if self.editor_find_replace_visible {
+                            ui.horizontal(|ui| {
+                                ui.add_space(4.0);
+                            });
+                        }
+                    });
+            }
+
+            // ── LINE NUMBERS SIDEBAR ───────────────────────────────────────────
+            if self.editor_show_line_numbers {
+                let line_count = self.editor.text.lines().count().max(1);
+                let digit_w = (line_count as f32).log10().floor() as usize + 1;
+                let lnum_width = digit_w as f32 * 9.0 + 12.0;
+                let gen = generation;
+                egui::SidePanel::left(Id::new(("editor_lnum", gen)))
+                    .exact_width(lnum_width)
+                    .frame(egui::Frame::none().fill(current_palette().panel))
+                    .show_inside(ui, |ui| {
+                        let palette = current_palette();
+                        let font_size = self.editor.font_size;
+                        egui::ScrollArea::vertical()
+                            .id_salt(Id::new(("editor_lnum_scroll", gen)))
+                            .show(ui, |ui| {
+                                for n in 1..=(line_count + 1) {
+                                    ui.label(
+                                        RichText::new(format!("{n}"))
+                                            .color(palette.dim)
+                                            .monospace()
+                                            .size(font_size),
+                                    );
+                                }
+                            });
+                    });
+            }
 
             // ── CENTRAL PANEL: text editor ─────────────────────────────────────
             egui::CentralPanel::default()

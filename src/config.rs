@@ -612,6 +612,8 @@ pub struct Settings {
     pub desktop_icon_custom_positions: BTreeMap<String, [f32; 2]>,
     #[serde(default)]
     pub desktop_hidden_builtin_icons: BTreeSet<String>,
+    #[serde(default)]
+    pub editor_recent_files: Vec<String>,
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -659,6 +661,7 @@ impl Default for Settings {
             desktop_snap_to_grid: false,
             desktop_icon_custom_positions: BTreeMap::new(),
             desktop_hidden_builtin_icons: BTreeSet::new(),
+            editor_recent_files: Vec::new(),
         }
     }
 }
