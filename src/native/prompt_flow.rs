@@ -5,6 +5,7 @@ use crate::connections::NetworkMenuGroup;
 use crate::default_apps::DefaultAppSlot;
 use crate::native::installer_screen::{InstallerMenuTarget, InstallerPackageAction};
 use eframe::egui::{self, Context, Key};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum PromptOutcome {
@@ -87,6 +88,26 @@ pub enum PromptOutcome {
     EditMenuAddCategoryPath {
         name: String,
         path: String,
+    },
+    FileManagerRename {
+        path: PathBuf,
+        name: String,
+    },
+    FileManagerMoveTo {
+        path: PathBuf,
+        destination: String,
+    },
+    FileManagerOpenWithNewCommand {
+        path: PathBuf,
+        ext_key: String,
+        make_default: bool,
+        command: String,
+    },
+    FileManagerOpenWithEditCommand {
+        path: PathBuf,
+        ext_key: String,
+        previous: String,
+        command: String,
     },
     ConfirmEditMenuDelete {
         target: EditMenuTarget,
@@ -230,6 +251,38 @@ pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptO
                             path: prompt.buffer,
                         }
                     }
+                    TerminalPromptAction::FileManagerRename { path } => {
+                        PromptOutcome::FileManagerRename {
+                            path,
+                            name: prompt.buffer,
+                        }
+                    }
+                    TerminalPromptAction::FileManagerMoveTo { path } => {
+                        PromptOutcome::FileManagerMoveTo {
+                            path,
+                            destination: prompt.buffer,
+                        }
+                    }
+                    TerminalPromptAction::FileManagerOpenWithNewCommand {
+                        path,
+                        ext_key,
+                        make_default,
+                    } => PromptOutcome::FileManagerOpenWithNewCommand {
+                        path,
+                        ext_key,
+                        make_default,
+                        command: prompt.buffer,
+                    },
+                    TerminalPromptAction::FileManagerOpenWithEditCommand {
+                        path,
+                        ext_key,
+                        previous,
+                    } => PromptOutcome::FileManagerOpenWithEditCommand {
+                        path,
+                        ext_key,
+                        previous,
+                        command: prompt.buffer,
+                    },
                     TerminalPromptAction::NewLogName => PromptOutcome::NewLogName(prompt.buffer),
                     TerminalPromptAction::Noop => PromptOutcome::Noop,
                     TerminalPromptAction::ConfirmDeleteUser { .. }

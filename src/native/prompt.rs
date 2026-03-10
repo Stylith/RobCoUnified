@@ -8,6 +8,7 @@ use crate::core::auth::UserRecord;
 use crate::default_apps::DefaultAppSlot;
 use crate::native::installer_screen::{InstallerMenuTarget, InstallerPackageAction};
 use eframe::egui::{self, Align2, Context, Pos2};
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,22 @@ pub enum TerminalPromptAction {
     EditMenuAddCategoryName,
     EditMenuAddCategoryPath {
         name: String,
+    },
+    FileManagerRename {
+        path: PathBuf,
+    },
+    FileManagerMoveTo {
+        path: PathBuf,
+    },
+    FileManagerOpenWithNewCommand {
+        path: PathBuf,
+        ext_key: String,
+        make_default: bool,
+    },
+    FileManagerOpenWithEditCommand {
+        path: PathBuf,
+        ext_key: String,
+        previous: String,
     },
     ConfirmEditMenuDelete {
         target: EditMenuTarget,
