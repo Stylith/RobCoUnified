@@ -610,6 +610,8 @@ pub struct Settings {
     pub desktop_snap_to_grid: bool,
     #[serde(default)]
     pub desktop_icon_custom_positions: BTreeMap<String, [f32; 2]>,
+    #[serde(default = "default_true")]
+    pub desktop_show_builtin_icons: bool,
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -656,6 +658,7 @@ impl Default for Settings {
             desktop_icon_sort: DesktopIconSortMode::Custom,
             desktop_snap_to_grid: false,
             desktop_icon_custom_positions: BTreeMap::new(),
+            desktop_show_builtin_icons: true,
         }
     }
 }

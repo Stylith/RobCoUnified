@@ -627,6 +627,8 @@ pub struct RobcoNativeApp {
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
+    appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
+    editor_save_as_input: Option<String>, // Some(path_string) = Save As dialog open
 }
 
 struct ParkedSessionState {
@@ -787,6 +789,8 @@ impl Default for RobcoNativeApp {
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
+            appearance_tab: 0,
+            editor_save_as_input: None,
         }
     }
 }
@@ -1532,6 +1536,20 @@ impl RobcoNativeApp {
             .get(&window)
             .map(|state| state.generation)
             .unwrap_or(0)
+    }
+
+    fn desktop_window_egui_id(&self, window: DesktopWindow) -> egui::Id {
+        let gen = self.desktop_window_generation(window);
+        match window {
+            DesktopWindow::FileManager => Id::new(("native_file_manager", gen)),
+            DesktopWindow::Editor => Id::new(("native_word_processor", gen)),
+            DesktopWindow::Settings => Id::new(("native_settings", gen)),
+            DesktopWindow::Applications => Id::new(("native_applications", gen)),
+            DesktopWindow::DonkeyKong => Id::new(("native_donkey_kong", gen)),
+            DesktopWindow::NukeCodes => Id::new(("native_nuke_codes", gen)),
+            DesktopWindow::PtyApp => Id::new(("native_desktop_pty", gen)),
+            DesktopWindow::TerminalMode => Id::new(("native_terminal_mode", gen)),
+        }
     }
 
     fn next_desktop_window_generation(&mut self) -> u64 {
@@ -2915,6 +2933,7 @@ impl RobcoNativeApp {
             (tex_terminal, "builtin_5", "Terminal", "[_]"),
         ];
 
+        let show_builtin = self.settings.draft.desktop_show_builtin_icons;
         let mut open_window: Option<DesktopWindow> = None;
         let open_windows: [DesktopWindow; 6] = [
             DesktopWindow::FileManager,
@@ -2927,7 +2946,7 @@ impl RobcoNativeApp {
         let mut shortcut_action: Option<ContextMenuAction> = None;
         let mut needs_persist = false;
 
-        for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
+        if show_builtin { for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
             let stored_pos = self.settings.draft.desktop_icon_custom_positions
                 .get(*key)
                 .map(|&[x, y]| egui::pos2(x, y));
@@ -2997,7 +3016,7 @@ impl RobcoNativeApp {
             if response.double_clicked() {
                 open_window = Some(open_windows[index]);
             }
-        }
+        } } // end if show_builtin
 
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         for (sidx, shortcut) in shortcuts.iter().enumerate() {
@@ -3147,6 +3166,78 @@ impl RobcoNativeApp {
 
         if let Some(window) = open_window {
             self.open_desktop_window(window);
+        }
+    }
+
+    fn draw_editor_save_as_window(&mut self, ctx: &egui::Context) {
+        let Some(ref mut path_input) = self.editor_save_as_input else {
+            return;
+        };
+        let palette = current_palette();
+        let mut close = false;
+        let mut confirm_path: Option<String> = None;
+
+        egui::Window::new("editor_save_as_window")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .fixed_size(egui::vec2(440.0, 110.0))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                Self::apply_top_dropdown_menu_style(ui);
+                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
+                ui.painter().rect_stroke(ui.max_rect(), 0.0, egui::Stroke::new(1.0, palette.fg));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Save As").color(palette.fg).strong());
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Path:").color(palette.dim));
+                    let input = egui::TextEdit::singleline(path_input)
+                        .desired_width(ui.available_width() - 16.0)
+                        .text_color(palette.fg)
+                        .frame(true);
+                    let response = ui.add(input);
+                    if response.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        confirm_path = Some(path_input.clone());
+                    }
+                    ui.add_space(8.0);
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    if ui.button("Save").clicked() {
+                        confirm_path = Some(path_input.clone());
+                    }
+                    ui.add_space(8.0);
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        if let Some(raw_path) = confirm_path {
+            let path = std::path::PathBuf::from(&raw_path);
+            match save_text_file(&path, &self.editor.text) {
+                Ok(()) => {
+                    let name = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("document")
+                        .to_string();
+                    self.editor.path = Some(path);
+                    self.editor.dirty = false;
+                    self.editor.status = format!("Saved {name}.");
+                }
+                Err(err) => {
+                    self.editor.status = format!("Save failed: {err}");
+                }
+            }
+            self.editor_save_as_input = None;
+        } else if close {
+            self.editor_save_as_input = None;
         }
     }
 
@@ -4193,6 +4284,40 @@ impl RobcoNativeApp {
         }
     }
 
+    /// Double-click handler for the file manager. In pick modes (icon/wallpaper
+    /// selection), clicking a file triggers the pick action immediately. For
+    /// directories or normal mode, falls through to the regular open logic.
+    fn file_manager_activate_or_pick(&mut self) {
+        if let Some(selected_path) = self.file_manager.selected.clone() {
+            if selected_path.is_file() {
+                if let Some(pick_idx) = self.picking_icon_for_shortcut {
+                    let path_str = selected_path.to_string_lossy().to_string();
+                    if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(pick_idx) {
+                        sc.icon_path = Some(path_str.clone());
+                    }
+                    self.shortcut_icon_cache.remove(&path_str);
+                    if let Some(props) = &mut self.shortcut_properties {
+                        if props.shortcut_idx == pick_idx {
+                            props.icon_path_draft = Some(path_str);
+                        }
+                    }
+                    self.picking_icon_for_shortcut = None;
+                    self.file_manager.open = false;
+                    self.persist_native_settings();
+                    return;
+                }
+                if self.picking_wallpaper {
+                    let path_str = selected_path.to_string_lossy().to_string();
+                    self.settings.draft.desktop_wallpaper = path_str;
+                    self.picking_wallpaper = false;
+                    self.file_manager.open = false;
+                    return;
+                }
+            }
+        }
+        self.activate_file_manager_selection();
+    }
+
     fn new_document(&mut self) {
         let Some(session) = &self.session else {
             return;
@@ -5201,8 +5326,35 @@ impl RobcoNativeApp {
                     ui.add_space(10.0);
                     ui.menu_button("File", |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
+                        let editor_active =
+                            self.desktop_active_window == Some(DesktopWindow::Editor);
                         let file_manager_active =
                             self.desktop_active_window == Some(DesktopWindow::FileManager);
+                        if editor_active {
+                            if ui.button("Save         Ctrl+S").clicked() {
+                                self.save_editor();
+                                ui.close_menu();
+                            }
+                            if ui.button("Save As…").clicked() {
+                                let current = self.editor.path
+                                    .as_ref()
+                                    .and_then(|p| p.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                self.editor_save_as_input = Some(current);
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                            if ui.button("New Document").clicked() {
+                                self.new_document();
+                                ui.close_menu();
+                            }
+                            if ui.button("Open File Manager").clicked() {
+                                self.open_desktop_window(DesktopWindow::FileManager);
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                        }
                         if file_manager_active {
                             let has_extra_tabs = self.file_manager.tabs.len() > 1;
                             let has_selection = self.file_manager.selected_row().is_some();
@@ -5370,61 +5522,58 @@ impl RobcoNativeApp {
                             }
                             Self::retro_separator(ui);
                         }
+                        if ui.button("My Computer").clicked() {
+                            self.open_desktop_window(DesktopWindow::FileManager);
+                            ui.close_menu();
+                        }
                         if ui.button("Applications").clicked() {
                             self.open_desktop_window(DesktopWindow::Applications);
-                            ui.close_menu();
-                        }
-                        if ui.button("Documents").clicked() {
-                            if let Some(session) = &self.session {
-                                self.open_file_manager_at(word_processor_dir(&session.username));
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Logs").clicked() {
-                            self.open_file_manager_at(logs_dir());
-                            ui.close_menu();
-                        }
-                        if ui.button("Network").clicked() {
-                            self.open_start_menu();
-                            self.set_start_panel_for_root(2);
-                            ui.close_menu();
-                        }
-                        if ui.button("Games").clicked() {
-                            self.open_start_menu();
-                            self.set_start_panel_for_root(3);
-                            ui.close_menu();
-                        }
-                        if ui.button("Program Installer").clicked() {
-                            self.run_start_system_action(StartSystemAction::ProgramInstaller);
                             ui.close_menu();
                         }
                         if ui.button("Settings").clicked() {
                             self.open_desktop_window(DesktopWindow::Settings);
                             ui.close_menu();
                         }
-                        Self::retro_separator(ui);
-                        if ui.button("Open Start Menu").clicked() {
-                            self.open_start_menu();
-                            ui.close_menu();
-                        }
-                        if ui.button("My Computer").clicked() {
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                            ui.close_menu();
-                        }
                     });
                     ui.menu_button("Edit", |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
                         if self.desktop_active_window == Some(DesktopWindow::Editor) {
-                            if ui.button("Save").clicked() {
-                                self.save_editor();
+                            let gen = self.desktop_window_generation(DesktopWindow::Editor);
+                            let text_edit_id = Id::new(("editor_text_edit", gen));
+                            let inject_key = |ctx: &Context, key: egui::Key, modifiers: egui::Modifiers| {
+                                ctx.memory_mut(|m| m.request_focus(text_edit_id));
+                                ctx.input_mut(|i| i.events.push(egui::Event::Key {
+                                    key,
+                                    physical_key: None,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers,
+                                }));
+                            };
+                            if ui.button("Undo         Ctrl+Z").clicked() {
+                                inject_key(ctx, egui::Key::Z, egui::Modifiers::COMMAND);
                                 ui.close_menu();
                             }
-                            if ui.button("New Document").clicked() {
-                                self.new_document();
+                            if ui.button("Redo         Ctrl+Y").clicked() {
+                                inject_key(ctx, egui::Key::Y, egui::Modifiers::COMMAND);
                                 ui.close_menu();
                             }
-                            if ui.button("Open File Manager").clicked() {
-                                self.open_desktop_window(DesktopWindow::FileManager);
+                            Self::retro_separator(ui);
+                            if ui.button("Cut          Ctrl+X").clicked() {
+                                inject_key(ctx, egui::Key::X, egui::Modifiers::COMMAND);
+                                ui.close_menu();
+                            }
+                            if ui.button("Copy         Ctrl+C").clicked() {
+                                inject_key(ctx, egui::Key::C, egui::Modifiers::COMMAND);
+                                ui.close_menu();
+                            }
+                            if ui.button("Paste        Ctrl+V").clicked() {
+                                inject_key(ctx, egui::Key::V, egui::Modifiers::COMMAND);
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                            if ui.button("Select All   Ctrl+A").clicked() {
+                                inject_key(ctx, egui::Key::A, egui::Modifiers::COMMAND);
                                 ui.close_menu();
                             }
                         } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
@@ -5509,6 +5658,35 @@ impl RobcoNativeApp {
                             let _ = Self::retro_disabled_button(ui, "No edit actions");
                         }
                     });
+                    if self.desktop_active_window == Some(DesktopWindow::Editor) {
+                        ui.menu_button("Format", |ui| {
+                            Self::apply_top_dropdown_menu_style(ui);
+                            ui.set_min_width(160.0);
+                            ui.set_max_width(220.0);
+                            let ww_label = if self.editor.word_wrap {
+                                "[x] Word Wrap"
+                            } else {
+                                "[ ] Word Wrap"
+                            };
+                            if ui.button(ww_label).clicked() {
+                                self.editor.word_wrap = !self.editor.word_wrap;
+                                ui.close_menu();
+                            }
+                            Self::retro_separator(ui);
+                            if ui.button("Font Larger  Ctrl++").clicked() {
+                                self.editor.font_size = (self.editor.font_size + 2.0).min(32.0);
+                                ui.close_menu();
+                            }
+                            if ui.button("Font Smaller Ctrl+-").clicked() {
+                                self.editor.font_size = (self.editor.font_size - 2.0).max(10.0);
+                                ui.close_menu();
+                            }
+                            if ui.button("Reset Font").clicked() {
+                                self.editor.font_size = 16.0;
+                                ui.close_menu();
+                            }
+                        });
+                    }
                     ui.menu_button("View", |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
                         let file_manager_active =
@@ -5936,6 +6114,12 @@ impl RobcoNativeApp {
                                 self.new_document();
                             } else {
                                 self.handle_desktop_taskbar_window_click(window);
+                                // Bring the window to the top of the egui layer stack.
+                                let layer_id = egui::LayerId::new(
+                                    egui::Order::Middle,
+                                    self.desktop_window_egui_id(window),
+                                );
+                                ctx.move_to_top(layer_id);
                             }
                         }
                     }
@@ -7368,10 +7552,10 @@ impl RobcoNativeApp {
         } else {
             egui::Stroke::NONE
         };
-        // CentralPanel uses Frame::none() so there is no panel background that can
-        // overpaint us. Use the ScrollArea's clip painter directly — painter_at(rect)
-        // can produce an empty clip if available_width changes between layout and paint.
-        let painter = ui.painter().clone();
+        // Clip painter to the item rect intersected with the current clip rect.
+        // Using painter_at(rect) keeps the text anchor always inside the clip,
+        // preventing the "visible fill, invisible text" artifact.
+        let painter = ui.painter_at(rect.intersect(ui.clip_rect()));
         if highlighted {
             painter.rect_filled(rect, 0.0, fill);
         }
@@ -7409,8 +7593,7 @@ impl RobcoNativeApp {
         } else {
             egui::Stroke::NONE
         };
-        // Same reasoning as retro_file_manager_button — use the scroll area's painter directly.
-        let painter = ui.painter().clone();
+        let painter = ui.painter_at(rect.intersect(ui.clip_rect()));
         if highlighted {
             painter.rect_filled(rect, 0.0, fill);
         }
@@ -7529,39 +7712,38 @@ impl RobcoNativeApp {
     ) -> DesktopHeaderAction {
         let palette = current_palette();
         let mut action = DesktopHeaderAction::None;
-        // allocate_exact_size guarantees the background rect spans the full
-        // available width regardless of where the header is called from
-        // (TopBottomPanel, fixed_size window closure, etc.).  A Frame::show
-        // would only size to its content, leaving a gap on the right.
         let h = 28.0;
+        // allocate_exact_size advances the cursor by exactly h — no more, no less.
+        // This is the single, correct allocation for the header strip.
         let (bg_rect, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), h),
             egui::Sense::hover(),
         );
         ui.painter().rect_filled(bg_rect, 0.0, palette.fg);
-        // Render title + buttons in a child UI inside the allocated strip.
-        // The parent cursor already advanced past bg_rect, so this doesn't
-        // add extra height.
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bg_rect.shrink2(egui::vec2(8.0, 0.0))), |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(title).color(Color32::BLACK).strong());
-                ui.add_space(6.0);
-                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                    if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
-                        action = DesktopHeaderAction::Close;
-                    }
-                    if Self::desktop_header_glyph_button(
-                        ui,
-                        if maximized { "[R]" } else { "[+]" },
-                    )
-                    .clicked()
-                    {
-                        action = DesktopHeaderAction::ToggleMaximize;
-                    }
-                    if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
-                        action = DesktopHeaderAction::Minimize;
-                    }
-                });
+        // child_ui creates a sub-view INSIDE the already-allocated rect.
+        // It does NOT register a second widget with the parent placer,
+        // so there is no "double use of widget" collision.
+        let inner_rect = bg_rect.shrink2(egui::vec2(8.0, 0.0));
+        let mut child = ui.child_ui(inner_rect, Layout::left_to_right(egui::Align::Center), None);
+        child.horizontal(|ui| {
+            ui.label(RichText::new(title).color(Color32::BLACK).strong());
+            ui.add_space(6.0);
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
+                    action = DesktopHeaderAction::Close;
+                }
+                if Self::desktop_header_glyph_button(
+                    ui,
+                    if maximized { "[R]" } else { "[+]" },
+                )
+                .clicked()
+                {
+                    action = DesktopHeaderAction::ToggleMaximize;
+                }
+                if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
+                    action = DesktopHeaderAction::Minimize;
+                }
             });
         });
         ui.add_space(2.0);
@@ -7851,7 +8033,7 @@ impl RobcoNativeApp {
                                             if response.clicked() { self.file_manager.select(Some(row.path.clone())); }
                                             if response.double_clicked() {
                                                 self.file_manager.select(Some(row.path.clone()));
-                                                self.activate_file_manager_selection();
+                                                self.file_manager_activate_or_pick();
                                             }
                                             let has_clipboard = self
                                                 .file_clipboard
@@ -7917,7 +8099,7 @@ impl RobcoNativeApp {
                                                         if response.clicked() { self.file_manager.select(Some(row.path.clone())); }
                                                         if response.double_clicked() {
                                                             self.file_manager.select(Some(row.path.clone()));
-                                                            self.activate_file_manager_selection();
+                                                            self.file_manager_activate_or_pick();
                                                         }
                                                         let has_clipboard = self
                                                             .file_clipboard
@@ -8089,8 +8271,6 @@ impl RobcoNativeApp {
         } else if let Some((pos, size)) = restore {
             window = window.current_pos(pos).default_size(size);
         }
-        // Deferred action from menus — handled after show() so ctx is free.
-        let mut editor_menu_action: Option<&'static str> = None;
         let text_edit_id = Id::new(("editor_text_edit", generation));
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
@@ -8101,94 +8281,7 @@ impl RobcoNativeApp {
                 .show_inside(ui, |ui| {
                     header_action = Self::draw_desktop_window_header(ui, &title, maximized);
 
-                    // Menu bar
-                    ui.horizontal(|ui| {
-                        ui.menu_button("File", |ui| {
-                            Self::apply_top_dropdown_menu_style(ui);
-                            ui.set_min_width(160.0);
-                            ui.set_max_width(220.0);
-                            if ui.button("New").clicked() {
-                                editor_menu_action = Some("new");
-                                ui.close_menu();
-                            }
-                            if ui.button("Open File Manager").clicked() {
-                                editor_menu_action = Some("open_fm");
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Save         Ctrl+S").clicked() {
-                                editor_menu_action = Some("save");
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Close").clicked() {
-                                editor_menu_action = Some("close");
-                                ui.close_menu();
-                            }
-                        });
-                        ui.menu_button("Edit", |ui| {
-                            Self::apply_top_dropdown_menu_style(ui);
-                            ui.set_min_width(180.0);
-                            ui.set_max_width(240.0);
-                            if ui.button("Undo         Ctrl+Z").clicked() {
-                                editor_menu_action = Some("undo");
-                                ui.close_menu();
-                            }
-                            if ui.button("Redo         Ctrl+Y").clicked() {
-                                editor_menu_action = Some("redo");
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Cut          Ctrl+X").clicked() {
-                                editor_menu_action = Some("cut");
-                                ui.close_menu();
-                            }
-                            if ui.button("Copy         Ctrl+C").clicked() {
-                                editor_menu_action = Some("copy");
-                                ui.close_menu();
-                            }
-                            if ui.button("Paste        Ctrl+V").clicked() {
-                                editor_menu_action = Some("paste");
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Select All   Ctrl+A").clicked() {
-                                editor_menu_action = Some("select_all");
-                                ui.close_menu();
-                            }
-                        });
-                        ui.menu_button("Format", |ui| {
-                            Self::apply_top_dropdown_menu_style(ui);
-                            ui.set_min_width(140.0);
-                            ui.set_max_width(200.0);
-                            let ww_label = if self.editor.word_wrap {
-                                "[x] Word Wrap"
-                            } else {
-                                "[ ] Word Wrap"
-                            };
-                            if ui.button(ww_label).clicked() {
-                                self.editor.word_wrap = !self.editor.word_wrap;
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Font Larger").clicked() {
-                                self.editor.font_size =
-                                    (self.editor.font_size + 2.0).min(32.0);
-                                ui.close_menu();
-                            }
-                            if ui.button("Font Smaller").clicked() {
-                                self.editor.font_size =
-                                    (self.editor.font_size - 2.0).max(10.0);
-                                ui.close_menu();
-                            }
-                            if ui.button("Reset Font").clicked() {
-                                self.editor.font_size = 16.0;
-                                ui.close_menu();
-                            }
-                        });
-                    });
-
-                    // Path and status
+                    // Path and status (menus live in the global top bar when editor is active)
                     if let Some(path) = &self.editor.path {
                         ui.small(path.display().to_string());
                     }
@@ -8254,72 +8347,6 @@ impl RobcoNativeApp {
             DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Editor, true),
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::Editor, shown_rect)
-            }
-        }
-        // Handle menu actions that need ctx (inject key events) or mutate open
-        if let Some(action) = editor_menu_action {
-            // Ensure the text edit is focused so injected key events land there
-            ctx.memory_mut(|m| m.request_focus(text_edit_id));
-            match action {
-                "new" => self.new_document(),
-                "open_fm" => self.open_desktop_window(DesktopWindow::FileManager),
-                "save" => self.save_editor(),
-                "close" => open = false,
-                "undo" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::Z,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                "redo" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::Y,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                "cut" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::X,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                "copy" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::C,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                "paste" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::V,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                "select_all" => {
-                    ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                        key: egui::Key::A,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: egui::Modifiers::COMMAND,
-                    }));
-                }
-                _ => {}
             }
         }
         self.update_desktop_window_state(DesktopWindow::Editor, open);
@@ -8536,259 +8563,214 @@ impl RobcoNativeApp {
                                 });
                             }
                             NativeSettingsPanel::Appearance => {
-                                Self::settings_two_columns(ui, |left, right| {
-                                    Self::settings_section(left, "Theme", |left| {
-                                        left.horizontal(|ui| {
-                                            ui.label("Theme");
-                                            let mut current_idx = THEMES
-                                                .iter()
-                                                .position(|(name, _)| *name == self.settings.draft.theme)
-                                                .unwrap_or(0);
-                                            egui::ComboBox::from_id_salt("native_settings_theme")
-                                                .selected_text(
-                                                    RichText::new(THEMES[current_idx].0)
-                                                        .color(current_palette().fg),
-                                                )
-                                                .show_ui(ui, |ui| {
-                                                    Self::apply_settings_control_style(ui);
-                                                    for (idx, (name, _)) in THEMES.iter().enumerate() {
-                                                        if Self::retro_choice_button(
-                                                            ui,
-                                                            *name,
-                                                            current_idx == idx,
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            current_idx = idx;
-                                                            self.settings.draft.theme =
-                                                                (*name).to_string();
-                                                            changed = true;
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                });
-                                        });
-                                        if self.settings.draft.theme == CUSTOM_THEME_NAME {
-                                            let mut rgb = self.settings.draft.custom_theme_rgb;
-                                            changed |= left
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[0], 0..=255)
-                                                        .text("Custom Red"),
-                                                )
-                                                .changed();
-                                            changed |= left
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[1], 0..=255)
-                                                        .text("Custom Green"),
-                                                )
-                                                .changed();
-                                            changed |= left
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[2], 0..=255)
-                                                        .text("Custom Blue"),
-                                                )
-                                                .changed();
-                                            if rgb != self.settings.draft.custom_theme_rgb {
-                                                self.settings.draft.custom_theme_rgb = rgb;
-                                            }
+                                let palette = current_palette();
+                                // ── Tab bar ───────────────────────────────────────────────────
+                                let tabs = ["Background", "Colors", "Icons", "Terminal"];
+                                ui.horizontal(|ui| {
+                                    for (i, label) in tabs.iter().enumerate() {
+                                        let active = self.appearance_tab == i as u8;
+                                        let color = if active { palette.fg } else { palette.dim };
+                                        let btn = ui.add(
+                                            egui::Button::new(
+                                                RichText::new(*label).color(color).strong(),
+                                            )
+                                            .stroke(egui::Stroke::new(
+                                                if active { 2.0 } else { 1.0 },
+                                                color,
+                                            ))
+                                            .fill(if active { palette.panel } else { palette.bg }),
+                                        );
+                                        if btn.clicked() {
+                                            self.appearance_tab = i as u8;
                                         }
-                                    });
-
-                                    Self::settings_section(left, "Desktop Surface", |left| {
-                                        left.label("Wallpaper Path");
-                                        left.horizontal(|ui| {
-                                            let wallpaper_width =
-                                                Self::responsive_input_width(ui, 0.72, 160.0, 400.0);
-                                            if ui
-                                                .add(
-                                                    TextEdit::singleline(
-                                                        &mut self.settings.draft.desktop_wallpaper,
-                                                    )
-                                                    .desired_width(wallpaper_width)
-                                                    .hint_text("/path/to/image.png"),
-                                                )
-                                                .changed()
-                                            {
+                                    }
+                                });
+                                ui.add_space(10.0);
+                                Self::retro_separator(ui);
+                                ui.add_space(8.0);
+                                // ── Tab content ───────────────────────────────────────────────
+                                match self.appearance_tab {
+                                    // ── Background ─────────────────────────────────────────────
+                                    0 => {
+                                        Self::settings_section(ui, "Wallpaper", |ui| {
+                                            ui.label("Wallpaper Path");
+                                            ui.horizontal(|ui| {
+                                                let w = Self::responsive_input_width(ui, 0.72, 160.0, 400.0);
+                                                if ui.add(
+                                                    TextEdit::singleline(&mut self.settings.draft.desktop_wallpaper)
+                                                        .desired_width(w)
+                                                        .hint_text("/path/to/image.png"),
+                                                ).changed() {
+                                                    changed = true;
+                                                }
+                                                if ui.button("Browse…").clicked() {
+                                                    let start = dirs::picture_dir()
+                                                        .or_else(dirs::home_dir)
+                                                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                                                    self.picking_wallpaper = true;
+                                                    self.open_file_manager_at(start);
+                                                }
+                                            });
+                                            ui.add_space(8.0);
+                                            ui.horizontal(|ui| {
+                                                ui.label("Wallpaper Mode");
+                                                let selected = match self.settings.draft.desktop_wallpaper_size_mode {
+                                                    WallpaperSizeMode::DefaultSize => "Default Size",
+                                                    WallpaperSizeMode::FitToScreen => "Fit To Screen",
+                                                    WallpaperSizeMode::Centered => "Centered",
+                                                    WallpaperSizeMode::Tile => "Tile",
+                                                    WallpaperSizeMode::Stretch => "Stretch",
+                                                };
+                                                egui::ComboBox::from_id_salt("native_settings_wallpaper_mode")
+                                                    .selected_text(RichText::new(selected).color(palette.fg))
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (mode, label) in [
+                                                            (WallpaperSizeMode::DefaultSize, "Default Size"),
+                                                            (WallpaperSizeMode::FitToScreen, "Fit To Screen"),
+                                                            (WallpaperSizeMode::Centered, "Centered"),
+                                                            (WallpaperSizeMode::Tile, "Tile"),
+                                                            (WallpaperSizeMode::Stretch, "Stretch"),
+                                                        ] {
+                                                            if Self::retro_choice_button(ui, label, self.settings.draft.desktop_wallpaper_size_mode == mode).clicked() {
+                                                                self.settings.draft.desktop_wallpaper_size_mode = mode;
+                                                                changed = true;
+                                                                ui.close_menu();
+                                                            }
+                                                        }
+                                                    });
+                                            });
+                                        });
+                                    }
+                                    // ── Colors ─────────────────────────────────────────────────
+                                    1 => {
+                                        Self::settings_section(ui, "Theme Color", |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Theme");
+                                                let mut current_idx = THEMES
+                                                    .iter()
+                                                    .position(|(name, _)| *name == self.settings.draft.theme)
+                                                    .unwrap_or(0);
+                                                egui::ComboBox::from_id_salt("native_settings_theme")
+                                                    .selected_text(RichText::new(THEMES[current_idx].0).color(palette.fg))
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (idx, (name, _)) in THEMES.iter().enumerate() {
+                                                            if Self::retro_choice_button(ui, *name, current_idx == idx).clicked() {
+                                                                current_idx = idx;
+                                                                self.settings.draft.theme = (*name).to_string();
+                                                                changed = true;
+                                                                ui.close_menu();
+                                                            }
+                                                        }
+                                                    });
+                                            });
+                                            if self.settings.draft.theme == CUSTOM_THEME_NAME {
+                                                let mut rgb = self.settings.draft.custom_theme_rgb;
+                                                changed |= ui.add(egui::Slider::new(&mut rgb[0], 0..=255).text("Red")).changed();
+                                                changed |= ui.add(egui::Slider::new(&mut rgb[1], 0..=255).text("Green")).changed();
+                                                changed |= ui.add(egui::Slider::new(&mut rgb[2], 0..=255).text("Blue")).changed();
+                                                if rgb != self.settings.draft.custom_theme_rgb {
+                                                    self.settings.draft.custom_theme_rgb = rgb;
+                                                }
+                                                // Color preview bar
+                                                let preview_color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                                let (bar_rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(ui.available_width(), 24.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter().rect_filled(bar_rect, 4.0, preview_color);
+                                                ui.painter().rect_stroke(bar_rect, 4.0, egui::Stroke::new(1.0, palette.fg));
+                                            }
+                                        });
+                                    }
+                                    // ── Icons ──────────────────────────────────────────────────
+                                    2 => {
+                                        Self::settings_section(ui, "Desktop Icons", |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Icon Style");
+                                                let selected = match self.settings.draft.desktop_icon_style {
+                                                    DesktopIconStyle::Dos => "DOS",
+                                                    DesktopIconStyle::Win95 => "Win95",
+                                                    DesktopIconStyle::Minimal => "Minimal",
+                                                    DesktopIconStyle::NoIcons => "No Icons",
+                                                };
+                                                egui::ComboBox::from_id_salt("native_settings_desktop_icons")
+                                                    .selected_text(RichText::new(selected).color(palette.fg))
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (style, label) in [
+                                                            (DesktopIconStyle::Dos, "DOS"),
+                                                            (DesktopIconStyle::Win95, "Win95"),
+                                                            (DesktopIconStyle::Minimal, "Minimal"),
+                                                            (DesktopIconStyle::NoIcons, "No Icons"),
+                                                        ] {
+                                                            if Self::retro_choice_button(ui, label, self.settings.draft.desktop_icon_style == style).clicked() {
+                                                                self.settings.draft.desktop_icon_style = style;
+                                                                changed = true;
+                                                                ui.close_menu();
+                                                            }
+                                                        }
+                                                    });
+                                            });
+                                            ui.add_space(8.0);
+                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.desktop_show_builtin_icons, "Show built-in desktop icons").clicked() {
                                                 changed = true;
                                             }
-                                            if ui.button("Browse…").clicked() {
-                                                // Open the file manager at the pictures
-                                                // directory (fall back to home).
-                                                let start = dirs::picture_dir()
-                                                    .or_else(dirs::home_dir)
-                                                    .unwrap_or_else(|| std::path::PathBuf::from("."));
-                                                self.picking_wallpaper = true;
-                                                self.open_file_manager_at(start);
+                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.desktop_show_cursor, "Show desktop cursor").clicked() {
+                                                changed = true;
                                             }
                                         });
-                                        left.add_space(8.0);
-                                        left.horizontal(|ui| {
-                                            ui.label("Wallpaper Mode");
-                                            let selected = match self
-                                                .settings
-                                                .draft
-                                                .desktop_wallpaper_size_mode
-                                            {
-                                                WallpaperSizeMode::DefaultSize => "Default Size",
-                                                WallpaperSizeMode::FitToScreen => "Fit To Screen",
-                                                WallpaperSizeMode::Centered => "Centered",
-                                                WallpaperSizeMode::Tile => "Tile",
-                                                WallpaperSizeMode::Stretch => "Stretch",
-                                            };
-                                            egui::ComboBox::from_id_salt(
-                                                "native_settings_wallpaper_mode",
-                                            )
-                                            .selected_text(
-                                                RichText::new(selected).color(current_palette().fg),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                Self::apply_settings_control_style(ui);
-                                                for (mode, label) in [
-                                                    (
-                                                        WallpaperSizeMode::DefaultSize,
-                                                        "Default Size",
-                                                    ),
-                                                    (
-                                                        WallpaperSizeMode::FitToScreen,
-                                                        "Fit To Screen",
-                                                    ),
-                                                    (WallpaperSizeMode::Centered, "Centered"),
-                                                    (WallpaperSizeMode::Tile, "Tile"),
-                                                    (WallpaperSizeMode::Stretch, "Stretch"),
-                                                ] {
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        label,
-                                                        self.settings
-                                                            .draft
-                                                            .desktop_wallpaper_size_mode
-                                                            == mode,
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        self.settings.draft.desktop_wallpaper_size_mode =
-                                                            mode;
-                                                        changed = true;
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                            });
-                                        });
-                                        left.add_space(8.0);
-                                        left.horizontal(|ui| {
-                                            ui.label("Desktop Icons");
-                                            let selected = match self.settings.draft.desktop_icon_style {
-                                                DesktopIconStyle::Dos => "DOS",
-                                                DesktopIconStyle::Win95 => "Win95",
-                                                DesktopIconStyle::Minimal => "Minimal",
-                                                DesktopIconStyle::NoIcons => "No Icons",
-                                            };
-                                            egui::ComboBox::from_id_salt(
-                                                "native_settings_desktop_icons",
-                                            )
-                                            .selected_text(
-                                                RichText::new(selected).color(current_palette().fg),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                Self::apply_settings_control_style(ui);
-                                                for (style, label) in [
-                                                    (DesktopIconStyle::Dos, "DOS"),
-                                                    (DesktopIconStyle::Win95, "Win95"),
-                                                    (DesktopIconStyle::Minimal, "Minimal"),
-                                                    (DesktopIconStyle::NoIcons, "No Icons"),
-                                                ] {
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        label,
-                                                        self.settings.draft.desktop_icon_style
-                                                            == style,
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        self.settings.draft.desktop_icon_style =
-                                                            style;
-                                                        changed = true;
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                            });
-                                        });
-                                        left.add_space(8.0);
-                                        if Self::retro_checkbox_row(
-                                            left,
-                                            &mut self.settings.draft.desktop_show_cursor,
-                                            "Show desktop cursor",
-                                        )
-                                        .clicked()
-                                        {
-                                            changed = true;
-                                        }
-                                    });
-
-                                    Self::settings_section(right, "PTY Display", |right| {
-                                        if Self::retro_checkbox_row(
-                                            right,
-                                            &mut self.settings.draft.cli_styled_render,
-                                            "Styled PTY rendering",
-                                        )
-                                        .clicked()
-                                        {
-                                            changed = true;
-                                        }
-                                        right.horizontal(|ui| {
-                                            ui.label("PTY Color Mode");
-                                            let selected = match self.settings.draft.cli_color_mode {
-                                                CliColorMode::ThemeLock => "Theme Lock",
-                                                CliColorMode::PaletteMap => "Palette-map",
-                                                CliColorMode::Color => "Color",
-                                                CliColorMode::Monochrome => "Monochrome",
-                                            };
-                                            egui::ComboBox::from_id_salt("native_settings_cli_color")
-                                                .selected_text(
-                                                    RichText::new(selected)
-                                                        .color(current_palette().fg),
-                                                )
-                                                .show_ui(ui, |ui| {
-                                                    Self::apply_settings_control_style(ui);
-                                                    for (mode, label) in [
-                                                        (CliColorMode::ThemeLock, "Theme Lock"),
-                                                        (CliColorMode::PaletteMap, "Palette-map"),
-                                                        (CliColorMode::Color, "Color"),
-                                                        (CliColorMode::Monochrome, "Monochrome"),
-                                                    ] {
-                                                        if Self::retro_choice_button(
-                                                            ui,
-                                                            label,
-                                                            self.settings.draft.cli_color_mode == mode,
-                                                        )
-                                                        .clicked()
-                                                            && self.settings.draft.cli_color_mode != mode
-                                                        {
-                                                            self.settings.draft.cli_color_mode = mode;
-                                                            changed = true;
-                                                            ui.close_menu();
+                                    }
+                                    // ── Terminal ───────────────────────────────────────────────
+                                    _ => {
+                                        Self::settings_section(ui, "PTY Display", |ui| {
+                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.cli_styled_render, "Styled PTY rendering").clicked() {
+                                                changed = true;
+                                            }
+                                            ui.add_space(8.0);
+                                            ui.horizontal(|ui| {
+                                                ui.label("PTY Color Mode");
+                                                let selected = match self.settings.draft.cli_color_mode {
+                                                    CliColorMode::ThemeLock => "Theme Lock",
+                                                    CliColorMode::PaletteMap => "Palette-map",
+                                                    CliColorMode::Color => "Color",
+                                                    CliColorMode::Monochrome => "Monochrome",
+                                                };
+                                                egui::ComboBox::from_id_salt("native_settings_cli_color")
+                                                    .selected_text(RichText::new(selected).color(palette.fg))
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (mode, label) in [
+                                                            (CliColorMode::ThemeLock, "Theme Lock"),
+                                                            (CliColorMode::PaletteMap, "Palette-map"),
+                                                            (CliColorMode::Color, "Color"),
+                                                            (CliColorMode::Monochrome, "Monochrome"),
+                                                        ] {
+                                                            if Self::retro_choice_button(ui, label, self.settings.draft.cli_color_mode == mode).clicked()
+                                                                && self.settings.draft.cli_color_mode != mode
+                                                            {
+                                                                self.settings.draft.cli_color_mode = mode;
+                                                                changed = true;
+                                                                ui.close_menu();
+                                                            }
                                                         }
-                                                    }
-                                                });
-                                        });
-                                        if right
-                                            .button(match self.settings.draft.cli_acs_mode {
+                                                    });
+                                            });
+                                            ui.add_space(8.0);
+                                            if ui.button(match self.settings.draft.cli_acs_mode {
                                                 CliAcsMode::Ascii => "Border Glyphs: ASCII",
-                                                CliAcsMode::Unicode => {
-                                                    "Border Glyphs: Unicode Smooth"
-                                                }
-                                            })
-                                            .clicked()
-                                        {
-                                            self.settings.draft.cli_acs_mode =
-                                                match self.settings.draft.cli_acs_mode {
+                                                CliAcsMode::Unicode => "Border Glyphs: Unicode Smooth",
+                                            }).clicked() {
+                                                self.settings.draft.cli_acs_mode = match self.settings.draft.cli_acs_mode {
                                                     CliAcsMode::Ascii => CliAcsMode::Unicode,
                                                     CliAcsMode::Unicode => CliAcsMode::Ascii,
                                                 };
-                                            changed = true;
-                                        }
-                                    });
-                                });
+                                                changed = true;
+                                            }
+                                        });
+                                    }
+                                }
                             }
                             NativeSettingsPanel::DefaultApps => {
                                 changed |= self.draw_settings_default_apps_panel(ui);
@@ -10300,6 +10282,7 @@ impl eframe::App for RobcoNativeApp {
             self.draw_terminal_mode(ctx);
         }
         self.draw_shortcut_properties_window(ctx);
+        self.draw_editor_save_as_window(ctx);
         self.draw_terminal_prompt_overlay_global(ctx);
 
         if ctx.input(|i| i.viewport().close_requested()) {
