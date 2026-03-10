@@ -376,6 +376,10 @@ pub struct DesktopShortcut {
     pub pos_x: Option<f32>,
     #[serde(default)]
     pub pos_y: Option<f32>,
+    #[serde(default)]
+    pub launch_command: Option<String>,
+    #[serde(default)]
+    pub icon_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

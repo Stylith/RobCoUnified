@@ -268,6 +268,14 @@ enum FileManagerActionRequest {
 }
 
 #[derive(Debug, Clone)]
+struct ShortcutPropertiesState {
+    shortcut_idx: usize,
+    name_draft: String,
+    command_draft: String,
+    icon_path_draft: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 enum ContextMenuAction {
     Open,
     OpenWith,
@@ -290,6 +298,7 @@ enum ContextMenuAction {
     SortDesktopIcons(DesktopIconSortMode),
     ToggleSnapToGrid,
     LaunchShortcut(String),
+    OpenShortcutProperties(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -600,6 +609,9 @@ pub struct RobcoNativeApp {
     asset_cache: Option<AssetCache>,
     context_menu_action: Option<ContextMenuAction>,
     shell_status: String,
+    shortcut_properties: Option<ShortcutPropertiesState>,
+    picking_icon_for_shortcut: Option<usize>,
+    shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
 }
 
 struct ParkedSessionState {
@@ -750,6 +762,9 @@ impl Default for RobcoNativeApp {
             asset_cache: None,
             context_menu_action: None,
             shell_status: String::new(),
+            shortcut_properties: None,
+            picking_icon_for_shortcut: None,
+            shortcut_icon_cache: HashMap::new(),
         }
     }
 }
@@ -2536,6 +2551,8 @@ impl RobcoNativeApp {
                     app_name,
                     pos_x: None,
                     pos_y: None,
+                    launch_command: None,
+                    icon_path: None,
                 });
                 self.persist_native_settings();
             }
@@ -2564,7 +2581,25 @@ impl RobcoNativeApp {
                 self.persist_native_settings();
             }
             ContextMenuAction::LaunchShortcut(name) => {
-                self.run_start_leaf_action(StartLeafAction::LaunchConfiguredApp(name));
+                let custom_cmd = self.settings.draft.desktop_shortcuts.iter()
+                    .find(|s| s.app_name == name)
+                    .and_then(|s| s.launch_command.clone());
+                if let Some(cmd) = custom_cmd {
+                    let args: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+                    self.open_desktop_pty(&name, &args);
+                } else {
+                    self.run_start_leaf_action(StartLeafAction::LaunchConfiguredApp(name));
+                }
+            }
+            ContextMenuAction::OpenShortcutProperties(idx) => {
+                if let Some(sc) = self.settings.draft.desktop_shortcuts.get(idx) {
+                    self.shortcut_properties = Some(ShortcutPropertiesState {
+                        shortcut_idx: idx,
+                        name_draft: sc.label.clone(),
+                        command_draft: sc.launch_command.clone().unwrap_or_else(|| sc.app_name.clone()),
+                        icon_path_draft: sc.icon_path.clone(),
+                    });
+                }
             }
         }
     }
@@ -2934,14 +2969,33 @@ impl RobcoNativeApp {
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    Self::paint_tinted_texture(ui.painter(), &tex_applications, icon_rect, palette.fg);
+                    // Try to use a custom icon texture if icon_path is set
+                    let icon_path_clone = shortcut.icon_path.clone();
+                    let icon_tex: Option<egui::TextureHandle> = if let Some(ref path) = icon_path_clone {
+                        if let Some(tex) = self.shortcut_icon_cache.get(path) {
+                            Some(tex.clone())
+                        } else if let Ok(bytes) = std::fs::read(path) {
+                            let tex = Self::load_svg_icon(ui.ctx(), path, &bytes, Some(48));
+                            self.shortcut_icon_cache.insert(path.clone(), tex.clone());
+                            Some(tex)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(tex) = icon_tex {
+                        Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, palette.fg);
+                    } else {
+                        Self::paint_tinted_texture(ui.painter(), &tex_applications, icon_rect, palette.fg);
+                    }
                     let badge_size = (icon_size * 0.35).max(10.0);
                     let badge_rect = egui::Rect::from_min_size(
                         icon_rect.min + egui::vec2(0.0, icon_size - badge_size),
                         egui::vec2(badge_size, badge_size),
                     );
                     ui.painter().rect_filled(badge_rect, 0.0, Color32::BLACK);
-                    Self::paint_tinted_texture(ui.painter(), &tex_shortcut_badge, badge_rect, Color32::WHITE);
+                    Self::paint_tinted_texture(ui.painter(), &tex_shortcut_badge, badge_rect, palette.fg);
                 }
                 DesktopIconStyle::NoIcons => {}
             }
@@ -2982,6 +3036,11 @@ impl RobcoNativeApp {
                     ui.close_menu();
                 }
                 Self::retro_separator(ui);
+                if ui.button("Properties").clicked() {
+                    shortcut_action = Some(ContextMenuAction::OpenShortcutProperties(sidx));
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
                 if ui.button("Delete Shortcut").clicked() {
                     shortcut_action = Some(ContextMenuAction::DeleteShortcut(sidx));
                     ui.close_menu();
@@ -3013,6 +3072,152 @@ impl RobcoNativeApp {
 
         if let Some(window) = open_window {
             self.open_desktop_window(window);
+        }
+    }
+
+    fn draw_shortcut_properties_window(&mut self, ctx: &egui::Context) {
+        let Some(props) = self.shortcut_properties.clone() else {
+            return;
+        };
+        let palette = current_palette();
+        let props_idx = props.shortcut_idx;
+        let mut name_draft = props.name_draft.clone();
+        let mut command_draft = props.command_draft.clone();
+        let icon_path_draft = props.icon_path_draft.clone();
+        let mut action: Option<&'static str> = None;
+
+        egui::Window::new("shortcut_properties_window")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .frame(Self::desktop_window_frame())
+            .fixed_size(egui::vec2(360.0, 260.0))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                Self::apply_settings_control_style(ui);
+
+                // Header
+                let header_action = Self::draw_desktop_window_header(ui, "Shortcut Properties", false);
+                if matches!(header_action, DesktopHeaderAction::Close) {
+                    action = Some("cancel");
+                }
+
+                ui.add_space(12.0);
+
+                // Icon preview + shortcut label
+                ui.horizontal(|ui| {
+                    // Icon preview box
+                    let icon_size = 48.0;
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(icon_size, icon_size),
+                        egui::Sense::hover(),
+                    );
+                    // Draw current icon
+                    let icon_tex: Option<egui::TextureHandle> = icon_path_draft.as_ref().and_then(|p| {
+                        self.shortcut_icon_cache.get(p).cloned()
+                            .or_else(|| {
+                                std::fs::read(p).ok().map(|bytes| {
+                                    Self::load_svg_icon(ctx, p, &bytes, Some(48))
+                                })
+                            })
+                    });
+                    if let Some(tex) = icon_tex {
+                        Self::paint_tinted_texture(ui.painter(), &tex, rect, palette.fg);
+                    } else if let Some(cache) = &self.asset_cache {
+                        let icon = cache.icon_applications.clone();
+                        Self::paint_tinted_texture(ui.painter(), &icon, rect, palette.fg);
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(&name_draft).strong().monospace().color(palette.fg));
+                });
+
+                ui.add_space(8.0);
+                Self::retro_separator(ui);
+                ui.add_space(8.0);
+
+                // Name field
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Name:   ").monospace().color(palette.fg));
+                    let name_edit = egui::TextEdit::singleline(&mut name_draft)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(220.0);
+                    ui.add(name_edit);
+                });
+
+                ui.add_space(6.0);
+
+                // Target field
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Target: ").monospace().color(palette.fg));
+                    let cmd_edit = egui::TextEdit::singleline(&mut command_draft)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(220.0);
+                    ui.add(cmd_edit);
+                });
+
+                ui.add_space(6.0);
+
+                // Change Icon button
+                ui.horizontal(|ui| {
+                    ui.add_space(80.0);
+                    if ui.button("Change Icon...").clicked() {
+                        action = Some("change_icon");
+                    }
+                    if let Some(path) = &icon_path_draft {
+                        let filename = std::path::Path::new(path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        ui.label(RichText::new(filename).small().monospace().color(palette.dim));
+                    }
+                });
+
+                ui.add_space(12.0);
+                Self::retro_separator(ui);
+                ui.add_space(8.0);
+
+                // OK / Cancel
+                ui.horizontal(|ui| {
+                    ui.add_space(ui.available_width() / 2.0 - 70.0);
+                    if ui.button("  OK  ").clicked() {
+                        action = Some("ok");
+                    }
+                    ui.add_space(8.0);
+                    if ui.button("Cancel").clicked() {
+                        action = Some("cancel");
+                    }
+                });
+
+                // Sync drafts back to state
+                if let Some(props) = &mut self.shortcut_properties {
+                    props.name_draft = name_draft;
+                    props.command_draft = command_draft;
+                }
+            });
+
+        // Handle deferred actions OUTSIDE the window closure (to avoid double-borrow)
+        match action {
+            Some("ok") => {
+                if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(props_idx) {
+                    if let Some(props) = &self.shortcut_properties {
+                        sc.label = props.name_draft.clone();
+                        let cmd = props.command_draft.clone();
+                        sc.launch_command = if cmd == sc.app_name { None } else { Some(cmd) };
+                        sc.icon_path = props.icon_path_draft.clone();
+                    }
+                }
+                self.persist_native_settings();
+                self.shortcut_properties = None;
+            }
+            Some("cancel") => {
+                self.shortcut_properties = None;
+            }
+            Some("change_icon") => {
+                let icons_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/Icons");
+                self.picking_icon_for_shortcut = Some(props_idx);
+                self.open_file_manager_at(icons_dir);
+            }
+            _ => {}
         }
     }
 
@@ -7220,6 +7425,11 @@ impl RobcoNativeApp {
                     .show_inside(ui, |ui| {
                         header_action = Self::draw_desktop_window_header(ui, "My Computer", maximized);
 
+                        if self.picking_icon_for_shortcut.is_some() {
+                            let banner_color = current_palette().fg;
+                            ui.colored_label(banner_color, "[ Selecting Icon — choose an .svg file and click Choose Icon ]");
+                        }
+
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new("Tabs").strong());
                             for idx in 0..self.file_manager.tabs.len() {
@@ -7310,10 +7520,37 @@ impl RobcoNativeApp {
                             ui.separator();
                             ui.small(if show_tree_panel { "Tree On" } else { "Tree Off" });
                             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("New Document").clicked() { self.new_document(); }
-                                if ui.button("Open").clicked() { self.activate_file_manager_selection(); }
-                                if ui.button("Up").clicked() { self.file_manager.up(); }
-                                if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                if let Some(pick_idx) = self.picking_icon_for_shortcut {
+                                    if ui.button("Cancel").clicked() {
+                                        self.picking_icon_for_shortcut = None;
+                                    }
+                                    if ui.button("Choose Icon").clicked() {
+                                        if let Some(entry) = self.file_manager_selected_file() {
+                                            let path_str = entry.path.to_string_lossy().to_string();
+                                            if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(pick_idx) {
+                                                sc.icon_path = Some(path_str.clone());
+                                            }
+                                            // Invalidate cache for this path so it reloads
+                                            self.shortcut_icon_cache.remove(&path_str);
+                                            if let Some(props) = &mut self.shortcut_properties {
+                                                if props.shortcut_idx == pick_idx {
+                                                    props.icon_path_draft = Some(path_str);
+                                                }
+                                            }
+                                            self.picking_icon_for_shortcut = None;
+                                            self.persist_native_settings();
+                                        } else {
+                                            self.shell_status = "Select an SVG file first.".to_string();
+                                        }
+                                    }
+                                    if ui.button("Up").clicked() { self.file_manager.up(); }
+                                    if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                } else {
+                                    if ui.button("New Document").clicked() { self.new_document(); }
+                                    if ui.button("Open").clicked() { self.activate_file_manager_selection(); }
+                                    if ui.button("Up").clicked() { self.file_manager.up(); }
+                                    if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                }
                             });
                         });
                     });
@@ -9552,6 +9789,7 @@ impl eframe::App for RobcoNativeApp {
             self.draw_applications(ctx);
             self.draw_terminal_mode(ctx);
         }
+        self.draw_shortcut_properties_window(ctx);
         self.draw_terminal_prompt_overlay_global(ctx);
 
         if ctx.input(|i| i.viewport().close_requested()) {
