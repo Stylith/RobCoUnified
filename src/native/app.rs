@@ -293,7 +293,7 @@ enum ContextMenuAction {
     GenericCopy,
     GenericPaste,
     GenericSelectAll,
-    CreateShortcut(String),
+    CreateShortcut { label: String, action: StartLeafAction },
     DeleteShortcut(usize),
     SortDesktopIcons(DesktopIconSortMode),
     ToggleSnapToGrid,
@@ -2544,15 +2544,35 @@ impl RobcoNativeApp {
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}
             ContextMenuAction::GenericSelectAll => {}
-            ContextMenuAction::CreateShortcut(app_name) => {
-                let label = app_name.clone();
+            ContextMenuAction::CreateShortcut { label, action } => {
+                let (app_name, launch_command, shortcut_kind) = match &action {
+                    StartLeafAction::LaunchConfiguredApp(name) => {
+                        let cmd = resolve_program_command(name, &load_apps()).ok()
+                            .map(|args| args.join(" "));
+                        (name.clone(), cmd, "app".to_string())
+                    }
+                    StartLeafAction::LaunchNetworkProgram(name) => {
+                        let cmd = resolve_program_command(name, &load_networks()).ok()
+                            .map(|args| args.join(" "));
+                        (name.clone(), cmd, "network".to_string())
+                    }
+                    StartLeafAction::LaunchGameProgram(name) => {
+                        let cmd = resolve_program_command(name, &load_games()).ok()
+                            .map(|args| args.join(" "));
+                        (name.clone(), cmd, "game".to_string())
+                    }
+                    StartLeafAction::LaunchNukeCodes => (label.clone(), None, "nuke_codes".to_string()),
+                    StartLeafAction::OpenTextEditor => (label.clone(), None, "editor".to_string()),
+                    _ => (label.clone(), None, "app".to_string()),
+                };
                 self.settings.draft.desktop_shortcuts.push(DesktopShortcut {
                     label,
                     app_name,
                     pos_x: None,
                     pos_y: None,
-                    launch_command: None,
+                    launch_command,
                     icon_path: None,
+                    shortcut_kind,
                 });
                 self.persist_native_settings();
             }
@@ -2811,6 +2831,8 @@ impl RobcoNativeApp {
         let tex_nuke_codes = cache.icon_nuke_codes.clone();
         let tex_terminal = cache.icon_terminal.clone();
         let tex_shortcut_badge = cache.icon_shortcut_badge.clone();
+        let tex_app = cache.icon_app.clone();
+        let tex_connections = cache.icon_connections.clone();
 
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
@@ -2839,10 +2861,10 @@ impl RobcoNativeApp {
 
         let builtin_entries: [(TextureHandle, &str, &str, &str); 6] = [
             (tex_file_manager, "builtin_0", "Files", "[DIR]"),
-            (tex_editor, "builtin_1", "Documents", "[TXT]"),
+            (tex_editor.clone(), "builtin_1", "Documents", "[TXT]"),
             (tex_applications.clone(), "builtin_2", "Apps", "[APP]"),
             (tex_settings, "builtin_3", "Settings", "[CFG]"),
-            (tex_nuke_codes, "builtin_4", "Nuke Codes", "[!]"),
+            (tex_nuke_codes.clone(), "builtin_4", "Nuke Codes", "[!]"),
             (tex_terminal, "builtin_5", "Terminal", "[_]"),
         ];
 
@@ -2987,7 +3009,13 @@ impl RobcoNativeApp {
                     if let Some(tex) = icon_tex {
                         Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, palette.fg);
                     } else {
-                        Self::paint_tinted_texture(ui.painter(), &tex_applications, icon_rect, palette.fg);
+                        let kind_tex = match shortcut.shortcut_kind.as_str() {
+                            "network" => &tex_connections,
+                            "nuke_codes" => &tex_nuke_codes,
+                            "editor" => &tex_editor,
+                            _ => &tex_app,
+                        };
+                        Self::paint_tinted_texture(ui.painter(), kind_tex, icon_rect, palette.fg);
                     }
                     let badge_size = (icon_size * 0.35).max(10.0);
                     let badge_rect = egui::Rect::from_min_size(
@@ -5691,13 +5719,17 @@ impl RobcoNativeApp {
                                 if matches!(leaf, StartLeaf::Applications | StartLeaf::Games | StartLeaf::Network)
                                     && !matches!(item.action, StartLeafAction::None)
                                 {
-                                    let app_name = item.label.clone();
+                                    let item_label = item.label.clone();
+                                    let item_action = item.action.clone();
                                     response.context_menu(|ui| {
                                         Self::apply_context_menu_style(ui);
                                         ui.set_min_width(136.0);
                                         ui.set_max_width(180.0);
                                         if ui.button("Create Shortcut").clicked() {
-                                            leaf_context_action = Some(ContextMenuAction::CreateShortcut(app_name.clone()));
+                                            leaf_context_action = Some(ContextMenuAction::CreateShortcut {
+                                                label: item_label.clone(),
+                                                action: item_action.clone(),
+                                            });
                                             ui.close_menu();
                                         }
                                     });
@@ -7538,6 +7570,7 @@ impl RobcoNativeApp {
                                                 }
                                             }
                                             self.picking_icon_for_shortcut = None;
+                                            self.file_manager.open = false;
                                             self.persist_native_settings();
                                         } else {
                                             self.shell_status = "Select an SVG file first.".to_string();

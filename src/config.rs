@@ -380,6 +380,12 @@ pub struct DesktopShortcut {
     pub launch_command: Option<String>,
     #[serde(default)]
     pub icon_path: Option<String>,
+    #[serde(default = "default_shortcut_kind")]
+    pub shortcut_kind: String,
+}
+
+fn default_shortcut_kind() -> String {
+    "app".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
