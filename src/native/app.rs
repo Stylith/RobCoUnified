@@ -8,6 +8,10 @@ use super::data::{
     read_shell_snapshot, read_text_file, save_settings, save_text_file, word_processor_dir,
     write_shell_snapshot,
 };
+use super::donkey_kong::{
+    input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
+    DonkeyKongTheme, BUILTIN_DONKEY_KONG_GAME,
+};
 use super::default_apps_screen::{
     apply_custom_command as apply_default_app_custom_command, draw_default_apps_screen,
     DefaultAppsEvent,
@@ -209,6 +213,11 @@ struct TerminalModeWindow {
     status: String,
 }
 
+#[derive(Debug, Default, Clone)]
+struct DonkeyKongWindow {
+    open: bool,
+}
+
 struct AssetCache {
     icon_settings: TextureHandle,
     icon_file_manager: TextureHandle,
@@ -307,6 +316,7 @@ enum DesktopWindow {
     Editor,
     Settings,
     Applications,
+    DonkeyKong,
     NukeCodes,
     TerminalMode,
     PtyApp,
@@ -562,6 +572,8 @@ pub struct RobcoNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    donkey_kong_window: DonkeyKongWindow,
+    donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
@@ -619,6 +631,8 @@ struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    donkey_kong_window: DonkeyKongWindow,
+    donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
@@ -715,6 +729,8 @@ impl Default for RobcoNativeApp {
                 user_delete_confirm: String::new(),
             },
             applications: ApplicationsWindow::default(),
+            donkey_kong_window: DonkeyKongWindow::default(),
+            donkey_kong: None,
             desktop_nuke_codes_open: false,
             terminal_mode: TerminalModeWindow::default(),
             desktop_window_states: HashMap::new(),
@@ -1170,6 +1186,8 @@ impl RobcoNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             applications: self.applications.clone(),
+            donkey_kong_window: self.donkey_kong_window.clone(),
+            donkey_kong: self.donkey_kong.clone(),
             desktop_nuke_codes_open: self.desktop_nuke_codes_open,
             terminal_mode: self.terminal_mode.clone(),
             desktop_window_states: self.desktop_window_states.clone(),
@@ -1245,6 +1263,8 @@ impl RobcoNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.applications = parked.applications;
+        self.donkey_kong_window = parked.donkey_kong_window;
+        self.donkey_kong = parked.donkey_kong;
         self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.terminal_mode = parked.terminal_mode;
         self.desktop_window_states = parked.desktop_window_states;
@@ -1483,6 +1503,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => self.editor.open,
             DesktopWindow::Settings => self.settings.open,
             DesktopWindow::Applications => self.applications.open,
+            DesktopWindow::DonkeyKong => self.donkey_kong_window.open,
             DesktopWindow::NukeCodes => self.desktop_nuke_codes_open,
             DesktopWindow::TerminalMode => self.terminal_mode.open,
             DesktopWindow::PtyApp => self.terminal_pty.is_some(),
@@ -1601,6 +1622,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => egui::vec2(820.0, 560.0),
             DesktopWindow::Settings => egui::vec2(760.0, 500.0),
             DesktopWindow::Applications => egui::vec2(700.0, 480.0),
+            DesktopWindow::DonkeyKong => egui::vec2(820.0, 720.0),
             DesktopWindow::NukeCodes => egui::vec2(640.0, 420.0),
             DesktopWindow::TerminalMode => egui::vec2(720.0, 500.0),
             DesktopWindow::PtyApp => egui::vec2(960.0, 600.0),
@@ -1659,6 +1681,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => self.editor.open = open,
             DesktopWindow::Settings => self.settings.open = open,
             DesktopWindow::Applications => self.applications.open = open,
+            DesktopWindow::DonkeyKong => self.donkey_kong_window.open = open,
             DesktopWindow::NukeCodes => self.desktop_nuke_codes_open = open,
             DesktopWindow::TerminalMode => self.terminal_mode.open = open,
             DesktopWindow::PtyApp => {
@@ -1683,11 +1706,12 @@ impl RobcoNativeApp {
     }
 
     fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        const ORDER: [DesktopWindow; 7] = [
+        const ORDER: [DesktopWindow; 8] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
+            DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
@@ -1781,6 +1805,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => "ROBCO Word Processor".to_string(),
             DesktopWindow::Settings => "Settings".to_string(),
             DesktopWindow::Applications => "Applications".to_string(),
+            DesktopWindow::DonkeyKong => BUILTIN_DONKEY_KONG_GAME.to_string(),
             DesktopWindow::NukeCodes => "Nuke Codes".to_string(),
             DesktopWindow::TerminalMode => "Terminal".to_string(),
             DesktopWindow::PtyApp => self
@@ -1903,6 +1928,22 @@ impl RobcoNativeApp {
 
     fn file_manager_selected_entry(&self) -> Option<super::file_manager::FileEntryRow> {
         self.file_manager.selected_row()
+    }
+
+    /// Returns the SVG preview from cache if available, otherwise the default asset icon.
+    /// Returns an owned TextureHandle (Arc clone) so callers don't borrow self across &mut calls.
+    fn svg_preview_texture(&self, row: &super::file_manager::FileEntryRow) -> Option<TextureHandle> {
+        let is_svg = row.path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false);
+        if is_svg {
+            let key = row.path.to_string_lossy().to_string();
+            if let Some(tex) = self.shortcut_icon_cache.get(&key) {
+                return Some(tex.clone());
+            }
+        }
+        self.file_manager_texture_for_row(row).cloned()
     }
 
     fn split_file_name(name: &str) -> (&str, &str) {
@@ -3361,7 +3402,7 @@ impl RobcoNativeApp {
             }
             StartLeaf::Games => {
                 let mut items = Vec::new();
-                for key in Self::sorted_keys(&load_games()) {
+                for key in self.game_names() {
                     items.push(StartLeafItem {
                         label: key.clone(),
                         action: StartLeafAction::LaunchGameProgram(key),
@@ -3476,7 +3517,11 @@ impl RobcoNativeApp {
                 self.launch_named_program_from_map(&name, &load_networks(), &name);
             }
             StartLeafAction::LaunchGameProgram(name) => {
-                self.launch_named_program_from_map(&name, &load_games(), &name);
+                if name == BUILTIN_DONKEY_KONG_GAME {
+                    self.open_desktop_donkey_kong();
+                } else {
+                    self.launch_named_program_from_map(&name, &load_games(), &name);
+                }
             }
         }
     }
@@ -3503,6 +3548,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => self.draw_editor(ctx),
             DesktopWindow::Settings => self.draw_settings(ctx),
             DesktopWindow::Applications => self.draw_applications(ctx),
+            DesktopWindow::DonkeyKong => self.draw_desktop_donkey_kong(ctx),
             DesktopWindow::NukeCodes => self.draw_nuke_codes_window(ctx),
             DesktopWindow::TerminalMode => self.draw_terminal_mode(ctx),
             DesktopWindow::PtyApp => self.draw_desktop_pty_window(ctx),
@@ -3511,11 +3557,12 @@ impl RobcoNativeApp {
 
     fn draw_desktop_windows(&mut self, ctx: &Context) {
         self.sync_desktop_active_window();
-        const ORDER: [DesktopWindow; 7] = [
+        const ORDER: [DesktopWindow; 8] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
+            DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
@@ -3561,6 +3608,8 @@ impl RobcoNativeApp {
         self.settings.draft = current_settings();
         self.settings.status.clear();
         self.settings.panel = NativeSettingsPanel::Home;
+        self.donkey_kong_window.open = false;
+        self.donkey_kong = None;
         self.desktop_nuke_codes_open = false;
         self.terminal_mode.status.clear();
         let launch_default_desktop = matches!(self.settings.draft.default_open_mode, OpenMode::Desktop)
@@ -4199,6 +4248,50 @@ impl RobcoNativeApp {
         names
     }
 
+    fn game_names(&self) -> Vec<String> {
+        let mut names = vec![BUILTIN_DONKEY_KONG_GAME.to_string()];
+        names.extend(
+            Self::sorted_keys(&load_games())
+                .into_iter()
+                .filter(|name| name != BUILTIN_DONKEY_KONG_GAME),
+        );
+        names
+    }
+
+    fn current_donkey_kong_theme(&self) -> DonkeyKongTheme {
+        let palette = current_palette();
+        DonkeyKongTheme {
+            primary: palette.fg,
+            enemy: palette.selected_bg,
+            ui: palette.fg,
+            neutral: palette.dim,
+        }
+    }
+
+    fn ensure_donkey_kong_loaded(&mut self, ctx: &Context) -> &mut DonkeyKongGame {
+        let theme = self.current_donkey_kong_theme();
+        let scale = self.settings.draft.native_ui_scale.max(1.0);
+        self.donkey_kong.get_or_insert_with(|| {
+            DonkeyKongGame::new(
+                ctx,
+                DonkeyKongConfig {
+                    scale,
+                    theme: theme.clone(),
+                },
+            )
+        })
+    }
+
+    fn open_terminal_donkey_kong(&mut self) {
+        self.navigate_to_screen(TerminalScreen::DonkeyKong);
+        self.shell_status.clear();
+    }
+
+    fn open_desktop_donkey_kong(&mut self) {
+        self.open_desktop_window(DesktopWindow::DonkeyKong);
+        self.shell_status.clear();
+    }
+
     fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
         match target {
             EditMenuTarget::Applications => Self::sorted_keys(&load_apps()),
@@ -4423,6 +4516,7 @@ impl RobcoNativeApp {
                     TerminalScreen::Logs => self.terminal_logs_idx = selected_idx,
                     TerminalScreen::Network => self.terminal_network_idx = selected_idx,
                     TerminalScreen::Games => self.terminal_games_idx = selected_idx,
+                    TerminalScreen::DonkeyKong => {}
                     TerminalScreen::NukeCodes => {}
                     TerminalScreen::ProgramInstaller => {
                         self.terminal_installer.reset();
@@ -4507,6 +4601,10 @@ impl RobcoNativeApp {
             | TerminalScreen::Settings
             | TerminalScreen::UserManagement => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
+                self.shell_status.clear();
+            }
+            TerminalScreen::DonkeyKong => {
+                self.navigate_to_screen(TerminalScreen::Games);
                 self.shell_status.clear();
             }
             TerminalScreen::Logs => {
@@ -5506,6 +5604,7 @@ impl RobcoNativeApp {
                             DesktopWindow::Editor,
                             DesktopWindow::Settings,
                             DesktopWindow::Applications,
+                            DesktopWindow::DonkeyKong,
                             DesktopWindow::NukeCodes,
                             DesktopWindow::PtyApp,
                         ] {
@@ -5776,11 +5875,12 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_taskbar(&mut self, ctx: &Context) {
-        const WINDOW_ORDER: [DesktopWindow; 6] = [
+        const WINDOW_ORDER: [DesktopWindow; 7] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
+            DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
             DesktopWindow::PtyApp,
         ];
@@ -6402,7 +6502,7 @@ impl RobcoNativeApp {
     fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let games = load_games();
-        let entries: Vec<String> = games.keys().cloned().collect();
+        let entries = self.game_names();
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -6427,11 +6527,49 @@ impl RobcoNativeApp {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.shell_status.clear();
             }
-            ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &games) {
-                Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Games),
-                Err(err) => self.shell_status = err,
-            },
+            ProgramMenuEvent::Launch(name) => {
+                if name == BUILTIN_DONKEY_KONG_GAME {
+                    self.open_terminal_donkey_kong();
+                } else {
+                    match resolve_program_command(&name, &games) {
+                        Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Games),
+                        Err(err) => self.shell_status = err,
+                    }
+                }
+            }
         }
+    }
+
+    fn draw_terminal_donkey_kong(&mut self, ctx: &Context) {
+        ctx.request_repaint();
+        let theme = self.current_donkey_kong_theme();
+        let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
+        let input = donkey_kong_input_from_ctx(ctx);
+        let game = self.ensure_donkey_kong_loaded(ctx);
+        game.set_theme(theme);
+        game.update(input, dt);
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(current_palette().bg)
+                    .inner_margin(egui::Margin::same(12.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(BUILTIN_DONKEY_KONG_GAME).strong());
+                    ui.separator();
+                    ui.small("Arrow keys / WASD move");
+                    ui.separator();
+                    ui.small("Space jump / restart");
+                    ui.separator();
+                    ui.small("Esc back");
+                });
+                ui.add_space(8.0);
+                let game_rect = ui.available_rect_before_wrap();
+                game.draw(ui, game_rect);
+                ui.allocate_rect(game_rect, egui::Sense::hover());
+            });
     }
 
     fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {
@@ -7444,6 +7582,31 @@ impl RobcoNativeApp {
             window = window.current_pos(pos).default_size(size);
         }
         self.file_manager.ensure_selection_valid();
+
+        // Pre-load SVG previews for all .svg files in the current directory.
+        // Uses shortcut_icon_cache (same path→TextureHandle map). One-time cost per directory.
+        {
+            let svg_paths: Vec<std::path::PathBuf> = self.file_manager.rows()
+                .into_iter()
+                .filter(|r| {
+                    r.path.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("svg"))
+                        .unwrap_or(false)
+                })
+                .map(|r| r.path)
+                .collect();
+            for path in svg_paths {
+                let key = path.to_string_lossy().to_string();
+                if !self.shortcut_icon_cache.contains_key(&key) {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        let tex = Self::load_svg_icon(ctx, &key, &bytes, Some(32));
+                        self.shortcut_icon_cache.insert(key, tex);
+                    }
+                }
+            }
+        }
+
         let search_id = Id::new(("native_file_manager_search", generation));
         let shown = window.show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
@@ -7635,9 +7798,10 @@ impl RobcoNativeApp {
                                     .show(ui, |ui| {
                                         for row in &rows {
                                             let selected = self.file_manager.selected.as_ref() == Some(&row.path);
+                                            let preview = self.svg_preview_texture(row);
                                             let response = Self::retro_file_manager_item(
                                                 ui,
-                                                self.file_manager_texture_for_row(row),
+                                                preview.as_ref(),
                                                 row.icon(),
                                                 &row.label,
                                                 egui::vec2(ui.available_width(), 28.0),
@@ -7700,9 +7864,10 @@ impl RobcoNativeApp {
                                                     for row in chunk {
                                                     let selected = self.file_manager.selected.as_ref() == Some(&row.path);
                                                     let label = Self::truncate_file_manager_label(&row.label, 16);
+                                                    let preview = self.svg_preview_texture(row);
                                                         let response = Self::retro_file_manager_item(
                                                             ui,
-                                                            self.file_manager_texture_for_row(row),
+                                                            preview.as_ref(),
                                                             row.icon(),
                                                             &label,
                                                             egui::vec2(tile_width - 8.0, 60.0),
@@ -9447,6 +9612,86 @@ impl RobcoNativeApp {
         self.update_desktop_window_state(DesktopWindow::Applications, open);
     }
 
+    fn draw_desktop_donkey_kong(&mut self, ctx: &Context) {
+        if !self.donkey_kong_window.open || self.desktop_window_is_minimized(DesktopWindow::DonkeyKong) {
+            return;
+        }
+        ctx.request_repaint();
+        let mut open = self.donkey_kong_window.open;
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::DonkeyKong);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::DonkeyKong);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::DonkeyKong);
+        let mut window = egui::Window::new(BUILTIN_DONKEY_KONG_GAME)
+            .id(Id::new(("native_donkey_kong", generation)))
+            .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
+            .resizable(true)
+            .min_size([560.0, 500.0])
+            .default_size(Self::desktop_default_window_size(DesktopWindow::DonkeyKong));
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).default_size(size);
+        }
+        let theme = self.current_donkey_kong_theme();
+        let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
+        let input = donkey_kong_input_from_ctx(ctx);
+        let game = self.ensure_donkey_kong_loaded(ctx);
+        game.set_theme(theme);
+        game.update(input, dt);
+        let shown = window.show(ctx, |ui| {
+            Self::apply_settings_control_style(ui);
+            header_action =
+                Self::draw_desktop_window_header(ui, BUILTIN_DONKEY_KONG_GAME, maximized);
+            ui.horizontal(|ui| {
+                ui.small("Arrow keys / WASD move");
+                ui.separator();
+                ui.small("Space jump / restart");
+                ui.separator();
+                ui.small("Esc closes");
+            });
+            ui.separator();
+            let game_rect = ui.available_rect_before_wrap();
+            game.draw(ui, game_rect);
+            ui.allocate_rect(game_rect, egui::Sense::hover());
+        });
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        if let Some(inner) = shown.as_ref() {
+            Self::attach_generic_context_menu(&mut self.context_menu_action, &inner.response);
+        }
+        self.maybe_activate_desktop_window_from_click(
+            ctx,
+            DesktopWindow::DonkeyKong,
+            shown_contains_pointer,
+        );
+        if !maximized {
+            if let Some(rect) = shown_rect {
+                self.note_desktop_window_rect(DesktopWindow::DonkeyKong, rect);
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => open = false,
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::DonkeyKong, true)
+            }
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::DonkeyKong, shown_rect)
+            }
+        }
+        self.update_desktop_window_state(DesktopWindow::DonkeyKong, open);
+    }
+
     fn draw_nuke_codes_window(&mut self, ctx: &Context) {
         if !self.desktop_nuke_codes_open
             || self.desktop_window_is_minimized(DesktopWindow::NukeCodes)
@@ -9800,6 +10045,7 @@ impl eframe::App for RobcoNativeApp {
                 TerminalScreen::Logs => self.draw_terminal_logs(ctx),
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
+                TerminalScreen::DonkeyKong => self.draw_terminal_donkey_kong(ctx),
                 TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
