@@ -5645,10 +5645,8 @@ impl RobcoNativeApp {
                             ui.close_menu();
                         }
                         Self::retro_separator(ui);
-                        if ui.button("Exit All").clicked() {
-                            for w in [DesktopWindow::FileManager, DesktopWindow::Editor, DesktopWindow::Settings,
-                                      DesktopWindow::Applications, DesktopWindow::NukeCodes, DesktopWindow::PtyApp,
-                                      DesktopWindow::DonkeyKong] {
+                        if ui.button("Exit").clicked() {
+                            if let Some(w) = self.desktop_active_window {
                                 self.close_desktop_window(w);
                             }
                             ui.close_menu();
@@ -8527,7 +8525,8 @@ impl RobcoNativeApp {
                 let gen = generation;
                 egui::SidePanel::left(Id::new(("editor_lnum", gen)))
                     .exact_width(lnum_width)
-                    .frame(egui::Frame::none().fill(current_palette().panel))
+                    .frame(egui::Frame::none().fill(current_palette().bg))
+                    .show_separator_line(false)
                     .show_inside(ui, |ui| {
                         let palette = current_palette();
                         let font_size = self.editor.font_size;
@@ -8550,6 +8549,11 @@ impl RobcoNativeApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show_inside(ui, |ui| {
+                    // Block cursor in theme color
+                    let palette = current_palette();
+                    let char_width = self.editor.font_size * 0.6;
+                    ui.visuals_mut().text_cursor.stroke =
+                        egui::Stroke::new(char_width, palette.fg);
                     // Override monospace font size if user changed it
                     if (self.editor.font_size - 16.0).abs() > 0.1 {
                         ui.style_mut().text_styles.insert(
@@ -8560,10 +8564,16 @@ impl RobcoNativeApp {
                             ),
                         );
                     }
+                    let text_align = match self.editor_text_align {
+                        1 => egui::Align::Center,
+                        2 => egui::Align::RIGHT,
+                        _ => egui::Align::LEFT,
+                    };
                     let mut edit = TextEdit::multiline(&mut self.editor.text)
                         .id(text_edit_id)
                         .lock_focus(true)
-                        .code_editor();
+                        .code_editor()
+                        .horizontal_align(text_align);
                     if !self.editor.word_wrap {
                         edit = edit.desired_width(f32::INFINITY);
                     }
@@ -8584,9 +8594,15 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        // Context menus are attached to specific content widgets inside the
-        // window closure, not to the outer Area response (which causes
-        // "double use of widget" ID collisions in egui 0.29).
+        // Paint visible border on Foreground layer — guarantees it's above all content.
+        if let Some(rect) = shown_rect {
+            let palette = current_palette();
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                Id::new(("editor_border", generation)),
+            ))
+            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
+        }
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::Editor,
