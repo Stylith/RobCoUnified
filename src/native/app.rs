@@ -8522,57 +8522,93 @@ impl RobcoNativeApp {
                 _ => egui::Align::LEFT,
             };
 
-            // Line numbers + text side by side in the remaining space.
-            // allocate_ui_with_layout gives the inner UI the full remaining
-            // rect so line numbers and text both get the correct height.
+            // Text editor in a fixed-height ScrollArea — the window stays the
+            // same size and content scrolls instead of expanding.
             let remaining = ui.available_size();
-            ui.allocate_ui_with_layout(
-                remaining,
-                egui::Layout::left_to_right(egui::Align::Min),
-                |ui| {
-                    // Line numbers column
-                    if self.editor_show_line_numbers {
+
+            // Reserve left strip for line numbers if enabled
+            let lnum_width = if self.editor_show_line_numbers {
+                let line_count = self.editor.text.lines().count().max(1);
+                let digit_w = (line_count as f32).log10().floor() as usize + 1;
+                digit_w as f32 * 9.0 + 12.0
+            } else {
+                0.0
+            };
+            let text_width = (remaining.x - lnum_width).max(100.0);
+
+            egui::ScrollArea::vertical()
+                .id_salt(Id::new(("editor_scroll", generation)))
+                .max_height(remaining.y)
+                .show(ui, |ui| {
+                    // Line numbers: painted on the left via the painter,
+                    // not as widgets, so they scroll with the text.
+                    if self.editor_show_line_numbers && lnum_width > 0.0 {
                         let line_count = self.editor.text.lines().count().max(1);
-                        let digit_w = (line_count as f32).log10().floor() as usize + 1;
-                        let lnum_width = digit_w as f32 * 9.0 + 12.0;
-                        egui::ScrollArea::vertical()
-                            .id_salt(Id::new(("editor_lnum_scroll", generation)))
-                            .max_height(remaining.y)
-                            .show(ui, |ui| {
-                                ui.set_width(lnum_width);
-                                for n in 1..=(line_count + 1) {
-                                    ui.label(
-                                        RichText::new(format!("{n}"))
-                                            .color(palette.dim)
-                                            .monospace()
-                                            .size(self.editor.font_size),
-                                    );
-                                }
-                            });
+                        let line_h = self.editor.font_size * 1.4;
+                        let top = ui.cursor().min;
+                        let painter = ui.painter().clone();
+                        for n in 1..=(line_count + 1) {
+                            let y = top.y + (n as f32 - 1.0) * line_h;
+                            painter.text(
+                                egui::pos2(top.x + lnum_width - 6.0, y),
+                                egui::Align2::RIGHT_TOP,
+                                format!("{n}"),
+                                egui::FontId::new(self.editor.font_size, egui::FontFamily::Monospace),
+                                palette.dim,
+                            );
+                        }
                     }
 
-                    // Text edit fills the rest
-                    let mut edit = TextEdit::multiline(&mut self.editor.text)
-                        .id(text_edit_id)
-                        .lock_focus(true)
-                        .font(egui::TextStyle::Monospace)
-                        .horizontal_align(text_align);
-                    if !self.editor.word_wrap {
-                        edit = edit.desired_width(f32::INFINITY);
+                    // Indent the TextEdit past the line number column
+                    if lnum_width > 0.0 {
+                        ui.add_space(0.0); // ensure cursor is at left
+                        let rect = ui.available_rect_before_wrap();
+                        let indented = egui::Rect::from_min_size(
+                            egui::pos2(rect.left() + lnum_width, rect.top()),
+                            egui::vec2(text_width, rect.height()),
+                        );
+                        let mut child = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(indented)
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                        );
+                        let mut edit = TextEdit::multiline(&mut self.editor.text)
+                            .id(text_edit_id)
+                            .lock_focus(true)
+                            .font(egui::TextStyle::Monospace)
+                            .horizontal_align(text_align);
+                        if !self.editor.word_wrap {
+                            edit = edit.desired_width(f32::INFINITY);
+                        }
+                        let response = child.add(edit);
+                        // Extend parent's min_rect to include the text edit
+                        ui.allocate_rect(child.min_rect(), egui::Sense::hover());
+                        Self::attach_generic_context_menu(
+                            &mut self.context_menu_action,
+                            &response,
+                        );
+                        if response.changed() {
+                            self.editor.dirty = true;
+                        }
+                    } else {
+                        let mut edit = TextEdit::multiline(&mut self.editor.text)
+                            .id(text_edit_id)
+                            .lock_focus(true)
+                            .font(egui::TextStyle::Monospace)
+                            .horizontal_align(text_align);
+                        if !self.editor.word_wrap {
+                            edit = edit.desired_width(f32::INFINITY);
+                        }
+                        let response = ui.add(edit);
+                        Self::attach_generic_context_menu(
+                            &mut self.context_menu_action,
+                            &response,
+                        );
+                        if response.changed() {
+                            self.editor.dirty = true;
+                        }
                     }
-                    let response = ui.add_sized(
-                        egui::vec2(ui.available_width(), remaining.y),
-                        edit,
-                    );
-                    Self::attach_generic_context_menu(
-                        &mut self.context_menu_action,
-                        &response,
-                    );
-                    if response.changed() {
-                        self.editor.dirty = true;
-                    }
-                },
-            );
+                });
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
