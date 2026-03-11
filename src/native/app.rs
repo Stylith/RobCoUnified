@@ -8373,6 +8373,7 @@ impl RobcoNativeApp {
             .to_string();
 
         if !self.desktop_mode_open {
+            // Keyboard shortcuts for terminal mode (no mouse needed)
             if ctx.input(|i| {
                 i.key_pressed(Key::Escape)
                     || i.key_pressed(Key::Tab)
@@ -8381,45 +8382,41 @@ impl RobcoNativeApp {
                 self.update_desktop_window_state(DesktopWindow::Editor, false);
                 return;
             }
+            if ctx.input(|i| i.key_pressed(Key::N) && i.modifiers.command) {
+                self.new_document();
+            }
+            let palette = current_palette();
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::none()
-                        .fill(current_palette().bg)
+                        .fill(palette.bg)
                         .inner_margin(egui::Margin::same(8.0)),
                 )
                 .show(ctx, |ui| {
+                    // Header with keyboard shortcut hints
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&title).strong());
-                        ui.separator();
-                        if ui.button("New").clicked() {
-                            self.new_document();
-                        }
-                        if ui.button("Save").clicked() {
-                            self.save_editor();
-                        }
-                        if ui.button("Open File Manager").clicked() {
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                        }
-                        if ui.button("Close").clicked() {
-                            self.update_desktop_window_state(DesktopWindow::Editor, false);
-                        }
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new("Esc:Exit  ^S:Save  ^N:New  ^F:Find").color(palette.dim).small());
+                        });
                     });
                     if let Some(path) = &self.editor.path {
                         ui.small(path.display().to_string());
                     }
+                    if !self.editor.status.is_empty() {
+                        ui.small(RichText::new(&self.editor.status).color(palette.dim));
+                    }
                     ui.separator();
+                    // Block cursor
+                    let char_width = 16.0 * 0.6;
+                    ui.visuals_mut().text_cursor.stroke =
+                        egui::Stroke::new(char_width, palette.fg);
                     let edit = TextEdit::multiline(&mut self.editor.text)
-                        .desired_rows(28)
                         .lock_focus(true)
-                        .code_editor();
+                        .font(egui::TextStyle::Monospace);
                     let response = ui.add_sized(ui.available_size(), edit);
-                    Self::attach_generic_context_menu(&mut self.context_menu_action, &response);
                     if response.changed() {
                         self.editor.dirty = true;
-                    }
-                    if !self.editor.status.is_empty() {
-                        ui.separator();
-                        ui.small(&self.editor.status);
                     }
                 });
             return;
@@ -8525,51 +8522,57 @@ impl RobcoNativeApp {
                 _ => egui::Align::LEFT,
             };
 
-            // Line numbers + text side by side in the remaining space
+            // Line numbers + text side by side in the remaining space.
+            // allocate_ui_with_layout gives the inner UI the full remaining
+            // rect so line numbers and text both get the correct height.
             let remaining = ui.available_size();
-            ui.horizontal(|ui| {
-                // Line numbers column
-                if self.editor_show_line_numbers {
-                    let line_count = self.editor.text.lines().count().max(1);
-                    let digit_w = (line_count as f32).log10().floor() as usize + 1;
-                    let lnum_width = digit_w as f32 * 9.0 + 12.0;
-                    egui::ScrollArea::vertical()
-                        .id_salt(Id::new(("editor_lnum_scroll", generation)))
-                        .max_height(remaining.y)
-                        .show(ui, |ui| {
-                            ui.set_width(lnum_width);
-                            for n in 1..=(line_count + 1) {
-                                ui.label(
-                                    RichText::new(format!("{n}"))
-                                        .color(palette.dim)
-                                        .monospace()
-                                        .size(self.editor.font_size),
-                                );
-                            }
-                        });
-                }
+            ui.allocate_ui_with_layout(
+                remaining,
+                egui::Layout::left_to_right(egui::Align::Min),
+                |ui| {
+                    // Line numbers column
+                    if self.editor_show_line_numbers {
+                        let line_count = self.editor.text.lines().count().max(1);
+                        let digit_w = (line_count as f32).log10().floor() as usize + 1;
+                        let lnum_width = digit_w as f32 * 9.0 + 12.0;
+                        egui::ScrollArea::vertical()
+                            .id_salt(Id::new(("editor_lnum_scroll", generation)))
+                            .max_height(remaining.y)
+                            .show(ui, |ui| {
+                                ui.set_width(lnum_width);
+                                for n in 1..=(line_count + 1) {
+                                    ui.label(
+                                        RichText::new(format!("{n}"))
+                                            .color(palette.dim)
+                                            .monospace()
+                                            .size(self.editor.font_size),
+                                    );
+                                }
+                            });
+                    }
 
-                // Text edit fills the rest
-                let mut edit = TextEdit::multiline(&mut self.editor.text)
-                    .id(text_edit_id)
-                    .lock_focus(true)
-                    .font(egui::TextStyle::Monospace)
-                    .horizontal_align(text_align);
-                if !self.editor.word_wrap {
-                    edit = edit.desired_width(f32::INFINITY);
-                }
-                let response = ui.add_sized(
-                    egui::vec2(ui.available_width(), remaining.y),
-                    edit,
-                );
-                Self::attach_generic_context_menu(
-                    &mut self.context_menu_action,
-                    &response,
-                );
-                if response.changed() {
-                    self.editor.dirty = true;
-                }
-            });
+                    // Text edit fills the rest
+                    let mut edit = TextEdit::multiline(&mut self.editor.text)
+                        .id(text_edit_id)
+                        .lock_focus(true)
+                        .font(egui::TextStyle::Monospace)
+                        .horizontal_align(text_align);
+                    if !self.editor.word_wrap {
+                        edit = edit.desired_width(f32::INFINITY);
+                    }
+                    let response = ui.add_sized(
+                        egui::vec2(ui.available_width(), remaining.y),
+                        edit,
+                    );
+                    Self::attach_generic_context_menu(
+                        &mut self.context_menu_action,
+                        &response,
+                    );
+                    if response.changed() {
+                        self.editor.dirty = true;
+                    }
+                },
+            );
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
