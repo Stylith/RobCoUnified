@@ -8450,30 +8450,26 @@ impl RobcoNativeApp {
         }
         let text_edit_id = Id::new(("editor_text_edit", generation));
         let shown = window.show(ctx, |ui| {
-            // ── TOP PANEL: title bar + menu bar + status ──────────────────────
-            egui::TopBottomPanel::top(Id::new(("editor_top", generation)))
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
-                    header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            // Force the window UI to claim its full min_size so egui's auto-sizer
+            // doesn't collapse the window to just the header height.
+            ui.set_min_size(egui::vec2(398.0, 298.0));
 
-                    // Path and status (menus live in the global top bar when editor is active)
-                    if let Some(path) = &self.editor.path {
-                        ui.small(path.display().to_string());
-                    }
-                    if !self.editor.status.is_empty() {
-                        ui.small(self.editor.status.clone());
-                    }
-                });
+            // ── HEADER ───────────────────────────────────────────────────────
+            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            if let Some(path) = &self.editor.path {
+                ui.small(path.display().to_string());
+            }
+            if !self.editor.status.is_empty() {
+                ui.small(self.editor.status.clone());
+            }
 
-            // ── FIND/REPLACE BAR (bottom, shown when editor_find_open) ─────────
+            // ── FIND/REPLACE BAR ─────────────────────────────────────────────
             if self.editor_find_open {
-                let gen = generation;
-                egui::TopBottomPanel::bottom(Id::new(("editor_find", gen)))
-                    .exact_height(if self.editor_find_replace_visible { 60.0 } else { 32.0 })
-                    .frame(egui::Frame::none().fill(current_palette().panel))
-                    .show_inside(ui, |ui| {
-                        let palette = current_palette();
-                        ui.add_space(4.0);
+                let palette = current_palette();
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin::symmetric(4.0, 4.0))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Find:").color(palette.dim));
                             ui.add_space(4.0);
@@ -8509,86 +8505,71 @@ impl RobcoNativeApp {
                                 }
                             });
                         });
-                        if self.editor_find_replace_visible {
-                            ui.horizontal(|ui| {
-                                ui.add_space(4.0);
-                            });
-                        }
                     });
             }
 
-            // ── LINE NUMBERS SIDEBAR ───────────────────────────────────────────
-            if self.editor_show_line_numbers {
-                let line_count = self.editor.text.lines().count().max(1);
-                let digit_w = (line_count as f32).log10().floor() as usize + 1;
-                let lnum_width = digit_w as f32 * 9.0 + 12.0;
-                let gen = generation;
-                egui::SidePanel::left(Id::new(("editor_lnum", gen)))
-                    .exact_width(lnum_width)
-                    .frame(egui::Frame::none().fill(current_palette().bg))
-                    .show_separator_line(false)
-                    .show_inside(ui, |ui| {
-                        let palette = current_palette();
-                        let font_size = self.editor.font_size;
-                        egui::ScrollArea::vertical()
-                            .id_salt(Id::new(("editor_lnum_scroll", gen)))
-                            .show(ui, |ui| {
-                                for n in 1..=(line_count + 1) {
-                                    ui.label(
-                                        RichText::new(format!("{n}"))
-                                            .color(palette.dim)
-                                            .monospace()
-                                            .size(font_size),
-                                    );
-                                }
-                            });
-                    });
+            // ── TEXT EDITOR AREA ─────────────────────────────────────────────
+            let palette = current_palette();
+            let char_width = self.editor.font_size * 0.6;
+            ui.visuals_mut().text_cursor.stroke =
+                egui::Stroke::new(char_width, palette.fg);
+            if (self.editor.font_size - 16.0).abs() > 0.1 {
+                ui.style_mut().text_styles.insert(
+                    egui::TextStyle::Monospace,
+                    egui::FontId::new(self.editor.font_size, egui::FontFamily::Monospace),
+                );
             }
+            let text_align = match self.editor_text_align {
+                1 => egui::Align::Center,
+                2 => egui::Align::RIGHT,
+                _ => egui::Align::LEFT,
+            };
 
-            // ── CENTRAL PANEL: text editor ─────────────────────────────────────
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
-                    // Block cursor in theme color
-                    let palette = current_palette();
-                    let char_width = self.editor.font_size * 0.6;
-                    ui.visuals_mut().text_cursor.stroke =
-                        egui::Stroke::new(char_width, palette.fg);
-                    // Override monospace font size if user changed it
-                    if (self.editor.font_size - 16.0).abs() > 0.1 {
-                        ui.style_mut().text_styles.insert(
-                            egui::TextStyle::Monospace,
-                            egui::FontId::new(
-                                self.editor.font_size,
-                                egui::FontFamily::Monospace,
-                            ),
-                        );
-                    }
-                    let text_align = match self.editor_text_align {
-                        1 => egui::Align::Center,
-                        2 => egui::Align::RIGHT,
-                        _ => egui::Align::LEFT,
-                    };
-                    let mut edit = TextEdit::multiline(&mut self.editor.text)
-                        .id(text_edit_id)
-                        .lock_focus(true)
-                        .code_editor()
-                        .horizontal_align(text_align);
-                    if !self.editor.word_wrap {
-                        edit = edit.desired_width(f32::INFINITY);
-                    }
-                    // add_sized inside a CentralPanel::show_inside is safe —
-                    // available_size() is the panel's carved rect, not the
-                    // window's resizable area, so it won't cause auto-grow.
-                    let response = ui.add_sized(ui.available_size(), edit);
-                    Self::attach_generic_context_menu(
-                        &mut self.context_menu_action,
-                        &response,
-                    );
-                    if response.changed() {
-                        self.editor.dirty = true;
-                    }
-                });
+            // Line numbers + text side by side in the remaining space
+            let remaining = ui.available_size();
+            ui.horizontal(|ui| {
+                // Line numbers column
+                if self.editor_show_line_numbers {
+                    let line_count = self.editor.text.lines().count().max(1);
+                    let digit_w = (line_count as f32).log10().floor() as usize + 1;
+                    let lnum_width = digit_w as f32 * 9.0 + 12.0;
+                    egui::ScrollArea::vertical()
+                        .id_salt(Id::new(("editor_lnum_scroll", generation)))
+                        .max_height(remaining.y)
+                        .show(ui, |ui| {
+                            ui.set_width(lnum_width);
+                            for n in 1..=(line_count + 1) {
+                                ui.label(
+                                    RichText::new(format!("{n}"))
+                                        .color(palette.dim)
+                                        .monospace()
+                                        .size(self.editor.font_size),
+                                );
+                            }
+                        });
+                }
+
+                // Text edit fills the rest
+                let mut edit = TextEdit::multiline(&mut self.editor.text)
+                    .id(text_edit_id)
+                    .lock_focus(true)
+                    .font(egui::TextStyle::Monospace)
+                    .horizontal_align(text_align);
+                if !self.editor.word_wrap {
+                    edit = edit.desired_width(f32::INFINITY);
+                }
+                let response = ui.add_sized(
+                    egui::vec2(ui.available_width(), remaining.y),
+                    edit,
+                );
+                Self::attach_generic_context_menu(
+                    &mut self.context_menu_action,
+                    &response,
+                );
+                if response.changed() {
+                    self.editor.dirty = true;
+                }
+            });
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
