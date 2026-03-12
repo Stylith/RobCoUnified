@@ -27,8 +27,9 @@ use super::installer_screen::{
     add_package_to_menu, apply_filter as apply_installer_filter,
     apply_search_query as apply_installer_search_query, build_package_command,
     draw_installer_screen, settle_view_after_package_command, DesktopInstallerConfirm,
-    DesktopInstallerEvent, DesktopInstallerState, DesktopInstallerView, InstallerCategory, InstallerEvent,
-    InstallerMenuTarget, InstallerPackageAction, TerminalInstallerState,
+    DesktopInstallerEvent, DesktopInstallerNotice, DesktopInstallerState, DesktopInstallerView,
+    InstallerCategory, InstallerEvent, InstallerMenuTarget, InstallerPackageAction,
+    TerminalInstallerState,
 };
 use super::menu::{
     draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
@@ -229,6 +230,7 @@ struct AssetCache {
     icon_file_manager: TextureHandle,
     icon_terminal: TextureHandle,
     icon_applications: TextureHandle,
+    icon_installer: TextureHandle,
     icon_nuke_codes: TextureHandle,
     icon_editor: TextureHandle,
     icon_general: TextureHandle,
@@ -292,6 +294,13 @@ struct ShortcutPropertiesState {
 }
 
 #[derive(Debug, Clone)]
+struct StartMenuRenameState {
+    target: EditMenuTarget,
+    original_name: String,
+    name_input: String,
+}
+
+#[derive(Debug, Clone)]
 enum ContextMenuAction {
     Open,
     OpenWith,
@@ -310,6 +319,8 @@ enum ContextMenuAction {
     GenericPaste,
     GenericSelectAll,
     CreateShortcut { label: String, action: StartLeafAction },
+    RenameStartMenuEntry { target: EditMenuTarget, name: String },
+    RemoveStartMenuEntry { target: EditMenuTarget, name: String },
     DeleteShortcut(usize),
     SortDesktopIcons(DesktopIconSortMode),
     ToggleSnapToGrid,
@@ -649,6 +660,7 @@ pub struct RobcoNativeApp {
     context_menu_action: Option<ContextMenuAction>,
     shell_status: String,
     shortcut_properties: Option<ShortcutPropertiesState>,
+    start_menu_rename: Option<StartMenuRenameState>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
@@ -722,6 +734,7 @@ struct ParkedSessionState {
     file_undo_stack: Vec<FileManagerEditOp>,
     file_redo_stack: Vec<FileManagerEditOp>,
     shell_status: String,
+    start_menu_rename: Option<StartMenuRenameState>,
 }
 
 impl Default for RobcoNativeApp {
@@ -828,6 +841,7 @@ impl Default for RobcoNativeApp {
             context_menu_action: None,
             shell_status: String::new(),
             shortcut_properties: None,
+            start_menu_rename: None,
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
@@ -938,6 +952,12 @@ impl RobcoNativeApp {
                 ctx,
                 "icon_applications",
                 include_bytes!("../Icons/pixel--grid.svg"),
+                Some(ICON_SIZE),
+            ),
+            icon_installer: Self::load_svg_icon(
+                ctx,
+                "icon_installer",
+                include_bytes!("../Icons/pixel--file-import-solid.svg"),
                 Some(ICON_SIZE),
             ),
             icon_nuke_codes: Self::load_svg_icon(
@@ -1372,6 +1392,7 @@ impl RobcoNativeApp {
             file_undo_stack: self.file_undo_stack.clone(),
             file_redo_stack: self.file_redo_stack.clone(),
             shell_status: std::mem::take(&mut self.shell_status),
+            start_menu_rename: self.start_menu_rename.take(),
         };
         self.session_runtime.insert(idx, parked);
     }
@@ -1451,6 +1472,7 @@ impl RobcoNativeApp {
         self.file_redo_stack = parked.file_redo_stack;
         self.context_menu_action = None;
         self.shell_status = parked.shell_status;
+        self.start_menu_rename = parked.start_menu_rename;
         true
     }
 
@@ -2779,6 +2801,17 @@ impl RobcoNativeApp {
                 });
                 self.persist_native_settings();
             }
+            ContextMenuAction::RenameStartMenuEntry { target, name } => {
+                self.start_menu_rename = Some(StartMenuRenameState {
+                    target,
+                    original_name: name.clone(),
+                    name_input: name,
+                });
+            }
+            ContextMenuAction::RemoveStartMenuEntry { target, name } => {
+                self.delete_program_entry(target, &name);
+                self.close_start_menu();
+            }
             ContextMenuAction::DeleteShortcut(idx) => {
                 if idx < self.settings.draft.desktop_shortcuts.len() {
                     self.settings.draft.desktop_shortcuts.remove(idx);
@@ -3022,6 +3055,63 @@ impl RobcoNativeApp {
         });
     }
 
+    fn desktop_icon_label_lines(label: &str) -> Vec<String> {
+        if label.len() <= 12 || !label.contains(' ') {
+            return vec![label.to_string()];
+        }
+        let words: Vec<&str> = label.split_whitespace().collect();
+        if words.len() < 2 {
+            return vec![label.to_string()];
+        }
+        let midpoint = label.len() / 2;
+        let mut split_idx = 1usize;
+        let mut best_delta = usize::MAX;
+        let mut prefix_len = words[0].len();
+        for idx in 1..words.len() {
+            let delta = prefix_len.abs_diff(midpoint);
+            if delta < best_delta {
+                best_delta = delta;
+                split_idx = idx;
+            }
+            if idx < words.len() - 1 {
+                prefix_len += 1 + words[idx].len();
+            }
+        }
+        vec![words[..split_idx].join(" "), words[split_idx..].join(" ")]
+    }
+
+    fn paint_desktop_icon_label(
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        label: &str,
+        color: Color32,
+    ) {
+        let lines = Self::desktop_icon_label_lines(label);
+        if lines.len() == 1 {
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                &lines[0],
+                FontId::new(13.0, FontFamily::Monospace),
+                color,
+            );
+            return;
+        }
+
+        let line_height = 11.0;
+        let total_height = line_height * lines.len() as f32;
+        let start_y = rect.center().y - total_height * 0.5 + line_height * 0.5;
+        for (idx, line) in lines.iter().enumerate() {
+            ui.painter().text(
+                egui::pos2(rect.center().x, start_y + idx as f32 * line_height),
+                Align2::CENTER_CENTER,
+                line,
+                FontId::new(11.0, FontFamily::Monospace),
+                color,
+            );
+        }
+    }
+
     fn draw_desktop_icons(&mut self, ui: &mut egui::Ui) {
         let Some(cache) = self.asset_cache.as_ref() else {
             return;
@@ -3029,7 +3119,7 @@ impl RobcoNativeApp {
         // Clone all needed textures upfront so we release the cache borrow
         let tex_file_manager = cache.icon_file_manager.clone();
         let tex_editor = cache.icon_editor.clone();
-        let tex_applications = cache.icon_applications.clone();
+        let tex_installer = cache.icon_installer.clone();
         let tex_settings = cache.icon_settings.clone();
         let tex_nuke_codes = cache.icon_nuke_codes.clone();
         let tex_terminal = cache.icon_terminal.clone();
@@ -3040,11 +3130,12 @@ impl RobcoNativeApp {
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
         let snap = self.settings.draft.desktop_snap_to_grid;
+        let sort_mode = self.settings.draft.desktop_icon_sort;
         let workspace = Self::desktop_workspace_rect(ui.ctx());
         let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) =
             match style {
             DesktopIconStyle::Minimal => (34.0, 0.0, 46.0, 48.0),
-            DesktopIconStyle::Win95 | DesktopIconStyle::Dos => (48.0, 18.0, 74.0, 84.0),
+            DesktopIconStyle::Win95 | DesktopIconStyle::Dos => (48.0, 28.0, 84.0, 100.0),
             DesktopIconStyle::NoIcons => return,
         };
 
@@ -3062,39 +3153,117 @@ impl RobcoNativeApp {
             }
         };
 
-        let builtin_entries: [(TextureHandle, &str, &str, &str); 6] = [
-            (tex_file_manager, "builtin_0", "Files", "[DIR]"),
-            (tex_editor.clone(), "builtin_1", "Documents", "[TXT]"),
-            (tex_applications.clone(), "builtin_2", "Apps", "[APP]"),
-            (tex_settings, "builtin_3", "Settings", "[CFG]"),
-            (tex_nuke_codes.clone(), "builtin_4", "Nuke Codes", "[!]"),
-            (tex_terminal, "builtin_5", "Terminal", "[_]"),
+        let builtin_entries: [(TextureHandle, &str, &str, &str, Option<DesktopWindow>); 6] = [
+            (
+                tex_file_manager,
+                "builtin_0",
+                "Files",
+                "[DIR]",
+                Some(DesktopWindow::FileManager),
+            ),
+            (
+                tex_editor.clone(),
+                "builtin_1",
+                "Documents",
+                "[TXT]",
+                Some(DesktopWindow::Editor),
+            ),
+            (
+                tex_installer,
+                "builtin_2",
+                "Program Installer",
+                "[PKG]",
+                Some(DesktopWindow::Installer),
+            ),
+            (
+                tex_settings,
+                "builtin_3",
+                "Settings",
+                "[CFG]",
+                Some(DesktopWindow::Settings),
+            ),
+            (
+                tex_nuke_codes.clone(),
+                "builtin_4",
+                "Nuke Codes",
+                "[!]",
+                Some(DesktopWindow::NukeCodes),
+            ),
+            (tex_terminal, "builtin_5", "Terminal", "[_]", None),
         ];
 
         let hidden_icons = &self.settings.draft.desktop_hidden_builtin_icons;
+        let shortcuts = self.settings.draft.desktop_shortcuts.clone();
+        let mut default_positions: HashMap<String, egui::Pos2> = HashMap::new();
+        if !matches!(sort_mode, DesktopIconSortMode::Custom) {
+            let rows_per_column = (((workspace.height() - 16.0) / item_height).floor() as usize).max(1);
+            let mut ordered_icons: Vec<(String, String, usize, usize)> = Vec::new();
+            for (idx, (_, key, label, _, _)) in builtin_entries.iter().enumerate() {
+                if !hidden_icons.contains(&key.to_string()) {
+                    ordered_icons.push((key.to_string(), (*label).to_string(), 0, idx));
+                }
+            }
+            for (idx, shortcut) in shortcuts.iter().enumerate() {
+                let type_rank = match shortcut.shortcut_kind.as_str() {
+                    "network" => 2,
+                    "game" => 3,
+                    "nuke_codes" => 4,
+                    "editor" => 5,
+                    _ => 1,
+                };
+                ordered_icons.push((
+                    format!("shortcut_{idx}"),
+                    shortcut.label.clone(),
+                    type_rank,
+                    idx,
+                ));
+            }
+            match sort_mode {
+                DesktopIconSortMode::ByName => {
+                    ordered_icons.sort_by_key(|(_, label, _, fallback)| {
+                        (label.to_ascii_lowercase(), *fallback)
+                    });
+                }
+                DesktopIconSortMode::ByType => {
+                    ordered_icons.sort_by_key(|(_, label, type_rank, fallback)| {
+                        (*type_rank, label.to_ascii_lowercase(), *fallback)
+                    });
+                }
+                DesktopIconSortMode::Custom => {}
+            }
+            for (idx, (key, _, _, _)) in ordered_icons.into_iter().enumerate() {
+                let col = idx / rows_per_column;
+                let row = idx % rows_per_column;
+                default_positions.insert(
+                    key,
+                    egui::pos2(
+                        workspace.left() + 4.0 + col as f32 * column_width,
+                        workspace.top() + 16.0 + row as f32 * item_height,
+                    ),
+                );
+            }
+        }
         let mut open_window: Option<DesktopWindow> = None;
-        let open_windows: [DesktopWindow; 6] = [
-            DesktopWindow::FileManager,
-            DesktopWindow::Editor,
-            DesktopWindow::Applications,
-            DesktopWindow::Settings,
-            DesktopWindow::NukeCodes,
-            DesktopWindow::PtyApp,
-        ];
+        let mut open_terminal = false;
         let mut shortcut_action: Option<ContextMenuAction> = None;
         let mut needs_persist = false;
 
-        for (index, (texture, key, label, ascii)) in builtin_entries.iter().enumerate() {
+        for (index, (texture, key, label, ascii, target_window)) in builtin_entries.iter().enumerate()
+        {
             if hidden_icons.contains(&key.to_string()) {
                 continue;
             }
             let stored_pos = self.settings.draft.desktop_icon_custom_positions
                 .get(*key)
                 .map(|&[x, y]| egui::pos2(x, y));
-            let top_left = stored_pos.unwrap_or_else(|| egui::pos2(
-                workspace.left() + 4.0,
-                workspace.top() + 16.0 + index as f32 * item_height,
-            ));
+            let top_left = stored_pos.unwrap_or_else(|| {
+                default_positions.get(*key).copied().unwrap_or_else(|| {
+                    egui::pos2(
+                        workspace.left() + 4.0,
+                        workspace.top() + 16.0 + index as f32 * item_height,
+                    )
+                })
+            });
 
             let icon_rect = egui::Rect::from_min_size(
                 top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
@@ -3129,13 +3298,7 @@ impl RobcoNativeApp {
             }
 
             if label_height > 0.0 {
-                ui.painter().text(
-                    label_rect.center(),
-                    Align2::CENTER_CENTER,
-                    *label,
-                    FontId::new(13.0, FontFamily::Monospace),
-                    palette.fg,
-                );
+                Self::paint_desktop_icon_label(ui, label_rect, label, palette.fg);
             }
 
             if response.dragged() {
@@ -3155,20 +3318,25 @@ impl RobcoNativeApp {
             }
 
             if response.double_clicked() {
-                open_window = Some(open_windows[index]);
+                if let Some(window) = target_window {
+                    open_window = Some(*window);
+                } else {
+                    open_terminal = true;
+                }
             }
         }
 
-        let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         for (sidx, shortcut) in shortcuts.iter().enumerate() {
             let key = format!("shortcut_{}", sidx);
             let stored_pos = self.settings.draft.desktop_icon_custom_positions
                 .get(&key)
                 .map(|&[x, y]| egui::pos2(x, y));
-            let default_shortcut_pos = egui::pos2(
-                workspace.left() + 4.0 + column_width,
-                workspace.top() + 16.0 + sidx as f32 * item_height,
-            );
+            let default_shortcut_pos = default_positions.get(&key).copied().unwrap_or_else(|| {
+                egui::pos2(
+                    workspace.left() + 4.0 + column_width,
+                    workspace.top() + 16.0 + sidx as f32 * item_height,
+                )
+            });
             let top_left = stored_pos.unwrap_or(default_shortcut_pos);
 
             let icon_rect = egui::Rect::from_min_size(
@@ -3236,13 +3404,7 @@ impl RobcoNativeApp {
             }
 
             if label_height > 0.0 {
-                ui.painter().text(
-                    label_rect.center(),
-                    Align2::CENTER_CENTER,
-                    &shortcut.label,
-                    FontId::new(13.0, FontFamily::Monospace),
-                    palette.fg,
-                );
+                Self::paint_desktop_icon_label(ui, label_rect, &shortcut.label, palette.fg);
             }
 
             if response.dragged() {
@@ -3305,7 +3467,9 @@ impl RobcoNativeApp {
             }
         }
 
-        if let Some(window) = open_window {
+        if open_terminal {
+            self.open_desktop_terminal_shell();
+        } else if let Some(window) = open_window {
             self.open_desktop_window(window);
         }
     }
@@ -3932,6 +4096,21 @@ impl RobcoNativeApp {
                     || !crate::connections::macos_connections_disabled()
             })
             .collect()
+    }
+
+    fn start_leaf_menu_target(action: &StartLeafAction) -> Option<(EditMenuTarget, String)> {
+        match action {
+            StartLeafAction::LaunchConfiguredApp(name) => {
+                Some((EditMenuTarget::Applications, name.clone()))
+            }
+            StartLeafAction::LaunchNetworkProgram(name) => {
+                Some((EditMenuTarget::Network, name.clone()))
+            }
+            StartLeafAction::LaunchGameProgram(name) if name != BUILTIN_DONKEY_KONG_GAME => {
+                Some((EditMenuTarget::Games, name.clone()))
+            }
+            _ => None,
+        }
     }
 
     fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<StartLeafItem> {
@@ -5134,6 +5313,75 @@ impl RobcoNativeApp {
             }
         }
         self.shell_status = format!("{name} deleted.");
+    }
+
+    fn rename_program_entry(&mut self, target: EditMenuTarget, old_name: &str, new_name: &str) {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            self.shell_status = "Name cannot be empty.".to_string();
+            return;
+        }
+        if new_name == old_name {
+            self.shell_status = "Name unchanged.".to_string();
+            return;
+        }
+
+        match target {
+            EditMenuTarget::Applications => {
+                let mut apps = load_apps();
+                if apps.contains_key(new_name) {
+                    self.shell_status = format!("{new_name} already exists.");
+                    return;
+                }
+                let Some(entry) = apps.remove(old_name) else {
+                    self.shell_status = format!("{old_name} was not found.");
+                    return;
+                };
+                apps.insert(new_name.to_string(), entry);
+                save_apps(&apps);
+            }
+            EditMenuTarget::Documents => {
+                let mut categories = load_categories();
+                if categories.contains_key(new_name) {
+                    self.shell_status = format!("{new_name} already exists.");
+                    return;
+                }
+                let Some(entry) = categories.remove(old_name) else {
+                    self.shell_status = format!("{old_name} was not found.");
+                    return;
+                };
+                categories.insert(new_name.to_string(), entry);
+                save_categories(&categories);
+            }
+            EditMenuTarget::Network => {
+                let mut network = load_networks();
+                if network.contains_key(new_name) {
+                    self.shell_status = format!("{new_name} already exists.");
+                    return;
+                }
+                let Some(entry) = network.remove(old_name) else {
+                    self.shell_status = format!("{old_name} was not found.");
+                    return;
+                };
+                network.insert(new_name.to_string(), entry);
+                save_networks(&network);
+            }
+            EditMenuTarget::Games => {
+                let mut games = load_games();
+                if games.contains_key(new_name) {
+                    self.shell_status = format!("{new_name} already exists.");
+                    return;
+                }
+                let Some(entry) = games.remove(old_name) else {
+                    self.shell_status = format!("{old_name} was not found.");
+                    return;
+                };
+                games.insert(new_name.to_string(), entry);
+                save_games(&games);
+            }
+        }
+
+        self.shell_status = format!("{old_name} renamed to {new_name}.");
     }
 
     fn expand_tilde(raw: &str) -> PathBuf {
@@ -6732,16 +6980,44 @@ impl RobcoNativeApp {
                                 {
                                     let item_label = item.label.clone();
                                     let item_action = item.action.clone();
+                                    let removable_item = Self::start_leaf_menu_target(&item_action);
                                     response.context_menu(|ui| {
                                         Self::apply_context_menu_style(ui);
                                         ui.set_min_width(136.0);
                                         ui.set_max_width(180.0);
+                                        if let Some((target, name)) = removable_item.as_ref() {
+                                            if ui.button("Rename").clicked() {
+                                                leaf_context_action = Some(
+                                                    ContextMenuAction::RenameStartMenuEntry {
+                                                        target: *target,
+                                                        name: name.clone(),
+                                                    },
+                                                );
+                                                ui.close_menu();
+                                            }
+                                            Self::retro_separator(ui);
+                                        }
                                         if ui.button("Create Shortcut").clicked() {
                                             leaf_context_action = Some(ContextMenuAction::CreateShortcut {
                                                 label: item_label.clone(),
                                                 action: item_action.clone(),
                                             });
                                             ui.close_menu();
+                                        }
+                                        if let Some((target, name)) = removable_item.as_ref() {
+                                            Self::retro_separator(ui);
+                                            if ui
+                                                .button(format!("Remove from {}", target.title()))
+                                                .clicked()
+                                            {
+                                                leaf_context_action = Some(
+                                                    ContextMenuAction::RemoveStartMenuEntry {
+                                                        target: *target,
+                                                        name: name.clone(),
+                                                    },
+                                                );
+                                                ui.close_menu();
+                                            }
                                         }
                                     });
                                 }
@@ -6751,6 +7027,75 @@ impl RobcoNativeApp {
             if let Some(action) = leaf_context_action {
                 self.context_menu_action = Some(action);
             }
+        }
+    }
+
+    fn draw_start_menu_rename_window(&mut self, ctx: &Context) {
+        let Some(rename) = self.start_menu_rename.clone() else {
+            return;
+        };
+
+        let palette = current_palette();
+        let mut close = false;
+        let mut apply = false;
+        let mut name_input = rename.name_input.clone();
+
+        egui::Window::new("start_menu_rename_window")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(egui::vec2(320.0, 124.0))
+            .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .stroke(egui::Stroke::new(2.0, palette.fg))
+                    .inner_margin(egui::Margin::same(12.0)),
+            )
+            .show(ctx, |ui| {
+                Self::apply_context_menu_style(ui);
+                ui.label(
+                    RichText::new(format!("Rename {}", rename.target.singular()))
+                        .strong()
+                        .color(palette.fg),
+                );
+                ui.add_space(8.0);
+                ui.label(RichText::new(&rename.original_name).color(palette.dim));
+                ui.add_space(6.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut name_input)
+                        .desired_width(f32::INFINITY)
+                        .text_color(palette.fg)
+                        .cursor_at_end(true),
+                );
+                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    apply = true;
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Rename").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        if let Some(rename_state) = &mut self.start_menu_rename {
+            rename_state.name_input = name_input;
+        }
+        if apply {
+            if let Some(rename_state) = self.start_menu_rename.take() {
+                self.rename_program_entry(
+                    rename_state.target,
+                    &rename_state.original_name,
+                    &rename_state.name_input,
+                );
+            }
+            self.close_start_menu();
+        } else if close {
+            self.start_menu_rename = None;
         }
     }
 
@@ -9572,7 +9917,7 @@ impl RobcoNativeApp {
                                             let icon_entries: [(&str, &str); 6] = [
                                                 ("builtin_0", "Files"),
                                                 ("builtin_1", "Documents"),
-                                                ("builtin_2", "Apps"),
+                                                ("builtin_2", "Program Installer"),
                                                 ("builtin_3", "Settings"),
                                                 ("builtin_4", "Nuke Codes"),
                                                 ("builtin_5", "Terminal"),
@@ -10648,6 +10993,7 @@ impl RobcoNativeApp {
         let mut deferred_confirm_setup: Option<(String, InstallerPackageAction)> = None;
         let mut deferred_confirm_yes = false;
         let mut deferred_confirm_no = false;
+        let mut deferred_notice_close = false;
         let mut deferred_add_to_menu: Option<(String, InstallerMenuTarget)> = None;
         let mut deferred_open_add_to_menu: Option<String> = None;
         let mut deferred_open_runtime_tools = false;
@@ -10655,6 +11001,7 @@ impl RobcoNativeApp {
         let view = self.desktop_installer.view.clone();
         let status = self.desktop_installer.status.clone();
         let has_confirm = self.desktop_installer.confirm_dialog.is_some();
+        let notice = self.desktop_installer.notice.clone();
 
         // Pre-extract icon textures for the home view (avoids borrowing self in closure)
         let tex_apps = self.asset_cache.as_ref().map(|c| c.icon_applications.clone());
@@ -10722,6 +11069,38 @@ impl RobcoNativeApp {
                     });
             }
 
+            if let Some(notice) = notice.as_ref() {
+                egui::Area::new(Id::new(("inst_notice", generation)))
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        Self::apply_installer_widget_style(ui, palette);
+                        egui::Frame::none()
+                            .fill(palette.bg)
+                            .stroke(egui::Stroke::new(2.0, palette.fg))
+                            .inner_margin(egui::Margin::same(14.0))
+                            .show(ui, |ui| {
+                                ui.set_min_width(360.0);
+                                ui.label(
+                                    RichText::new(if notice.success {
+                                        "Operation Complete"
+                                    } else {
+                                        "Operation Failed"
+                                    })
+                                    .color(palette.fg)
+                                    .strong()
+                                    .heading(),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(RichText::new(&notice.message).color(palette.fg));
+                                ui.add_space(12.0);
+                                if ui.button(RichText::new("[ OK ]").color(palette.fg)).clicked() {
+                                    deferred_notice_close = true;
+                                }
+                            });
+                    });
+            }
+
             // ── Main content ────────────────────────────────────────────────
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().inner_margin(egui::Margin::same(16.0)))
@@ -10760,7 +11139,7 @@ impl RobcoNativeApp {
                             let pkg = pkg.clone();
                             Self::draw_installer_package_actions(
                                 ui,
-                                &self.desktop_installer,
+                                &mut self.desktop_installer,
                                 palette,
                                 &pkg,
                                 installed,
@@ -10869,6 +11248,9 @@ impl RobcoNativeApp {
         if deferred_confirm_no {
             self.desktop_installer.confirm_dialog = None;
         }
+        if deferred_notice_close {
+            self.desktop_installer.notice = None;
+        }
         if let Some(pkg) = deferred_open_add_to_menu {
             self.desktop_installer.display_name_input = pkg.clone();
             self.desktop_installer.view = DesktopInstallerView::AddToMenu { pkg };
@@ -10884,35 +11266,116 @@ impl RobcoNativeApp {
         ui: &mut egui::Ui,
         palette: super::retro_ui::RetroPalette,
     ) {
+        ui.visuals_mut().window_fill = palette.bg;
+        ui.visuals_mut().panel_fill = palette.bg;
+        ui.visuals_mut().faint_bg_color = palette.bg;
         let widgets = &mut ui.visuals_mut().widgets;
-        // Buttons: transparent bg, theme-colored border
-        widgets.inactive.bg_fill = Color32::TRANSPARENT;
-        widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        widgets.inactive.bg_fill = palette.bg;
+        widgets.inactive.weak_bg_fill = palette.bg;
         widgets.inactive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
         widgets.inactive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-        // Hovered
         widgets.hovered.bg_fill = palette.hovered_bg;
         widgets.hovered.weak_bg_fill = palette.hovered_bg;
         widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
         widgets.hovered.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-        // Active/pressed
         widgets.active.bg_fill = palette.active_bg;
         widgets.active.weak_bg_fill = palette.active_bg;
         widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
         widgets.active.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-        // Text edits
+        widgets.open.bg_fill = palette.hovered_bg;
+        widgets.open.weak_bg_fill = palette.hovered_bg;
+        widgets.open.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.open.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.noninteractive.bg_fill = palette.bg;
+        widgets.noninteractive.weak_bg_fill = palette.bg;
         widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
         widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-        // TextEdit background / selection
         ui.visuals_mut().extreme_bg_color = palette.panel;
+        ui.visuals_mut().code_bg_color = palette.bg;
+        ui.visuals_mut().window_shadow = egui::epaint::Shadow::NONE;
+        ui.visuals_mut().popup_shadow = egui::epaint::Shadow::NONE;
+        ui.visuals_mut().window_rounding = egui::Rounding::ZERO;
+        ui.visuals_mut().menu_rounding = egui::Rounding::ZERO;
         ui.visuals_mut().selection.bg_fill = palette.selection_bg;
         ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, palette.fg);
-        // Separator color
+        ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(1.5, palette.fg);
         ui.visuals_mut().widgets.noninteractive.bg_stroke =
             egui::Stroke::new(1.0, palette.dim);
-        // Override text color for labels/non-interactive
         ui.visuals_mut().widgets.noninteractive.fg_stroke =
             egui::Stroke::new(1.0, palette.fg);
+    }
+
+    fn apply_installer_dropdown_style(
+        ui: &mut egui::Ui,
+        palette: super::retro_ui::RetroPalette,
+    ) {
+        let mut style = ui.style().as_ref().clone();
+        style.visuals.window_fill = palette.bg;
+        style.visuals.panel_fill = palette.bg;
+        style.visuals.window_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.widgets.noninteractive.bg_fill = palette.bg;
+        style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.inactive.bg_fill = palette.bg;
+        style.visuals.widgets.inactive.weak_bg_fill = palette.bg;
+        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.hovered.bg_fill = palette.hovered_bg;
+        style.visuals.widgets.hovered.weak_bg_fill = palette.hovered_bg;
+        style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.active.bg_fill = palette.active_bg;
+        style.visuals.widgets.active.weak_bg_fill = palette.active_bg;
+        style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        style.visuals.widgets.open = style.visuals.widgets.hovered;
+        ui.set_style(style);
+    }
+
+    fn installer_link_button(
+        ui: &mut egui::Ui,
+        text: RichText,
+        palette: super::retro_ui::RetroPalette,
+    ) -> egui::Response {
+        ui.scope(|ui| {
+            let mut style = ui.style().as_ref().clone();
+            style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+            style.visuals.widgets.hovered.bg_fill = palette.hovered_bg;
+            style.visuals.widgets.hovered.weak_bg_fill = palette.hovered_bg;
+            style.visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+            style.visuals.widgets.active.bg_fill = palette.active_bg;
+            style.visuals.widgets.active.weak_bg_fill = palette.active_bg;
+            style.visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
+            style.visuals.widgets.open = style.visuals.widgets.hovered;
+            style.spacing.button_padding = egui::vec2(8.0, 4.0);
+            ui.set_style(style);
+            ui.add(egui::Button::new(text))
+        })
+        .inner
+    }
+
+    fn installer_description_preview(desc: &str, limit: usize) -> String {
+        let trimmed = desc.trim();
+        let count = trimmed.chars().count();
+        if count <= limit {
+            trimmed.to_string()
+        } else {
+            format!(
+                "{}...",
+                trimmed
+                    .chars()
+                    .take(limit.saturating_sub(3).max(1))
+                    .collect::<String>()
+                    .trim_end()
+            )
+        }
     }
 
     fn draw_installer_home(
@@ -11018,13 +11481,10 @@ impl RobcoNativeApp {
             ui.add_space(24.0);
 
             // ── Installed apps button ───────────────────────────────────
-            let installed_btn = ui.add(
-                egui::Button::new(
-                    RichText::new("Installed apps")
-                        .color(palette.fg)
-                        .heading(),
-                )
-                .frame(false),
+            let installed_btn = Self::installer_link_button(
+                ui,
+                RichText::new("Installed apps").color(palette.fg).heading(),
+                palette,
             );
             if installed_btn.clicked() {
                 *deferred_load_installed = true;
@@ -11033,11 +11493,10 @@ impl RobcoNativeApp {
             ui.add_space(8.0);
 
             // ── Runtime tools link ──────────────────────────────────────
-            let runtime_btn = ui.add(
-                egui::Button::new(
-                    RichText::new("Runtime Tools").color(palette.dim),
-                )
-                .frame(false),
+            let runtime_btn = Self::installer_link_button(
+                ui,
+                RichText::new("Runtime Tools").color(palette.dim),
+                palette,
             );
             if runtime_btn.clicked() {
                 *deferred_open_runtime_tools = true;
@@ -11052,29 +11511,33 @@ impl RobcoNativeApp {
                         RichText::new("Package Manager:").color(palette.dim).small(),
                     );
                     let current_label = state.pm_label().to_string();
-                    egui::ComboBox::from_id_salt("pm_selector")
-                        .selected_text(
-                            RichText::new(&current_label).color(palette.fg).small(),
-                        )
-                        .show_ui(ui, |ui| {
-                            for (idx, pm) in state.available_pms.clone().iter().enumerate() {
-                                let selected = idx == state.selected_pm_idx;
-                                let text_color = if selected {
-                                    Color32::BLACK
-                                } else {
-                                    palette.fg
-                                };
-                                if ui
-                                    .selectable_label(
-                                        selected,
-                                        RichText::new(pm.name()).color(text_color),
-                                    )
-                                    .clicked()
-                                {
-                                    state.selected_pm_idx = idx;
+                    ui.scope(|ui| {
+                        Self::apply_installer_dropdown_style(ui, palette);
+                        egui::ComboBox::from_id_salt("pm_selector")
+                            .selected_text(
+                                RichText::new(&current_label).color(palette.fg).small(),
+                            )
+                            .show_ui(ui, |ui| {
+                                Self::apply_installer_dropdown_style(ui, palette);
+                                for (idx, pm) in state.available_pms.clone().iter().enumerate() {
+                                    let selected = idx == state.selected_pm_idx;
+                                    let text_color = if selected {
+                                        Color32::BLACK
+                                    } else {
+                                        palette.fg
+                                    };
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            RichText::new(pm.name()).color(text_color),
+                                        )
+                                        .clicked()
+                                    {
+                                        state.selected_pm_idx = idx;
+                                    }
                                 }
-                            }
-                        });
+                            });
+                    });
                 });
             } else {
                 ui.label(
@@ -11125,36 +11588,49 @@ impl RobcoNativeApp {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for idx in start..end {
                 let result = &state.search_results[idx];
-                ui.horizontal(|ui| {
-                    let status_text = if result.installed {
-                        "[installed]"
-                    } else {
-                        "[get]"
-                    };
-                    let status_color = if result.installed {
-                        palette.dim
-                    } else {
-                        palette.fg
-                    };
-                    ui.label(RichText::new(status_text).color(status_color));
-                    ui.label(RichText::new(&result.pkg).color(palette.fg).strong());
-                    if let Some(ref desc) = result.description {
-                        ui.label(RichText::new(format!("- {desc}")).color(palette.dim));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn_label = if result.installed {
-                            "Actions"
+                let desc_preview = result
+                    .description
+                    .as_ref()
+                    .map(|desc| Self::installer_description_preview(desc, 88));
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        let status_text = if result.installed {
+                            "[installed]"
                         } else {
-                            "Install"
+                            "[get]"
                         };
-                        if ui
-                            .button(RichText::new(format!("[ {btn_label} ]")).color(palette.fg))
-                            .clicked()
-                        {
-                            *deferred_open_actions =
-                                Some((result.pkg.clone(), result.installed));
-                        }
+                        let status_color = if result.installed {
+                            palette.dim
+                        } else {
+                            palette.fg
+                        };
+                        ui.label(RichText::new(status_text).color(status_color));
+                        ui.label(RichText::new(&result.pkg).color(palette.fg).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let btn_label = if result.installed {
+                                "Actions"
+                            } else {
+                                "Install"
+                            };
+                            if ui
+                                .button(RichText::new(format!("[ {btn_label} ]")).color(palette.fg))
+                                .clicked()
+                            {
+                                *deferred_open_actions =
+                                    Some((result.pkg.clone(), result.installed));
+                            }
+                        });
                     });
+                    if let Some(desc) = desc_preview {
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(desc).color(palette.dim));
+                    } else if !state.can_fetch_descriptions() {
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new("Description unavailable while offline.")
+                                .color(palette.dim),
+                        );
+                    }
                 });
                 ui.separator();
             }
@@ -11230,16 +11706,31 @@ impl RobcoNativeApp {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for pkg in &filtered[start..end] {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(pkg).color(palette.fg));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(RichText::new("[ Actions ]").color(palette.fg))
-                            .clicked()
-                        {
-                            *deferred_open_actions = Some(pkg.clone());
-                        }
+                let desc_preview = state
+                    .fetch_package_description(pkg)
+                    .map(|desc| Self::installer_description_preview(&desc, 88));
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(pkg).color(palette.fg).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(RichText::new("[ Actions ]").color(palette.fg))
+                                .clicked()
+                            {
+                                *deferred_open_actions = Some(pkg.clone());
+                            }
+                        });
                     });
+                    if let Some(desc) = desc_preview {
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(desc).color(palette.dim));
+                    } else if !state.can_fetch_descriptions() {
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new("Description unavailable while offline.")
+                                .color(palette.dim),
+                        );
+                    }
                 });
                 ui.separator();
             }
@@ -11280,7 +11771,7 @@ impl RobcoNativeApp {
 
     fn draw_installer_package_actions(
         ui: &mut egui::Ui,
-        state: &DesktopInstallerState,
+        state: &mut DesktopInstallerState,
         palette: super::retro_ui::RetroPalette,
         pkg: &str,
         installed: bool,
@@ -11296,17 +11787,52 @@ impl RobcoNativeApp {
                 *deferred_back = true;
             }
             ui.add_space(8.0);
-            ui.label(RichText::new(pkg).color(palette.fg).strong().heading());
+            ui.label(RichText::new("App Details").color(palette.dim).strong());
         });
-
-        // Description
-        if let Some(desc) = state.package_description_cached(pkg) {
-            ui.add_space(4.0);
-            ui.label(RichText::new(desc).color(palette.dim));
-        }
-
         ui.separator();
         ui.add_space(12.0);
+
+        let description = state.fetch_package_description(pkg);
+        let status_label = if installed {
+            "Installed"
+        } else {
+            "Available"
+        };
+
+        egui::Frame::none()
+            .fill(palette.panel)
+            .stroke(egui::Stroke::new(1.0, palette.fg))
+            .inner_margin(egui::Margin::same(18.0))
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new(pkg).color(palette.fg).heading().strong());
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("{} via {}", status_label, state.pm_label()))
+                            .color(palette.dim),
+                    );
+                });
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(14.0);
+                ui.label(RichText::new("Description").color(palette.fg).strong());
+                ui.add_space(6.0);
+                match description {
+                    Some(desc) => {
+                        ui.label(RichText::new(desc).color(palette.dim));
+                    }
+                    None => {
+                        let message = if state.can_fetch_descriptions() {
+                            "Description unavailable."
+                        } else {
+                            "Description unavailable while offline."
+                        };
+                        ui.label(RichText::new(message).color(palette.dim));
+                    }
+                }
+            });
+
+        ui.add_space(16.0);
 
         if installed {
             ui.horizontal_wrapped(|ui| {
@@ -11341,14 +11867,12 @@ impl RobcoNativeApp {
                     *deferred_open_add_to_menu = Some(pkg.to_string());
                 }
             });
-        } else {
-            if ui
-                .button(RichText::new("[ Install ]").color(palette.fg))
-                .clicked()
-            {
-                *deferred_confirm =
-                    Some((pkg.to_string(), InstallerPackageAction::Install));
-            }
+        } else if ui
+            .button(RichText::new("[ Install ]").color(palette.fg))
+            .clicked()
+        {
+            *deferred_confirm =
+                Some((pkg.to_string(), InstallerPackageAction::Install));
         }
     }
 
@@ -11881,6 +12405,44 @@ impl RobcoNativeApp {
         // "double use of widget" ID collisions in egui 0.29).
         let completion_message = state.completion_message.clone();
         let title_for_exit = state.title.clone();
+        let mut installer_notice: Option<DesktopInstallerNotice> = None;
+        let mut reopen_installer = false;
+
+        match event {
+            PtyScreenEvent::None => {}
+            PtyScreenEvent::CloseRequested => open = false,
+            PtyScreenEvent::ProcessExited => {
+                let exit_status = state.session.exit_status();
+                let success = exit_status
+                    .as_ref()
+                    .map(|status| status.success())
+                    .unwrap_or(true);
+                let message = if success {
+                    completion_message
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| format!("{title_for_exit} exited."))
+                } else if let Some(status) = exit_status.as_ref() {
+                    format!(
+                        "{} failed with exit code {}.",
+                        title_for_exit,
+                        status.exit_code()
+                    )
+                } else {
+                    format!("{title_for_exit} failed.")
+                };
+                open = false;
+                self.shell_status = message.clone();
+                if title_for_exit == "Program Installer" {
+                    installer_notice = Some(DesktopInstallerNotice {
+                        message,
+                        success,
+                    });
+                    reopen_installer = true;
+                }
+            }
+        }
+
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::PtyApp,
@@ -11891,18 +12453,12 @@ impl RobcoNativeApp {
                 self.note_desktop_window_rect(DesktopWindow::PtyApp, rect);
             }
         }
-
-        match event {
-            PtyScreenEvent::None => {}
-            PtyScreenEvent::CloseRequested => open = false,
-            PtyScreenEvent::ProcessExited => {
-                open = false;
-                if let Some(msg) = completion_message.as_ref() {
-                    self.shell_status = msg.to_string();
-                } else {
-                    self.shell_status = format!("{title_for_exit} exited.");
-                }
-            }
+        if let Some(notice) = installer_notice {
+            self.desktop_installer.status = notice.message.clone();
+            self.desktop_installer.notice = Some(notice);
+        }
+        if reopen_installer {
+            self.open_desktop_window(DesktopWindow::Installer);
         }
 
         match header_action {
@@ -12135,6 +12691,7 @@ impl eframe::App for RobcoNativeApp {
         if self.desktop_mode_open {
             self.draw_desktop_windows(ctx);
             self.draw_start_panel(ctx);
+            self.draw_start_menu_rename_window(ctx);
             self.draw_spotlight(ctx);
         } else {
             self.draw_file_manager(ctx);

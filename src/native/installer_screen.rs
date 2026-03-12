@@ -256,8 +256,19 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec!["yay".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
-            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-S".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
+            PackageManager::Pacman => vec![
+                "sudo".into(),
+                "pacman".into(),
+                "-S".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
             PackageManager::Zypper => vec![
                 "sudo".into(),
                 "zypper".into(),
@@ -1827,6 +1838,12 @@ pub enum DesktopInstallerEvent {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct DesktopInstallerNotice {
+    pub message: String,
+    pub success: bool,
+}
+
 pub struct DesktopInstallerState {
     pub open: bool,
     pub view: DesktopInstallerView,
@@ -1843,6 +1860,7 @@ pub struct DesktopInstallerState {
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
     pub confirm_dialog: Option<DesktopInstallerConfirm>,
+    pub notice: Option<DesktopInstallerNotice>,
     pub display_name_input: String,
 }
 
@@ -1865,6 +1883,7 @@ impl Default for DesktopInstallerState {
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
             confirm_dialog: None,
+            notice: None,
             display_name_input: String::new(),
         }
     }
@@ -1906,12 +1925,17 @@ impl DesktopInstallerState {
         }
         if !has_internet() {
             self.status = "Error: No internet connection.".to_string();
+            self.notice = Some(DesktopInstallerNotice {
+                message: "Search requires an internet connection.".to_string(),
+                success: false,
+            });
             return;
         }
         let Some(pm) = self.selected_pm() else {
             self.status = "Error: No package manager found.".to_string();
             return;
         };
+        self.notice = None;
         self.search_results = pm.search(&query);
         self.search_page = 0;
         if self.search_results.is_empty() {
@@ -1954,6 +1978,10 @@ impl DesktopInstallerState {
             .and_then(|d| d.clone())
     }
 
+    pub fn can_fetch_descriptions(&self) -> bool {
+        has_internet()
+    }
+
     pub fn fetch_package_description(&mut self, pkg: &str) -> Option<String> {
         if let Some(desc) = self.package_descriptions.get(pkg) {
             return desc.clone();
@@ -1964,8 +1992,12 @@ impl DesktopInstallerState {
             .find(|r| r.pkg == pkg)
             .and_then(|r| r.description.clone())
             .or_else(|| {
-                self.selected_pm()
-                    .and_then(|pm| pm.package_description(pkg))
+                if has_internet() {
+                    self.selected_pm()
+                        .and_then(|pm| pm.package_description(pkg))
+                } else {
+                    None
+                }
             });
         self.package_descriptions
             .insert(pkg.to_string(), fetched.clone());

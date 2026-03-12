@@ -13,7 +13,7 @@ use anyhow::Result;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, PtySize};
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
@@ -556,6 +556,8 @@ pub struct PtySession {
     /// correct size.  Updated by resize().
     shared_cols: Arc<AtomicU16>,
     shared_rows: Arc<AtomicU16>,
+    /// Cached child exit status once the process has terminated.
+    last_exit_status: Option<ExitStatus>,
 }
 
 #[allow(dead_code)]
@@ -869,6 +871,7 @@ impl PtySession {
             display,
             shared_cols,
             shared_rows,
+            last_exit_status: None,
         })
     }
 
@@ -964,7 +967,24 @@ impl PtySession {
 
     /// Is the child process still running?
     pub fn is_alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        if self.last_exit_status.is_some() {
+            return false;
+        }
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                self.last_exit_status = Some(status);
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn exit_status(&mut self) -> Option<ExitStatus> {
+        if self.last_exit_status.is_none() {
+            let _ = self.is_alive();
+        }
+        self.last_exit_status.clone()
     }
 
     pub fn exited_within(&mut self, window: Duration) -> bool {
@@ -1088,7 +1108,7 @@ impl PtySession {
     pub fn terminate(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
             let _ = self.child.kill();
-            let _ = self.child.try_wait();
+            self.last_exit_status = self.child.try_wait().ok().flatten();
         }
     }
 

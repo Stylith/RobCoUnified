@@ -399,11 +399,20 @@ pub fn draw_embedded_pty_in_ui_sized(
                 render_rows_count,
             );
         }
+        let mut row_requires_cell_draw = vec![false; render_rows_count];
+        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+            row_requires_cell_draw[row_idx] = row.iter().take(render_cols).any(|cell| {
+                let (fg, _bg) = resolve_cell_colors(*cell);
+                cell.ch != ' ' && (fg != palette.fg || cell.bold || cell.italic || cell.underline)
+            });
+        }
         let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
             .ok()
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
             .unwrap_or(false);
+        let allow_texture = !row_requires_cell_draw.iter().any(|needs| *needs);
         let texture_drawn = use_texture
+            && allow_texture
             && render_plain_texture_if_possible(
                 state,
                 ctx,
@@ -434,6 +443,9 @@ pub fn draw_embedded_pty_in_ui_sized(
         }
         if !texture_drawn {
             for (row_idx, line) in lines_ref.iter().enumerate().take(render_rows_count) {
+                if row_requires_cell_draw[row_idx] {
+                    continue;
+                }
                 let clipped: String = line
                     .trim_end_matches(' ')
                     .chars()
@@ -453,16 +465,18 @@ pub fn draw_embedded_pty_in_ui_sized(
             }
         }
         for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+            let force_row_cells = row_requires_cell_draw[row_idx];
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let (fg, _bg) = resolve_cell_colors(*cell);
                 if cell.ch == ' ' {
                     continue;
                 }
-                // The plain pass already drew baseline glyphs for the whole row.
-                // Only overlay individual cells when the foreground or text style
-                // actually differs; background-only highlighting should not redraw
-                // the same glyph on top of itself.
-                if fg == palette.fg && !cell.bold && !cell.italic && !cell.underline {
+                if !force_row_cells
+                    && fg == palette.fg
+                    && !cell.bold
+                    && !cell.italic
+                    && !cell.underline
+                {
                     continue;
                 }
                 let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
@@ -907,16 +921,6 @@ pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
     // (e.g. terminal mode where the CentralPanel is focused), we skip
     // the Key→char fallback to avoid double-sending characters.
     let had_text_event = events.iter().any(|e| matches!(e, egui::Event::Text(_)));
-    // DEBUG: log ALL events to stderr (except mouse noise)
-    for e in &events {
-        match e {
-            egui::Event::PointerMoved(_) | egui::Event::PointerGone |
-            egui::Event::MouseWheel { .. } | egui::Event::Zoom(_) => {}
-            other => {
-                eprintln!("[PTY-INPUT] {:?}", other);
-            }
-        }
-    }
     for event in events {
         match event {
             egui::Event::Paste(text) => {
@@ -934,12 +938,10 @@ pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
             // egui intercepts Ctrl+X/C as Cut/Copy before emitting Key events.
             // Convert them back to control bytes for the PTY.
             egui::Event::Cut => {
-                eprintln!("[PTY-WRITE] Cut → Ctrl+X byte 0x18");
                 session.write(&[0x18]); // Ctrl+X
                 had_input = true;
             }
             egui::Event::Copy => {
-                eprintln!("[PTY-WRITE] Copy → Ctrl+C byte 0x03");
                 session.write(&[0x03]); // Ctrl+C
                 had_input = true;
             }
@@ -967,7 +969,6 @@ pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
                         let lc = ch.to_ascii_lowercase();
                         if lc.is_ascii_lowercase() {
                             let ctrl_byte = (lc as u8) - b'a' + 1;
-                            eprintln!("[PTY-WRITE] Ctrl+{} → byte 0x{:02x}", lc, ctrl_byte);
                             session.write(&[ctrl_byte]);
                             had_input = true;
                             continue;
@@ -977,7 +978,6 @@ pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
 
                 // Escape → ESC byte
                 if key == Key::Escape {
-                    eprintln!("[PTY-WRITE] Sending ESC byte 0x1b");
                     session.write(b"\x1b");
                     had_input = true;
                     continue;
