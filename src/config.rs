@@ -400,6 +400,8 @@ pub struct DesktopPtyProfileSettings {
     pub mouse_passthrough: bool,
     #[serde(default = "default_profile_open_fullscreen")]
     pub open_fullscreen: bool,
+    #[serde(default = "default_profile_live_resize")]
+    pub live_resize: bool,
 }
 
 const fn default_profile_mouse_passthrough() -> bool {
@@ -410,15 +412,20 @@ const fn default_profile_open_fullscreen() -> bool {
     false
 }
 
+const fn default_profile_live_resize() -> bool {
+    true
+}
+
 impl Default for DesktopPtyProfileSettings {
     fn default() -> Self {
         Self {
             min_w: 34,
             min_h: 12,
-            preferred_w: None,
-            preferred_h: None,
+            preferred_w: Some(96),
+            preferred_h: Some(32),
             mouse_passthrough: true,
             open_fullscreen: false,
+            live_resize: true,
         }
     }
 }
@@ -447,6 +454,7 @@ fn default_calcurse_profile() -> DesktopPtyProfileSettings {
         preferred_h: Some(34),
         mouse_passthrough: false,
         open_fullscreen: false,
+        live_resize: true,
     }
 }
 
@@ -458,6 +466,7 @@ fn default_spotify_profile() -> DesktopPtyProfileSettings {
         preferred_h: Some(34),
         mouse_passthrough: true,
         open_fullscreen: false,
+        live_resize: true,
     }
 }
 
@@ -469,6 +478,7 @@ fn default_ranger_profile() -> DesktopPtyProfileSettings {
         preferred_h: Some(32),
         mouse_passthrough: true,
         open_fullscreen: false,
+        live_resize: true,
     }
 }
 
@@ -480,6 +490,7 @@ fn default_reddit_profile() -> DesktopPtyProfileSettings {
         preferred_h: Some(34),
         mouse_passthrough: true,
         open_fullscreen: false,
+        live_resize: true,
     }
 }
 

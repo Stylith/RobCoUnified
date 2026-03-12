@@ -1,8 +1,10 @@
 use super::menu::TerminalScreen;
-use super::retro_ui::{current_palette, RetroPalette, RetroScreen};
+use super::retro_ui::{
+    current_palette, RetroPalette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+};
 use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use eframe::egui::{self, Align2, Color32, Context, Key, Pos2, Rect, Stroke};
+use eframe::egui::{self, Align2, Color32, Context, FontId, Key, Pos2, Rect, Stroke};
 use ratatui::style::Color;
 use std::time::{Duration, Instant};
 
@@ -23,11 +25,15 @@ pub struct NativePtyState {
     pub return_screen: TerminalScreen,
     pub completion_message: Option<String>,
     pub session: PtySession,
+    pub desktop_cols_floor: Option<u16>,
+    pub desktop_rows_floor: Option<u16>,
+    pub desktop_live_resize: bool,
     prev_plain_lines: Vec<String>,
     prev_plain_cursor: Option<(u16, u16)>,
     plain_texture: PlainTextureRenderer,
     perf: PtyPerfStats,
-    show_perf_overlay: bool,
+    pub show_perf_overlay: bool,
+    idle_frames: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -153,11 +159,15 @@ pub fn spawn_embedded_pty_with_options(
         return_screen,
         completion_message: None,
         session,
+        desktop_cols_floor: None,
+        desktop_rows_floor: None,
+        desktop_live_resize: true,
         prev_plain_lines: Vec::new(),
         prev_plain_cursor: None,
         plain_texture: PlainTextureRenderer::default(),
         perf: PtyPerfStats::default(),
         show_perf_overlay: false,
+        idle_frames: 0,
     })
 }
 
@@ -198,7 +208,22 @@ pub fn draw_embedded_pty_in_ui(
     rows: usize,
 ) -> PtyScreenEvent {
     let desired = ui.available_size();
-    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired)
+    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, true)
+}
+
+/// Like `draw_embedded_pty_in_ui` but only processes keyboard input
+/// when `focused` is true.  Desktop PTY windows pass the active-window
+/// check here so input only flows to the focused window.
+pub fn draw_embedded_pty_in_ui_focused(
+    ui: &mut egui::Ui,
+    ctx: &Context,
+    state: &mut NativePtyState,
+    cols: usize,
+    rows: usize,
+    focused: bool,
+) -> PtyScreenEvent {
+    let desired = ui.available_size();
+    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, focused)
 }
 
 pub fn draw_embedded_pty_in_ui_sized(
@@ -208,41 +233,64 @@ pub fn draw_embedded_pty_in_ui_sized(
     cols: usize,
     rows: usize,
     desired: egui::Vec2,
+    focused: bool,
 ) -> PtyScreenEvent {
-    if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
+    if focused && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
     }
-    if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
+    if focused && ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
         state.show_perf_overlay = !state.show_perf_overlay;
     }
     let frame_started = Instant::now();
-
-    let pty_cols = cols.clamp(1, MAX_NATIVE_PTY_COLS) as u16;
     let show_top_bar = state.session.top_bar_label().is_some();
+    let (display_cols, display_rows) = if let Some(cols_floor) = state.desktop_cols_floor {
+        let cols_floor = cols_floor as usize;
+        let rows_floor =
+            state.desktop_rows_floor.unwrap_or(20) as usize + 1 + usize::from(show_top_bar);
+        if state.desktop_live_resize {
+            (
+                ((desired.x / FIXED_PTY_CELL_W).floor() as usize)
+                    .max(cols_floor)
+                    .clamp(40, MAX_NATIVE_PTY_COLS),
+                ((desired.y / FIXED_PTY_CELL_H).floor() as usize)
+                    .max(rows_floor)
+                    .clamp(2, MAX_NATIVE_PTY_ROWS + 1 + usize::from(show_top_bar)),
+            )
+        } else {
+            (cols_floor, rows_floor)
+        }
+    } else {
+        (cols, rows)
+    };
+    let pty_cols = display_cols.clamp(1, MAX_NATIVE_PTY_COLS) as u16;
     // Keep one row for global footer/status bar and optional PTY title band.
     let reserved_rows = 1 + usize::from(show_top_bar);
-    let pty_rows = rows
+    let pty_rows = display_rows
         .saturating_sub(reserved_rows)
         .clamp(1, MAX_NATIVE_PTY_ROWS) as u16;
     let input_started = Instant::now();
+    // Resize the PTY if dimensions changed.  PtySession::resize() has a
+    // built-in guard (no-op if same) so this is safe to call every frame.
     state.session.resize(pty_cols, pty_rows);
-    let input_activity = handle_pty_input(ctx, &mut state.session);
-    let input_ms = input_started.elapsed().as_secs_f32() * 1000.0;
-    // Prefer output-driven repaints, but keep a regular repaint cadence so
-    // animated apps (e.g. cmatrix) keep moving even when activity detection
-    // is temporarily quiet.
-    let output_activity = state.session.take_output_activity();
-    if input_activity || output_activity {
-        ctx.request_repaint();
-    }
-    // Favor low-latency keyboard echo while keeping idle CPU bounded.
-    let tick_ms = if input_activity {
-        1
-    } else if output_activity {
-        4
+    let input_activity = if focused {
+        handle_pty_input(ctx, &mut state.session)
     } else {
-        10
+        false
     };
+    let input_ms = input_started.elapsed().as_secs_f32() * 1000.0;
+    let output_activity = state.session.take_output_activity();
+    // Always repaint at 60fps while PTY is alive.  Activity detection is
+    // still used for perf overlay stats, but the repaint cadence is fixed
+    // so we never miss frames or show half-updated ncurses screens.
+    // When there's been no activity for a while, drop to a slower cadence.
+    let idle_secs = if !input_activity && !output_activity {
+        state.idle_frames = state.idle_frames.saturating_add(1);
+        state.idle_frames as f32 / 60.0
+    } else {
+        state.idle_frames = 0;
+        0.0
+    };
+    let tick_ms = if idle_secs > 2.0 { 200 } else { 16 };
     ctx.request_repaint_after(Duration::from_millis(tick_ms));
 
     if !state.session.is_alive() {
@@ -263,7 +311,18 @@ pub fn draw_embedded_pty_in_ui_sized(
     let palette = current_palette();
     ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
     let render_rows = pty_rows as usize + usize::from(show_top_bar);
-    let (screen, response) = RetroScreen::new_sized(ui, pty_cols as usize, render_rows, desired);
+    let (screen, response) = if state.desktop_cols_floor.is_some() {
+        RetroScreen::new_fixed_cell_sized(
+            ui,
+            pty_cols as usize,
+            render_rows,
+            desired,
+            FIXED_PTY_CELL_W,
+            FIXED_PTY_CELL_H,
+        )
+    } else {
+        RetroScreen::new_sized(ui, pty_cols as usize, render_rows, desired)
+    };
     let painter = ui.painter_at(screen.rect);
     let row_offset = usize::from(show_top_bar);
     let content_rect = if show_top_bar {
@@ -277,7 +336,8 @@ pub fn draw_embedded_pty_in_ui_sized(
     };
     if let Some(label) = state.session.top_bar_label() {
         let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
-        let bar_font = screen.font().clone();
+        let bar_font =
+            FontId::monospace((bar_rect.height() * 0.72).max(screen.font().size + 2.0));
         painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
         painter.text(
             bar_rect.center(),
@@ -295,15 +355,15 @@ pub fn draw_embedded_pty_in_ui_sized(
         );
     }
 
+    // ── Fetch committed display frame ──────────────────────────────────
+    // The reader thread builds this snapshot after each coalesced I/O
+    // batch, so it's guaranteed to be consistent (no mid-update tears).
+    let started = Instant::now();
+    let frame = state.session.committed_frame();
+    snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+
     let plain_fast = state.session.prefers_plain_render();
-    let plain_snapshot = if plain_fast {
-        let started = Instant::now();
-        let snap = state.session.snapshot_plain(pty_cols, pty_rows);
-        snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
-        Some(snap)
-    } else {
-        None
-    };
+
     handle_pty_mouse(
         ui.ctx(),
         &response,
@@ -314,8 +374,12 @@ pub fn draw_embedded_pty_in_ui_sized(
     );
     let content_painter = painter.with_clip_rect(content_rect);
 
+    // Clamp iteration to the minimum of committed frame and display dims.
+    let render_cols = (frame.cols as usize).min(pty_cols as usize);
+    let render_rows_count = (frame.rows as usize).min(pty_rows as usize);
+
     if plain_fast {
-        let snap = plain_snapshot.as_ref().expect("plain snapshot present");
+        let snap = &frame.plain;
         let smoothed_lines = if smooth_borders && plain_lines_have_ascii_borders(&snap.lines) {
             let mut lines = snap.lines.clone();
             smooth_ascii_borders_in_plain_lines(&mut lines);
@@ -324,15 +388,15 @@ pub fn draw_embedded_pty_in_ui_sized(
             None
         };
         let lines_ref: &[String] = smoothed_lines.as_deref().unwrap_or(&snap.lines);
-        let dirty_rows = collect_dirty_rows(&state.prev_plain_lines, lines_ref, pty_rows as usize);
+        let dirty_rows = collect_dirty_rows(&state.prev_plain_lines, lines_ref, render_rows_count);
         if state.show_perf_overlay {
             dirty_stats = diff_plain_snapshot(
                 &state.prev_plain_lines,
                 lines_ref,
                 state.prev_plain_cursor,
                 (snap.cursor_row, snap.cursor_col),
-                pty_cols as usize,
-                pty_rows as usize,
+                render_cols,
+                render_rows_count,
             );
         }
         let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
@@ -350,15 +414,11 @@ pub fn draw_embedded_pty_in_ui_sized(
                 lines_ref,
                 dirty_rows.as_slice(),
             );
-        let glyph_advance = content_painter
-            .layout_no_wrap("W".to_string(), screen.font().clone(), palette.fg)
-            .size()
-            .x
-            .max(1.0);
+        let glyph_advance = screen.row_rect(0, row_offset, 1).width().max(1.0);
         let x_origin = content_rect.left();
-        let styled_snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
-        for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
+        // Background colors from the styled cells of the committed frame.
+        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+            for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let (_fg, bg) = resolve_cell_colors(*cell);
                 if bg == palette.bg {
                     continue;
@@ -373,11 +433,11 @@ pub fn draw_embedded_pty_in_ui_sized(
             }
         }
         if !texture_drawn {
-            for (row_idx, line) in lines_ref.iter().enumerate() {
+            for (row_idx, line) in lines_ref.iter().enumerate().take(render_rows_count) {
                 let clipped: String = line
                     .trim_end_matches(' ')
                     .chars()
-                    .take(pty_cols as usize)
+                    .take(render_cols)
                     .collect();
                 if clipped.is_empty() {
                     continue;
@@ -392,10 +452,17 @@ pub fn draw_embedded_pty_in_ui_sized(
                 );
             }
         }
-        for (row_idx, row) in styled_snapshot.cells.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
-                let (fg, bg) = resolve_cell_colors(*cell);
-                if bg == palette.bg || cell.ch == ' ' {
+        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+            for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
+                let (fg, _bg) = resolve_cell_colors(*cell);
+                if cell.ch == ' ' {
+                    continue;
+                }
+                // The plain pass already drew baseline glyphs for the whole row.
+                // Only overlay individual cells when the foreground or text style
+                // actually differs; background-only highlighting should not redraw
+                // the same glyph on top of itself.
+                if fg == palette.fg && !cell.bold && !cell.italic && !cell.underline {
                     continue;
                 }
                 let x = screen.snap_value(x_origin + col_idx as f32 * glyph_advance);
@@ -430,7 +497,7 @@ pub fn draw_embedded_pty_in_ui_sized(
                 }
             }
         }
-        state.prev_plain_lines = lines_ref.to_vec();
+        state.prev_plain_lines = lines_ref[..render_rows_count.min(lines_ref.len())].to_vec();
         state.prev_plain_cursor = Some((snap.cursor_row, snap.cursor_col));
         if !snap.cursor_hidden {
             let row = snap.cursor_row as usize + row_offset;
@@ -454,17 +521,16 @@ pub fn draw_embedded_pty_in_ui_sized(
             }
         }
     } else {
-        let started = Instant::now();
-        let snapshot = state.session.snapshot_styled(pty_cols, pty_rows);
-        snapshot_ms += started.elapsed().as_secs_f32() * 1000.0;
+        let snapshot = &frame.styled;
+
         if state.show_perf_overlay {
             dirty_stats.changed_rows = dirty_stats.total_rows;
             dirty_stats.changed_cells = dirty_stats.total_cells;
         }
         state.prev_plain_lines.clear();
         state.prev_plain_cursor = None;
-        for (row_idx, row) in snapshot.cells.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
+        for (row_idx, row) in snapshot.cells.iter().enumerate().take(render_rows_count) {
+            for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let mut cell_to_draw = *cell;
                 if smooth_borders {
                     cell_to_draw.ch =
@@ -834,28 +900,23 @@ mod tests {
     }
 }
 
-fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
+pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
     let mut had_input = false;
     let events = ctx.input(|i| i.events.clone());
-    let is_control_key = |key: Key| {
-        matches!(
-            key,
-            Key::ArrowUp
-                | Key::ArrowDown
-                | Key::ArrowLeft
-                | Key::ArrowRight
-                | Key::Escape
-                | Key::Tab
-                | Key::Backspace
-                | Key::Enter
-                | Key::Home
-                | Key::End
-                | Key::Insert
-                | Key::Delete
-                | Key::PageUp
-                | Key::PageDown
-        )
-    };
+    // Track whether any Event::Text arrived this frame.  When it does
+    // (e.g. terminal mode where the CentralPanel is focused), we skip
+    // the Key→char fallback to avoid double-sending characters.
+    let had_text_event = events.iter().any(|e| matches!(e, egui::Event::Text(_)));
+    // DEBUG: log ALL events to stderr (except mouse noise)
+    for e in &events {
+        match e {
+            egui::Event::PointerMoved(_) | egui::Event::PointerGone |
+            egui::Event::MouseWheel { .. } | egui::Event::Zoom(_) => {}
+            other => {
+                eprintln!("[PTY-INPUT] {:?}", other);
+            }
+        }
+    }
     for event in events {
         match event {
             egui::Event::Paste(text) => {
@@ -870,17 +931,24 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
                     had_input = true;
                 }
             }
+            // egui intercepts Ctrl+X/C as Cut/Copy before emitting Key events.
+            // Convert them back to control bytes for the PTY.
+            egui::Event::Cut => {
+                eprintln!("[PTY-WRITE] Cut → Ctrl+X byte 0x18");
+                session.write(&[0x18]); // Ctrl+X
+                had_input = true;
+            }
+            egui::Event::Copy => {
+                eprintln!("[PTY-WRITE] Copy → Ctrl+C byte 0x03");
+                session.write(&[0x03]); // Ctrl+C
+                had_input = true;
+            }
             egui::Event::Key {
                 key,
                 pressed: true,
                 modifiers,
                 ..
             } => {
-                // Printable text should flow exclusively through Event::Text.
-                // Event::Key is reserved for control/navigation and modified combos.
-                if !modifiers.ctrl && !modifiers.alt && !modifiers.command && !is_control_key(key) {
-                    continue;
-                }
                 if modifiers.ctrl && key == Key::Q {
                     continue;
                 }
@@ -888,6 +956,70 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
                     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                     continue;
                 }
+                // ── Direct byte writing for all keys ─────────────────
+                // We write PTY bytes directly rather than going through
+                // send_key(), which locks the parser to check application
+                // cursor mode.  Only arrow keys actually need that check.
+
+                // Ctrl+letter → control byte (0x01..0x1A)
+                if modifiers.ctrl && !modifiers.alt {
+                    if let Some(ch) = key_to_char(key, false) {
+                        let lc = ch.to_ascii_lowercase();
+                        if lc.is_ascii_lowercase() {
+                            let ctrl_byte = (lc as u8) - b'a' + 1;
+                            eprintln!("[PTY-WRITE] Ctrl+{} → byte 0x{:02x}", lc, ctrl_byte);
+                            session.write(&[ctrl_byte]);
+                            had_input = true;
+                            continue;
+                        }
+                    }
+                }
+
+                // Escape → ESC byte
+                if key == Key::Escape {
+                    eprintln!("[PTY-WRITE] Sending ESC byte 0x1b");
+                    session.write(b"\x1b");
+                    had_input = true;
+                    continue;
+                }
+
+                // Simple control keys that don't depend on terminal mode
+                match key {
+                    Key::Enter => { session.write(b"\r"); had_input = true; continue; }
+                    Key::Tab => { session.write(b"\t"); had_input = true; continue; }
+                    Key::Backspace => { session.write(b"\x7f"); had_input = true; continue; }
+                    Key::Delete => { session.write(b"\x1b[3~"); had_input = true; continue; }
+                    Key::Home => { session.write(b"\x1b[H"); had_input = true; continue; }
+                    Key::End => { session.write(b"\x1b[F"); had_input = true; continue; }
+                    Key::PageUp => { session.write(b"\x1b[5~"); had_input = true; continue; }
+                    Key::PageDown => { session.write(b"\x1b[6~"); had_input = true; continue; }
+                    Key::Insert => { session.write(b"\x1b[2~"); had_input = true; continue; }
+                    _ => {}
+                }
+
+                // Arrow keys — these need application_cursor check via send_key
+                if matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight) {
+                    if let Some((code, mods)) = map_key_event(key, modifiers) {
+                        session.send_key(code, mods);
+                        had_input = true;
+                    }
+                    continue;
+                }
+
+                // Printable key fallback (desktop mode: no Event::Text without focus)
+                if !modifiers.ctrl && !modifiers.alt && !modifiers.command {
+                    if !had_text_event {
+                        if let Some(ch) = key_to_char(key, modifiers.shift) {
+                            let mut tmp = [0u8; 4];
+                            let s = ch.encode_utf8(&mut tmp);
+                            session.write(s.as_bytes());
+                            had_input = true;
+                        }
+                    }
+                    continue;
+                }
+
+                // Fallback for anything else (Alt+key, etc.)
                 if let Some((code, mods)) = map_key_event(key, modifiers) {
                     session.send_key(code, mods);
                     had_input = true;
@@ -897,6 +1029,63 @@ fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
         }
     }
     had_input
+}
+
+/// Convert an egui Key to a printable char for the PTY fallback path.
+/// Returns None for keys that aren't simple printable characters.
+fn key_to_char(key: Key, shift: bool) -> Option<char> {
+    use Key::*;
+    match key {
+        A => Some(if shift { 'A' } else { 'a' }),
+        B => Some(if shift { 'B' } else { 'b' }),
+        C => Some(if shift { 'C' } else { 'c' }),
+        D => Some(if shift { 'D' } else { 'd' }),
+        E => Some(if shift { 'E' } else { 'e' }),
+        F => Some(if shift { 'F' } else { 'f' }),
+        G => Some(if shift { 'G' } else { 'g' }),
+        H => Some(if shift { 'H' } else { 'h' }),
+        I => Some(if shift { 'I' } else { 'i' }),
+        J => Some(if shift { 'J' } else { 'j' }),
+        K => Some(if shift { 'K' } else { 'k' }),
+        L => Some(if shift { 'L' } else { 'l' }),
+        M => Some(if shift { 'M' } else { 'm' }),
+        N => Some(if shift { 'N' } else { 'n' }),
+        O => Some(if shift { 'O' } else { 'o' }),
+        P => Some(if shift { 'P' } else { 'p' }),
+        Q => Some(if shift { 'Q' } else { 'q' }),
+        R => Some(if shift { 'R' } else { 'r' }),
+        S => Some(if shift { 'S' } else { 's' }),
+        T => Some(if shift { 'T' } else { 't' }),
+        U => Some(if shift { 'U' } else { 'u' }),
+        V => Some(if shift { 'V' } else { 'v' }),
+        W => Some(if shift { 'W' } else { 'w' }),
+        X => Some(if shift { 'X' } else { 'x' }),
+        Y => Some(if shift { 'Y' } else { 'y' }),
+        Z => Some(if shift { 'Z' } else { 'z' }),
+        Num0 => Some(if shift { ')' } else { '0' }),
+        Num1 => Some(if shift { '!' } else { '1' }),
+        Num2 => Some(if shift { '@' } else { '2' }),
+        Num3 => Some(if shift { '#' } else { '3' }),
+        Num4 => Some(if shift { '$' } else { '4' }),
+        Num5 => Some(if shift { '%' } else { '5' }),
+        Num6 => Some(if shift { '^' } else { '6' }),
+        Num7 => Some(if shift { '&' } else { '7' }),
+        Num8 => Some(if shift { '*' } else { '8' }),
+        Num9 => Some(if shift { '(' } else { '9' }),
+        Space => Some(' '),
+        Minus => Some(if shift { '_' } else { '-' }),
+        Equals => Some(if shift { '+' } else { '=' }),
+        OpenBracket => Some(if shift { '{' } else { '[' }),
+        CloseBracket => Some(if shift { '}' } else { ']' }),
+        Backslash => Some(if shift { '|' } else { '\\' }),
+        Semicolon => Some(if shift { ':' } else { ';' }),
+        Colon => Some(':'),
+        Comma => Some(if shift { '<' } else { ',' }),
+        Period => Some(if shift { '>' } else { '.' }),
+        Slash => Some(if shift { '?' } else { '/' }),
+        Backtick => Some(if shift { '~' } else { '`' }),
+        _ => None,
+    }
 }
 
 fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
@@ -967,41 +1156,62 @@ fn draw_vector_border_cell(
     color: Color32,
     bold: bool,
 ) {
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    let overscan = 0.7;
+    let cx = (rect.left() + rect.width() * 0.5).round();
+    let cy = (rect.top() + rect.height() * 0.5).round();
+    let overscan = 1.0;
     let thickness = if bold {
         (rect.height() * 0.18).clamp(1.5, 3.0)
     } else {
         (rect.height() * 0.14).clamp(1.0, 2.2)
-    };
-    let stroke = Stroke::new(thickness, color);
+    }
+    .round()
+    .max(1.0);
+    let half = thickness * 0.5;
     if conn.left {
-        painter.line_segment(
-            [Pos2::new(rect.left() - overscan, cy), Pos2::new(cx, cy)],
-            stroke,
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(rect.left() - overscan, cy - half),
+                Pos2::new(cx + half, cy + half),
+            ),
+            0.0,
+            color,
         );
     }
     if conn.right {
-        painter.line_segment(
-            [Pos2::new(cx, cy), Pos2::new(rect.right() + overscan, cy)],
-            stroke,
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(cx - half, cy - half),
+                Pos2::new(rect.right() + overscan, cy + half),
+            ),
+            0.0,
+            color,
         );
     }
     if conn.up {
-        painter.line_segment(
-            [Pos2::new(cx, rect.top() - overscan), Pos2::new(cx, cy)],
-            stroke,
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(cx - half, rect.top() - overscan),
+                Pos2::new(cx + half, cy + half),
+            ),
+            0.0,
+            color,
         );
     }
     if conn.down {
-        painter.line_segment(
-            [Pos2::new(cx, cy), Pos2::new(cx, rect.bottom() + overscan)],
-            stroke,
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(cx - half, cy - half),
+                Pos2::new(cx + half, rect.bottom() + overscan),
+            ),
+            0.0,
+            color,
         );
     }
-    // Fill joint center to avoid tiny anti-aliased cracks.
-    painter.circle_filled(Pos2::new(cx, cy), thickness * 0.45, color);
+    painter.rect_filled(
+        Rect::from_center_size(Pos2::new(cx, cy), egui::vec2(thickness, thickness)),
+        0.0,
+        color,
+    );
 }
 
 fn snapshot_char(cells: &[Vec<PtyStyledCell>], row: isize, col: isize) -> char {

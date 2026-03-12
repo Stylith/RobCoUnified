@@ -4,9 +4,9 @@ use super::connections_screen::{
     TerminalConnectionsState,
 };
 use super::data::{
-    app_names, authenticate, bind_login_session, current_settings, home_dir_fallback, logs_dir,
-    read_shell_snapshot, read_text_file, save_settings, save_text_file, word_processor_dir,
-    write_shell_snapshot,
+    app_names, authenticate, bind_login_session, current_settings, documents_dir,
+    home_dir_fallback, logs_dir, read_shell_snapshot, read_text_file, save_settings,
+    save_text_file, word_processor_dir, write_shell_snapshot,
 };
 use super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
@@ -26,8 +26,9 @@ use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScre
 use super::installer_screen::{
     add_package_to_menu, apply_filter as apply_installer_filter,
     apply_search_query as apply_installer_search_query, build_package_command,
-    draw_installer_screen, settle_view_after_package_command, InstallerEvent,
-    InstallerPackageAction, TerminalInstallerState,
+    draw_installer_screen, settle_view_after_package_command, DesktopInstallerConfirm,
+    DesktopInstallerEvent, DesktopInstallerState, DesktopInstallerView, InstallerCategory, InstallerEvent,
+    InstallerMenuTarget, InstallerPackageAction, TerminalInstallerState,
 };
 use super::menu::{
     draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
@@ -43,10 +44,13 @@ use super::prompt::{
 };
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
-    draw_embedded_pty, draw_embedded_pty_in_ui, spawn_embedded_pty_with_options, NativePtyState,
+    draw_embedded_pty, draw_embedded_pty_in_ui_focused, handle_pty_input,
+    spawn_embedded_pty_with_options, NativePtyState,
     PtyScreenEvent,
 };
-use super::retro_ui::{configure_visuals, current_palette, RetroScreen};
+use super::retro_ui::{
+    configure_visuals, current_palette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+};
 use super::settings_screen::{
     run_terminal_settings_screen, TerminalSettingsEvent,
 };
@@ -245,6 +249,7 @@ struct AssetCache {
     icon_archive: TextureHandle,
     icon_app: TextureHandle,
     icon_shortcut_badge: TextureHandle,
+    icon_gaming: TextureHandle,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
 }
@@ -322,6 +327,7 @@ enum DesktopWindow {
     NukeCodes,
     TerminalMode,
     PtyApp,
+    Installer,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -448,6 +454,24 @@ fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
+
+#[derive(Clone, Debug)]
+enum SpotlightCategory {
+    App,
+    Game,
+    Document,
+    File,
+    System,
+    Network,
+}
+
+#[derive(Clone, Debug)]
+struct SpotlightResult {
+    name: String,
+    category: SpotlightCategory,
+    /// For files/documents: the full path
+    path: Option<PathBuf>,
+}
 const TERMINAL_SCREEN_COLS: usize = 92;
 const TERMINAL_SCREEN_ROWS: usize = 28;
 const TERMINAL_CONTENT_COL: usize = 3;
@@ -577,6 +601,7 @@ pub struct RobcoNativeApp {
     donkey_kong_window: DonkeyKongWindow,
     donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
+    desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
     desktop_active_window: Option<DesktopWindow>,
@@ -636,6 +661,14 @@ pub struct RobcoNativeApp {
     editor_replace_query: String,
     editor_find_occurrence: usize,
     editor_text_align: u8, // 0=Left 1=Center 2=Right
+    // Spotlight search
+    spotlight_open: bool,
+    spotlight_query: String,
+    spotlight_tab: u8,    // 0=All 1=Apps 2=Documents 3=Files
+    spotlight_selected: usize,
+    spotlight_results: Vec<SpotlightResult>,
+    spotlight_last_query: String,
+    spotlight_last_tab: u8,
 }
 
 struct ParkedSessionState {
@@ -646,6 +679,7 @@ struct ParkedSessionState {
     donkey_kong_window: DonkeyKongWindow,
     donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
+    desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
     desktop_active_window: Option<DesktopWindow>,
@@ -746,6 +780,7 @@ impl Default for RobcoNativeApp {
             donkey_kong_window: DonkeyKongWindow::default(),
             donkey_kong: None,
             desktop_nuke_codes_open: false,
+            desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
             desktop_window_states: HashMap::new(),
             desktop_active_window: None,
@@ -805,6 +840,13 @@ impl Default for RobcoNativeApp {
             editor_replace_query: String::new(),
             editor_find_occurrence: 0,
             editor_text_align: 0,
+            spotlight_open: false,
+            spotlight_query: String::new(),
+            spotlight_tab: 0,
+            spotlight_selected: 0,
+            spotlight_results: Vec::new(),
+            spotlight_last_query: String::new(),
+            spotlight_last_tab: u8::MAX,
         }
     }
 }
@@ -1018,6 +1060,12 @@ impl RobcoNativeApp {
                 include_bytes!("../Icons/pixel--external-link-solid.svg"),
                 Some(16),
             ),
+            icon_gaming: Self::load_svg_icon(
+                ctx,
+                "icon_gaming",
+                include_bytes!("../Icons/pixel--gaming.svg"),
+                Some(ICON_SIZE),
+            ),
             wallpaper: None,
             wallpaper_loaded_for: String::new(),
         }
@@ -1156,6 +1204,74 @@ impl RobcoNativeApp {
         }
     }
 
+    fn native_pty_profile_key(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let base = Path::new(trimmed)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(trimmed)
+            .trim();
+        if base.is_empty() {
+            None
+        } else {
+            Some(base.to_ascii_lowercase())
+        }
+    }
+
+    fn native_pty_profile_for_command(cmd: &[String]) -> DesktopPtyProfileSettings {
+        let settings = get_settings();
+        let profiles = settings.desktop_cli_profiles;
+        let Some(base) = cmd
+            .first()
+            .and_then(|program| Self::native_pty_profile_key(program))
+        else {
+            return profiles.default;
+        };
+        if let Some(custom) = profiles.custom.get(&base) {
+            return custom.clone();
+        }
+        match base.as_str() {
+            name if name.starts_with("calcurse") => profiles.calcurse,
+            name if name.starts_with("myman") => DesktopPtyProfileSettings {
+                live_resize: false,
+                preferred_w: Some(96),
+                preferred_h: Some(32),
+                ..profiles.default
+            },
+            "spotify_player" => profiles.spotify_player,
+            "ranger" => profiles.ranger,
+            "tuir" | "rtv" => profiles.reddit,
+            _ => profiles.default,
+        }
+    }
+
+    fn native_pty_force_render_mode(cmd: &[String]) -> Option<bool> {
+        let Some(base) = cmd
+            .first()
+            .and_then(|program| Self::native_pty_profile_key(program))
+        else {
+            return None;
+        };
+        match base.as_str() {
+            name if name.starts_with("myman") => Some(false),
+            "spotify_player" | "ranger" => Some(false),
+            _ => None,
+        }
+    }
+
+    fn native_pty_window_min_size(state: &NativePtyState) -> egui::Vec2 {
+        let cols = state.desktop_cols_floor.unwrap_or(40) as f32;
+        // Add one row for the desktop footer/status line that sits under the PTY grid.
+        let rows = state.desktop_rows_floor.unwrap_or(20).saturating_add(1) as f32;
+        egui::vec2(
+            (cols * FIXED_PTY_CELL_W).max(640.0),
+            (rows * FIXED_PTY_CELL_H).max(300.0),
+        )
+    }
+
     fn apply_global_retro_menu_chrome(ctx: &Context) {
         let palette = current_palette();
         let stroke = egui::Stroke::new(2.0, palette.fg);
@@ -1213,6 +1329,7 @@ impl RobcoNativeApp {
             donkey_kong_window: self.donkey_kong_window.clone(),
             donkey_kong: self.donkey_kong.clone(),
             desktop_nuke_codes_open: self.desktop_nuke_codes_open,
+            desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
             desktop_window_states: self.desktop_window_states.clone(),
             desktop_active_window: self.desktop_active_window,
@@ -1290,6 +1407,7 @@ impl RobcoNativeApp {
         self.donkey_kong_window = parked.donkey_kong_window;
         self.donkey_kong = parked.donkey_kong;
         self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
+        self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;
         self.desktop_window_states = parked.desktop_window_states;
         self.desktop_active_window = parked.desktop_active_window;
@@ -1529,6 +1647,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => self.applications.open,
             DesktopWindow::DonkeyKong => self.donkey_kong_window.open,
             DesktopWindow::NukeCodes => self.desktop_nuke_codes_open,
+            DesktopWindow::Installer => self.desktop_installer.open,
             DesktopWindow::TerminalMode => self.terminal_mode.open,
             DesktopWindow::PtyApp => self.terminal_pty.is_some(),
         }
@@ -1561,6 +1680,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => Id::new(("native_applications", gen)),
             DesktopWindow::DonkeyKong => Id::new(("native_donkey_kong", gen)),
             DesktopWindow::NukeCodes => Id::new(("native_nuke_codes", gen)),
+            DesktopWindow::Installer => Id::new(("native_installer", gen)),
             DesktopWindow::PtyApp => Id::new(("native_desktop_pty", gen)),
             DesktopWindow::TerminalMode => Id::new(("native_terminal_mode", gen)),
         }
@@ -1662,6 +1782,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => egui::vec2(700.0, 480.0),
             DesktopWindow::DonkeyKong => egui::vec2(820.0, 720.0),
             DesktopWindow::NukeCodes => egui::vec2(640.0, 420.0),
+            DesktopWindow::Installer => egui::vec2(800.0, 600.0),
             DesktopWindow::TerminalMode => egui::vec2(720.0, 500.0),
             DesktopWindow::PtyApp => egui::vec2(960.0, 600.0),
         }
@@ -1721,6 +1842,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => self.applications.open = open,
             DesktopWindow::DonkeyKong => self.donkey_kong_window.open = open,
             DesktopWindow::NukeCodes => self.desktop_nuke_codes_open = open,
+            DesktopWindow::Installer => self.desktop_installer.open = open,
             DesktopWindow::TerminalMode => self.terminal_mode.open = open,
             DesktopWindow::PtyApp => {
                 if !open {
@@ -1744,13 +1866,14 @@ impl RobcoNativeApp {
     }
 
     fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        const ORDER: [DesktopWindow; 8] = [
+        const ORDER: [DesktopWindow; 9] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
             DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
+            DesktopWindow::Installer,
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
         ];
@@ -1845,6 +1968,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => "Applications".to_string(),
             DesktopWindow::DonkeyKong => BUILTIN_DONKEY_KONG_GAME.to_string(),
             DesktopWindow::NukeCodes => "Nuke Codes".to_string(),
+            DesktopWindow::Installer => "Program Installer".to_string(),
             DesktopWindow::TerminalMode => "Terminal".to_string(),
             DesktopWindow::PtyApp => self
                 .terminal_pty
@@ -3258,6 +3382,378 @@ impl RobcoNativeApp {
         }
     }
 
+    // ── SPOTLIGHT SEARCH ─────────────────────────────────────────────────
+
+    fn spotlight_gather_results(&mut self) {
+        let query = self.spotlight_query.to_lowercase();
+        let tab = self.spotlight_tab;
+        // Skip if query+tab haven't changed
+        if query == self.spotlight_last_query && tab == self.spotlight_last_tab {
+            return;
+        }
+        self.spotlight_last_query = query.clone();
+        self.spotlight_last_tab = tab;
+        self.spotlight_results.clear();
+        self.spotlight_selected = 0;
+
+        let matches_query = |name: &str| -> bool {
+            query.is_empty() || name.to_lowercase().contains(&query)
+        };
+
+        // Apps (tab 0=All or 1=Apps)
+        if tab == 0 || tab == 1 {
+            // Built-in apps
+            for name in &[
+                "File Manager",
+                "Settings",
+                "Terminal",
+                BUILTIN_TEXT_EDITOR_APP,
+                BUILTIN_NUKE_CODES_APP,
+            ] {
+                if matches_query(name) {
+                    self.spotlight_results.push(SpotlightResult {
+                        name: name.to_string(),
+                        category: SpotlightCategory::System,
+                        path: None,
+                    });
+                }
+            }
+            // Configured apps
+            for name in app_names() {
+                if name != BUILTIN_NUKE_CODES_APP
+                    && name != BUILTIN_TEXT_EDITOR_APP
+                    && matches_query(&name)
+                {
+                    self.spotlight_results.push(SpotlightResult {
+                        name,
+                        category: SpotlightCategory::App,
+                        path: None,
+                    });
+                }
+            }
+            // Games
+            for name in self.game_names() {
+                if matches_query(&name) {
+                    self.spotlight_results.push(SpotlightResult {
+                        name,
+                        category: SpotlightCategory::Game,
+                        path: None,
+                    });
+                }
+            }
+            // Network programs
+            for name in load_networks().keys() {
+                if matches_query(name) {
+                    self.spotlight_results.push(SpotlightResult {
+                        name: name.clone(),
+                        category: SpotlightCategory::Network,
+                        path: None,
+                    });
+                }
+            }
+        }
+
+        // Documents (tab 0=All or 2=Documents)
+        if tab == 0 || tab == 2 {
+            let username = crate::session::active_username().unwrap_or_default();
+            let doc_dir = word_processor_dir(&username);
+            if doc_dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&doc_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if entry.file_type().map_or(false, |t| t.is_file()) && matches_query(&name)
+                        {
+                            self.spotlight_results.push(SpotlightResult {
+                                name,
+                                category: SpotlightCategory::Document,
+                                path: Some(entry.path()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Files (tab 0=All or 3=Files)
+        if tab == 0 || tab == 3 {
+            // Search home directory (shallow) and Documents
+            let dirs_to_search = [home_dir_fallback(), documents_dir()];
+            let mut seen = std::collections::HashSet::new();
+            for dir in &dirs_to_search {
+                if !dir.is_dir() {
+                    continue;
+                }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if seen.contains(&path) {
+                            continue;
+                        }
+                        seen.insert(path.clone());
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if matches_query(&name) {
+                            self.spotlight_results.push(SpotlightResult {
+                                name,
+                                category: SpotlightCategory::File,
+                                path: Some(path),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Limit results to avoid slowness
+        self.spotlight_results.truncate(50);
+    }
+
+    fn spotlight_activate_result(&mut self, result: &SpotlightResult) {
+        self.spotlight_open = false;
+        self.spotlight_query.clear();
+        match &result.category {
+            SpotlightCategory::System => match result.name.as_str() {
+                "File Manager" => self.open_desktop_window(DesktopWindow::FileManager),
+                "Settings" => self.open_desktop_window(DesktopWindow::Settings),
+                "Terminal" => self.open_desktop_window(DesktopWindow::TerminalMode),
+                n if n == BUILTIN_TEXT_EDITOR_APP => {
+                    if self.editor.path.is_none() {
+                        self.new_document();
+                    }
+                    self.open_desktop_window(DesktopWindow::Editor);
+                }
+                n if n == BUILTIN_NUKE_CODES_APP => {
+                    self.open_desktop_window(DesktopWindow::NukeCodes);
+                }
+                _ => {}
+            },
+            SpotlightCategory::App => {
+                self.launch_named_program_from_map(
+                    &result.name, &load_apps(), &result.name,
+                );
+            }
+            SpotlightCategory::Game => {
+                if result.name == BUILTIN_DONKEY_KONG_GAME {
+                    self.open_desktop_window(DesktopWindow::DonkeyKong);
+                } else {
+                    self.launch_named_program_from_map(
+                        &result.name, &load_games(), &result.name,
+                    );
+                }
+            }
+            SpotlightCategory::Network => {
+                self.launch_named_program_from_map(
+                    &result.name, &load_networks(), &result.name,
+                );
+            }
+            SpotlightCategory::Document => {
+                if let Some(path) = &result.path {
+                    self.open_path_in_editor(path.clone());
+                }
+            }
+            SpotlightCategory::File => {
+                if let Some(path) = &result.path {
+                    if path.is_dir() {
+                        self.file_manager.set_cwd(path.clone());
+                    } else if let Some(parent) = path.parent() {
+                        self.file_manager.set_cwd(parent.to_path_buf());
+                    }
+                    self.open_desktop_window(DesktopWindow::FileManager);
+                }
+            }
+        }
+    }
+
+    fn draw_spotlight(&mut self, ctx: &Context) {
+        if !self.spotlight_open {
+            return;
+        }
+
+        // Close on Escape
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.spotlight_open = false;
+            return;
+        }
+
+        // Arrow key navigation
+        let mut scroll_selected_into_view = false;
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            if !self.spotlight_results.is_empty() {
+                let next =
+                    (self.spotlight_selected + 1).min(self.spotlight_results.len() - 1);
+                if next != self.spotlight_selected {
+                    self.spotlight_selected = next;
+                    scroll_selected_into_view = true;
+                }
+            }
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            let next = self.spotlight_selected.saturating_sub(1);
+            if next != self.spotlight_selected {
+                self.spotlight_selected = next;
+                scroll_selected_into_view = true;
+            }
+        }
+
+        // Enter to activate
+        let mut activate_idx: Option<usize> = None;
+        if ctx.input(|i| i.key_pressed(Key::Enter)) && !self.spotlight_results.is_empty() {
+            activate_idx = Some(self.spotlight_selected);
+        }
+
+        // Gather results
+        let prev_query = self.spotlight_last_query.clone();
+        let prev_tab = self.spotlight_last_tab;
+        self.spotlight_gather_results();
+        if self.spotlight_last_query != prev_query || self.spotlight_last_tab != prev_tab {
+            scroll_selected_into_view = true;
+        }
+
+        let palette = current_palette();
+        let screen = ctx.screen_rect();
+        let box_width = 600.0_f32.min(screen.width() - 40.0);
+        let box_height = 420.0_f32.min(screen.height() - 80.0);
+
+        egui::Window::new("spotlight_window")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .fixed_size(egui::vec2(box_width, box_height))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .order(egui::Order::Foreground)
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.bg)
+                    .stroke(egui::Stroke::new(2.0, palette.fg))
+                    .shadow(egui::epaint::Shadow::NONE)
+                    .inner_margin(egui::Margin::same(12.0)),
+            )
+            .show(ctx, |ui| {
+                let v = ui.visuals_mut();
+                v.override_text_color = Some(palette.fg);
+                v.extreme_bg_color = palette.bg;
+                v.selection.bg_fill = palette.fg;
+                v.selection.stroke = egui::Stroke::new(1.0, palette.fg);
+                // noninteractive (labels, frames)
+                v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+                v.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+                v.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
+                v.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+                // inactive (buttons at rest)
+                v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+                v.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+                // hovered
+                v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+                v.widgets.hovered.bg_fill = palette.panel;
+                v.widgets.hovered.weak_bg_fill = palette.panel;
+                v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+                v.widgets.hovered.expansion = 0.0;
+                // active (pressed)
+                v.widgets.active.fg_stroke = egui::Stroke::new(1.0, Color32::BLACK);
+                v.widgets.active.bg_fill = palette.fg;
+                v.widgets.active.weak_bg_fill = palette.fg;
+                v.widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+
+                // Search input
+                let search_resp = ui.add(
+                    TextEdit::singleline(&mut self.spotlight_query)
+                        .desired_width(box_width - 48.0)
+                        .hint_text("Search apps, documents, files…")
+                        .font(egui::TextStyle::Body),
+                );
+                // Auto-focus
+                if search_resp.gained_focus() || !search_resp.has_focus() {
+                    search_resp.request_focus();
+                }
+
+                ui.add_space(6.0);
+
+                // Tab buttons
+                ui.horizontal(|ui| {
+                    let tabs = ["All", "Apps", "Documents", "Files"];
+                    for (i, label) in tabs.iter().enumerate() {
+                        let selected = self.spotlight_tab == i as u8;
+                        let text = if selected {
+                            RichText::new(*label).color(Color32::BLACK).strong()
+                        } else {
+                            RichText::new(*label).color(palette.fg)
+                        };
+                        let btn = egui::Button::new(text);
+                        let btn = if selected {
+                            btn.fill(palette.fg)
+                        } else {
+                            btn.fill(palette.panel)
+                        };
+                        if ui.add(btn).clicked() {
+                            self.spotlight_tab = i as u8;
+                            // Force re-search
+                            self.spotlight_last_tab = u8::MAX;
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Results
+                let results_height = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .max_height(results_height)
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        if self.spotlight_results.is_empty() {
+                            if self.spotlight_query.is_empty() {
+                                ui.label(
+                                    RichText::new("Type to search…").color(palette.dim),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new("No results found.").color(palette.dim),
+                                );
+                            }
+                        } else {
+                            for (i, result) in self.spotlight_results.iter().enumerate() {
+                                let selected = i == self.spotlight_selected;
+                                let cat_label = match &result.category {
+                                    SpotlightCategory::App => "APP",
+                                    SpotlightCategory::Game => "GAME",
+                                    SpotlightCategory::Document => "DOC",
+                                    SpotlightCategory::File => "FILE",
+                                    SpotlightCategory::System => "SYS",
+                                    SpotlightCategory::Network => "NET",
+                                };
+                                let display = format!("[{cat_label}]  {}", result.name);
+                                let text_color = if selected {
+                                    Color32::BLACK
+                                } else {
+                                    palette.fg
+                                };
+                                let resp = ui.add(
+                                    egui::SelectableLabel::new(
+                                        selected,
+                                        RichText::new(display).color(text_color),
+                                    ),
+                                );
+                                if resp.clicked() {
+                                    activate_idx = Some(i);
+                                }
+                                if selected && scroll_selected_into_view {
+                                    resp.scroll_to_me(None);
+                                }
+                            }
+                        }
+                    });
+            });
+
+        // Activate after UI is done (deferred to avoid borrow issues)
+        if let Some(idx) = activate_idx {
+            if idx < self.spotlight_results.len() {
+                let result = self.spotlight_results[idx].clone();
+                self.spotlight_activate_result(&result);
+            }
+        }
+    }
+
     fn draw_shortcut_properties_window(&mut self, ctx: &egui::Context) {
         let Some(props) = self.shortcut_properties.clone() else {
             return;
@@ -3583,10 +4079,7 @@ impl RobcoNativeApp {
         match action {
             StartSystemAction::ProgramInstaller => {
                 self.close_start_menu();
-                self.desktop_mode_open = false;
-                self.terminal_installer.reset();
-                self.navigate_to_screen(TerminalScreen::ProgramInstaller);
-                self.shell_status.clear();
+                self.open_desktop_window(DesktopWindow::Installer);
             }
             StartSystemAction::Terminal => self.open_desktop_terminal_shell(),
             StartSystemAction::FileManager => self.open_desktop_window(DesktopWindow::FileManager),
@@ -3664,6 +4157,7 @@ impl RobcoNativeApp {
             DesktopWindow::Applications => self.draw_applications(ctx),
             DesktopWindow::DonkeyKong => self.draw_desktop_donkey_kong(ctx),
             DesktopWindow::NukeCodes => self.draw_nuke_codes_window(ctx),
+            DesktopWindow::Installer => self.draw_installer(ctx),
             DesktopWindow::TerminalMode => self.draw_terminal_mode(ctx),
             DesktopWindow::PtyApp => self.draw_desktop_pty_window(ctx),
         }
@@ -3671,13 +4165,14 @@ impl RobcoNativeApp {
 
     fn draw_desktop_windows(&mut self, ctx: &Context) {
         self.sync_desktop_active_window();
-        const ORDER: [DesktopWindow; 8] = [
+        const ORDER: [DesktopWindow; 9] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
             DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
+            DesktopWindow::Installer,
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
         ];
@@ -3725,6 +4220,7 @@ impl RobcoNativeApp {
         self.donkey_kong_window.open = false;
         self.donkey_kong = None;
         self.desktop_nuke_codes_open = false;
+        self.desktop_installer = DesktopInstallerState::default();
         self.terminal_mode.status.clear();
         let launch_default_desktop = matches!(self.settings.draft.default_open_mode, OpenMode::Desktop)
             && session::take_default_mode_pending_for_active();
@@ -4133,23 +4629,40 @@ impl RobcoNativeApp {
         if let Some(mut previous) = self.terminal_pty.take() {
             previous.session.terminate();
         }
-        let layout = self.terminal_layout();
+        let profile = Self::native_pty_profile_for_command(cmd);
+        // Launch desktop PTYs at their preferred compatibility size up front
+        // so ncurses apps don't start in an undersized grid and then immediately
+        // reflow on the first egui frame.
+        let pty_cols = profile
+            .preferred_w
+            .unwrap_or(96)
+            .max(profile.min_w)
+            .clamp(40, 160);
+        let pty_rows = profile
+            .preferred_h
+            .unwrap_or(32)
+            .max(profile.min_h)
+            .clamp(10, 60);
         let options = crate::pty::PtyLaunchOptions {
-            force_render_mode: Some(false),
+            force_render_mode: Self::native_pty_force_render_mode(cmd),
             ..crate::pty::PtyLaunchOptions::default()
         };
         match spawn_embedded_pty_with_options(
             title,
             cmd,
             TerminalScreen::MainMenu,
-            layout.cols as u16,
-            layout.rows.saturating_sub(1) as u16,
+            pty_cols,
+            pty_rows,
             options,
         ) {
-            Ok(state) => {
+            Ok(mut state) => {
+                state.desktop_cols_floor = Some(pty_cols);
+                state.desktop_rows_floor = Some(pty_rows);
+                state.desktop_live_resize = profile.live_resize;
                 self.terminal_pty = Some(state);
                 self.open_desktop_window(DesktopWindow::PtyApp);
-                self.desktop_window_state_mut(DesktopWindow::PtyApp).maximized = false;
+                let window = self.desktop_window_state_mut(DesktopWindow::PtyApp);
+                window.maximized = profile.open_fullscreen;
                 self.shell_status = format!("Opened {title} in PTY window.");
             }
             Err(err) => {
@@ -4159,8 +4672,20 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_terminal_shell(&mut self) {
-        let layout = self.terminal_layout();
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let requested_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let requested_shell_name = std::path::Path::new(&requested_shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let shell = if requested_shell_name == "fish" {
+            if std::path::Path::new("/bin/bash").exists() {
+                "/bin/bash".to_string()
+            } else {
+                "/bin/sh".to_string()
+            }
+        } else {
+            requested_shell
+        };
         let shell_name = std::path::Path::new(&shell)
             .file_name()
             .and_then(|s| s.to_str())
@@ -4176,24 +4701,38 @@ impl RobcoNativeApp {
             }
             _ => {}
         }
+        let profile = Self::native_pty_profile_for_command(&cmd);
+        let pty_cols = profile
+            .preferred_w
+            .unwrap_or(96)
+            .max(profile.min_w)
+            .clamp(40, 160);
+        let pty_rows = profile
+            .preferred_h
+            .unwrap_or(32)
+            .max(profile.min_h)
+            .clamp(10, 60);
         let options = crate::pty::PtyLaunchOptions {
             env: vec![
                 ("PS1".into(), "> ".into()),
                 ("PROMPT".into(), "> ".into()),
                 ("ZDOTDIR".into(), "/dev/null".into()),
             ],
-            top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
-            force_render_mode: Some(true),
+            top_bar: None,
+            force_render_mode: Some(false),
         };
         match spawn_embedded_pty_with_options(
             "ROBCO MAINTENANCE TERMLINK",
             &cmd,
             TerminalScreen::MainMenu,
-            layout.cols as u16,
-            layout.rows.saturating_sub(1) as u16,
+            pty_cols,
+            pty_rows,
             options,
         ) {
-            Ok(state) => {
+            Ok(mut state) => {
+                state.desktop_cols_floor = Some(pty_cols);
+                state.desktop_rows_floor = Some(pty_rows);
+                state.desktop_live_resize = profile.live_resize;
                 self.terminal_pty = Some(state);
                 self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = "Opened terminal shell in PTY.".to_string();
@@ -4208,7 +4747,6 @@ impl RobcoNativeApp {
         if let Some(mut previous) = self.terminal_pty.take() {
             previous.session.terminate();
         }
-        let layout = self.terminal_layout();
         let requested_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         let requested_shell_name = std::path::Path::new(&requested_shell)
             .file_name()
@@ -4240,6 +4778,17 @@ impl RobcoNativeApp {
             }
             _ => {}
         }
+        let profile = Self::native_pty_profile_for_command(&cmd);
+        let pty_cols = profile
+            .preferred_w
+            .unwrap_or(96)
+            .max(profile.min_w)
+            .clamp(40, 160);
+        let pty_rows = profile
+            .preferred_h
+            .unwrap_or(32)
+            .max(profile.min_h)
+            .clamp(10, 60);
         let options = crate::pty::PtyLaunchOptions {
             env: vec![
                 ("PS1".into(), "> ".into()),
@@ -4253,13 +4802,18 @@ impl RobcoNativeApp {
             "Terminal",
             &cmd,
             TerminalScreen::MainMenu,
-            layout.cols as u16,
-            layout.rows.saturating_sub(1) as u16,
+            pty_cols,
+            pty_rows,
             options,
         ) {
-            Ok(state) => {
+            Ok(mut state) => {
+                state.desktop_cols_floor = Some(pty_cols);
+                state.desktop_rows_floor = Some(pty_rows);
+                state.desktop_live_resize = profile.live_resize;
                 self.terminal_pty = Some(state);
                 self.open_desktop_window(DesktopWindow::PtyApp);
+                let window = self.desktop_window_state_mut(DesktopWindow::PtyApp);
+                window.maximized = profile.open_fullscreen;
                 self.shell_status = "Opened terminal shell in PTY window.".to_string();
             }
             Err(err) => {
@@ -5994,6 +6548,18 @@ impl RobcoNativeApp {
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let now = Local::now().format("%a %d %b %H:%M").to_string();
                         ui.label(RichText::new(now).color(Color32::BLACK));
+                        ui.add_space(10.0);
+                        if ui.button(RichText::new("Search").color(Color32::BLACK)).clicked()
+                            || ctx.input(|i| i.key_pressed(Key::Space) && i.modifiers.command)
+                        {
+                            self.spotlight_open = !self.spotlight_open;
+                            if self.spotlight_open {
+                                self.spotlight_query.clear();
+                                self.spotlight_selected = 0;
+                                self.spotlight_results.clear();
+                                self.spotlight_last_query.clear();
+                            }
+                        }
                     });
                 });
             });
@@ -6221,13 +6787,14 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_taskbar(&mut self, ctx: &Context) {
-        const WINDOW_ORDER: [DesktopWindow; 7] = [
+        const WINDOW_ORDER: [DesktopWindow; 8] = [
             DesktopWindow::FileManager,
             DesktopWindow::Editor,
             DesktopWindow::Settings,
             DesktopWindow::Applications,
             DesktopWindow::DonkeyKong,
             DesktopWindow::NukeCodes,
+            DesktopWindow::Installer,
             DesktopWindow::PtyApp,
         ];
         self.sync_desktop_active_window();
@@ -6356,8 +6923,12 @@ impl RobcoNativeApp {
     }
 
     fn launch_configured_app_in_pty(&mut self, name: &str, return_screen: TerminalScreen) {
-        let apps = load_apps();
-        match resolve_program_command(name, &apps) {
+        let source = match return_screen {
+            TerminalScreen::Network => load_networks(),
+            TerminalScreen::Games => load_games(),
+            _ => load_apps(),
+        };
+        match resolve_program_command(name, &source) {
             Ok(cmd) => self.open_embedded_pty(name, &cmd, return_screen),
             Err(err) => self.shell_status = err,
         }
@@ -6957,6 +7528,22 @@ impl RobcoNativeApp {
             self.shell_status = "No embedded PTY session.".to_string();
             return;
         };
+        let title = state.title.clone();
+        let palette = current_palette();
+        TopBottomPanel::top("native_terminal_pty_title_bar")
+            .resizable(false)
+            .exact_height(retro_footer_height())
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.fg)
+                    .inner_margin(egui::Margin::symmetric(6.0, 4.0)),
+            )
+            .show(ctx, |ui| {
+                ui.with_layout(Layout::top_down_justified(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(title).color(Color32::BLACK).strong());
+                });
+            });
         let event = draw_embedded_pty(
             ctx,
             state,
@@ -7263,17 +7850,58 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_terminal_footer_spacer(&self, ctx: &Context) {
-        TopBottomPanel::bottom("native_terminal_footer_spacer")
+    fn draw_terminal_status_bar(&self, ctx: &Context) {
+        // Repaint once per second to keep the clock updated
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        let palette = current_palette();
+        TopBottomPanel::bottom("native_terminal_status_bar")
             .resizable(false)
             .exact_height(retro_footer_height())
             .show_separator_line(false)
             .frame(
                 egui::Frame::none()
-                    .fill(current_palette().bg)
-                    .inner_margin(0.0),
+                    .fill(palette.fg)
+                    .inner_margin(egui::Margin::symmetric(6.0, 4.0)),
             )
-            .show(ctx, |_ui| {});
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // Left: date/time
+                    let now = Local::now().format("%a %Y-%m-%d %I:%M%p").to_string();
+                    ui.label(RichText::new(now).color(Color32::BLACK).strong());
+
+                    // Center: session tabs [1*] [2] [3]
+                    let sessions = crate::session::get_sessions();
+                    let active = crate::session::active_idx();
+                    if !sessions.is_empty() {
+                        let tabs: String = sessions
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _)| {
+                                if i == active {
+                                    format!("[{}*]", i + 1)
+                                } else {
+                                    format!("[{}]", i + 1)
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        // Approximate centering
+                        let avail = ui.available_width();
+                        let tab_width = tabs.len() as f32 * 8.0;
+                        let spacing = ((avail - tab_width) / 2.0).max(8.0);
+                        ui.add_space(spacing);
+                        ui.label(RichText::new(tabs).color(Color32::BLACK).strong());
+                    }
+
+                    // Right: battery (if available)
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        let batt = crate::status::battery_status_string();
+                        if !batt.is_empty() {
+                            ui.label(RichText::new(batt).color(Color32::BLACK).strong());
+                        }
+                    });
+                });
+            });
     }
 
     fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
@@ -7360,6 +7988,14 @@ impl RobcoNativeApp {
     fn apply_top_bar_menu_button_style(ui: &mut egui::Ui) {
         let palette = current_palette();
         let mut style = ui.style().as_ref().clone();
+        // Popup/window fill must be set HERE on the parent UI — menu_button
+        // reads these when creating the popup frame, before the inner closure runs.
+        style.visuals.window_fill = palette.bg;
+        style.visuals.window_stroke = egui::Stroke::new(2.0, palette.fg);
+        style.visuals.window_rounding = egui::Rounding::ZERO;
+        style.visuals.menu_rounding = egui::Rounding::ZERO;
+        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         style.visuals.button_frame = false;
         style.visuals.override_text_color = Some(Color32::BLACK);
         style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
@@ -8374,11 +9010,7 @@ impl RobcoNativeApp {
 
         if !self.desktop_mode_open {
             // Keyboard shortcuts for terminal mode (no mouse needed)
-            if ctx.input(|i| {
-                i.key_pressed(Key::Escape)
-                    || i.key_pressed(Key::Tab)
-                    || (i.modifiers.ctrl && i.key_pressed(Key::Q))
-            }) {
+            if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
                 self.update_desktop_window_state(DesktopWindow::Editor, false);
                 return;
             }
@@ -8386,33 +9018,36 @@ impl RobcoNativeApp {
                 self.new_document();
             }
             let palette = current_palette();
+
+            // Editor fills remaining space (status bar drawn globally)
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::none()
                         .fill(palette.bg)
-                        .inner_margin(egui::Margin::same(8.0)),
+                        .inner_margin(egui::Margin::same(4.0)),
                 )
                 .show(ctx, |ui| {
-                    // Header with keyboard shortcut hints
+                    // Header: title + hints
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&title).strong());
+                        ui.label(RichText::new(&title).color(palette.fg).strong());
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new("Esc:Exit  ^S:Save  ^N:New  ^F:Find").color(palette.dim).small());
+                            ui.label(RichText::new("Esc:Back  ^S:Save  ^N:New  ^F:Find").color(palette.dim).small());
                         });
                     });
                     if let Some(path) = &self.editor.path {
-                        ui.small(path.display().to_string());
+                        ui.label(RichText::new(path.display().to_string()).color(palette.dim).small());
                     }
                     if !self.editor.status.is_empty() {
-                        ui.small(RichText::new(&self.editor.status).color(palette.dim));
+                        ui.label(RichText::new(&self.editor.status).color(palette.dim).small());
                     }
-                    ui.separator();
-                    // Block cursor
+
+                    // Block cursor in theme color
                     let char_width = 16.0 * 0.6;
                     ui.visuals_mut().text_cursor.stroke =
                         egui::Stroke::new(char_width, palette.fg);
                     let edit = TextEdit::multiline(&mut self.editor.text)
                         .lock_focus(true)
+                        .frame(false)
                         .font(egui::TextStyle::Monospace);
                     let response = ui.add_sized(ui.available_size(), edit);
                     if response.changed() {
@@ -8447,10 +9082,6 @@ impl RobcoNativeApp {
         }
         let text_edit_id = Id::new(("editor_text_edit", generation));
         let shown = window.show(ctx, |ui| {
-            // Force the window UI to claim its full min_size so egui's auto-sizer
-            // doesn't collapse the window to just the header height.
-            ui.set_min_size(egui::vec2(398.0, 298.0));
-
             // ── HEADER ───────────────────────────────────────────────────────
             header_action = Self::draw_desktop_window_header(ui, &title, maximized);
             if let Some(path) = &self.editor.path {
@@ -8522,93 +9153,25 @@ impl RobcoNativeApp {
                 _ => egui::Align::LEFT,
             };
 
-            // Text editor in a fixed-height ScrollArea — the window stays the
-            // same size and content scrolls instead of expanding.
+            // Fill all remaining space with the TextEdit.
             let remaining = ui.available_size();
-
-            // Reserve left strip for line numbers if enabled
-            let lnum_width = if self.editor_show_line_numbers {
-                let line_count = self.editor.text.lines().count().max(1);
-                let digit_w = (line_count as f32).log10().floor() as usize + 1;
-                digit_w as f32 * 9.0 + 12.0
-            } else {
-                0.0
-            };
-            let text_width = (remaining.x - lnum_width).max(100.0);
-
-            egui::ScrollArea::vertical()
-                .id_salt(Id::new(("editor_scroll", generation)))
-                .max_height(remaining.y)
-                .show(ui, |ui| {
-                    // Line numbers: painted on the left via the painter,
-                    // not as widgets, so they scroll with the text.
-                    if self.editor_show_line_numbers && lnum_width > 0.0 {
-                        let line_count = self.editor.text.lines().count().max(1);
-                        let line_h = self.editor.font_size * 1.4;
-                        let top = ui.cursor().min;
-                        let painter = ui.painter().clone();
-                        for n in 1..=(line_count + 1) {
-                            let y = top.y + (n as f32 - 1.0) * line_h;
-                            painter.text(
-                                egui::pos2(top.x + lnum_width - 6.0, y),
-                                egui::Align2::RIGHT_TOP,
-                                format!("{n}"),
-                                egui::FontId::new(self.editor.font_size, egui::FontFamily::Monospace),
-                                palette.dim,
-                            );
-                        }
-                    }
-
-                    // Indent the TextEdit past the line number column
-                    if lnum_width > 0.0 {
-                        ui.add_space(0.0); // ensure cursor is at left
-                        let rect = ui.available_rect_before_wrap();
-                        let indented = egui::Rect::from_min_size(
-                            egui::pos2(rect.left() + lnum_width, rect.top()),
-                            egui::vec2(text_width, rect.height()),
-                        );
-                        let mut child = ui.new_child(
-                            egui::UiBuilder::new()
-                                .max_rect(indented)
-                                .layout(egui::Layout::top_down(egui::Align::Min)),
-                        );
-                        let mut edit = TextEdit::multiline(&mut self.editor.text)
-                            .id(text_edit_id)
-                            .lock_focus(true)
-                            .font(egui::TextStyle::Monospace)
-                            .horizontal_align(text_align);
-                        if !self.editor.word_wrap {
-                            edit = edit.desired_width(f32::INFINITY);
-                        }
-                        let response = child.add(edit);
-                        // Extend parent's min_rect to include the text edit
-                        ui.allocate_rect(child.min_rect(), egui::Sense::hover());
-                        Self::attach_generic_context_menu(
-                            &mut self.context_menu_action,
-                            &response,
-                        );
-                        if response.changed() {
-                            self.editor.dirty = true;
-                        }
-                    } else {
-                        let mut edit = TextEdit::multiline(&mut self.editor.text)
-                            .id(text_edit_id)
-                            .lock_focus(true)
-                            .font(egui::TextStyle::Monospace)
-                            .horizontal_align(text_align);
-                        if !self.editor.word_wrap {
-                            edit = edit.desired_width(f32::INFINITY);
-                        }
-                        let response = ui.add(edit);
-                        Self::attach_generic_context_menu(
-                            &mut self.context_menu_action,
-                            &response,
-                        );
-                        if response.changed() {
-                            self.editor.dirty = true;
-                        }
-                    }
-                });
+            let mut edit = TextEdit::multiline(&mut self.editor.text)
+                .id(text_edit_id)
+                .lock_focus(true)
+                .frame(false)
+                .font(egui::TextStyle::Monospace)
+                .horizontal_align(text_align);
+            if !self.editor.word_wrap {
+                edit = edit.desired_width(f32::INFINITY);
+            }
+            let response = ui.add_sized(remaining, edit);
+            Self::attach_generic_context_menu(
+                &mut self.context_menu_action,
+                &response,
+            );
+            if response.changed() {
+                self.editor.dirty = true;
+            }
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
@@ -9542,6 +10105,11 @@ impl RobcoNativeApp {
                 {
                     changed = true;
                 }
+                if Self::retro_checkbox_row(right, &mut profile.live_resize, "Live resize")
+                    .clicked()
+                {
+                    changed = true;
+                }
                 right.add_space(8.0);
                 right.small(format!(
                     "Custom profiles currently stored: {}",
@@ -10038,6 +10606,939 @@ impl RobcoNativeApp {
         });
     }
 
+    // ─── Desktop Program Installer ─────────────────────────────────────────────
+
+    fn draw_installer(&mut self, ctx: &Context) {
+        if !self.desktop_installer.open
+            || self.desktop_window_is_minimized(DesktopWindow::Installer)
+        {
+            return;
+        }
+        let mut open = self.desktop_installer.open;
+        let maximized = self.desktop_window_is_maximized(DesktopWindow::Installer);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Installer);
+        let mut header_action = DesktopHeaderAction::None;
+        let generation = self.desktop_window_generation(DesktopWindow::Installer);
+        let default_size = Self::desktop_default_window_size(DesktopWindow::Installer);
+        let mut window = egui::Window::new("Program Installer")
+            .id(Id::new(("native_installer", generation)))
+            .open(&mut open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
+            .resizable(true)
+            .min_size([500.0, 400.0])
+            .default_size([default_size.x, default_size.y]);
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((pos, size)) = restore {
+            window = window.current_pos(pos).default_size(size);
+        }
+
+        let palette = current_palette();
+        let mut deferred_back = false;
+        let mut deferred_search = false;
+        let mut deferred_load_installed = false;
+        let mut deferred_open_installed_actions: Option<String> = None;
+        let mut deferred_open_search_actions: Option<(String, bool)> = None;
+        let mut deferred_confirm_setup: Option<(String, InstallerPackageAction)> = None;
+        let mut deferred_confirm_yes = false;
+        let mut deferred_confirm_no = false;
+        let mut deferred_add_to_menu: Option<(String, InstallerMenuTarget)> = None;
+        let mut deferred_open_add_to_menu: Option<String> = None;
+        let mut deferred_open_runtime_tools = false;
+
+        let view = self.desktop_installer.view.clone();
+        let status = self.desktop_installer.status.clone();
+        let has_confirm = self.desktop_installer.confirm_dialog.is_some();
+
+        // Pre-extract icon textures for the home view (avoids borrowing self in closure)
+        let tex_apps = self.asset_cache.as_ref().map(|c| c.icon_applications.clone());
+        let tex_tools = self.asset_cache.as_ref().map(|c| c.icon_terminal.clone());
+        let tex_network = self.asset_cache.as_ref().map(|c| c.icon_connections.clone());
+        let tex_games = self.asset_cache.as_ref().map(|c| c.icon_gaming.clone());
+
+        let shown = window.show(ctx, |ui| {
+            // ── Monochrome styling for all widgets ──────────────────────────
+            Self::apply_installer_widget_style(ui, palette);
+
+            // ── Header ──────────────────────────────────────────────────────
+            egui::TopBottomPanel::top(Id::new(("inst_top", generation)))
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    header_action =
+                        Self::draw_desktop_window_header(ui, "RobCo Program Installer", maximized);
+                });
+
+            // ── Status bar at bottom ────────────────────────────────────────
+            if !status.is_empty() {
+                egui::TopBottomPanel::bottom(Id::new(("inst_bottom", generation)))
+                    .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 4.0)))
+                    .show_inside(ui, |ui| {
+                        ui.label(RichText::new(&status).color(palette.dim));
+                    });
+            }
+
+            // ── Confirmation dialog overlay ─────────────────────────────────
+            if has_confirm {
+                egui::TopBottomPanel::bottom(Id::new(("inst_confirm", generation)))
+                    .frame(
+                        egui::Frame::none()
+                            .fill(palette.panel)
+                            .stroke(egui::Stroke::new(1.0, palette.fg))
+                            .inner_margin(egui::Margin::same(12.0)),
+                    )
+                    .show_inside(ui, |ui| {
+                        if let Some(ref confirm) = self.desktop_installer.confirm_dialog {
+                            let action_label = match confirm.action {
+                                InstallerPackageAction::Install => "Install",
+                                InstallerPackageAction::Update => "Update",
+                                InstallerPackageAction::Reinstall => "Reinstall",
+                                InstallerPackageAction::Uninstall => "Uninstall",
+                            };
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {}?",
+                                    action_label, confirm.pkg
+                                ))
+                                .color(palette.fg)
+                                .strong(),
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button(RichText::new("[ Yes ]").color(palette.fg)).clicked() {
+                                    deferred_confirm_yes = true;
+                                }
+                                ui.add_space(12.0);
+                                if ui.button(RichText::new("[ No ]").color(palette.fg)).clicked() {
+                                    deferred_confirm_no = true;
+                                }
+                            });
+                        }
+                    });
+            }
+
+            // ── Main content ────────────────────────────────────────────────
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().inner_margin(egui::Margin::same(16.0)))
+                .show_inside(ui, |ui| {
+                    match view {
+                        DesktopInstallerView::Home => {
+                            Self::draw_installer_home(
+                                ui,
+                                &mut self.desktop_installer,
+                                palette,
+                                &mut deferred_search,
+                                &mut deferred_load_installed,
+                                &mut deferred_open_runtime_tools,
+                                [&tex_apps, &tex_tools, &tex_network, &tex_games],
+                            );
+                        }
+                        DesktopInstallerView::SearchResults => {
+                            Self::draw_installer_search_results(
+                                ui,
+                                &mut self.desktop_installer,
+                                palette,
+                                &mut deferred_back,
+                                &mut deferred_open_search_actions,
+                            );
+                        }
+                        DesktopInstallerView::Installed => {
+                            Self::draw_installer_installed(
+                                ui,
+                                &mut self.desktop_installer,
+                                palette,
+                                &mut deferred_back,
+                                &mut deferred_open_installed_actions,
+                            );
+                        }
+                        DesktopInstallerView::PackageActions { ref pkg, installed } => {
+                            let pkg = pkg.clone();
+                            Self::draw_installer_package_actions(
+                                ui,
+                                &self.desktop_installer,
+                                palette,
+                                &pkg,
+                                installed,
+                                &mut deferred_back,
+                                &mut deferred_confirm_setup,
+                                &mut deferred_open_add_to_menu,
+                            );
+                        }
+                        DesktopInstallerView::AddToMenu { ref pkg } => {
+                            let pkg = pkg.clone();
+                            Self::draw_installer_add_to_menu(
+                                ui,
+                                &mut self.desktop_installer,
+                                palette,
+                                &pkg,
+                                &mut deferred_back,
+                                &mut deferred_add_to_menu,
+                            );
+                        }
+                        DesktopInstallerView::RuntimeTools => {
+                            Self::draw_installer_runtime_tools(
+                                ui,
+                                &mut self.desktop_installer,
+                                palette,
+                                &mut deferred_back,
+                                &mut deferred_confirm_setup,
+                            );
+                        }
+                    }
+                });
+        });
+
+        // ── Post-show: handle deferred actions ──────────────────────────────
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        if let Some(rect) = shown_rect {
+            if !maximized {
+                let state = self.desktop_window_state_mut(DesktopWindow::Installer);
+                state.restore_pos = Some([rect.min.x, rect.min.y]);
+                state.restore_size = Some([rect.width(), rect.height()]);
+            }
+            self.maybe_activate_desktop_window_from_click(
+                ctx,
+                DesktopWindow::Installer,
+                rect.contains(ctx.input(|i| i.pointer.interact_pos().unwrap_or_default())),
+            );
+        }
+
+        // Sync open state
+        if !open {
+            self.desktop_installer.open = false;
+        }
+        self.update_desktop_window_state(DesktopWindow::Installer, self.desktop_installer.open);
+
+        // Handle header buttons
+        match header_action {
+            DesktopHeaderAction::Close => self.close_desktop_window(DesktopWindow::Installer),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::Installer, true)
+            }
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(DesktopWindow::Installer, shown_rect)
+            }
+            DesktopHeaderAction::None => {}
+        }
+
+        // Process deferred actions
+        if deferred_back {
+            self.desktop_installer.go_back();
+        }
+        if deferred_search {
+            self.desktop_installer.do_search();
+        }
+        if deferred_load_installed {
+            self.desktop_installer.load_installed();
+        }
+        if deferred_open_runtime_tools {
+            self.desktop_installer.view = DesktopInstallerView::RuntimeTools;
+        }
+        if let Some(pkg) = deferred_open_installed_actions {
+            self.desktop_installer.view = DesktopInstallerView::PackageActions {
+                pkg,
+                installed: true,
+            };
+        }
+        if let Some((pkg, installed)) = deferred_open_search_actions {
+            self.desktop_installer.view = DesktopInstallerView::PackageActions { pkg, installed };
+        }
+        if let Some((pkg, action)) = deferred_confirm_setup {
+            self.desktop_installer.confirm_dialog = Some(DesktopInstallerConfirm { pkg, action });
+        }
+        if deferred_confirm_yes {
+            let event = self.desktop_installer.confirm_action();
+            if let DesktopInstallerEvent::LaunchCommand {
+                argv,
+                status,
+                completion_message,
+            } = event
+            {
+                self.desktop_installer.status = status.clone();
+                self.open_desktop_pty("Program Installer", &argv);
+                if let Some(pty) = self.terminal_pty.as_mut() {
+                    pty.completion_message = completion_message;
+                }
+            }
+        }
+        if deferred_confirm_no {
+            self.desktop_installer.confirm_dialog = None;
+        }
+        if let Some(pkg) = deferred_open_add_to_menu {
+            self.desktop_installer.display_name_input = pkg.clone();
+            self.desktop_installer.view = DesktopInstallerView::AddToMenu { pkg };
+        }
+        if let Some((pkg, target)) = deferred_add_to_menu {
+            self.desktop_installer.add_to_menu(&pkg, target);
+        }
+    }
+
+    // ── Installer sub-views ─────────────────────────────────────────────────
+
+    fn apply_installer_widget_style(
+        ui: &mut egui::Ui,
+        palette: super::retro_ui::RetroPalette,
+    ) {
+        let widgets = &mut ui.visuals_mut().widgets;
+        // Buttons: transparent bg, theme-colored border
+        widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        widgets.inactive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.inactive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        // Hovered
+        widgets.hovered.bg_fill = palette.hovered_bg;
+        widgets.hovered.weak_bg_fill = palette.hovered_bg;
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.hovered.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        // Active/pressed
+        widgets.active.bg_fill = palette.active_bg;
+        widgets.active.weak_bg_fill = palette.active_bg;
+        widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.active.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        // Text edits
+        widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
+        widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
+        // TextEdit background / selection
+        ui.visuals_mut().extreme_bg_color = palette.panel;
+        ui.visuals_mut().selection.bg_fill = palette.selection_bg;
+        ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, palette.fg);
+        // Separator color
+        ui.visuals_mut().widgets.noninteractive.bg_stroke =
+            egui::Stroke::new(1.0, palette.dim);
+        // Override text color for labels/non-interactive
+        ui.visuals_mut().widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, palette.fg);
+    }
+
+    fn draw_installer_home(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        deferred_search: &mut bool,
+        deferred_load_installed: &mut bool,
+        deferred_open_runtime_tools: &mut bool,
+        icons: [&Option<TextureHandle>; 4], // [apps, tools, network, games]
+    ) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("RobCo Program Installer")
+                    .color(palette.fg)
+                    .heading()
+                    .strong()
+                    .underline(),
+            );
+            ui.add_space(16.0);
+
+            // ── Search bar ──────────────────────────────────────────────
+            let search_width = ui.available_width().min(500.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(search_width, 32.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let search_field = ui.add_sized(
+                        [search_width - 80.0, 28.0],
+                        egui::TextEdit::singleline(&mut state.search_query)
+                            .hint_text("Search packages...")
+                            .text_color(palette.fg)
+                            .frame(true),
+                    );
+                    if search_field.lost_focus()
+                        && ui.input(|i| i.key_pressed(Key::Enter))
+                    {
+                        *deferred_search = true;
+                    }
+                    if ui
+                        .button(RichText::new("Search").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_search = true;
+                    }
+                },
+            );
+
+            ui.add_space(24.0);
+
+            // ── Category cards with SVG icons ───────────────────────────
+            let card_size = egui::vec2(130.0, 120.0);
+            let icon_size = 48.0;
+            let categories = [
+                (InstallerCategory::Apps, 0usize),
+                (InstallerCategory::Tools, 1),
+                (InstallerCategory::Network, 2),
+                (InstallerCategory::Games, 3),
+            ];
+
+            ui.horizontal(|ui| {
+                let total_width = categories.len() as f32 * (card_size.x + 16.0) - 16.0;
+                let avail = ui.available_width();
+                if avail > total_width {
+                    ui.add_space((avail - total_width) / 2.0);
+                }
+
+                for (cat, icon_idx) in &categories {
+                    let (resp, painter) = ui.allocate_painter(card_size, egui::Sense::click());
+                    let rect = resp.rect;
+                    // Card border
+                    painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
+                    // Hover highlight
+                    if resp.hovered() {
+                        painter.rect_filled(rect, 0.0, palette.hovered_bg);
+                    }
+                    // SVG icon (tinted to theme color)
+                    if let Some(tex) = icons[*icon_idx] {
+                        let icon_rect = egui::Rect::from_center_size(
+                            rect.center() - egui::vec2(0.0, 14.0),
+                            egui::vec2(icon_size, icon_size),
+                        );
+                        Self::paint_tinted_texture(&painter, tex, icon_rect, palette.fg);
+                    }
+                    // Label
+                    painter.text(
+                        egui::pos2(rect.center().x, rect.bottom() - 18.0),
+                        egui::Align2::CENTER_CENTER,
+                        cat.label(),
+                        egui::FontId::monospace(16.0),
+                        palette.fg,
+                    );
+
+                    if resp.clicked() {
+                        state.search_query = cat.label().to_lowercase();
+                        *deferred_search = true;
+                    }
+                    ui.add_space(16.0);
+                }
+            });
+
+            ui.add_space(24.0);
+
+            // ── Installed apps button ───────────────────────────────────
+            let installed_btn = ui.add(
+                egui::Button::new(
+                    RichText::new("Installed apps")
+                        .color(palette.fg)
+                        .heading(),
+                )
+                .frame(false),
+            );
+            if installed_btn.clicked() {
+                *deferred_load_installed = true;
+            }
+
+            ui.add_space(8.0);
+
+            // ── Runtime tools link ──────────────────────────────────────
+            let runtime_btn = ui.add(
+                egui::Button::new(
+                    RichText::new("Runtime Tools").color(palette.dim),
+                )
+                .frame(false),
+            );
+            if runtime_btn.clicked() {
+                *deferred_open_runtime_tools = true;
+            }
+
+            ui.add_space(8.0);
+
+            // ── Package manager selector ─────────────────────────────────
+            if state.available_pms.len() > 1 {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Package Manager:").color(palette.dim).small(),
+                    );
+                    let current_label = state.pm_label().to_string();
+                    egui::ComboBox::from_id_salt("pm_selector")
+                        .selected_text(
+                            RichText::new(&current_label).color(palette.fg).small(),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (idx, pm) in state.available_pms.clone().iter().enumerate() {
+                                let selected = idx == state.selected_pm_idx;
+                                let text_color = if selected {
+                                    Color32::BLACK
+                                } else {
+                                    palette.fg
+                                };
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        RichText::new(pm.name()).color(text_color),
+                                    )
+                                    .clicked()
+                                {
+                                    state.selected_pm_idx = idx;
+                                }
+                            }
+                        });
+                });
+            } else {
+                ui.label(
+                    RichText::new(format!("Package Manager: {}", state.pm_label()))
+                        .color(palette.dim)
+                        .small(),
+                );
+            }
+        });
+    }
+
+    fn draw_installer_search_results(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        deferred_back: &mut bool,
+        deferred_open_actions: &mut Option<(String, bool)>,
+    ) {
+        // Back button + title
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("< Back").color(palette.fg))
+                .clicked()
+            {
+                *deferred_back = true;
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "Search Results: \"{}\"  ({} found)",
+                    state.search_query,
+                    state.search_results.len()
+                ))
+                .color(palette.fg)
+                .strong(),
+            );
+        });
+        ui.separator();
+
+        // Paginated results
+        let page_size = 20usize;
+        let total = state.search_results.len();
+        let total_pages = total.div_ceil(page_size).max(1);
+        state.search_page = state.search_page.min(total_pages.saturating_sub(1));
+        let start = state.search_page * page_size;
+        let end = (start + page_size).min(total);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for idx in start..end {
+                let result = &state.search_results[idx];
+                ui.horizontal(|ui| {
+                    let status_text = if result.installed {
+                        "[installed]"
+                    } else {
+                        "[get]"
+                    };
+                    let status_color = if result.installed {
+                        palette.dim
+                    } else {
+                        palette.fg
+                    };
+                    ui.label(RichText::new(status_text).color(status_color));
+                    ui.label(RichText::new(&result.pkg).color(palette.fg).strong());
+                    if let Some(ref desc) = result.description {
+                        ui.label(RichText::new(format!("- {desc}")).color(palette.dim));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn_label = if result.installed {
+                            "Actions"
+                        } else {
+                            "Install"
+                        };
+                        if ui
+                            .button(RichText::new(format!("[ {btn_label} ]")).color(palette.fg))
+                            .clicked()
+                        {
+                            *deferred_open_actions =
+                                Some((result.pkg.clone(), result.installed));
+                        }
+                    });
+                });
+                ui.separator();
+            }
+
+            // Pagination controls
+            if total_pages > 1 {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if state.search_page > 0 {
+                        if ui
+                            .button(RichText::new("< Prev").color(palette.fg))
+                            .clicked()
+                        {
+                            state.search_page -= 1;
+                        }
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "Page {}/{}",
+                            state.search_page + 1,
+                            total_pages
+                        ))
+                        .color(palette.dim),
+                    );
+                    if state.search_page + 1 < total_pages {
+                        if ui
+                            .button(RichText::new("Next >").color(palette.fg))
+                            .clicked()
+                        {
+                            state.search_page += 1;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    fn draw_installer_installed(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        deferred_back: &mut bool,
+        deferred_open_actions: &mut Option<String>,
+    ) {
+        // Header with back + filter
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("< Back").color(palette.fg))
+                .clicked()
+            {
+                *deferred_back = true;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Installed Apps").color(palette.fg).strong());
+            ui.add_space(16.0);
+            ui.label(RichText::new("Filter:").color(palette.dim));
+            ui.add_sized(
+                [200.0, 0.0],
+                egui::TextEdit::singleline(&mut state.installed_filter)
+                    .hint_text("type to filter...")
+                    .text_color(palette.fg),
+            );
+        });
+        ui.separator();
+
+        let filtered = state.filtered_installed();
+        let page_size = 30usize;
+        let total = filtered.len();
+        let total_pages = total.div_ceil(page_size).max(1);
+        state.installed_page = state.installed_page.min(total_pages.saturating_sub(1));
+        let start = state.installed_page * page_size;
+        let end = (start + page_size).min(total);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for pkg in &filtered[start..end] {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(pkg).color(palette.fg));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(RichText::new("[ Actions ]").color(palette.fg))
+                            .clicked()
+                        {
+                            *deferred_open_actions = Some(pkg.clone());
+                        }
+                    });
+                });
+                ui.separator();
+            }
+
+            // Pagination
+            if total_pages > 1 {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if state.installed_page > 0 {
+                        if ui
+                            .button(RichText::new("< Prev").color(palette.fg))
+                            .clicked()
+                        {
+                            state.installed_page -= 1;
+                        }
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "Page {}/{}  ({} packages)",
+                            state.installed_page + 1,
+                            total_pages,
+                            total
+                        ))
+                        .color(palette.dim),
+                    );
+                    if state.installed_page + 1 < total_pages {
+                        if ui
+                            .button(RichText::new("Next >").color(palette.fg))
+                            .clicked()
+                        {
+                            state.installed_page += 1;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    fn draw_installer_package_actions(
+        ui: &mut egui::Ui,
+        state: &DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        pkg: &str,
+        installed: bool,
+        deferred_back: &mut bool,
+        deferred_confirm: &mut Option<(String, InstallerPackageAction)>,
+        deferred_open_add_to_menu: &mut Option<String>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("< Back").color(palette.fg))
+                .clicked()
+            {
+                *deferred_back = true;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new(pkg).color(palette.fg).strong().heading());
+        });
+
+        // Description
+        if let Some(desc) = state.package_description_cached(pkg) {
+            ui.add_space(4.0);
+            ui.label(RichText::new(desc).color(palette.dim));
+        }
+
+        ui.separator();
+        ui.add_space(12.0);
+
+        if installed {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(RichText::new("[ Update ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some((pkg.to_string(), InstallerPackageAction::Update));
+                }
+                ui.add_space(8.0);
+                if ui
+                    .button(RichText::new("[ Reinstall ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some((pkg.to_string(), InstallerPackageAction::Reinstall));
+                }
+                ui.add_space(8.0);
+                if ui
+                    .button(RichText::new("[ Uninstall ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some((pkg.to_string(), InstallerPackageAction::Uninstall));
+                }
+                ui.add_space(8.0);
+                if ui
+                    .button(RichText::new("[ Add to Menu ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_open_add_to_menu = Some(pkg.to_string());
+                }
+            });
+        } else {
+            if ui
+                .button(RichText::new("[ Install ]").color(palette.fg))
+                .clicked()
+            {
+                *deferred_confirm =
+                    Some((pkg.to_string(), InstallerPackageAction::Install));
+            }
+        }
+    }
+
+    fn draw_installer_add_to_menu(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        pkg: &str,
+        deferred_back: &mut bool,
+        deferred_add: &mut Option<(String, InstallerMenuTarget)>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("< Back").color(palette.fg))
+                .clicked()
+            {
+                *deferred_back = true;
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!("Add \"{}\" to Menu", pkg))
+                    .color(palette.fg)
+                    .strong(),
+            );
+        });
+        ui.separator();
+        ui.add_space(12.0);
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Display Name:").color(palette.fg));
+            ui.add_sized(
+                [250.0, 0.0],
+                egui::TextEdit::singleline(&mut state.display_name_input)
+                    .hint_text(pkg)
+                    .text_color(palette.fg),
+            );
+        });
+        ui.add_space(16.0);
+
+        ui.label(RichText::new("Choose target menu:").color(palette.fg));
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("[ Applications ]").color(palette.fg))
+                .clicked()
+            {
+                *deferred_add = Some((pkg.to_string(), InstallerMenuTarget::Applications));
+            }
+            ui.add_space(8.0);
+            if ui
+                .button(RichText::new("[ Games ]").color(palette.fg))
+                .clicked()
+            {
+                *deferred_add = Some((pkg.to_string(), InstallerMenuTarget::Games));
+            }
+            ui.add_space(8.0);
+            if ui
+                .button(RichText::new("[ Network ]").color(palette.fg))
+                .clicked()
+            {
+                *deferred_add = Some((pkg.to_string(), InstallerMenuTarget::Network));
+            }
+        });
+    }
+
+    fn draw_installer_runtime_tools(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: super::retro_ui::RetroPalette,
+        deferred_back: &mut bool,
+        deferred_confirm: &mut Option<(String, InstallerPackageAction)>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("< Back").color(palette.fg))
+                .clicked()
+            {
+                *deferred_back = true;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Runtime Tools").color(palette.fg).strong());
+        });
+        ui.separator();
+        ui.add_space(12.0);
+
+        // playsound
+        let playsound_installed = state.runtime_playsound_installed();
+        let ps_status = if playsound_installed {
+            "[installed]"
+        } else {
+            "[not installed]"
+        };
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} Audio Runtime (playsound) — Python audio runtime (pip)",
+                    ps_status
+                ))
+                .color(palette.fg),
+            );
+        });
+        ui.horizontal(|ui| {
+            if playsound_installed {
+                if ui
+                    .button(RichText::new("[ Update ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some(("playsound".to_string(), InstallerPackageAction::Update));
+                }
+                if ui
+                    .button(RichText::new("[ Reinstall ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some(("playsound".to_string(), InstallerPackageAction::Reinstall));
+                }
+                if ui
+                    .button(RichText::new("[ Uninstall ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some(("playsound".to_string(), InstallerPackageAction::Uninstall));
+                }
+            } else {
+                if ui
+                    .button(RichText::new("[ Install ]").color(palette.fg))
+                    .clicked()
+                {
+                    *deferred_confirm =
+                        Some(("playsound".to_string(), InstallerPackageAction::Install));
+                }
+            }
+        });
+
+        // blueutil (macOS only)
+        if cfg!(target_os = "macos") {
+            ui.add_space(12.0);
+            let blueutil_installed = state.runtime_blueutil_installed();
+            let bt_status = if blueutil_installed {
+                "[installed]"
+            } else {
+                "[not installed]"
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} Bluetooth Utility (blueutil) — macOS Bluetooth utility (Homebrew)",
+                        bt_status
+                    ))
+                    .color(palette.fg),
+                );
+            });
+            ui.horizontal(|ui| {
+                if blueutil_installed {
+                    if ui
+                        .button(RichText::new("[ Update ]").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_confirm =
+                            Some(("blueutil".to_string(), InstallerPackageAction::Update));
+                    }
+                    if ui
+                        .button(RichText::new("[ Reinstall ]").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_confirm =
+                            Some(("blueutil".to_string(), InstallerPackageAction::Reinstall));
+                    }
+                    if ui
+                        .button(RichText::new("[ Uninstall ]").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_confirm =
+                            Some(("blueutil".to_string(), InstallerPackageAction::Uninstall));
+                    }
+                } else {
+                    if ui
+                        .button(RichText::new("[ Install ]").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_confirm =
+                            Some(("blueutil".to_string(), InstallerPackageAction::Install));
+                    }
+                }
+            });
+        }
+    }
+
     fn draw_applications(&mut self, ctx: &Context) {
         if !self.applications.open || self.desktop_window_is_minimized(DesktopWindow::Applications) {
             return;
@@ -10313,6 +11814,7 @@ impl RobcoNativeApp {
         let generation = self.desktop_window_generation(DesktopWindow::PtyApp);
         let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let pty_focused = self.desktop_active_window == Some(DesktopWindow::PtyApp);
         let Some(state) = self.terminal_pty.as_mut() else {
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
             return;
@@ -10321,12 +11823,14 @@ impl RobcoNativeApp {
         let mut header_action = DesktopHeaderAction::None;
         let title = state.title.clone();
         let mut event = PtyScreenEvent::None;
+        let min_size = Self::native_pty_window_min_size(state);
         let mut window = egui::Window::new(title.clone())
             .id(Id::new(("native_desktop_pty", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
             .resizable(true)
+            .min_size(min_size)
             .default_pos(default_pos)
             .default_size(default_size);
         if maximized {
@@ -10337,18 +11841,35 @@ impl RobcoNativeApp {
                 .fixed_pos(rect.min)
                 .fixed_size(rect.size());
         } else if let Some((pos, size)) = restore {
-            let size = Self::desktop_clamp_window_size(ctx, size, egui::vec2(640.0, 420.0));
+            let size = Self::desktop_clamp_window_size(ctx, size, min_size);
             let pos = Self::desktop_clamp_window_pos(ctx, pos, size);
             window = window.current_pos(pos).default_size(size);
         }
         let shown = window.show(ctx, |ui| {
-                Self::apply_settings_control_style(ui);
+                // NOTE: do NOT call apply_settings_control_style here — it changes
+                // extreme_bg_color and margins, which destabilizes available_size()
+                // causing resize oscillation (constant SIGWINCH) for ncurses apps.
                 header_action = Self::draw_desktop_window_header(ui, &title, maximized);
                 let available = ui.available_size();
-                let cols = ((available.x / 12.0).floor() as usize).clamp(40, 220);
-                let rows = ((available.y / 27.0).floor() as usize).clamp(20, 60);
+                let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
+                let rows_floor = state
+                    .desktop_rows_floor
+                    .unwrap_or(20)
+                    .saturating_add(1) as usize;
+                let (cols, rows) = if state.desktop_live_resize {
+                    (
+                        ((available.x / FIXED_PTY_CELL_W).floor() as usize)
+                            .max(cols_floor)
+                            .clamp(40, 220),
+                        ((available.y / FIXED_PTY_CELL_H).floor() as usize)
+                            .max(rows_floor)
+                            .clamp(20, 60),
+                    )
+                } else {
+                    (cols_floor, rows_floor)
+                };
                 ui.allocate_ui_with_layout(available, Layout::top_down(egui::Align::Min), |ui| {
-                    event = draw_embedded_pty_in_ui(ui, ctx, state, cols, rows);
+                    event = draw_embedded_pty_in_ui_focused(ui, ctx, state, cols, rows, pty_focused);
                 });
             });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
@@ -10441,6 +11962,36 @@ impl eframe::App for RobcoNativeApp {
     }
 
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Process PTY keyboard input at the very top of the frame, before
+        // any egui widgets render.  Widgets (TextEdit, menus, buttons) can
+        // consume Event::Key and Event::Text from the events list during
+        // their show() calls, leaving the PTY with zero events if it runs
+        // after them.
+        let mut early_pty_close = false;
+        if self.desktop_mode_open && self.desktop_active_window == Some(DesktopWindow::PtyApp) {
+            if let Some(state) = self.terminal_pty.as_mut() {
+                if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
+                    early_pty_close = true;
+                }
+                if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
+                    state.show_perf_overlay = !state.show_perf_overlay;
+                }
+                handle_pty_input(ctx, &mut state.session);
+                // Clear keyboard events so the later draw pass doesn't
+                // double-process them.
+                ctx.input_mut(|i| {
+                    i.events.retain(|e| !matches!(e,
+                        egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
+                    ));
+                });
+            }
+        }
+        if early_pty_close {
+            if let Some(mut pty) = self.terminal_pty.take() {
+                pty.session.terminate();
+            }
+            self.update_desktop_window_state(DesktopWindow::PtyApp, false);
+        }
         apply_native_appearance(ctx);
 
         if let Some(flash) = &self.terminal_flash {
@@ -10484,7 +12035,7 @@ impl eframe::App for RobcoNativeApp {
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
                 let layout = self.terminal_layout();
-                self.draw_terminal_footer_spacer(ctx);
+                self.draw_terminal_status_bar(ctx);
                 let show_hacking_wait = self.session.is_none()
                     && matches!(self.login_mode, LoginScreenMode::Hacking)
                     && matches!(&flash.action, FlashAction::FinishLogin { .. });
@@ -10520,12 +12071,12 @@ impl eframe::App for RobcoNativeApp {
         }
 
         if self.session.is_none() {
-            self.draw_terminal_footer_spacer(ctx);
+            self.draw_terminal_status_bar(ctx);
             self.draw_login(ctx);
             return;
         }
 
-        if self.desktop_mode_open {
+        if !self.desktop_mode_open {
             self.capture_session_switch_shortcuts(ctx);
             if session::has_switch_request() {
                 self.apply_pending_session_switch();
@@ -10553,7 +12104,7 @@ impl eframe::App for RobcoNativeApp {
             self.draw_desktop_taskbar(ctx);
             self.draw_desktop(ctx);
         } else {
-            self.draw_terminal_footer_spacer(ctx);
+            self.draw_terminal_status_bar(ctx);
             if self.suppress_next_menu_submit {
                 ctx.input_mut(|i| {
                     i.consume_key(egui::Modifiers::NONE, Key::Enter);
@@ -10584,6 +12135,7 @@ impl eframe::App for RobcoNativeApp {
         if self.desktop_mode_open {
             self.draw_desktop_windows(ctx);
             self.draw_start_panel(ctx);
+            self.draw_spotlight(ctx);
         } else {
             self.draw_file_manager(ctx);
             self.draw_editor(ctx);

@@ -1,0 +1,34 @@
+{
+  "frames": {
+    "Spark": {
+      "x": 0,
+      "y": 0,
+      "w": 16,
+      "h": 16,
+      "tint_role": "Enemy"
+    },
+    "Explosion1": {
+      "x": 16,
+      "y": 0,
+      "w": 16,
+      "h": 16,
+      "tint_role": "Enemy"
+    },
+    "Explosion2": {
+      "x": 32,
+      "y": 0,
+      "w": 16,
+      "h": 16,
+      "tint_role": "Enemy"
+    }
+  },
+  "animations": {
+    "Explosion": {
+      "frames": [
+        "Explosion1",
+        "Explosion2"
+      ],
+      "tick": 5
+    }
+  }
+}

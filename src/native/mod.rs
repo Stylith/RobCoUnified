@@ -2,6 +2,7 @@ mod about_screen;
 pub mod app;
 mod connections_screen;
 mod data;
+mod donkey_kong;
 mod default_apps_screen;
 mod document_browser;
 mod edit_menus_screen;

@@ -4,12 +4,10 @@
 //! Boot key clips are preprocessed to remove leading dead-space and keep
 //! a short click window, which reduces random perceived gaps.
 
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
@@ -18,7 +16,7 @@ use crate::config::get_settings;
 
 static STOPPED: AtomicBool = AtomicBool::new(false);
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
-const MAX_CONCURRENT: usize = 6;
+const MAX_CONCURRENT: usize = 10;
 
 static LAST_NAVIGATE_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_NAV_REPEAT_MS: AtomicU64 = AtomicU64::new(0);
@@ -26,33 +24,16 @@ static LAST_KEYPRESS_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_BOOT_KEY_MS: AtomicU64 = AtomicU64::new(0);
 static BOOT_SEQ_IDX: AtomicUsize = AtomicUsize::new(0);
 
-const SOUND_TEMP_DISABLED: bool = true;
+const SOUND_TEMP_DISABLED: bool = false;
 
-const NAVIGATE_REPEAT_GAP_MS: u64 = 210;
-const NAVIGATE_HOLD_WINDOW_MS: u64 = 180;
+const NAVIGATE_REPEAT_GAP_MS: u64 = 80;
+const NAVIGATE_HOLD_WINDOW_MS: u64 = 120;
 const KEYPRESS_GAP_MS: u64 = 16;
 const BOOT_KEY_GAP_MS: u64 = 0;
 
-struct PythonHelper {
-    child: Child,
-    stdin: ChildStdin,
-}
-
-static PY_HELPER: OnceLock<Mutex<Option<PythonHelper>>> = OnceLock::new();
-static PY_HELPER_READY: AtomicBool = AtomicBool::new(false);
-static PY_HELPER_USABLE: AtomicBool = AtomicBool::new(false);
-static PY_HAS_PLAYSOUND: OnceLock<bool> = OnceLock::new();
 
 pub fn stop_audio() {
     STOPPED.store(true, Ordering::SeqCst);
-    if let Some(lock) = PY_HELPER.get() {
-        if let Ok(mut guard) = lock.lock() {
-            if let Some(mut helper) = guard.take() {
-                let _ = helper.child.kill();
-                let _ = helper.child.wait();
-            }
-        }
-    }
 }
 
 struct SoundPaths {
@@ -207,11 +188,26 @@ fn run_spawn(path: PathBuf) {
     let child = Command::new("afplay").arg(&path).spawn();
 
     #[cfg(target_os = "linux")]
-    let child = Command::new("aplay")
-        .arg("-q")
+    let child = Command::new("pw-play")
         .arg(&path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .or_else(|_| Command::new("paplay").arg(&path).spawn());
+        .or_else(|_| {
+            Command::new("paplay")
+                .arg(&path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+        .or_else(|_| {
+            Command::new("aplay")
+                .arg("-q")
+                .arg(&path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        });
 
     #[cfg(target_os = "windows")]
     let child = {
@@ -244,193 +240,18 @@ fn run_spawn(path: PathBuf) {
     }
 }
 
-fn helper_lock() -> &'static Mutex<Option<PythonHelper>> {
-    PY_HELPER.get_or_init(|| Mutex::new(None))
-}
 
-fn python_has_playsound() -> bool {
-    *PY_HAS_PLAYSOUND.get_or_init(|| {
-        Command::new("python3")
-            .args(["-c", "import playsound"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
-fn ensure_python_helper() {
-    let Ok(mut guard) = helper_lock().lock() else {
-        return;
-    };
-    if guard.is_some() {
-        return;
-    }
-
-    let script = r#"import sys
-try:
-    from playsound import playsound
-    backend_ok = True
-except Exception:
-    playsound = None
-    backend_ok = False
-
-if backend_ok:
-    sys.stdout.write("__ROBCOS_READY__\n")
-else:
-    sys.stdout.write("__ROBCOS_NOBACKEND__\n")
-sys.stdout.flush()
-
-for line in sys.stdin:
-    path = line.rstrip("\r\n")
-    if not path or not backend_ok:
-        continue
-    try:
-        playsound(path, False)
-    except TypeError:
-        try:
-            playsound(path)
-        except Exception:
-            pass
-    except Exception:
-        pass
-"#;
-
-    PY_HELPER_READY.store(false, Ordering::Release);
-    PY_HELPER_USABLE.store(false, Ordering::Release);
-
-    let spawn = Command::new("python3")
-        .args(["-u", "-c", script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-
-    let Ok(mut child) = spawn else {
-        return;
-    };
-    let Some(stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return;
-    };
-
-    if let Some(stdout) = child.stdout.take() {
-        std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_ok() {
-                let msg = line.trim();
-                if msg == "__ROBCOS_READY__" {
-                    PY_HELPER_USABLE.store(true, Ordering::Release);
-                }
-                if msg == "__ROBCOS_READY__" || msg == "__ROBCOS_NOBACKEND__" {
-                    PY_HELPER_READY.store(true, Ordering::Release);
-                }
-            }
-        });
-    }
-
-    *guard = Some(PythonHelper { child, stdin });
-}
-
-fn play_via_python(path: &std::path::Path) -> bool {
-    ensure_python_helper();
-    if !PY_HELPER_READY.load(Ordering::Acquire) || !PY_HELPER_USABLE.load(Ordering::Acquire) {
-        return false;
-    }
-    let Ok(mut guard) = helper_lock().lock() else {
-        return false;
-    };
-    let Some(helper) = guard.as_mut() else {
-        return false;
-    };
-
-    let line = format!("{}\n", path.display());
-    if helper.stdin.write_all(line.as_bytes()).is_ok() && helper.stdin.flush().is_ok() {
-        return true;
-    }
-
-    // If helper died, drop it and fall back to native spawn for this event.
-    if let Some(mut dead) = guard.take() {
-        let _ = dead.child.kill();
-        let _ = dead.child.wait();
-    }
-    false
-}
-
-fn play_via_python_oneshot(path: &std::path::Path) -> bool {
-    let script = r#"import sys
-try:
-    from playsound import playsound
-except Exception:
-    sys.exit(1)
-if len(sys.argv) < 2:
-    sys.exit(1)
-target = sys.argv[1]
-try:
-    playsound(target)
-except Exception:
-    pass
-"#;
-    Command::new("python3")
-        .args(["-u", "-c", script, path.to_string_lossy().as_ref()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| true)
-        .unwrap_or(false)
-}
-
-fn has_helper_process() -> bool {
-    helper_lock().lock().map(|g| g.is_some()).unwrap_or(false)
-}
-
-pub fn wait_boot_audio_ready(timeout_ms: u64) {
+pub fn wait_boot_audio_ready(_timeout_ms: u64) {
     if !sound_enabled() {
         return;
     }
-
+    // Warm up paths so temp files are written before first play call.
     let _ = get_paths();
-    ensure_python_helper();
-
-    if !has_helper_process() {
-        // Fallback to previous behavior when python helper is unavailable.
-        std::thread::sleep(Duration::from_millis(180));
-        return;
-    }
-
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_millis(timeout_ms) {
-        if PY_HELPER_READY.load(Ordering::Acquire) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 fn play_nonblocking(path: PathBuf) {
     if STOPPED.load(Ordering::SeqCst) {
         return;
-    }
-
-    if play_via_python(&path) {
-        return;
-    }
-
-    if python_has_playsound() {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(120) {
-            if play_via_python(&path) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        if play_via_python_oneshot(&path) {
-            return;
-        }
     }
 
     // Soft cap to avoid runaway process spawning on held keys.
@@ -568,12 +389,11 @@ pub fn play_error() {
 }
 
 pub fn play_startup() {
-    // Warm up sound paths + helper once so first audible event has no cold-start delay.
+    // Warm up sound paths so first audible event has no cold-start delay.
     if !sound_enabled() {
         return;
     }
     let _ = get_paths();
-    ensure_python_helper();
 }
 
 #[allow(dead_code)]

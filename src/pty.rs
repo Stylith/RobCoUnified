@@ -22,7 +22,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -548,6 +548,14 @@ pub struct PtySession {
     /// Last observed output epoch on UI/render side.
     #[allow(dead_code)]
     last_seen_output_epoch: u64,
+    /// Committed display buffer — updated by reader thread after each
+    /// coalesced I/O batch.  The renderer reads from this, never from
+    /// the parser directly.
+    display: Arc<Mutex<CommittedFrame>>,
+    /// Shared PTY dimensions so the reader thread can snapshot at the
+    /// correct size.  Updated by resize().
+    shared_cols: Arc<AtomicU16>,
+    shared_rows: Arc<AtomicU16>,
 }
 
 #[allow(dead_code)]
@@ -578,6 +586,113 @@ pub struct PtyStyledSnapshot {
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub cursor_hidden: bool,
+}
+
+/// A complete terminal frame committed by the reader thread after processing
+/// a coalesced I/O batch.  The renderer reads exclusively from this buffer,
+/// never touching the vt100 parser directly, which eliminates race conditions
+/// that cause mid-update blank/torn frames in ncurses apps.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct CommittedFrame {
+    pub styled: PtyStyledSnapshot,
+    pub plain: PtyTextSnapshot,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl CommittedFrame {
+    fn blank(cols: u16, rows: u16) -> Self {
+        let default_cell = PtyStyledCell {
+            ch: ' ',
+            fg: Color::Reset,
+            bg: Color::Black,
+            bold: false,
+            italic: false,
+            underline: false,
+            reversed: false,
+        };
+        Self {
+            styled: PtyStyledSnapshot {
+                cells: vec![vec![default_cell; cols as usize]; rows as usize],
+                cursor_row: 0,
+                cursor_col: 0,
+                cursor_hidden: true,
+            },
+            plain: PtyTextSnapshot {
+                lines: vec![String::new(); rows as usize],
+                cursor_row: 0,
+                cursor_col: 0,
+                cursor_hidden: true,
+            },
+            cols,
+            rows,
+        }
+    }
+}
+
+/// Build a styled cell snapshot from a locked parser.
+/// Called by the reader thread while holding the parser lock — guaranteed
+/// to see a consistent post-batch state.
+fn build_styled_snapshot(
+    parser: &vt100::Parser,
+    cols: u16,
+    rows: u16,
+    acs_mode: AcsGlyphMode,
+    color_mode: PtyColorMode,
+) -> PtyStyledSnapshot {
+    let screen = parser.screen();
+    let mut lines = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut out = Vec::with_capacity(cols as usize);
+        for col in 0..cols {
+            let cell = screen.cell(row, col);
+            let ch = cell
+                .and_then(|c| c.contents().chars().next())
+                .unwrap_or(' ');
+            let ch = if matches!(acs_mode, AcsGlyphMode::Unicode) {
+                smooth_ascii_border_char(screen, row, col, ch)
+            } else {
+                ch
+            };
+            let style = cell
+                .map(|c| vt100_style(c, color_mode))
+                .unwrap_or_else(|| vt100_default_style(color_mode));
+            out.push(PtyStyledCell {
+                ch,
+                fg: style.fg.unwrap_or(crate::config::current_theme_color()),
+                bg: style.bg.unwrap_or(Color::Black),
+                bold: style.add_modifier.contains(Modifier::BOLD),
+                italic: style.add_modifier.contains(Modifier::ITALIC),
+                underline: style.add_modifier.contains(Modifier::UNDERLINED),
+                reversed: style.add_modifier.contains(Modifier::REVERSED),
+            });
+        }
+        lines.push(out);
+    }
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    PtyStyledSnapshot {
+        cells: lines,
+        cursor_row: cursor_row.min(rows.saturating_sub(1)),
+        cursor_col: cursor_col.min(cols.saturating_sub(1)),
+        cursor_hidden: screen.hide_cursor(),
+    }
+}
+
+/// Build a plain text snapshot from a locked parser.
+fn build_plain_snapshot(parser: &vt100::Parser, cols: u16, rows: u16) -> PtyTextSnapshot {
+    let screen = parser.screen();
+    let mut lines: Vec<String> = screen.rows(0, cols).take(rows as usize).collect();
+    while lines.len() < rows as usize {
+        lines.push(String::new());
+    }
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    PtyTextSnapshot {
+        lines,
+        cursor_row: cursor_row.min(rows.saturating_sub(1)),
+        cursor_col: cursor_col.min(cols.saturating_sub(1)),
+        cursor_hidden: screen.hide_cursor(),
+    }
 }
 
 impl PtySession {
@@ -612,7 +727,11 @@ impl PtySession {
             cmd.env("NCURSES_NO_UTF8_ACS", "1");
         }
         if cmd.get_env("TERM").is_none() {
-            cmd.env("TERM", "xterm-256color");
+            // Use xterm (not xterm-256color) — our vt100 parser + custom
+            // renderer may not faithfully support every xterm-256color
+            // capability.  ncurses apps look up terminfo for TERM and will
+            // use simpler, more compatible escape sequences with "xterm".
+            cmd.env("TERM", "xterm");
         }
         let render_mode = match options.force_render_mode {
             Some(true) => PtyRenderMode::Plain,
@@ -625,32 +744,108 @@ impl PtySession {
         let writer = pair.master.take_writer()?;
         let reader = pair.master.try_clone_reader()?;
 
+        // Grab the master fd for poll()-based coalescing in the reader thread.
+        // The reader is a dup of this fd so polling it tells us whether the
+        // reader has more data queued.
+        #[cfg(unix)]
+        let poll_fd = pair.master.as_raw_fd().unwrap_or(-1);
+
         // vt100 parser — shared with reader thread
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let parser_clone = Arc::clone(&parser);
         let output_epoch = Arc::new(AtomicU64::new(0));
         let output_epoch_clone = Arc::clone(&output_epoch);
 
-        // Reader thread: pump PTY output into the vt100 parser continuously
+        // Committed display buffer — the reader thread builds snapshots
+        // after each coalesced batch and commits here.
+        let display = Arc::new(Mutex::new(CommittedFrame::blank(cols, rows)));
+        let display_clone = Arc::clone(&display);
+        let shared_cols = Arc::new(AtomicU16::new(cols));
+        let shared_rows = Arc::new(AtomicU16::new(rows));
+        let reader_cols = Arc::clone(&shared_cols);
+        let reader_rows = Arc::clone(&shared_rows);
+        let reader_acs_mode = acs_mode;
+        let reader_color_mode = color_mode;
+
+        // Reader thread: pump PTY output into the vt100 parser continuously.
+        // Uses poll()-based I/O coalescing to prevent mid-frame tearing from
+        // ncurses apps that send "clear screen" + "draw content" as separate
+        // write() calls.  After the first blocking read returns data, we poll
+        // to check if more bytes are queued and read them too, so the whole
+        // update is parsed as a single batch.
         std::thread::Builder::new()
             .name("robcos-pty-reader".into())
             .spawn(move || {
                 let mut reader = reader;
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; 16384];
                 let mut dec_special = DecSpecialGraphics {
                     glyph_mode: acs_mode,
                     ..DecSpecialGraphics::default()
                 };
+
                 loop {
+                    // Phase 1: blocking read — wait for first bytes
                     match std::io::Read::read(&mut reader, &mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            let bytes = dec_special.process(&buf[..n]);
-                            if bytes.is_empty() {
+                            let mut all_bytes = dec_special.process(&buf[..n]);
+
+                            // Phase 2: poll + read loop — coalesce any queued data
+                            // so "clear + redraw" arrives as one parser batch.
+                            #[cfg(unix)]
+                            if poll_fd >= 0 {
+                                loop {
+                                    let mut pfd = libc::pollfd {
+                                        fd: poll_fd,
+                                        events: libc::POLLIN,
+                                        revents: 0,
+                                    };
+                                    // 1ms timeout gives ncurses apps time to
+                                    // flush their full clear+redraw sequence
+                                    // before we finalize the batch.
+                                    let ready = unsafe {
+                                        libc::poll(&mut pfd as *mut _, 1, 1)
+                                    };
+                                    if ready > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                                        match std::io::Read::read(&mut reader, &mut buf) {
+                                            Ok(0) | Err(_) => break,
+                                            Ok(extra_n) => {
+                                                let extra = dec_special.process(&buf[..extra_n]);
+                                                all_bytes.extend_from_slice(&extra);
+                                            }
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if all_bytes.is_empty() {
                                 continue;
                             }
                             if let Ok(mut p) = parser_clone.lock() {
-                                p.process(&bytes);
+                                p.process(&all_bytes);
+                                // Build display frame while holding the parser lock.
+                                // This guarantees the snapshot is consistent — taken
+                                // after the full coalesced batch has been processed.
+                                let snap_cols = reader_cols.load(Ordering::Relaxed);
+                                let snap_rows = reader_rows.load(Ordering::Relaxed);
+                                let frame = CommittedFrame {
+                                    styled: build_styled_snapshot(
+                                        &p,
+                                        snap_cols,
+                                        snap_rows,
+                                        reader_acs_mode,
+                                        reader_color_mode,
+                                    ),
+                                    plain: build_plain_snapshot(&p, snap_cols, snap_rows),
+                                    cols: snap_cols,
+                                    rows: snap_rows,
+                                };
+                                drop(p); // release parser lock before display lock
+                                if let Ok(mut d) = display_clone.lock() {
+                                    *d = frame;
+                                }
                                 output_epoch_clone.fetch_add(1, Ordering::Relaxed);
                             }
                         }
@@ -671,12 +866,16 @@ impl PtySession {
             master: pair.master,
             output_epoch,
             last_seen_output_epoch: 0,
+            display,
+            shared_cols,
+            shared_rows,
         })
     }
 
     /// Send raw bytes to the child's stdin (keyboard input)
     pub fn write(&mut self, data: &[u8]) {
         let _ = self.writer.write_all(data);
+        let _ = self.writer.flush();
     }
 
     /// Translate a terminal key event and send it to the PTY child.
@@ -741,13 +940,17 @@ impl PtySession {
             .unwrap_or(false)
     }
 
-    /// Resize the PTY and notify the child via SIGWINCH
+    /// Resize the PTY and notify the child via SIGWINCH.
+    /// Also updates shared dimensions so the reader thread's next
+    /// committed frame uses the new size.
     pub fn resize(&mut self, cols: u16, rows: u16) {
         if cols == self.cols && rows == self.rows {
             return;
         }
         self.cols = cols;
         self.rows = rows;
+        self.shared_cols.store(cols, Ordering::Relaxed);
+        self.shared_rows.store(rows, Ordering::Relaxed);
         let _ = self.master.resize(PtySize {
             rows,
             cols,
@@ -797,6 +1000,15 @@ impl PtySession {
     #[allow(dead_code)]
     pub fn prefers_plain_render(&self) -> bool {
         matches!(self.render_mode, PtyRenderMode::Plain)
+    }
+
+    /// Get the latest committed display frame.
+    /// This is the primary API for renderers — it returns a snapshot that
+    /// was built by the reader thread after a complete coalesced I/O batch,
+    /// so it's guaranteed to be in a consistent (non-mid-update) state.
+    #[allow(dead_code)]
+    pub fn committed_frame(&self) -> CommittedFrame {
+        self.display.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Snapshot the current screen as plain text for non-ratatui renderers.

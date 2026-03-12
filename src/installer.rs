@@ -18,6 +18,7 @@ enum PackageManager {
     Brew,
     Apt,
     Dnf,
+    Yay,
     Pacman,
     Zypper,
 }
@@ -29,6 +30,7 @@ impl PackageManager {
             ("apt", PackageManager::Apt),
             ("apt-get", PackageManager::Apt),
             ("dnf", PackageManager::Dnf),
+            ("yay", PackageManager::Yay),
             ("pacman", PackageManager::Pacman),
             ("zypper", PackageManager::Zypper),
         ];
@@ -45,6 +47,7 @@ impl PackageManager {
             PackageManager::Brew => "brew",
             PackageManager::Apt => "apt",
             PackageManager::Dnf => "dnf",
+            PackageManager::Yay => "yay",
             PackageManager::Pacman => "pacman",
             PackageManager::Zypper => "zypper",
         }
@@ -65,6 +68,12 @@ impl PackageManager {
                 "dnf".into(),
                 "install".into(),
                 "-y".into(),
+                pkg.into(),
+            ],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-S".into(),
+                "--noconfirm".into(),
                 pkg.into(),
             ],
             PackageManager::Pacman => vec![
@@ -101,6 +110,12 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-R".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -135,7 +150,8 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-U".into(), pkg.into()],
+            PackageManager::Yay => vec!["yay".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
+            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Zypper => vec![
                 "sudo".into(),
                 "zypper".into(),
@@ -154,12 +170,13 @@ impl PackageManager {
                 .output()
                 .ok(),
             PackageManager::Dnf => Command::new("dnf").args(["search", query]).output().ok(),
+            PackageManager::Yay => Command::new("yay").args(["-Ss", query]).output().ok(),
             PackageManager::Pacman => Command::new("pacman").args(["-Ss", query]).output().ok(),
             PackageManager::Zypper => Command::new("zypper").args(["se", query]).output().ok(),
         }
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-        if matches!(self, PackageManager::Pacman) {
+        if matches!(self, PackageManager::Pacman | PackageManager::Yay) {
             let lines: Vec<&str> = out.lines().collect();
             let mut results = Vec::new();
             let mut idx = 0usize;
@@ -235,6 +252,7 @@ impl PackageManager {
             PackageManager::Brew => ("brew", &["list"]),
             PackageManager::Apt => ("apt", &["list", "--installed"]),
             PackageManager::Dnf => ("dnf", &["list", "installed"]),
+            PackageManager::Yay => ("yay", &["-Q"]),
             PackageManager::Pacman => ("pacman", &["-Q"]),
             PackageManager::Zypper => ("zypper", &["se", "--installed-only"]),
         };
@@ -300,6 +318,11 @@ impl PackageManager {
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Yay => Command::new("yay")
+                .args(["-Si", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
             PackageManager::Pacman => Command::new("pacman")
                 .args(["-Si", pkg])
                 .output()
@@ -329,7 +352,7 @@ impl PackageManager {
                     }
                 })
                 .unwrap_or_default(),
-            PackageManager::Pacman => output
+            PackageManager::Yay | PackageManager::Pacman => output
                 .lines()
                 .find_map(|line| {
                     if line.trim_start().starts_with("Description") {

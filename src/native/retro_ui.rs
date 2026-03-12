@@ -4,6 +4,9 @@ use eframe::egui::{
 };
 use ratatui::style::Color;
 
+pub const FIXED_PTY_CELL_W: f32 = 11.0;
+pub const FIXED_PTY_CELL_H: f32 = 22.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct RetroPalette {
     pub fg: Color32,
@@ -87,6 +90,39 @@ impl RetroScreen {
         // Terminal sizing is driven by the caller-provided grid (cols/rows).
         // Keeping glyph sizing grid-relative avoids double-scaling artifacts.
         let target_font = (cell_h * 0.80).max(8.0);
+        let height_limit = (cell_h - 3.0).max(8.0);
+        let width_limit = ((cell_w - 0.5).max(7.0) / 0.47).max(8.0);
+        let font_size = (target_font.min(height_limit.min(width_limit))).max(8.0);
+        let font_size = (font_size * pixels_per_point).round() / pixels_per_point;
+        (
+            Self {
+                rect,
+                cols,
+                cell: egui::vec2(cell_w, cell_h),
+                font: FontId::monospace(font_size),
+                pixels_per_point,
+            },
+            response,
+        )
+    }
+
+    pub fn new_fixed_cell_sized(
+        ui: &mut Ui,
+        cols: usize,
+        rows: usize,
+        desired: Vec2,
+        cell_w: f32,
+        cell_h: f32,
+    ) -> (Self, Response) {
+        let (outer_rect, response) = ui.allocate_exact_size(desired, Sense::hover());
+        let pixels_per_point = ui.ctx().pixels_per_point().max(1.0);
+        let grid_w = (cols.max(1) as f32 * cell_w).min(outer_rect.width());
+        let grid_h = (rows.max(1) as f32 * cell_h).min(outer_rect.height());
+        let rect = Rect::from_min_size(
+            outer_rect.min,
+            egui::vec2(grid_w.max(cell_w), grid_h.max(cell_h)),
+        );
+        let target_font = (cell_h * 0.90).max(8.0);
         let height_limit = (cell_h - 3.0).max(8.0);
         let width_limit = ((cell_w - 1.0).max(7.0) / 0.53).max(8.0);
         let font_size = (target_font.min(height_limit.min(width_limit))).max(8.0);

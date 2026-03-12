@@ -1,0 +1,1 @@
+Codex task: Port KendraTam8 DonkeyKong Pygame project to an embeddable Rust library using macroquad, themed monochrome sprites, and centralized sprite registry.

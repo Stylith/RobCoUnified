@@ -115,37 +115,45 @@ pub enum InstallerEvent {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum PackageManager {
+pub(crate) enum PackageManager {
     Brew,
     Apt,
     Dnf,
+    Yay,
     Pacman,
     Zypper,
 }
 
 impl PackageManager {
     fn detect() -> Option<Self> {
+        Self::detect_all().into_iter().next()
+    }
+
+    pub(crate) fn detect_all() -> Vec<Self> {
         let pms: &[(&str, PackageManager)] = &[
             ("brew", PackageManager::Brew),
             ("apt", PackageManager::Apt),
-            ("apt-get", PackageManager::Apt),
             ("dnf", PackageManager::Dnf),
+            ("yay", PackageManager::Yay),
             ("pacman", PackageManager::Pacman),
             ("zypper", PackageManager::Zypper),
         ];
+        let mut found = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for (bin, pm) in pms {
-            if which(bin) {
-                return Some(*pm);
+            if which(bin) && seen.insert(std::mem::discriminant(pm)) {
+                found.push(*pm);
             }
         }
-        None
+        found
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             PackageManager::Brew => "brew",
             PackageManager::Apt => "apt",
             PackageManager::Dnf => "dnf",
+            PackageManager::Yay => "yay",
             PackageManager::Pacman => "pacman",
             PackageManager::Zypper => "zypper",
         }
@@ -166,6 +174,12 @@ impl PackageManager {
                 "dnf".into(),
                 "install".into(),
                 "-y".into(),
+                pkg.into(),
+            ],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-S".into(),
+                "--noconfirm".into(),
                 pkg.into(),
             ],
             PackageManager::Pacman => vec![
@@ -202,6 +216,12 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-R".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -236,7 +256,8 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-U".into(), pkg.into()],
+            PackageManager::Yay => vec!["yay".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
+            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Zypper => vec![
                 "sudo".into(),
                 "zypper".into(),
@@ -265,6 +286,12 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-S".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -291,13 +318,14 @@ impl PackageManager {
                 .output()
                 .ok(),
             PackageManager::Dnf => Command::new("dnf").args(["search", query]).output().ok(),
+            PackageManager::Yay => Command::new("yay").args(["-Ss", query]).output().ok(),
             PackageManager::Pacman => Command::new("pacman").args(["-Ss", query]).output().ok(),
             PackageManager::Zypper => Command::new("zypper").args(["se", query]).output().ok(),
         }
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
         let installed: HashSet<String> = self.list_installed().into_iter().collect();
-        if matches!(self, PackageManager::Pacman) {
+        if matches!(self, PackageManager::Pacman | PackageManager::Yay) {
             let lines: Vec<&str> = out.lines().collect();
             let mut results = Vec::new();
             let mut idx = 0usize;
@@ -351,7 +379,7 @@ fn search_pkg_name(pm: PackageManager, line: &str) -> Option<String> {
     if line.is_empty() || line.starts_with('=') || line.starts_with("warning:") {
         return None;
     }
-    if matches!(pm, PackageManager::Pacman) && line.starts_with(' ') {
+    if matches!(pm, PackageManager::Pacman | PackageManager::Yay) && line.starts_with(' ') {
         // pacman descriptions are on indented lines; package header is non-indented.
         return None;
     }
@@ -400,6 +428,7 @@ impl PackageManager {
             PackageManager::Brew => ("brew", &["list"]),
             PackageManager::Apt => ("apt", &["list", "--installed"]),
             PackageManager::Dnf => ("dnf", &["list", "installed"]),
+            PackageManager::Yay => ("yay", &["-Q"]),
             PackageManager::Pacman => ("pacman", &["-Q"]),
             PackageManager::Zypper => ("zypper", &["se", "--installed-only"]),
         };
@@ -465,6 +494,11 @@ impl PackageManager {
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
+            PackageManager::Yay => Command::new("yay")
+                .args(["-Si", pkg])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
             PackageManager::Pacman => Command::new("pacman")
                 .args(["-Si", pkg])
                 .output()
@@ -494,7 +528,7 @@ impl PackageManager {
                     }
                 })
                 .unwrap_or_default(),
-            PackageManager::Pacman => output
+            PackageManager::Yay | PackageManager::Pacman => output
                 .lines()
                 .find_map(|line| {
                     if line.trim_start().starts_with("Description") {
@@ -1746,6 +1780,361 @@ pub fn add_package_to_menu(
         pkg: pkg.to_string(),
     };
     InstallerEvent::Status("Added to menu.".to_string())
+}
+
+// ─── Desktop Installer GUI ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopInstallerView {
+    Home,
+    SearchResults,
+    Installed,
+    PackageActions { pkg: String, installed: bool },
+    AddToMenu { pkg: String },
+    RuntimeTools,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallerCategory {
+    Apps,
+    Tools,
+    Network,
+    Games,
+}
+
+impl InstallerCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Apps => "Apps",
+            Self::Tools => "Tools",
+            Self::Network => "Network",
+            Self::Games => "Games",
+        }
+    }
+}
+
+pub struct DesktopInstallerConfirm {
+    pub pkg: String,
+    pub action: InstallerPackageAction,
+}
+
+pub enum DesktopInstallerEvent {
+    None,
+    LaunchCommand {
+        argv: Vec<String>,
+        status: String,
+        completion_message: Option<String>,
+    },
+}
+
+pub struct DesktopInstallerState {
+    pub open: bool,
+    pub view: DesktopInstallerView,
+    pub search_query: String,
+    pub search_results: Vec<SearchResult>,
+    pub installed_packages: Vec<String>,
+    pub installed_filter: String,
+    pub installed_page: usize,
+    pub search_page: usize,
+    pub status: String,
+    pub available_pms: Vec<PackageManager>,
+    pub selected_pm_idx: usize,
+    package_descriptions: HashMap<String, Option<String>>,
+    runtime_playsound_installed: Option<bool>,
+    runtime_blueutil_installed: Option<bool>,
+    pub confirm_dialog: Option<DesktopInstallerConfirm>,
+    pub display_name_input: String,
+}
+
+impl Default for DesktopInstallerState {
+    fn default() -> Self {
+        let available = PackageManager::detect_all();
+        Self {
+            open: false,
+            view: DesktopInstallerView::Home,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            installed_packages: Vec::new(),
+            installed_filter: String::new(),
+            installed_page: 0,
+            search_page: 0,
+            status: String::new(),
+            available_pms: available,
+            selected_pm_idx: 0,
+            package_descriptions: HashMap::new(),
+            runtime_playsound_installed: None,
+            runtime_blueutil_installed: None,
+            confirm_dialog: None,
+            display_name_input: String::new(),
+        }
+    }
+}
+
+impl DesktopInstallerState {
+    pub fn selected_pm(&self) -> Option<PackageManager> {
+        self.available_pms.get(self.selected_pm_idx).copied()
+    }
+
+    pub fn go_back(&mut self) {
+        self.confirm_dialog = None;
+        self.view = match &self.view {
+            DesktopInstallerView::Home => return,
+            DesktopInstallerView::SearchResults => DesktopInstallerView::Home,
+            DesktopInstallerView::Installed => DesktopInstallerView::Home,
+            DesktopInstallerView::PackageActions { .. } => {
+                if self.search_results.is_empty() {
+                    DesktopInstallerView::Installed
+                } else {
+                    DesktopInstallerView::SearchResults
+                }
+            }
+            DesktopInstallerView::AddToMenu { pkg } => {
+                DesktopInstallerView::PackageActions {
+                    pkg: pkg.clone(),
+                    installed: true,
+                }
+            }
+            DesktopInstallerView::RuntimeTools => DesktopInstallerView::Home,
+        };
+    }
+
+    pub fn do_search(&mut self) {
+        let query = self.search_query.trim().to_string();
+        if query.is_empty() {
+            self.status = "Enter a search term.".to_string();
+            return;
+        }
+        if !has_internet() {
+            self.status = "Error: No internet connection.".to_string();
+            return;
+        }
+        let Some(pm) = self.selected_pm() else {
+            self.status = "Error: No package manager found.".to_string();
+            return;
+        };
+        self.search_results = pm.search(&query);
+        self.search_page = 0;
+        if self.search_results.is_empty() {
+            self.status = "No results found.".to_string();
+        } else {
+            self.status = format!("Found {} result(s).", self.search_results.len());
+            self.view = DesktopInstallerView::SearchResults;
+        }
+    }
+
+    pub fn load_installed(&mut self) {
+        self.installed_packages = self
+            .selected_pm()
+            .map(|p| p.list_installed())
+            .unwrap_or_default();
+        self.installed_page = 0;
+        self.installed_filter.clear();
+        self.status = format!(
+            "Loaded {} installed package(s).",
+            self.installed_packages.len()
+        );
+        self.view = DesktopInstallerView::Installed;
+    }
+
+    pub fn filtered_installed(&self) -> Vec<String> {
+        self.installed_packages
+            .iter()
+            .filter(|p| {
+                self.installed_filter.is_empty()
+                    || p.to_lowercase()
+                        .contains(&self.installed_filter.to_lowercase())
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn package_description_cached(&self, pkg: &str) -> Option<String> {
+        self.package_descriptions
+            .get(pkg)
+            .and_then(|d| d.clone())
+    }
+
+    pub fn fetch_package_description(&mut self, pkg: &str) -> Option<String> {
+        if let Some(desc) = self.package_descriptions.get(pkg) {
+            return desc.clone();
+        }
+        let fetched = self
+            .search_results
+            .iter()
+            .find(|r| r.pkg == pkg)
+            .and_then(|r| r.description.clone())
+            .or_else(|| {
+                self.selected_pm()
+                    .and_then(|pm| pm.package_description(pkg))
+            });
+        self.package_descriptions
+            .insert(pkg.to_string(), fetched.clone());
+        fetched
+    }
+
+    pub fn pm_label(&self) -> &str {
+        self.selected_pm()
+            .map(|p| p.name())
+            .unwrap_or("Not Found")
+    }
+
+    pub fn confirm_action(&mut self) -> DesktopInstallerEvent {
+        let Some(confirm) = self.confirm_dialog.take() else {
+            return DesktopInstallerEvent::None;
+        };
+        let Some(pm) = self.selected_pm() else {
+            self.status = "Error: No package manager found.".to_string();
+            return DesktopInstallerEvent::None;
+        };
+        if !has_internet()
+            && matches!(
+                confirm.action,
+                InstallerPackageAction::Install | InstallerPackageAction::Update
+            )
+        {
+            self.status = "Error: No internet connection.".to_string();
+            return DesktopInstallerEvent::None;
+        }
+        let pkg = &confirm.pkg;
+        let argv = match confirm.action {
+            InstallerPackageAction::Install => {
+                if pkg == "playsound" {
+                    playsound_install_cmd()
+                } else {
+                    pm.install_cmd(pkg)
+                }
+            }
+            InstallerPackageAction::Reinstall => {
+                if pkg == "playsound" {
+                    playsound_reinstall_cmd()
+                } else {
+                    pm.reinstall_cmd(pkg)
+                }
+            }
+            InstallerPackageAction::Update => {
+                if pkg == "playsound" {
+                    playsound_update_cmd()
+                } else {
+                    pm.update_cmd(pkg)
+                }
+            }
+            InstallerPackageAction::Uninstall => {
+                if pkg == "playsound" {
+                    playsound_uninstall_cmd()
+                } else {
+                    pm.remove_cmd(pkg)
+                }
+            }
+        };
+        let status = match confirm.action {
+            InstallerPackageAction::Install => format!("Installing {pkg}..."),
+            InstallerPackageAction::Update => format!("Updating {pkg}..."),
+            InstallerPackageAction::Reinstall => format!("Reinstalling {pkg}..."),
+            InstallerPackageAction::Uninstall => format!("Uninstalling {pkg}..."),
+        };
+        let completion_message = match confirm.action {
+            InstallerPackageAction::Install => format!("{pkg} installed."),
+            InstallerPackageAction::Update => format!("{pkg} updated."),
+            InstallerPackageAction::Reinstall => format!("{pkg} reinstalled."),
+            InstallerPackageAction::Uninstall => format!("{pkg} uninstalled."),
+        };
+        self.status = status.clone();
+        DesktopInstallerEvent::LaunchCommand {
+            argv,
+            status,
+            completion_message: Some(completion_message),
+        }
+    }
+
+    pub fn add_to_menu(&mut self, pkg: &str, target: InstallerMenuTarget) {
+        let display = if self.display_name_input.trim().is_empty() {
+            pkg.to_string()
+        } else {
+            self.display_name_input.trim().to_string()
+        };
+        let val = Value::Array(vec![Value::String(pkg.to_string())]);
+        match target {
+            InstallerMenuTarget::Applications => {
+                let mut d = load_apps();
+                d.insert(display, val);
+                save_apps(&d);
+            }
+            InstallerMenuTarget::Games => {
+                let mut d = load_games();
+                d.insert(display, val);
+                save_games(&d);
+            }
+            InstallerMenuTarget::Network => {
+                let mut d = load_networks();
+                d.insert(display, val);
+                save_networks(&d);
+            }
+        }
+        self.display_name_input.clear();
+        self.status = "Added to menu.".to_string();
+        self.view = DesktopInstallerView::PackageActions {
+            pkg: pkg.to_string(),
+            installed: true,
+        };
+    }
+
+    pub fn runtime_playsound_installed(&mut self) -> bool {
+        if self.runtime_playsound_installed.is_none() {
+            self.runtime_playsound_installed = Some(has_python_module("playsound"));
+        }
+        self.runtime_playsound_installed.unwrap_or(false)
+    }
+
+    pub fn runtime_blueutil_installed(&mut self) -> bool {
+        if cfg!(target_os = "macos") && self.runtime_blueutil_installed.is_none() {
+            self.runtime_blueutil_installed = Some(which("blueutil"));
+        }
+        self.runtime_blueutil_installed.unwrap_or(false)
+    }
+}
+
+fn playsound_install_cmd() -> Vec<String> {
+    if is_arch_based_linux() {
+        vec![
+            "yay".into(), "-S".into(), "--noconfirm".into(),
+            "python-playsound".into(),
+        ]
+    } else {
+        vec![
+            "python3".into(), "-m".into(), "pip".into(), "install".into(),
+            "--user".into(), "--upgrade".into(), "playsound".into(),
+        ]
+    }
+}
+
+fn playsound_reinstall_cmd() -> Vec<String> {
+    if is_arch_based_linux() {
+        playsound_install_cmd()
+    } else {
+        vec![
+            "python3".into(), "-m".into(), "pip".into(), "install".into(),
+            "--user".into(), "--upgrade".into(), "--force-reinstall".into(),
+            "playsound".into(),
+        ]
+    }
+}
+
+fn playsound_update_cmd() -> Vec<String> {
+    playsound_install_cmd()
+}
+
+fn playsound_uninstall_cmd() -> Vec<String> {
+    if is_arch_based_linux() {
+        vec![
+            "yay".into(), "-R".into(), "--noconfirm".into(),
+            "python-playsound".into(),
+        ]
+    } else {
+        vec![
+            "python3".into(), "-m".into(), "pip".into(), "uninstall".into(),
+            "-y".into(), "playsound".into(),
+        ]
+    }
 }
 
 #[cfg(test)]
