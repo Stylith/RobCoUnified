@@ -1924,7 +1924,10 @@ impl RobcoNativeApp {
             self.reset_desktop_settings_window();
             self.prime_desktop_window_defaults(window);
         } else if !self.desktop_window_is_open(window)
-            && matches!(window, DesktopWindow::TerminalMode | DesktopWindow::PtyApp)
+            && matches!(
+                window,
+                DesktopWindow::TerminalMode | DesktopWindow::PtyApp | DesktopWindow::Installer
+            )
         {
             self.prime_desktop_window_defaults(window);
         }
@@ -6817,11 +6820,10 @@ impl RobcoNativeApp {
         if !self.start_open {
             return;
         }
-        const ROOT_W: f32 = 230.0;
-        const SUB_W: f32 = 190.0;
-        const LEAF_W: f32 = 210.0;
-        const ROW_H: f32 = 22.0;
-        const TITLE_H: f32 = 42.0;
+        const ROOT_W: f32 = 270.0;
+        const SUB_W: f32 = 250.0;
+        const LEAF_W: f32 = 270.0;
+        const ROW_H: f32 = 24.0;
         const PANEL_PAD_H: f32 = 16.0;
         const TASKBAR_H: f32 = 32.0;
         const ROOT_LEFT: f32 = 8.0;
@@ -6862,13 +6864,11 @@ impl RobcoNativeApp {
                                     || start_root_submenu_for_idx(idx).is_some();
                                 let suffix = if has_panel { " >" } else { "" };
                                 let selected = self.start_selected_root == idx;
-                                let response = ui.selectable_label(
+                                let response = Self::start_menu_row(
+                                    ui,
+                                    &format!("{label}{suffix}"),
                                     selected,
-                                    RichText::new(format!(" {label}{suffix}")).color(if selected {
-                                        Color32::BLACK
-                                    } else {
-                                        palette.fg
-                                    }),
+                                    ROOT_W - 16.0,
                                 );
                                 if response.hovered() {
                                     self.set_start_panel_for_root(idx);
@@ -6892,7 +6892,6 @@ impl RobcoNativeApp {
                 });
                 root_rect = Some(frame_response.response.rect);
                 self.start_root_panel_height = frame_response.response.rect.height();
-                branch_anchor_y = frame_response.response.rect.top() + TITLE_H;
                 branch_x = frame_response.response.rect.right() - 2.0;
             });
         let Some(root_rect) = root_rect else {
@@ -6922,14 +6921,8 @@ impl RobcoNativeApp {
                                 ui.set_max_width(SUB_W);
                                 for (idx, (label, action)) in items.iter().enumerate() {
                                     let selected = self.start_system_selected == idx;
-                                    let response = ui.selectable_label(
-                                        selected,
-                                        RichText::new(format!(" {label}")).color(if selected {
-                                            Color32::BLACK
-                                        } else {
-                                            palette.fg
-                                        }),
-                                    );
+                                    let response =
+                                        Self::start_menu_row(ui, label, selected, SUB_W - 16.0);
                                     if response.hovered() {
                                         self.start_system_selected = idx;
                                     }
@@ -6961,13 +6954,11 @@ impl RobcoNativeApp {
                             ui.set_max_width(LEAF_W);
                             for (idx, item) in items.iter().enumerate() {
                                 let selected = self.start_leaf_selected == idx;
-                                let response = ui.selectable_label(
+                                let response = Self::start_menu_row(
+                                    ui,
+                                    &item.label,
                                     selected,
-                                    RichText::new(format!(" {}", item.label)).color(if selected {
-                                        Color32::BLACK
-                                    } else {
-                                        palette.fg
-                                    }),
+                                    LEAF_W - 16.0,
                                 );
                                 if response.hovered() {
                                     self.start_leaf_selected = idx;
@@ -8534,6 +8525,29 @@ impl RobcoNativeApp {
         style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.open.expansion = 0.0;
         ui.set_style(style);
+    }
+
+    fn start_menu_row(
+        ui: &mut egui::Ui,
+        label: &str,
+        selected: bool,
+        width: f32,
+    ) -> egui::Response {
+        let palette = current_palette();
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click());
+        let active = selected || response.hovered();
+        let fill = if active { palette.fg } else { palette.panel };
+        let text_color = if active { Color32::BLACK } else { palette.fg };
+        ui.painter().rect_filled(rect, 0.0, fill);
+        ui.painter().text(
+            egui::pos2(rect.left() + 8.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::new(20.0, FontFamily::Monospace),
+            text_color,
+        );
+        response
     }
 
     fn apply_settings_control_style(ui: &mut egui::Ui) {
@@ -10959,12 +10973,20 @@ impl RobcoNativeApp {
         {
             return;
         }
+        {
+            let state = self.desktop_window_state(DesktopWindow::Installer);
+            if state.maximized && (state.restore_pos.is_none() || state.restore_size.is_none()) {
+                let state = self.desktop_window_state_mut(DesktopWindow::Installer);
+                state.maximized = false;
+            }
+        }
         let mut open = self.desktop_installer.open;
         let maximized = self.desktop_window_is_maximized(DesktopWindow::Installer);
         let restore = self.take_desktop_window_restore_dims(DesktopWindow::Installer);
         let mut header_action = DesktopHeaderAction::None;
         let generation = self.desktop_window_generation(DesktopWindow::Installer);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Installer);
+        let default_pos = Self::desktop_default_window_pos(ctx, default_size);
         let mut window = egui::Window::new("Program Installer")
             .id(Id::new(("native_installer", generation)))
             .open(&mut open)
@@ -10972,6 +10994,7 @@ impl RobcoNativeApp {
             .frame(Self::desktop_window_frame())
             .resizable(true)
             .min_size([500.0, 400.0])
+            .default_pos(default_pos)
             .default_size([default_size.x, default_size.y]);
         if maximized {
             let rect = Self::desktop_workspace_rect(ctx);
@@ -11022,13 +11045,16 @@ impl RobcoNativeApp {
                 });
 
             // ── Status bar at bottom ────────────────────────────────────────
-            if !status.is_empty() {
-                egui::TopBottomPanel::bottom(Id::new(("inst_bottom", generation)))
-                    .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 4.0)))
-                    .show_inside(ui, |ui| {
+            egui::TopBottomPanel::bottom(Id::new(("inst_bottom", generation)))
+                .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 4.0)))
+                .exact_height(28.0)
+                .show_inside(ui, |ui| {
+                    if !status.is_empty() {
                         ui.label(RichText::new(&status).color(palette.dim));
-                    });
-            }
+                    } else {
+                        ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
+                    }
+                });
 
             // ── Confirmation dialog overlay ─────────────────────────────────
             if has_confirm {
@@ -11048,12 +11074,9 @@ impl RobcoNativeApp {
                                 InstallerPackageAction::Uninstall => "Uninstall",
                             };
                             ui.label(
-                                RichText::new(format!(
-                                    "{} {}?",
-                                    action_label, confirm.pkg
-                                ))
-                                .color(palette.fg)
-                                .strong(),
+                                RichText::new(format!("{} {}?", action_label, confirm.pkg))
+                                    .color(palette.fg)
+                                    .strong(),
                             );
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
@@ -11104,70 +11127,68 @@ impl RobcoNativeApp {
             // ── Main content ────────────────────────────────────────────────
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().inner_margin(egui::Margin::same(16.0)))
-                .show_inside(ui, |ui| {
-                    match view {
-                        DesktopInstallerView::Home => {
-                            Self::draw_installer_home(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &mut deferred_search,
-                                &mut deferred_load_installed,
-                                &mut deferred_open_runtime_tools,
-                                [&tex_apps, &tex_tools, &tex_network, &tex_games],
-                            );
-                        }
-                        DesktopInstallerView::SearchResults => {
-                            Self::draw_installer_search_results(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &mut deferred_back,
-                                &mut deferred_open_search_actions,
-                            );
-                        }
-                        DesktopInstallerView::Installed => {
-                            Self::draw_installer_installed(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &mut deferred_back,
-                                &mut deferred_open_installed_actions,
-                            );
-                        }
-                        DesktopInstallerView::PackageActions { ref pkg, installed } => {
-                            let pkg = pkg.clone();
-                            Self::draw_installer_package_actions(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &pkg,
-                                installed,
-                                &mut deferred_back,
-                                &mut deferred_confirm_setup,
-                                &mut deferred_open_add_to_menu,
-                            );
-                        }
-                        DesktopInstallerView::AddToMenu { ref pkg } => {
-                            let pkg = pkg.clone();
-                            Self::draw_installer_add_to_menu(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &pkg,
-                                &mut deferred_back,
-                                &mut deferred_add_to_menu,
-                            );
-                        }
-                        DesktopInstallerView::RuntimeTools => {
-                            Self::draw_installer_runtime_tools(
-                                ui,
-                                &mut self.desktop_installer,
-                                palette,
-                                &mut deferred_back,
-                                &mut deferred_confirm_setup,
-                            );
-                        }
+                .show_inside(ui, |ui| match view {
+                    DesktopInstallerView::Home => {
+                        Self::draw_installer_home(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &mut deferred_search,
+                            &mut deferred_load_installed,
+                            &mut deferred_open_runtime_tools,
+                            [&tex_apps, &tex_tools, &tex_network, &tex_games],
+                        );
+                    }
+                    DesktopInstallerView::SearchResults => {
+                        Self::draw_installer_search_results(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &mut deferred_back,
+                            &mut deferred_open_search_actions,
+                        );
+                    }
+                    DesktopInstallerView::Installed => {
+                        Self::draw_installer_installed(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &mut deferred_back,
+                            &mut deferred_open_installed_actions,
+                        );
+                    }
+                    DesktopInstallerView::PackageActions { ref pkg, installed } => {
+                        let pkg = pkg.clone();
+                        Self::draw_installer_package_actions(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &pkg,
+                            installed,
+                            &mut deferred_back,
+                            &mut deferred_confirm_setup,
+                            &mut deferred_open_add_to_menu,
+                        );
+                    }
+                    DesktopInstallerView::AddToMenu { ref pkg } => {
+                        let pkg = pkg.clone();
+                        Self::draw_installer_add_to_menu(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &pkg,
+                            &mut deferred_back,
+                            &mut deferred_add_to_menu,
+                        );
+                    }
+                    DesktopInstallerView::RuntimeTools => {
+                        Self::draw_installer_runtime_tools(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &mut deferred_back,
+                            &mut deferred_confirm_setup,
+                        );
                     }
                 });
         });
@@ -11176,9 +11197,7 @@ impl RobcoNativeApp {
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         if let Some(rect) = shown_rect {
             if !maximized {
-                let state = self.desktop_window_state_mut(DesktopWindow::Installer);
-                state.restore_pos = Some([rect.min.x, rect.min.y]);
-                state.restore_size = Some([rect.width(), rect.height()]);
+                self.note_desktop_window_rect(DesktopWindow::Installer, rect);
             }
             self.maybe_activate_desktop_window_from_click(
                 ctx,
