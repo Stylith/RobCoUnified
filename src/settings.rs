@@ -761,6 +761,7 @@ fn settings_general_rows() -> Vec<String> {
     } else {
         "Sound: OFF [toggle]"
     };
+    let sound_volume_label = format!("System Sound Volume: {}% [adjust]", s.system_sound_volume);
     let bootup_label = if s.bootup {
         "Bootup: ON [toggle]"
     } else {
@@ -773,6 +774,7 @@ fn settings_general_rows() -> Vec<String> {
     };
     vec![
         sound_label.to_string(),
+        sound_volume_label,
         bootup_label.to_string(),
         nav_hints_label.to_string(),
         open_mode_label,
@@ -790,7 +792,7 @@ fn settings_general_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Back => break,
             MenuResult::Selected(sel) if sel == "Back" => break,
             MenuResult::Selected(sel) => match sel.as_str() {
-                l if l == rows[3] => {
+                l if l == rows[4] => {
                     update_settings(|s| {
                         s.default_open_mode = match s.default_open_mode {
                             OpenMode::Terminal => OpenMode::Desktop,
@@ -804,10 +806,16 @@ fn settings_general_menu(terminal: &mut Term) -> Result<()> {
                     persist_settings();
                 }
                 l if l == rows[1] => {
-                    update_settings(|s| s.bootup = !s.bootup);
+                    update_settings(|s| {
+                        s.system_sound_volume = (s.system_sound_volume.saturating_add(5)).min(100);
+                    });
                     persist_settings();
                 }
                 l if l == rows[2] => {
+                    update_settings(|s| s.bootup = !s.bootup);
+                    persist_settings();
+                }
+                l if l == rows[3] => {
                     update_settings(|s| s.show_navigation_hints = !s.show_navigation_hints);
                     persist_settings();
                 }

@@ -566,6 +566,8 @@ impl Default for BuiltinMenuVisibilitySettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound: bool,
+    #[serde(default = "default_system_sound_volume")]
+    pub system_sound_volume: u8,
     pub bootup: bool,
     pub theme: String,
     #[serde(default = "default_custom_theme_rgb")]
@@ -631,6 +633,10 @@ fn default_desktop_wallpaper() -> String {
     "RobCo".to_string()
 }
 
+const fn default_system_sound_volume() -> u8 {
+    100
+}
+
 fn default_native_ui_scale() -> f32 {
     1.0
 }
@@ -643,6 +649,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             sound: true,
+            system_sound_volume: default_system_sound_volume(),
             bootup: true,
             theme: "Green (Default)".into(),
             custom_theme_rgb: default_custom_theme_rgb(),
@@ -678,6 +685,7 @@ impl Default for Settings {
 }
 
 fn apply_legacy_settings_migrations(settings: &mut Settings) {
+    settings.system_sound_volume = settings.system_sound_volume.clamp(0, 100);
     if settings.hide_builtin_apps_in_menus {
         settings.builtin_menu_visibility.nuke_codes = false;
         settings.builtin_menu_visibility.text_editor = false;

@@ -19,6 +19,7 @@ pub enum TerminalSettingsEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsRowId {
     Sound,
+    SystemSoundVolume,
     Bootup,
     NavigationHints,
     Theme,
@@ -213,6 +214,7 @@ fn handle_settings_activation(
             draft.sound = !draft.sound;
             TerminalSettingsEvent::Persist
         }
+        SettingsRowId::SystemSoundVolume => TerminalSettingsEvent::None,
         SettingsRowId::Bootup => {
             draft.bootup = !draft.bootup;
             TerminalSettingsEvent::Persist
@@ -295,6 +297,10 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
         (
             format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
             SettingsRowId::Sound,
+        ),
+        (
+            format!("System Sound Volume: {}% [adjust]", draft.system_sound_volume),
+            SettingsRowId::SystemSoundVolume,
         ),
         (
             format!(
@@ -385,6 +391,10 @@ fn adjust_settings_slider(draft: &mut Settings, idx: usize, is_admin: bool, delt
             }
             true
         }
+        SettingsRowId::SystemSoundVolume => {
+            adjust_percent(&mut draft.system_sound_volume, delta * 5);
+            true
+        }
         SettingsRowId::CustomThemeGreen => {
             adjust_rgb_component(&mut draft.custom_theme_rgb[1], delta);
             if draft.theme != CUSTOM_THEME_NAME {
@@ -405,6 +415,11 @@ fn adjust_settings_slider(draft: &mut Settings, idx: usize, is_admin: bool, delt
 
 fn adjust_rgb_component(value: &mut u8, delta: i16) {
     let next = (*value as i16 + delta).clamp(0, 255);
+    *value = next as u8;
+}
+
+fn adjust_percent(value: &mut u8, delta: i16) {
+    let next = (*value as i16 + delta).clamp(0, 100);
     *value = next as u8;
 }
 

@@ -46,7 +46,8 @@ use super::prompt::{
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
     draw_embedded_pty, draw_embedded_pty_in_ui_focused, handle_pty_input,
-    spawn_embedded_pty_with_options, NativePtyState,
+    spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
+    TERMINAL_MODE_PTY_CELL_W,
     PtyScreenEvent,
 };
 use super::retro_ui::{
@@ -4786,17 +4787,37 @@ impl RobcoNativeApp {
     }
 
     fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
-        let layout = self.terminal_layout();
-        let options = crate::pty::PtyLaunchOptions::default();
+        let profile = Self::native_pty_profile_for_command(cmd);
+        let pty_cols = profile
+            .preferred_w
+            .unwrap_or(96)
+            .max(profile.min_w)
+            .clamp(40, 160);
+        let pty_rows = profile
+            .preferred_h
+            .unwrap_or(32)
+            .max(profile.min_h)
+            .clamp(10, 60);
+        let options = crate::pty::PtyLaunchOptions {
+            force_render_mode: Self::native_pty_force_render_mode(cmd),
+            ..crate::pty::PtyLaunchOptions::default()
+        };
         match spawn_embedded_pty_with_options(
             title,
             cmd,
             return_screen,
-            layout.cols as u16,
-            layout.rows.saturating_sub(1) as u16,
+            pty_cols,
+            pty_rows,
             options,
         ) {
-            Ok(state) => {
+            Ok(mut state) => {
+                state.desktop_cols_floor = Some(pty_cols);
+                state.desktop_rows_floor = Some(pty_rows);
+                state.desktop_live_resize = profile.live_resize;
+                state.fixed_cell_w = Some(TERMINAL_MODE_PTY_CELL_W);
+                state.fixed_cell_h = Some(TERMINAL_MODE_PTY_CELL_H);
+                state.fixed_font_scale = Some(0.94);
+                state.fixed_font_width_divisor = Some(0.44);
                 self.terminal_pty = Some(state);
                 self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = format!("Opened {title} in PTY.");
@@ -4915,6 +4936,10 @@ impl RobcoNativeApp {
                 state.desktop_cols_floor = Some(pty_cols);
                 state.desktop_rows_floor = Some(pty_rows);
                 state.desktop_live_resize = profile.live_resize;
+                state.fixed_cell_w = Some(TERMINAL_MODE_PTY_CELL_W);
+                state.fixed_cell_h = Some(TERMINAL_MODE_PTY_CELL_H);
+                state.fixed_font_scale = Some(0.94);
+                state.fixed_font_width_divisor = Some(0.44);
                 self.terminal_pty = Some(state);
                 self.navigate_to_screen(TerminalScreen::PtyApp);
                 self.shell_status = "Opened terminal shell in PTY.".to_string();
@@ -7864,22 +7889,6 @@ impl RobcoNativeApp {
             self.shell_status = "No embedded PTY session.".to_string();
             return;
         };
-        let title = state.title.clone();
-        let palette = current_palette();
-        TopBottomPanel::top("native_terminal_pty_title_bar")
-            .resizable(false)
-            .exact_height(retro_footer_height())
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.fg)
-                    .inner_margin(egui::Margin::symmetric(6.0, 4.0)),
-            )
-            .show(ctx, |ui| {
-                ui.with_layout(Layout::top_down_justified(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(title).color(Color32::BLACK).strong());
-                });
-            });
         let event = draw_embedded_pty(
             ctx,
             state,
@@ -9746,12 +9755,29 @@ impl RobcoNativeApp {
                                     });
 
                                     Self::settings_section(right, "Options", |right| {
+                                        let palette = current_palette();
                                         if Self::retro_checkbox_row(
                                             right,
                                             &mut self.settings.draft.sound,
                                             "Enable sound",
                                         )
                                         .clicked()
+                                        {
+                                            changed = true;
+                                        }
+                                        right.add_space(8.0);
+                                        right.label("System sound volume");
+                                        right.visuals_mut().selection.bg_fill = palette.fg;
+                                        right.visuals_mut().widgets.inactive.bg_fill = palette.dim;
+                                        if right
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut self.settings.draft.system_sound_volume,
+                                                    0..=100,
+                                                )
+                                                .suffix("%"),
+                                            )
+                                            .changed()
                                         {
                                             changed = true;
                                         }

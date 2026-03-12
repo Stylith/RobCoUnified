@@ -1,9 +1,11 @@
 use super::menu::draw_terminal_menu_screen;
 use crate::config::{
-    get_current_user, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
+    base_dir, get_current_user, load_apps, load_games, load_networks, save_apps, save_games,
+    save_networks,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1857,6 +1859,7 @@ pub struct DesktopInstallerState {
     pub available_pms: Vec<PackageManager>,
     pub selected_pm_idx: usize,
     package_descriptions: HashMap<String, Option<String>>,
+    installed_description_cache: HashMap<String, HashMap<String, String>>,
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
     pub confirm_dialog: Option<DesktopInstallerConfirm>,
@@ -1880,6 +1883,7 @@ impl Default for DesktopInstallerState {
             available_pms: available,
             selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
+            installed_description_cache: load_installed_description_cache(),
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
             confirm_dialog: None,
@@ -1890,6 +1894,34 @@ impl Default for DesktopInstallerState {
 }
 
 impl DesktopInstallerState {
+    fn installed_cache_key(pm: PackageManager) -> String {
+        pm.name().to_string()
+    }
+
+    fn installed_description_cached_for_pm(
+        &self,
+        pm: PackageManager,
+        pkg: &str,
+    ) -> Option<String> {
+        self.installed_description_cache
+            .get(&Self::installed_cache_key(pm))
+            .and_then(|pkgs| pkgs.get(pkg))
+            .cloned()
+    }
+
+    fn persist_installed_description(
+        &mut self,
+        pm: PackageManager,
+        pkg: &str,
+        desc: &str,
+    ) {
+        self.installed_description_cache
+            .entry(Self::installed_cache_key(pm))
+            .or_default()
+            .insert(pkg.to_string(), desc.to_string());
+        save_installed_description_cache(&self.installed_description_cache);
+    }
+
     pub fn selected_pm(&self) -> Option<PackageManager> {
         self.available_pms.get(self.selected_pm_idx).copied()
     }
@@ -1947,10 +1979,16 @@ impl DesktopInstallerState {
     }
 
     pub fn load_installed(&mut self) {
-        self.installed_packages = self
-            .selected_pm()
-            .map(|p| p.list_installed())
-            .unwrap_or_default();
+        let selected_pm = self.selected_pm();
+        self.installed_packages = selected_pm.map(|p| p.list_installed()).unwrap_or_default();
+        if let Some(pm) = selected_pm {
+            for pkg in &self.installed_packages {
+                if let Some(desc) = self.installed_description_cached_for_pm(pm, pkg) {
+                    self.package_descriptions
+                        .insert(pkg.clone(), Some(desc));
+                }
+            }
+        }
         self.installed_page = 0;
         self.installed_filter.clear();
         self.status = format!(
@@ -1972,12 +2010,6 @@ impl DesktopInstallerState {
             .collect()
     }
 
-    pub fn package_description_cached(&self, pkg: &str) -> Option<String> {
-        self.package_descriptions
-            .get(pkg)
-            .and_then(|d| d.clone())
-    }
-
     pub fn can_fetch_descriptions(&self) -> bool {
         has_internet()
     }
@@ -1986,6 +2018,17 @@ impl DesktopInstallerState {
         if let Some(desc) = self.package_descriptions.get(pkg) {
             return desc.clone();
         }
+        let selected_pm = self.selected_pm();
+        let installed_pkg = self.installed_packages.iter().any(|installed| installed == pkg);
+        if installed_pkg {
+            if let Some(pm) = selected_pm {
+                if let Some(desc) = self.installed_description_cached_for_pm(pm, pkg) {
+                    self.package_descriptions
+                        .insert(pkg.to_string(), Some(desc.clone()));
+                    return Some(desc);
+                }
+            }
+        }
         let fetched = self
             .search_results
             .iter()
@@ -1993,12 +2036,16 @@ impl DesktopInstallerState {
             .and_then(|r| r.description.clone())
             .or_else(|| {
                 if has_internet() {
-                    self.selected_pm()
-                        .and_then(|pm| pm.package_description(pkg))
+                    selected_pm.and_then(|pm| pm.package_description(pkg))
                 } else {
                     None
                 }
             });
+        if installed_pkg {
+            if let (Some(pm), Some(desc)) = (selected_pm, fetched.as_ref()) {
+                self.persist_installed_description(pm, pkg, desc);
+            }
+        }
         self.package_descriptions
             .insert(pkg.to_string(), fetched.clone());
         fetched
@@ -2122,6 +2169,23 @@ impl DesktopInstallerState {
             self.runtime_blueutil_installed = Some(which("blueutil"));
         }
         self.runtime_blueutil_installed.unwrap_or(false)
+    }
+}
+
+fn installed_description_cache_path() -> PathBuf {
+    base_dir().join("installed_package_descriptions.json")
+}
+
+fn load_installed_description_cache() -> HashMap<String, HashMap<String, String>> {
+    std::fs::read_to_string(installed_description_cache_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_installed_description_cache(cache: &HashMap<String, HashMap<String, String>>) {
+    if let Ok(raw) = serde_json::to_string_pretty(cache) {
+        let _ = std::fs::write(installed_description_cache_path(), raw);
     }
 }
 

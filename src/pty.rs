@@ -980,6 +980,7 @@ impl PtySession {
         }
     }
 
+    #[allow(dead_code)]
     pub fn exit_status(&mut self) -> Option<ExitStatus> {
         if self.last_exit_status.is_none() {
             let _ = self.is_alive();

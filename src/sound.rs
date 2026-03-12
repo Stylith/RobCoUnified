@@ -4,6 +4,7 @@
 //! Boot key clips are preprocessed to remove leading dead-space and keep
 //! a short click window, which reduces random perceived gaps.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -37,15 +38,21 @@ pub fn stop_audio() {
 }
 
 struct SoundPaths {
-    login: PathBuf,
-    logout: PathBuf,
-    error: PathBuf,
-    navigate: PathBuf,
-    keypress: PathBuf,
-    boot_keys: Vec<PathBuf>,
+    login: SoundClip,
+    logout: SoundClip,
+    error: SoundClip,
+    navigate: SoundClip,
+    keypress: SoundClip,
+    boot_keys: Vec<SoundClip>,
 }
 
 static PATHS: OnceLock<SoundPaths> = OnceLock::new();
+static CLIP_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+
+struct SoundClip {
+    name: &'static str,
+    bytes: Vec<u8>,
+}
 
 #[derive(Default)]
 struct BootShuffleState {
@@ -60,10 +67,8 @@ fn sound_enabled() -> bool {
     !SOUND_TEMP_DISABLED && get_settings().sound
 }
 
-fn write_temp(name: &str, bytes: &[u8]) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("robcos_{name}.wav"));
-    let _ = std::fs::write(&p, bytes);
-    p
+fn system_sound_volume() -> u8 {
+    get_settings().system_sound_volume.clamp(0, 100)
 }
 
 fn extract_boot_click_window_pcm16_mono(
@@ -140,45 +145,122 @@ fn extract_boot_click_window_pcm16_mono(
     out
 }
 
-fn write_temp_boot_key(name: &str, bytes: &[u8]) -> PathBuf {
-    let processed = extract_boot_click_window_pcm16_mono(bytes, 550, 28, 2100);
-    write_temp(name, &processed)
+fn scale_pcm16_wav(bytes: &[u8], volume: u8) -> Vec<u8> {
+    if volume >= 100 || bytes.len() < 44 {
+        return bytes.to_vec();
+    }
+    if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return bytes.to_vec();
+    }
+    if &bytes[12..16] != b"fmt " || &bytes[36..40] != b"data" {
+        return bytes.to_vec();
+    }
+
+    let audio_format = u16::from_le_bytes([bytes[20], bytes[21]]);
+    let bits_per_sample = u16::from_le_bytes([bytes[34], bytes[35]]);
+    let data_len = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+    let data_start = 44usize;
+
+    if audio_format != 1 || bits_per_sample != 16 || bytes.len() < data_start + data_len {
+        return bytes.to_vec();
+    }
+
+    let mut out = bytes.to_vec();
+    for sample in out[data_start..data_start + data_len].chunks_exact_mut(2) {
+        let raw = i16::from_le_bytes([sample[0], sample[1]]) as i32;
+        let scaled = (raw * volume as i32 / 100).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        sample.copy_from_slice(&scaled.to_le_bytes());
+    }
+    out
+}
+
+fn clip_path(clip: &SoundClip) -> PathBuf {
+    let volume = system_sound_volume();
+    let key = format!("{}_{}", clip.name, volume);
+    let cache = CLIP_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(existing) = guard.get(&key) {
+            return existing.clone();
+        }
+    }
+
+    let data = scale_pcm16_wav(&clip.bytes, volume);
+    let path = std::env::temp_dir().join(format!("robcos_{}_{}.wav", clip.name, volume));
+    let _ = std::fs::write(&path, data);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, path.clone());
+    }
+    path
 }
 
 fn get_paths() -> &'static SoundPaths {
     PATHS.get_or_init(|| SoundPaths {
-        login: write_temp("login", include_bytes!("sounds/ui_hacking_passgood.wav")),
-        logout: write_temp("logout", include_bytes!("sounds/ui_hacking_passbad.wav")),
-        error: write_temp("error", include_bytes!("sounds/ui_hacking_passbad.wav")),
-        navigate: write_temp(
-            "navigate",
-            include_bytes!("sounds/ui_hacking_charenter_01.wav"),
-        ),
-        keypress: write_temp(
-            "keypress",
-            include_bytes!("sounds/ui_hacking_charscroll.wav"),
-        ),
+        login: SoundClip {
+            name: "login",
+            bytes: include_bytes!("sounds/ui_hacking_passgood.wav").to_vec(),
+        },
+        logout: SoundClip {
+            name: "logout",
+            bytes: include_bytes!("sounds/ui_hacking_passbad.wav").to_vec(),
+        },
+        error: SoundClip {
+            name: "error",
+            bytes: include_bytes!("sounds/ui_hacking_passbad.wav").to_vec(),
+        },
+        navigate: SoundClip {
+            name: "navigate",
+            bytes: include_bytes!("sounds/ui_hacking_charenter_01.wav").to_vec(),
+        },
+        keypress: SoundClip {
+            name: "keypress",
+            bytes: include_bytes!("sounds/ui_hacking_charscroll.wav").to_vec(),
+        },
         boot_keys: vec![
-            write_temp_boot_key(
-                "boot0",
-                include_bytes!("sounds/ui_hacking_charsingle_01.wav"),
-            ),
-            write_temp_boot_key(
-                "boot1",
-                include_bytes!("sounds/ui_hacking_charsingle_02.wav"),
-            ),
-            write_temp_boot_key(
-                "boot2",
-                include_bytes!("sounds/ui_hacking_charsingle_03.wav"),
-            ),
-            write_temp_boot_key(
-                "boot3",
-                include_bytes!("sounds/ui_hacking_charsingle_04.wav"),
-            ),
-            write_temp_boot_key(
-                "boot4",
-                include_bytes!("sounds/ui_hacking_charsingle_05.wav"),
-            ),
+            SoundClip {
+                name: "boot0",
+                bytes: extract_boot_click_window_pcm16_mono(
+                    include_bytes!("sounds/ui_hacking_charsingle_01.wav"),
+                    550,
+                    28,
+                    2100,
+                ),
+            },
+            SoundClip {
+                name: "boot1",
+                bytes: extract_boot_click_window_pcm16_mono(
+                    include_bytes!("sounds/ui_hacking_charsingle_02.wav"),
+                    550,
+                    28,
+                    2100,
+                ),
+            },
+            SoundClip {
+                name: "boot2",
+                bytes: extract_boot_click_window_pcm16_mono(
+                    include_bytes!("sounds/ui_hacking_charsingle_03.wav"),
+                    550,
+                    28,
+                    2100,
+                ),
+            },
+            SoundClip {
+                name: "boot3",
+                bytes: extract_boot_click_window_pcm16_mono(
+                    include_bytes!("sounds/ui_hacking_charsingle_04.wav"),
+                    550,
+                    28,
+                    2100,
+                ),
+            },
+            SoundClip {
+                name: "boot4",
+                bytes: extract_boot_click_window_pcm16_mono(
+                    include_bytes!("sounds/ui_hacking_charsingle_05.wav"),
+                    550,
+                    28,
+                    2100,
+                ),
+            },
         ],
     })
 }
@@ -334,7 +416,7 @@ pub fn play_boot_key() {
         return;
     }
     let idx = next_boot_key_index(paths.len());
-    play_nonblocking(paths[idx].clone());
+    play_nonblocking(clip_path(&paths[idx]));
 }
 
 pub fn play_navigate() {
@@ -350,11 +432,11 @@ pub fn play_navigate() {
         if !passes_gap(&LAST_NAV_REPEAT_MS, NAVIGATE_REPEAT_GAP_MS) {
             return;
         }
-        play_nonblocking(get_paths().navigate.clone());
+        play_nonblocking(clip_path(&get_paths().navigate));
         return;
     }
 
-    play_nonblocking(get_paths().navigate.clone());
+    play_nonblocking(clip_path(&get_paths().navigate));
 }
 
 pub fn play_navigate_repeat() {
@@ -364,28 +446,28 @@ pub fn play_navigate_repeat() {
     if !passes_gap(&LAST_NAV_REPEAT_MS, NAVIGATE_REPEAT_GAP_MS) {
         return;
     }
-    play_nonblocking(get_paths().navigate.clone());
+    play_nonblocking(clip_path(&get_paths().navigate));
 }
 
 pub fn play_login() {
     if !sound_enabled() {
         return;
     }
-    play_nonblocking(get_paths().login.clone());
+    play_nonblocking(clip_path(&get_paths().login));
 }
 
 pub fn play_logout() {
     if !sound_enabled() {
         return;
     }
-    play_nonblocking(get_paths().logout.clone());
+    play_nonblocking(clip_path(&get_paths().logout));
 }
 
 pub fn play_error() {
     if !sound_enabled() {
         return;
     }
-    play_nonblocking(get_paths().error.clone());
+    play_nonblocking(clip_path(&get_paths().error));
 }
 
 pub fn play_startup() {
@@ -404,5 +486,5 @@ pub fn play_keypress() {
     if !passes_gap(&LAST_KEYPRESS_MS, KEYPRESS_GAP_MS) {
         return;
     }
-    play_nonblocking(get_paths().keypress.clone());
+    play_nonblocking(clip_path(&get_paths().keypress));
 }

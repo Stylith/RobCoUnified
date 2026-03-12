@@ -106,13 +106,15 @@ impl RetroScreen {
         )
     }
 
-    pub fn new_fixed_cell_sized(
+    pub fn new_fixed_cell_sized_tuned(
         ui: &mut Ui,
         cols: usize,
         rows: usize,
         desired: Vec2,
         cell_w: f32,
         cell_h: f32,
+        font_scale: f32,
+        width_divisor: f32,
     ) -> (Self, Response) {
         let (outer_rect, response) = ui.allocate_exact_size(desired, Sense::hover());
         let pixels_per_point = ui.ctx().pixels_per_point().max(1.0);
@@ -122,9 +124,9 @@ impl RetroScreen {
             outer_rect.min,
             egui::vec2(grid_w.max(cell_w), grid_h.max(cell_h)),
         );
-        let target_font = (cell_h * 0.90).max(8.0);
+        let target_font = (cell_h * font_scale).max(8.0);
         let height_limit = (cell_h - 3.0).max(8.0);
-        let width_limit = ((cell_w - 1.0).max(7.0) / 0.53).max(8.0);
+        let width_limit = ((cell_w - 1.0).max(7.0) / width_divisor.max(0.1)).max(8.0);
         let font_size = (target_font.min(height_limit.min(width_limit))).max(8.0);
         let font_size = (font_size * pixels_per_point).round() / pixels_per_point;
         (

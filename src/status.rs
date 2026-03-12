@@ -73,6 +73,10 @@ fn read_battery() -> Option<String> {
         let path = entry.ok()?.path();
         let kind = std::fs::read_to_string(path.join("type")).ok()?;
         if kind.trim() == "Battery" {
+            let scope = std::fs::read_to_string(path.join("scope")).unwrap_or_default();
+            if !scope.trim().is_empty() && scope.trim() != "System" {
+                continue;
+            }
             let cap = std::fs::read_to_string(path.join("capacity")).ok()?;
             let pct: u8 = cap.trim().parse().ok()?;
             let status_raw = std::fs::read_to_string(path.join("status")).unwrap_or_default();

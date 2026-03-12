@@ -8,9 +8,11 @@ use eframe::egui::{self, Align2, Color32, Context, FontId, Key, Pos2, Rect, Stro
 use ratatui::style::Color;
 use std::time::{Duration, Instant};
 
-const MAX_NATIVE_PTY_COLS: usize = 160;
+const MAX_NATIVE_PTY_COLS: usize = 240;
 const MAX_NATIVE_PTY_ROWS: usize = 80;
 const PERF_ALPHA: f32 = 0.18;
+pub const TERMINAL_MODE_PTY_CELL_W: f32 = 11.5;
+pub const TERMINAL_MODE_PTY_CELL_H: f32 = 22.0;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LineConnections {
@@ -28,6 +30,10 @@ pub struct NativePtyState {
     pub desktop_cols_floor: Option<u16>,
     pub desktop_rows_floor: Option<u16>,
     pub desktop_live_resize: bool,
+    pub fixed_cell_w: Option<f32>,
+    pub fixed_cell_h: Option<f32>,
+    pub fixed_font_scale: Option<f32>,
+    pub fixed_font_width_divisor: Option<f32>,
     prev_plain_lines: Vec<String>,
     prev_plain_cursor: Option<(u16, u16)>,
     plain_texture: PlainTextureRenderer,
@@ -162,6 +168,10 @@ pub fn spawn_embedded_pty_with_options(
         desktop_cols_floor: None,
         desktop_rows_floor: None,
         desktop_live_resize: true,
+        fixed_cell_w: None,
+        fixed_cell_h: None,
+        fixed_font_scale: None,
+        fixed_font_width_divisor: None,
         prev_plain_lines: Vec::new(),
         prev_plain_cursor: None,
         plain_texture: PlainTextureRenderer::default(),
@@ -241,6 +251,10 @@ pub fn draw_embedded_pty_in_ui_sized(
     if focused && ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
         state.show_perf_overlay = !state.show_perf_overlay;
     }
+    let fixed_cell_w = state.fixed_cell_w.unwrap_or(FIXED_PTY_CELL_W);
+    let fixed_cell_h = state.fixed_cell_h.unwrap_or(FIXED_PTY_CELL_H);
+    let fixed_font_scale = state.fixed_font_scale.unwrap_or(0.90);
+    let fixed_font_width_divisor = state.fixed_font_width_divisor.unwrap_or(0.53);
     let frame_started = Instant::now();
     let show_top_bar = state.session.top_bar_label().is_some();
     let (display_cols, display_rows) = if let Some(cols_floor) = state.desktop_cols_floor {
@@ -249,10 +263,10 @@ pub fn draw_embedded_pty_in_ui_sized(
             state.desktop_rows_floor.unwrap_or(20) as usize + 1 + usize::from(show_top_bar);
         if state.desktop_live_resize {
             (
-                ((desired.x / FIXED_PTY_CELL_W).floor() as usize)
+                ((desired.x / fixed_cell_w).floor() as usize)
                     .max(cols_floor)
                     .clamp(40, MAX_NATIVE_PTY_COLS),
-                ((desired.y / FIXED_PTY_CELL_H).floor() as usize)
+                ((desired.y / fixed_cell_h).floor() as usize)
                     .max(rows_floor)
                     .clamp(2, MAX_NATIVE_PTY_ROWS + 1 + usize::from(show_top_bar)),
             )
@@ -312,13 +326,15 @@ pub fn draw_embedded_pty_in_ui_sized(
     ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
     let render_rows = pty_rows as usize + usize::from(show_top_bar);
     let (screen, response) = if state.desktop_cols_floor.is_some() {
-        RetroScreen::new_fixed_cell_sized(
+        RetroScreen::new_fixed_cell_sized_tuned(
             ui,
             pty_cols as usize,
             render_rows,
             desired,
-            FIXED_PTY_CELL_W,
-            FIXED_PTY_CELL_H,
+            fixed_cell_w,
+            fixed_cell_h,
+            fixed_font_scale,
+            fixed_font_width_divisor,
         )
     } else {
         RetroScreen::new_sized(ui, pty_cols as usize, render_rows, desired)
