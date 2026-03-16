@@ -8,18 +8,22 @@ use super::data::{
     home_dir_fallback, logs_dir, read_shell_snapshot, read_text_file, save_settings,
     save_text_file, word_processor_dir, write_shell_snapshot,
 };
-use super::donkey_kong::{
-    input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
-    DonkeyKongTheme, BUILTIN_DONKEY_KONG_GAME,
-};
 use super::default_apps_screen::{
     apply_custom_command as apply_default_app_custom_command, draw_default_apps_screen,
     DefaultAppsEvent,
 };
+use super::desktop_app::{DesktopHostedApp, DesktopMenuSection};
 use super::document_browser::{activate_browser_selection, draw_terminal_document_browser};
+use super::donkey_kong::{
+    input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
+    DonkeyKongTheme, BUILTIN_DONKEY_KONG_GAME,
+};
 use super::edit_menus_screen::{
     draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, EditMenusEvent,
     TerminalEditMenusState,
+};
+use super::editor_app::{
+    EditorCommand, EditorTextAlign, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
 use super::file_manager::{FileManagerAction, NativeFileManagerState};
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
@@ -46,16 +50,13 @@ use super::prompt::{
 use super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use super::pty_screen::{
     draw_embedded_pty, draw_embedded_pty_in_ui_focused, handle_pty_input,
-    spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
+    spawn_embedded_pty_with_options, NativePtyState, PtyScreenEvent, TERMINAL_MODE_PTY_CELL_H,
     TERMINAL_MODE_PTY_CELL_W,
-    PtyScreenEvent,
 };
 use super::retro_ui::{
     configure_visuals, current_palette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
-use super::settings_screen::{
-    run_terminal_settings_screen, TerminalSettingsEvent,
-};
+use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_actions::{
     resolve_login_selection, resolve_main_menu_action, LoginSelectionAction,
     MainMenuSelectionAction,
@@ -65,15 +66,14 @@ use super::user_management::{
     handle_selection as handle_user_management_selection,
     screen_for_mode as user_management_screen_for_mode, UserManagementAction,
 };
-use anyhow::{anyhow, Result};
 use crate::config::ConnectionKind;
 use crate::config::{
     cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
     persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
     update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopFileManagerSettings,
-    DesktopIconSortMode, DesktopPtyProfileSettings, DesktopIconStyle, DesktopShortcut,
-    FileManagerSortMode, FileManagerViewMode,
-    OpenMode, Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
+    DesktopIconSortMode, DesktopIconStyle, DesktopPtyProfileSettings, DesktopShortcut,
+    FileManagerSortMode, FileManagerViewMode, OpenMode, Settings, WallpaperSizeMode,
+    CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{
     connect_connection, discovered_row_label, forget_saved_connection, network_requires_password,
@@ -87,6 +87,7 @@ use crate::default_apps::{
     binding_label, parse_custom_command_line, set_binding_for_slot, slot_label, DefaultAppSlot,
 };
 use crate::session;
+use anyhow::{anyhow, Result};
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
@@ -94,7 +95,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -141,17 +142,6 @@ enum LoginScreenMode {
 struct LoginHackingState {
     username: String,
     game: HackingGame,
-}
-
-#[derive(Debug, Clone)]
-struct EditorWindow {
-    open: bool,
-    path: Option<PathBuf>,
-    text: String,
-    dirty: bool,
-    status: String,
-    word_wrap: bool,
-    font_size: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +260,11 @@ struct FileManagerClipboardItem {
 }
 
 #[derive(Debug, Clone)]
+struct NativeFileManagerDragPayload {
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 enum FileManagerEditOp {
     CopyCreated { src: PathBuf, dst: PathBuf },
     Moved { from: PathBuf, to: PathBuf },
@@ -277,6 +272,7 @@ enum FileManagerEditOp {
 
 #[derive(Debug, Clone, Copy)]
 enum FileManagerActionRequest {
+    NewFolder,
     Copy,
     Cut,
     Paste,
@@ -319,9 +315,18 @@ enum ContextMenuAction {
     GenericCopy,
     GenericPaste,
     GenericSelectAll,
-    CreateShortcut { label: String, action: StartLeafAction },
-    RenameStartMenuEntry { target: EditMenuTarget, name: String },
-    RemoveStartMenuEntry { target: EditMenuTarget, name: String },
+    CreateShortcut {
+        label: String,
+        action: StartLeafAction,
+    },
+    RenameStartMenuEntry {
+        target: EditMenuTarget,
+        name: String,
+    },
+    RemoveStartMenuEntry {
+        target: EditMenuTarget,
+        name: String,
+    },
     DeleteShortcut(usize),
     SortDesktopIcons(DesktopIconSortMode),
     ToggleSnapToGrid,
@@ -466,7 +471,7 @@ fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
 }
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
-const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
+const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
 #[derive(Clone, Debug)]
 enum SpotlightCategory {
@@ -667,18 +672,10 @@ pub struct RobcoNativeApp {
     picking_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
-    editor_save_as_input: Option<String>, // Some(path_string) = Save As dialog open
-    editor_show_line_numbers: bool,
-    editor_find_open: bool,
-    editor_find_replace_visible: bool,
-    editor_find_query: String,
-    editor_replace_query: String,
-    editor_find_occurrence: usize,
-    editor_text_align: u8, // 0=Left 1=Center 2=Right
     // Spotlight search
     spotlight_open: bool,
     spotlight_query: String,
-    spotlight_tab: u8,    // 0=All 1=Apps 2=Documents 3=Files
+    spotlight_tab: u8, // 0=All 1=Apps 2=Documents 3=Files
     spotlight_selected: usize,
     spotlight_results: Vec<SpotlightResult>,
     spotlight_last_query: String,
@@ -757,15 +754,7 @@ impl Default for RobcoNativeApp {
             login_hacking: None,
             session: None,
             file_manager: NativeFileManagerState::new(home_dir_fallback()),
-            editor: EditorWindow {
-                open: false,
-                path: None,
-                text: String::new(),
-                dirty: false,
-                status: String::new(),
-                word_wrap: true,
-                font_size: 16.0,
-            },
+            editor: EditorWindow::default(),
             settings: SettingsWindow {
                 open: false,
                 draft: settings_draft,
@@ -848,14 +837,6 @@ impl Default for RobcoNativeApp {
             picking_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
             appearance_tab: 0,
-            editor_save_as_input: None,
-            editor_show_line_numbers: false,
-            editor_find_open: false,
-            editor_find_replace_visible: false,
-            editor_find_query: String::new(),
-            editor_replace_query: String::new(),
-            editor_find_occurrence: 0,
-            editor_text_align: 0,
             spotlight_open: false,
             spotlight_query: String::new(),
             spotlight_tab: 0,
@@ -889,8 +870,7 @@ impl RobcoNativeApp {
         let width = (natural.width() as f32 * scale).round() as u32;
         let height = (natural.height() as f32 * scale).round() as u32;
 
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-            .expect("zero-sized SVG icon");
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).expect("zero-sized SVG icon");
         resvg::render(
             &tree,
             resvg::tiny_skia::Transform::from_scale(scale, scale),
@@ -915,8 +895,8 @@ impl RobcoNativeApp {
         let (width, height) = image.dimensions();
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for pixel in image.pixels() {
-            let luma = ((pixel[0] as u16 * 77 + pixel[1] as u16 * 150 + pixel[2] as u16 * 29)
-                / 256) as u8;
+            let luma =
+                ((pixel[0] as u16 * 77 + pixel[1] as u16 * 150 + pixel[2] as u16 * 29) / 256) as u8;
             rgba.extend_from_slice(&[luma, luma, luma, pixel[3]]);
         }
         let color_image =
@@ -1813,10 +1793,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn desktop_default_window_pos(
-        ctx: &Context,
-        size: egui::Vec2,
-    ) -> egui::Pos2 {
+    fn desktop_default_window_pos(ctx: &Context, size: egui::Vec2) -> egui::Pos2 {
         let workspace = Self::desktop_workspace_rect(ctx);
         let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
         let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
@@ -1835,15 +1812,17 @@ impl RobcoNativeApp {
         )
     }
 
-    fn desktop_clamp_window_pos(
-        ctx: &Context,
-        pos: egui::Pos2,
-        size: egui::Vec2,
-    ) -> egui::Pos2 {
+    fn desktop_clamp_window_pos(ctx: &Context, pos: egui::Pos2, size: egui::Vec2) -> egui::Pos2 {
         let workspace = Self::desktop_workspace_rect(ctx);
         egui::pos2(
-            pos.x.clamp(workspace.left(), (workspace.right() - size.x).max(workspace.left())),
-            pos.y.clamp(workspace.top(), (workspace.bottom() - size.y).max(workspace.top())),
+            pos.x.clamp(
+                workspace.left(),
+                (workspace.right() - size.x).max(workspace.left()),
+            ),
+            pos.y.clamp(
+                workspace.top(),
+                (workspace.bottom() - size.y).max(workspace.top()),
+            ),
         )
     }
 
@@ -1904,18 +1883,15 @@ impl RobcoNativeApp {
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
         ];
-        ORDER
-            .into_iter()
-            .find(|window| self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window))
+        ORDER.into_iter().find(|window| {
+            self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
+        })
     }
 
     fn sync_desktop_active_window(&mut self) {
-        if self
-            .desktop_active_window
-            .is_some_and(|window| {
-                !self.desktop_window_is_open(window) || self.desktop_window_is_minimized(window)
-            })
-        {
+        if self.desktop_active_window.is_some_and(|window| {
+            !self.desktop_window_is_open(window) || self.desktop_window_is_minimized(window)
+        }) {
             self.desktop_active_window = self.first_open_desktop_window();
             return;
         }
@@ -1958,15 +1934,30 @@ impl RobcoNativeApp {
         }
     }
 
+    fn handle_closed_desktop_window(&mut self, window: DesktopWindow) {
+        if self.desktop_mode_open && matches!(window, DesktopWindow::Editor) {
+            self.editor.reset_for_desktop_new_document();
+            self.editor.ui.reset_search();
+        }
+    }
+
     fn close_desktop_window(&mut self, window: DesktopWindow) {
+        let was_open = self.desktop_window_is_open(window);
         self.set_desktop_window_open(window, false);
+        if was_open {
+            self.handle_closed_desktop_window(window);
+        }
         if self.desktop_active_window == Some(window) {
             self.desktop_active_window = self.first_open_desktop_window();
         }
     }
 
     fn update_desktop_window_state(&mut self, window: DesktopWindow, open: bool) {
+        let was_open = self.desktop_window_is_open(window);
         self.set_desktop_window_open(window, open);
+        if was_open && !open {
+            self.handle_closed_desktop_window(window);
+        }
         if !open && self.desktop_active_window == Some(window) {
             self.desktop_active_window = self.first_open_desktop_window();
         }
@@ -1993,7 +1984,7 @@ impl RobcoNativeApp {
     fn desktop_window_title(&self, window: DesktopWindow) -> String {
         match window {
             DesktopWindow::FileManager => "My Computer".to_string(),
-            DesktopWindow::Editor => "ROBCO Word Processor".to_string(),
+            DesktopWindow::Editor => EDITOR_APP_TITLE.to_string(),
             DesktopWindow::Settings => "Settings".to_string(),
             DesktopWindow::Applications => "Applications".to_string(),
             DesktopWindow::DonkeyKong => BUILTIN_DONKEY_KONG_GAME.to_string(),
@@ -2012,6 +2003,21 @@ impl RobcoNativeApp {
         self.desktop_active_window
             .map(|w| self.desktop_window_title(w))
             .unwrap_or_else(|| "Desktop".to_string())
+    }
+
+    fn active_desktop_app(&self) -> DesktopHostedApp {
+        match self.desktop_active_window {
+            Some(DesktopWindow::FileManager) => DesktopHostedApp::FileManager,
+            Some(DesktopWindow::Editor) => DesktopHostedApp::Editor,
+            Some(DesktopWindow::Settings) => DesktopHostedApp::Settings,
+            Some(DesktopWindow::Applications) => DesktopHostedApp::Applications,
+            Some(DesktopWindow::DonkeyKong) => DesktopHostedApp::Game,
+            Some(DesktopWindow::NukeCodes) => DesktopHostedApp::Utility,
+            Some(DesktopWindow::TerminalMode) => DesktopHostedApp::Terminal,
+            Some(DesktopWindow::PtyApp) => DesktopHostedApp::PtyApp,
+            Some(DesktopWindow::Installer) => DesktopHostedApp::Installer,
+            None => DesktopHostedApp::Desktop,
+        }
     }
 
     fn file_manager_view_mode(&self) -> FileManagerViewMode {
@@ -2056,7 +2062,8 @@ impl RobcoNativeApp {
 
     fn file_manager_open_home(&mut self) {
         if let Some(session) = &self.session {
-            self.file_manager.set_cwd(word_processor_dir(&session.username));
+            self.file_manager
+                .set_cwd(word_processor_dir(&session.username));
         } else {
             self.file_manager.set_cwd(home_dir_fallback());
         }
@@ -2089,7 +2096,10 @@ impl RobcoNativeApp {
         })
     }
 
-    fn file_manager_texture_for_row(&self, row: &super::file_manager::FileEntryRow) -> Option<&TextureHandle> {
+    fn file_manager_texture_for_row(
+        &self,
+        row: &super::file_manager::FileEntryRow,
+    ) -> Option<&TextureHandle> {
         let cache = self.asset_cache.as_ref()?;
         if row.is_parent_dir() {
             return Some(&cache.icon_folder_open);
@@ -2104,9 +2114,9 @@ impl RobcoNativeApp {
             .unwrap_or("")
             .to_ascii_lowercase();
         Some(match extension.as_str() {
-            "txt" | "md" | "log" | "toml" | "yaml" | "yml" | "json" | "cfg" | "ini"
-            | "conf" | "ron" | "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "hpp"
-            | "sh" | "bash" | "fish" | "lua" | "rb" => &cache.icon_text,
+            "txt" | "md" | "log" | "toml" | "yaml" | "yml" | "json" | "cfg" | "ini" | "conf"
+            | "ron" | "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "hpp" | "sh" | "bash"
+            | "fish" | "lua" | "rb" => &cache.icon_text,
             "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => &cache.icon_image,
             "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" => &cache.icon_audio,
             "mp4" | "mkv" | "avi" | "mov" | "webm" => &cache.icon_video,
@@ -2122,10 +2132,35 @@ impl RobcoNativeApp {
         self.file_manager.selected_row()
     }
 
+    fn file_manager_selected_entries(&self) -> Vec<super::file_manager::FileEntryRow> {
+        self.file_manager.selected_rows_for_action()
+    }
+
+    fn file_manager_has_editable_selection(&self) -> bool {
+        !self.file_manager_selected_entries().is_empty()
+    }
+
+    fn file_manager_selection_count(&self) -> usize {
+        self.file_manager_selected_entries().len()
+    }
+
+    fn file_manager_select_path(&mut self, path: PathBuf, ctrl_toggle: bool, allow_multi: bool) {
+        if allow_multi && ctrl_toggle {
+            self.file_manager.toggle_selected_path(&path);
+        } else {
+            self.file_manager.select(Some(path));
+        }
+    }
+
     /// Returns the SVG preview from cache if available, otherwise the default asset icon.
     /// Returns an owned TextureHandle (Arc clone) so callers don't borrow self across &mut calls.
-    fn svg_preview_texture(&self, row: &super::file_manager::FileEntryRow) -> Option<TextureHandle> {
-        let is_svg = row.path.extension()
+    fn svg_preview_texture(
+        &self,
+        row: &super::file_manager::FileEntryRow,
+    ) -> Option<TextureHandle> {
+        let is_svg = row
+            .path
+            .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.eq_ignore_ascii_case("svg"))
             .unwrap_or(false);
@@ -2202,10 +2237,17 @@ impl RobcoNativeApp {
 
     fn sync_open_with_settings_to_draft(&mut self) {
         let live = get_settings();
-        self.settings.draft.desktop_file_manager.open_with_by_extension =
-            live.desktop_file_manager.open_with_by_extension.clone();
-        self.settings.draft.desktop_file_manager.open_with_default_by_extension =
-            live.desktop_file_manager.open_with_default_by_extension.clone();
+        self.settings
+            .draft
+            .desktop_file_manager
+            .open_with_by_extension = live.desktop_file_manager.open_with_by_extension.clone();
+        self.settings
+            .draft
+            .desktop_file_manager
+            .open_with_default_by_extension = live
+            .desktop_file_manager
+            .open_with_default_by_extension
+            .clone();
     }
 
     fn set_open_with_default_in_settings(
@@ -2288,12 +2330,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn replace_open_with_command(
-        &mut self,
-        ext_key: &str,
-        old_command: &str,
-        new_command: &str,
-    ) {
+    fn replace_open_with_command(&mut self, ext_key: &str, old_command: &str, new_command: &str) {
         let old_normalized = old_command.trim();
         let new_normalized = new_command.trim();
         if old_normalized.is_empty() || new_normalized.is_empty() {
@@ -2382,15 +2419,19 @@ impl RobcoNativeApp {
     }
 
     fn file_manager_selected_file(&self) -> Option<super::file_manager::FileEntryRow> {
-        let entry = self.file_manager_selected_entry()?;
-        if entry.path.is_file() {
-            Some(entry)
-        } else {
-            None
+        let mut entries = self.file_manager_selected_entries();
+        if entries.len() != 1 {
+            return None;
         }
+        let entry = entries.pop()?;
+        entry.path.is_file().then_some(entry)
     }
 
-    fn unique_copy_path_in_dir(dir: &Path, original_name: &str, prefer_copy_suffix: bool) -> PathBuf {
+    fn unique_copy_path_in_dir(
+        dir: &Path,
+        original_name: &str,
+        prefer_copy_suffix: bool,
+    ) -> PathBuf {
         let direct = dir.join(original_name);
         if !prefer_copy_suffix && !direct.exists() {
             return direct;
@@ -2415,8 +2456,9 @@ impl RobcoNativeApp {
         if !direct.exists() {
             return direct;
         }
+        let (stem, ext) = Self::split_file_name(original_name);
         for index in 1..=9999usize {
-            let candidate = dir.join(format!("{original_name}.{index}"));
+            let candidate = dir.join(format!("{stem} ({index}){ext}"));
             if !candidate.exists() {
                 return candidate;
             }
@@ -2425,8 +2467,8 @@ impl RobcoNativeApp {
     }
 
     fn copy_path_recursive(src: &Path, dst: &Path) -> Result<()> {
-        let meta = std::fs::metadata(src)
-            .map_err(|e| anyhow!("Failed reading {}: {e}", src.display()))?;
+        let meta =
+            std::fs::metadata(src).map_err(|e| anyhow!("Failed reading {}: {e}", src.display()))?;
         if meta.is_dir() {
             std::fs::create_dir_all(dst)
                 .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
@@ -2517,35 +2559,63 @@ impl RobcoNativeApp {
         &mut self,
         mode: FileManagerClipboardMode,
     ) -> Result<String> {
-        let Some(entry) = self.file_manager_selected_entry() else {
+        let entries = self.file_manager_selected_entries();
+        if entries.is_empty() {
             return Err(anyhow!("Select a file or folder first."));
-        };
+        }
+        let clipboard_paths: Vec<PathBuf> =
+            entries.iter().map(|entry| entry.path.clone()).collect();
         self.file_clipboard = Some(FileManagerClipboardItem {
-            paths: vec![entry.path.clone()],
+            paths: clipboard_paths,
             mode: mode.clone(),
         });
+        let noun = if entries.len() == 1 {
+            entries[0].label.clone()
+        } else {
+            format!("{} items", entries.len())
+        };
         Ok(match mode {
-            FileManagerClipboardMode::Copy => format!("Copied {}", entry.label),
-            FileManagerClipboardMode::Cut => format!("Cut {}", entry.label),
+            FileManagerClipboardMode::Copy => format!("Copied {noun}"),
+            FileManagerClipboardMode::Cut => format!("Cut {noun}"),
         })
     }
 
-    fn file_manager_duplicate_selected(&mut self) -> Result<String> {
-        let Some(entry) = self.file_manager_selected_entry() else {
-            return Err(anyhow!("Select a file or folder first."));
-        };
-        let Some(parent) = entry.path.parent() else {
-            return Err(anyhow!("Cannot duplicate this item."));
-        };
-        let name = Self::path_display_name(&entry.path);
-        let dst = Self::unique_copy_path_in_dir(parent, &name, true);
-        Self::copy_path_recursive(&entry.path, &dst)?;
-        self.record_file_manager_edit_op(FileManagerEditOp::CopyCreated {
-            src: entry.path,
-            dst: dst.clone(),
-        });
+    fn file_manager_create_new_folder(&mut self) -> Result<String> {
+        let dst = Self::unique_path_in_dir(&self.file_manager.cwd, "New Folder");
+        std::fs::create_dir_all(&dst)
+            .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
         self.file_manager.select(Some(dst.clone()));
-        Ok(format!("Duplicated as {}", Self::path_display_name(&dst)))
+        Ok(format!("Created {}", Self::path_display_name(&dst)))
+    }
+
+    fn file_manager_duplicate_selected(&mut self) -> Result<String> {
+        let entries = self.file_manager_selected_entries();
+        if entries.is_empty() {
+            return Err(anyhow!("Select a file or folder first."));
+        }
+        let mut created = Vec::new();
+        for entry in entries {
+            let Some(parent) = entry.path.parent() else {
+                continue;
+            };
+            let name = Self::path_display_name(&entry.path);
+            let dst = Self::unique_copy_path_in_dir(parent, &name, true);
+            Self::copy_path_recursive(&entry.path, &dst)?;
+            self.record_file_manager_edit_op(FileManagerEditOp::CopyCreated {
+                src: entry.path,
+                dst: dst.clone(),
+            });
+            created.push(dst);
+        }
+        let Some(last) = created.last().cloned() else {
+            return Err(anyhow!("Cannot duplicate this selection."));
+        };
+        self.file_manager.select(Some(last.clone()));
+        if created.len() == 1 {
+            Ok(format!("Duplicated as {}", Self::path_display_name(&last)))
+        } else {
+            Ok(format!("Duplicated {} items", created.len()))
+        }
     }
 
     fn file_manager_rename_selected(&mut self, new_name: String) -> Result<String> {
@@ -2605,6 +2675,79 @@ impl RobcoNativeApp {
         }
         self.file_manager.select(Some(dst.clone()));
         Ok(format!("Moved to {}", dst.display()))
+    }
+
+    fn file_manager_can_move_path_to_dir(src: &Path, target_dir: &Path) -> bool {
+        if src == target_dir {
+            return false;
+        }
+        if src.parent().is_some_and(|parent| parent == target_dir) {
+            return false;
+        }
+        !(src.is_dir() && target_dir.starts_with(src))
+    }
+
+    fn file_manager_move_paths_to_dir(
+        &mut self,
+        paths: Vec<PathBuf>,
+        target_dir: &Path,
+    ) -> Result<String> {
+        if !target_dir.is_dir() {
+            return Err(anyhow!("Destination folder does not exist."));
+        }
+        let mut seen = HashSet::new();
+        let mut moved = Vec::new();
+        let target_dir = target_dir.to_path_buf();
+        for src in paths {
+            if !seen.insert(src.clone()) || !src.exists() {
+                continue;
+            }
+            if !Self::file_manager_can_move_path_to_dir(&src, &target_dir) {
+                continue;
+            }
+            let source_name = Self::path_display_name(&src);
+            let mut dst = target_dir.join(&source_name);
+            if dst.exists() {
+                dst = Self::unique_path_in_dir(&target_dir, &source_name);
+            }
+            if dst == src {
+                continue;
+            }
+            Self::move_path(&src, &dst)?;
+            self.record_file_manager_edit_op(FileManagerEditOp::Moved {
+                from: src,
+                to: dst.clone(),
+            });
+            moved.push(dst);
+        }
+        if moved.is_empty() {
+            return Err(anyhow!("Nothing to move."));
+        }
+        if target_dir == self.file_manager.cwd {
+            if let Some(last) = moved.last().cloned() {
+                self.file_manager.select(Some(last));
+            }
+        } else {
+            self.file_manager.ensure_selection_valid();
+        }
+        if moved.len() == 1 {
+            Ok(format!("Moved {}", Self::path_display_name(&moved[0])))
+        } else {
+            Ok(format!("Moved {} items", moved.len()))
+        }
+    }
+
+    fn file_manager_drop_allowed(paths: &[PathBuf], target_dir: &Path) -> bool {
+        paths
+            .iter()
+            .any(|src| src.exists() && Self::file_manager_can_move_path_to_dir(src, target_dir))
+    }
+
+    fn file_manager_handle_drop_to_dir(&mut self, paths: Vec<PathBuf>, target_dir: PathBuf) {
+        self.shell_status = match self.file_manager_move_paths_to_dir(paths, &target_dir) {
+            Ok(message) => message,
+            Err(err) => format!("File action failed: {err}"),
+        };
     }
 
     fn file_manager_paste_clipboard(&mut self) -> Result<String> {
@@ -2677,21 +2820,30 @@ impl RobcoNativeApp {
     }
 
     fn file_manager_delete_selected(&mut self) -> Result<String> {
-        let Some(entry) = self.file_manager_selected_entry() else {
+        let entries = self.file_manager_selected_entries();
+        if entries.is_empty() {
             return Err(anyhow!("Select a file or folder first."));
-        };
+        }
         let trash_dir = crate::config::base_dir().join(".fm_trash");
         std::fs::create_dir_all(&trash_dir)
             .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
-        let name = Self::path_display_name(&entry.path);
-        let trash_target = Self::unique_path_in_dir(&trash_dir, &name);
-        Self::move_path(&entry.path, &trash_target)?;
-        self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-            from: entry.path,
-            to: trash_target,
-        });
+        let mut moved = 0usize;
+        for entry in entries {
+            let name = Self::path_display_name(&entry.path);
+            let trash_target = Self::unique_path_in_dir(&trash_dir, &name);
+            Self::move_path(&entry.path, &trash_target)?;
+            self.record_file_manager_edit_op(FileManagerEditOp::Moved {
+                from: entry.path,
+                to: trash_target,
+            });
+            moved += 1;
+        }
         self.file_manager.ensure_selection_valid();
-        Ok(format!("Moved {name} to trash"))
+        if moved == 1 {
+            Ok("Moved item to trash".to_string())
+        } else {
+            Ok(format!("Moved {moved} items to trash"))
+        }
     }
 
     fn file_manager_undo(&mut self) -> Result<String> {
@@ -2716,6 +2868,7 @@ impl RobcoNativeApp {
 
     fn run_file_manager_action(&mut self, action: FileManagerActionRequest) {
         let outcome = match action {
+            FileManagerActionRequest::NewFolder => self.file_manager_create_new_folder(),
             FileManagerActionRequest::Copy => {
                 self.file_manager_set_clipboard_from_selected(FileManagerClipboardMode::Copy)
             }
@@ -2751,7 +2904,9 @@ impl RobcoNativeApp {
             ContextMenuAction::Rename => self.open_file_manager_rename_prompt(),
             ContextMenuAction::Cut => self.run_file_manager_action(FileManagerActionRequest::Cut),
             ContextMenuAction::Copy => self.run_file_manager_action(FileManagerActionRequest::Copy),
-            ContextMenuAction::Paste => self.run_file_manager_action(FileManagerActionRequest::Paste),
+            ContextMenuAction::Paste => {
+                self.run_file_manager_action(FileManagerActionRequest::Paste)
+            }
             ContextMenuAction::Duplicate => {
                 self.run_file_manager_action(FileManagerActionRequest::Duplicate)
             }
@@ -2765,7 +2920,7 @@ impl RobcoNativeApp {
                 self.shell_status = "Desktop paste is not implemented yet.".to_string();
             }
             ContextMenuAction::NewFolder => {
-                self.shell_status = "Desktop folder creation is not implemented yet.".to_string();
+                self.run_file_manager_action(FileManagerActionRequest::NewFolder);
             }
             ContextMenuAction::ChangeAppearance => {
                 self.open_desktop_window(DesktopWindow::Settings);
@@ -2780,21 +2935,26 @@ impl RobcoNativeApp {
             ContextMenuAction::CreateShortcut { label, action } => {
                 let (app_name, launch_command, shortcut_kind) = match &action {
                     StartLeafAction::LaunchConfiguredApp(name) => {
-                        let cmd = resolve_program_command(name, &load_apps()).ok()
+                        let cmd = resolve_program_command(name, &load_apps())
+                            .ok()
                             .map(|args| args.join(" "));
                         (name.clone(), cmd, "app".to_string())
                     }
                     StartLeafAction::LaunchNetworkProgram(name) => {
-                        let cmd = resolve_program_command(name, &load_networks()).ok()
+                        let cmd = resolve_program_command(name, &load_networks())
+                            .ok()
                             .map(|args| args.join(" "));
                         (name.clone(), cmd, "network".to_string())
                     }
                     StartLeafAction::LaunchGameProgram(name) => {
-                        let cmd = resolve_program_command(name, &load_games()).ok()
+                        let cmd = resolve_program_command(name, &load_games())
+                            .ok()
                             .map(|args| args.join(" "));
                         (name.clone(), cmd, "game".to_string())
                     }
-                    StartLeafAction::LaunchNukeCodes => (label.clone(), None, "nuke_codes".to_string()),
+                    StartLeafAction::LaunchNukeCodes => {
+                        (label.clone(), None, "nuke_codes".to_string())
+                    }
                     StartLeafAction::OpenTextEditor => (label.clone(), None, "editor".to_string()),
                     _ => (label.clone(), None, "app".to_string()),
                 };
@@ -2830,10 +2990,16 @@ impl RobcoNativeApp {
                 self.settings.draft.desktop_icon_sort = mode;
                 match mode {
                     DesktopIconSortMode::ByName => {
-                        self.settings.draft.desktop_shortcuts.sort_by(|a, b| a.label.cmp(&b.label));
+                        self.settings
+                            .draft
+                            .desktop_shortcuts
+                            .sort_by(|a, b| a.label.cmp(&b.label));
                     }
                     DesktopIconSortMode::ByType => {
-                        self.settings.draft.desktop_shortcuts.sort_by(|a, b| a.app_name.cmp(&b.app_name));
+                        self.settings
+                            .draft
+                            .desktop_shortcuts
+                            .sort_by(|a, b| a.app_name.cmp(&b.app_name));
                     }
                     DesktopIconSortMode::Custom => {}
                 }
@@ -2841,11 +3007,16 @@ impl RobcoNativeApp {
                 self.persist_native_settings();
             }
             ContextMenuAction::ToggleSnapToGrid => {
-                self.settings.draft.desktop_snap_to_grid = !self.settings.draft.desktop_snap_to_grid;
+                self.settings.draft.desktop_snap_to_grid =
+                    !self.settings.draft.desktop_snap_to_grid;
                 self.persist_native_settings();
             }
             ContextMenuAction::LaunchShortcut(name) => {
-                let custom_cmd = self.settings.draft.desktop_shortcuts.iter()
+                let custom_cmd = self
+                    .settings
+                    .draft
+                    .desktop_shortcuts
+                    .iter()
                     .find(|s| s.app_name == name)
                     .and_then(|s| s.launch_command.clone());
                 if let Some(cmd) = custom_cmd {
@@ -2860,7 +3031,10 @@ impl RobcoNativeApp {
                     self.shortcut_properties = Some(ShortcutPropertiesState {
                         shortcut_idx: idx,
                         name_draft: sc.label.clone(),
-                        command_draft: sc.launch_command.clone().unwrap_or_else(|| sc.app_name.clone()),
+                        command_draft: sc
+                            .launch_command
+                            .clone()
+                            .unwrap_or_else(|| sc.app_name.clone()),
                         icon_path_draft: sc.icon_path.clone(),
                     });
                 }
@@ -2940,6 +3114,10 @@ impl RobcoNativeApp {
                 *action = Some(ContextMenuAction::Paste);
                 ui.close_menu();
             }
+            if ui.button("New Folder").clicked() {
+                *action = Some(ContextMenuAction::NewFolder);
+                ui.close_menu();
+            }
             let duplicate = if has_selection {
                 ui.button("Duplicate")
             } else {
@@ -2991,18 +3169,34 @@ impl RobcoNativeApp {
                 Self::apply_context_menu_style(ui);
                 ui.set_min_width(140.0);
                 ui.set_max_width(180.0);
-                let name_label = if sort_mode == DesktopIconSortMode::ByName { "✓ Sort by Name" } else { "  Sort by Name" };
-                let type_label = if sort_mode == DesktopIconSortMode::ByType { "✓ Sort by Type" } else { "  Sort by Type" };
+                let name_label = if sort_mode == DesktopIconSortMode::ByName {
+                    "✓ Sort by Name"
+                } else {
+                    "  Sort by Name"
+                };
+                let type_label = if sort_mode == DesktopIconSortMode::ByType {
+                    "✓ Sort by Type"
+                } else {
+                    "  Sort by Type"
+                };
                 if ui.button(name_label).clicked() {
-                    *action = Some(ContextMenuAction::SortDesktopIcons(DesktopIconSortMode::ByName));
+                    *action = Some(ContextMenuAction::SortDesktopIcons(
+                        DesktopIconSortMode::ByName,
+                    ));
                     ui.close_menu();
                 }
                 if ui.button(type_label).clicked() {
-                    *action = Some(ContextMenuAction::SortDesktopIcons(DesktopIconSortMode::ByType));
+                    *action = Some(ContextMenuAction::SortDesktopIcons(
+                        DesktopIconSortMode::ByType,
+                    ));
                     ui.close_menu();
                 }
                 Self::retro_separator(ui);
-                let snap_label = if snap_to_grid { "✓ Snap to Grid" } else { "  Snap to Grid" };
+                let snap_label = if snap_to_grid {
+                    "✓ Snap to Grid"
+                } else {
+                    "  Snap to Grid"
+                };
                 if ui.button(snap_label).clicked() {
                     *action = Some(ContextMenuAction::ToggleSnapToGrid);
                     ui.close_menu();
@@ -3088,12 +3282,7 @@ impl RobcoNativeApp {
         vec![words[..split_idx].join(" "), words[split_idx..].join(" ")]
     }
 
-    fn paint_desktop_icon_label(
-        ui: &mut egui::Ui,
-        rect: egui::Rect,
-        label: &str,
-        color: Color32,
-    ) {
+    fn paint_desktop_icon_label(ui: &mut egui::Ui, rect: egui::Rect, label: &str, color: Color32) {
         let lines = Self::desktop_icon_label_lines(label);
         if lines.len() == 1 {
             ui.painter().text(
@@ -3140,8 +3329,8 @@ impl RobcoNativeApp {
         let snap = self.settings.draft.desktop_snap_to_grid;
         let sort_mode = self.settings.draft.desktop_icon_sort;
         let workspace = Self::desktop_workspace_rect(ui.ctx());
-        let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) =
-            match style {
+        let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) = match style
+        {
             DesktopIconStyle::Minimal => (34.0, 0.0, 46.0, 48.0),
             DesktopIconStyle::Win95 | DesktopIconStyle::Dos => (48.0, 28.0, 84.0, 100.0),
             DesktopIconStyle::NoIcons => return,
@@ -3204,7 +3393,8 @@ impl RobcoNativeApp {
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         let mut default_positions: HashMap<String, egui::Pos2> = HashMap::new();
         if !matches!(sort_mode, DesktopIconSortMode::Custom) {
-            let rows_per_column = (((workspace.height() - 16.0) / item_height).floor() as usize).max(1);
+            let rows_per_column =
+                (((workspace.height() - 16.0) / item_height).floor() as usize).max(1);
             let mut ordered_icons: Vec<(String, String, usize, usize)> = Vec::new();
             for (idx, (_, key, label, _, _)) in builtin_entries.iter().enumerate() {
                 if !hidden_icons.contains(&key.to_string()) {
@@ -3256,12 +3446,16 @@ impl RobcoNativeApp {
         let mut shortcut_action: Option<ContextMenuAction> = None;
         let mut needs_persist = false;
 
-        for (index, (texture, key, label, ascii, target_window)) in builtin_entries.iter().enumerate()
+        for (index, (texture, key, label, ascii, target_window)) in
+            builtin_entries.iter().enumerate()
         {
             if hidden_icons.contains(&key.to_string()) {
                 continue;
             }
-            let stored_pos = self.settings.draft.desktop_icon_custom_positions
+            let stored_pos = self
+                .settings
+                .draft
+                .desktop_icon_custom_positions
                 .get(*key)
                 .map(|&[x, y]| egui::pos2(x, y));
             let top_left = stored_pos.unwrap_or_else(|| {
@@ -3282,7 +3476,10 @@ impl RobcoNativeApp {
                 egui::vec2(column_width, label_height.max(16.0)),
             );
             let hit_rect = if label_height > 0.0 {
-                egui::Rect::from_min_size(top_left, egui::vec2(column_width, icon_size + label_height + 2.0))
+                egui::Rect::from_min_size(
+                    top_left,
+                    egui::vec2(column_width, icon_size + label_height + 2.0),
+                )
             } else {
                 icon_rect
             };
@@ -3311,14 +3508,20 @@ impl RobcoNativeApp {
 
             if response.dragged() {
                 let new_pos = top_left + response.drag_delta();
-                self.settings.draft.desktop_icon_custom_positions
+                self.settings
+                    .draft
+                    .desktop_icon_custom_positions
                     .insert(key.to_string(), [new_pos.x, new_pos.y]);
             }
             if response.drag_stopped() {
                 if snap {
-                    if let Some(&[x, y]) = self.settings.draft.desktop_icon_custom_positions.get(*key) {
+                    if let Some(&[x, y]) =
+                        self.settings.draft.desktop_icon_custom_positions.get(*key)
+                    {
                         let snapped = snap_pos(egui::pos2(x, y));
-                        self.settings.draft.desktop_icon_custom_positions
+                        self.settings
+                            .draft
+                            .desktop_icon_custom_positions
                             .insert(key.to_string(), [snapped.x, snapped.y]);
                     }
                 }
@@ -3336,7 +3539,10 @@ impl RobcoNativeApp {
 
         for (sidx, shortcut) in shortcuts.iter().enumerate() {
             let key = format!("shortcut_{}", sidx);
-            let stored_pos = self.settings.draft.desktop_icon_custom_positions
+            let stored_pos = self
+                .settings
+                .draft
+                .desktop_icon_custom_positions
                 .get(&key)
                 .map(|&[x, y]| egui::pos2(x, y));
             let default_shortcut_pos = default_positions.get(&key).copied().unwrap_or_else(|| {
@@ -3356,7 +3562,10 @@ impl RobcoNativeApp {
                 egui::vec2(column_width, label_height.max(16.0)),
             );
             let hit_rect = if label_height > 0.0 {
-                egui::Rect::from_min_size(top_left, egui::vec2(column_width, icon_size + label_height + 2.0))
+                egui::Rect::from_min_size(
+                    top_left,
+                    egui::vec2(column_width, icon_size + label_height + 2.0),
+                )
             } else {
                 icon_rect
             };
@@ -3376,19 +3585,20 @@ impl RobcoNativeApp {
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
                     // Try to use a custom icon texture if icon_path is set
                     let icon_path_clone = shortcut.icon_path.clone();
-                    let icon_tex: Option<egui::TextureHandle> = if let Some(ref path) = icon_path_clone {
-                        if let Some(tex) = self.shortcut_icon_cache.get(path) {
-                            Some(tex.clone())
-                        } else if let Ok(bytes) = std::fs::read(path) {
-                            let tex = Self::load_svg_icon(ui.ctx(), path, &bytes, Some(48));
-                            self.shortcut_icon_cache.insert(path.clone(), tex.clone());
-                            Some(tex)
+                    let icon_tex: Option<egui::TextureHandle> =
+                        if let Some(ref path) = icon_path_clone {
+                            if let Some(tex) = self.shortcut_icon_cache.get(path) {
+                                Some(tex.clone())
+                            } else if let Ok(bytes) = std::fs::read(path) {
+                                let tex = Self::load_svg_icon(ui.ctx(), path, &bytes, Some(48));
+                                self.shortcut_icon_cache.insert(path.clone(), tex.clone());
+                                Some(tex)
+                            } else {
+                                None
+                            }
                         } else {
                             None
-                        }
-                    } else {
-                        None
-                    };
+                        };
                     if let Some(tex) = icon_tex {
                         Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, palette.fg);
                     } else {
@@ -3406,7 +3616,12 @@ impl RobcoNativeApp {
                         egui::vec2(badge_size, badge_size),
                     );
                     ui.painter().rect_filled(badge_rect, 0.0, Color32::BLACK);
-                    Self::paint_tinted_texture(ui.painter(), &tex_shortcut_badge, badge_rect, palette.fg);
+                    Self::paint_tinted_texture(
+                        ui.painter(),
+                        &tex_shortcut_badge,
+                        badge_rect,
+                        palette.fg,
+                    );
                 }
                 DesktopIconStyle::NoIcons => {}
             }
@@ -3417,14 +3632,20 @@ impl RobcoNativeApp {
 
             if response.dragged() {
                 let new_pos = top_left + response.drag_delta();
-                self.settings.draft.desktop_icon_custom_positions
+                self.settings
+                    .draft
+                    .desktop_icon_custom_positions
                     .insert(key.clone(), [new_pos.x, new_pos.y]);
             }
             if response.drag_stopped() {
                 if snap {
-                    if let Some(&[x, y]) = self.settings.draft.desktop_icon_custom_positions.get(&key) {
+                    if let Some(&[x, y]) =
+                        self.settings.draft.desktop_icon_custom_positions.get(&key)
+                    {
                         let snapped = snap_pos(egui::pos2(x, y));
-                        self.settings.draft.desktop_icon_custom_positions
+                        self.settings
+                            .draft
+                            .desktop_icon_custom_positions
                             .insert(key.clone(), [snapped.x, snapped.y]);
                     }
                 }
@@ -3437,7 +3658,8 @@ impl RobcoNativeApp {
                 ui.set_min_width(136.0);
                 ui.set_max_width(180.0);
                 if ui.button("Open").clicked() {
-                    shortcut_action = Some(ContextMenuAction::LaunchShortcut(app_name_for_menu.clone()));
+                    shortcut_action =
+                        Some(ContextMenuAction::LaunchShortcut(app_name_for_menu.clone()));
                     ui.close_menu();
                 }
                 Self::retro_separator(ui);
@@ -3453,7 +3675,8 @@ impl RobcoNativeApp {
             });
 
             if response.double_clicked() {
-                shortcut_action = Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
+                shortcut_action =
+                    Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
             }
         }
 
@@ -3482,77 +3705,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_editor_save_as_window(&mut self, ctx: &egui::Context) {
-        let Some(ref mut path_input) = self.editor_save_as_input else {
-            return;
-        };
-        let palette = current_palette();
-        let mut close = false;
-        let mut confirm_path: Option<String> = None;
-
-        egui::Window::new("editor_save_as_window")
-            .title_bar(false)
-            .resizable(false)
-            .collapsible(false)
-            .fixed_size(egui::vec2(440.0, 110.0))
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                Self::apply_top_dropdown_menu_style(ui);
-                ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
-                ui.painter().rect_stroke(ui.max_rect(), 0.0, egui::Stroke::new(1.0, palette.fg));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Save As").color(palette.fg).strong());
-                });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new("Path:").color(palette.dim));
-                    let input = egui::TextEdit::singleline(path_input)
-                        .desired_width(ui.available_width() - 16.0)
-                        .text_color(palette.fg)
-                        .frame(true);
-                    let response = ui.add(input);
-                    if response.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        confirm_path = Some(path_input.clone());
-                    }
-                    ui.add_space(8.0);
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    if ui.button("Save").clicked() {
-                        confirm_path = Some(path_input.clone());
-                    }
-                    ui.add_space(8.0);
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
-            });
-
-        if let Some(raw_path) = confirm_path {
-            let path = std::path::PathBuf::from(&raw_path);
-            match save_text_file(&path, &self.editor.text) {
-                Ok(()) => {
-                    let name = path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("document")
-                        .to_string();
-                    self.editor.path = Some(path);
-                    self.editor.dirty = false;
-                    self.editor.status = format!("Saved {name}.");
-                }
-                Err(err) => {
-                    self.editor.status = format!("Save failed: {err}");
-                }
-            }
-            self.editor_save_as_input = None;
-        } else if close {
-            self.editor_save_as_input = None;
-        }
-    }
+    fn draw_editor_save_as_window(&mut self, _ctx: &egui::Context) {}
 
     // ── SPOTLIGHT SEARCH ─────────────────────────────────────────────────
 
@@ -3568,9 +3721,8 @@ impl RobcoNativeApp {
         self.spotlight_results.clear();
         self.spotlight_selected = 0;
 
-        let matches_query = |name: &str| -> bool {
-            query.is_empty() || name.to_lowercase().contains(&query)
-        };
+        let matches_query =
+            |name: &str| -> bool { query.is_empty() || name.to_lowercase().contains(&query) };
 
         // Apps (tab 0=All or 1=Apps)
         if tab == 0 || tab == 1 {
@@ -3699,23 +3851,17 @@ impl RobcoNativeApp {
                 _ => {}
             },
             SpotlightCategory::App => {
-                self.launch_named_program_from_map(
-                    &result.name, &load_apps(), &result.name,
-                );
+                self.launch_named_program_from_map(&result.name, &load_apps(), &result.name);
             }
             SpotlightCategory::Game => {
                 if result.name == BUILTIN_DONKEY_KONG_GAME {
                     self.open_desktop_window(DesktopWindow::DonkeyKong);
                 } else {
-                    self.launch_named_program_from_map(
-                        &result.name, &load_games(), &result.name,
-                    );
+                    self.launch_named_program_from_map(&result.name, &load_games(), &result.name);
                 }
             }
             SpotlightCategory::Network => {
-                self.launch_named_program_from_map(
-                    &result.name, &load_networks(), &result.name,
-                );
+                self.launch_named_program_from_map(&result.name, &load_networks(), &result.name);
             }
             SpotlightCategory::Document => {
                 if let Some(path) = &result.path {
@@ -3750,8 +3896,7 @@ impl RobcoNativeApp {
         let mut scroll_selected_into_view = false;
         if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
             if !self.spotlight_results.is_empty() {
-                let next =
-                    (self.spotlight_selected + 1).min(self.spotlight_results.len() - 1);
+                let next = (self.spotlight_selected + 1).min(self.spotlight_results.len() - 1);
                 if next != self.spotlight_selected {
                     self.spotlight_selected = next;
                     scroll_selected_into_view = true;
@@ -3875,13 +4020,9 @@ impl RobcoNativeApp {
                     .show(ui, |ui| {
                         if self.spotlight_results.is_empty() {
                             if self.spotlight_query.is_empty() {
-                                ui.label(
-                                    RichText::new("Type to search…").color(palette.dim),
-                                );
+                                ui.label(RichText::new("Type to search…").color(palette.dim));
                             } else {
-                                ui.label(
-                                    RichText::new("No results found.").color(palette.dim),
-                                );
+                                ui.label(RichText::new("No results found.").color(palette.dim));
                             }
                         } else {
                             for (i, result) in self.spotlight_results.iter().enumerate() {
@@ -3895,17 +4036,11 @@ impl RobcoNativeApp {
                                     SpotlightCategory::Network => "NET",
                                 };
                                 let display = format!("[{cat_label}]  {}", result.name);
-                                let text_color = if selected {
-                                    Color32::BLACK
-                                } else {
-                                    palette.fg
-                                };
-                                let resp = ui.add(
-                                    egui::SelectableLabel::new(
-                                        selected,
-                                        RichText::new(display).color(text_color),
-                                    ),
-                                );
+                                let text_color = if selected { Color32::BLACK } else { palette.fg };
+                                let resp = ui.add(egui::SelectableLabel::new(
+                                    selected,
+                                    RichText::new(display).color(text_color),
+                                ));
                                 if resp.clicked() {
                                     activate_idx = Some(i);
                                 }
@@ -3948,7 +4083,8 @@ impl RobcoNativeApp {
                 Self::apply_settings_control_style(ui);
 
                 // Header
-                let header_action = Self::draw_desktop_window_header(ui, "Shortcut Properties", false);
+                let header_action =
+                    Self::draw_desktop_window_header(ui, "Shortcut Properties", false);
                 if matches!(header_action, DesktopHeaderAction::Close) {
                     action = Some("cancel");
                 }
@@ -3964,14 +4100,14 @@ impl RobcoNativeApp {
                         egui::Sense::hover(),
                     );
                     // Draw current icon
-                    let icon_tex: Option<egui::TextureHandle> = icon_path_draft.as_ref().and_then(|p| {
-                        self.shortcut_icon_cache.get(p).cloned()
-                            .or_else(|| {
-                                std::fs::read(p).ok().map(|bytes| {
-                                    Self::load_svg_icon(ctx, p, &bytes, Some(48))
-                                })
+                    let icon_tex: Option<egui::TextureHandle> =
+                        icon_path_draft.as_ref().and_then(|p| {
+                            self.shortcut_icon_cache.get(p).cloned().or_else(|| {
+                                std::fs::read(p)
+                                    .ok()
+                                    .map(|bytes| Self::load_svg_icon(ctx, p, &bytes, Some(48)))
                             })
-                    });
+                        });
                     if let Some(tex) = icon_tex {
                         Self::paint_tinted_texture(ui.painter(), &tex, rect, palette.fg);
                     } else if let Some(cache) = &self.asset_cache {
@@ -3979,7 +4115,12 @@ impl RobcoNativeApp {
                         Self::paint_tinted_texture(ui.painter(), &icon, rect, palette.fg);
                     }
                     ui.add_space(8.0);
-                    ui.label(RichText::new(&name_draft).strong().monospace().color(palette.fg));
+                    ui.label(
+                        RichText::new(&name_draft)
+                            .strong()
+                            .monospace()
+                            .color(palette.fg),
+                    );
                 });
 
                 ui.add_space(8.0);
@@ -4019,7 +4160,12 @@ impl RobcoNativeApp {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_default();
-                        ui.label(RichText::new(filename).small().monospace().color(palette.dim));
+                        ui.label(
+                            RichText::new(filename)
+                                .small()
+                                .monospace()
+                                .color(palette.dim),
+                        );
                     }
                 });
 
@@ -4064,7 +4210,8 @@ impl RobcoNativeApp {
                 self.shortcut_properties = None;
             }
             Some("change_icon") => {
-                let icons_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/Icons");
+                let icons_dir =
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/Icons");
                 self.picking_icon_for_shortcut = Some(props_idx);
                 self.open_file_manager_at(icons_dir);
             }
@@ -4224,6 +4371,83 @@ impl RobcoNativeApp {
         self.file_manager.set_cwd(path);
         self.file_manager.selected = None;
         self.open_desktop_window(DesktopWindow::FileManager);
+    }
+
+    fn default_editor_save_name(&self) -> String {
+        self.editor
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("document.txt")
+            .to_string()
+    }
+
+    fn open_editor_save_as_picker(&mut self) {
+        let Some(session) = &self.session else {
+            self.editor.status = "No active session.".to_string();
+            return;
+        };
+        let start_dir = self
+            .editor
+            .path
+            .as_ref()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| word_processor_dir(&session.username));
+        self.editor.save_as_input = Some(self.default_editor_save_name());
+        self.open_file_manager_at(start_dir);
+        if let Some(path) = self.editor.path.clone() {
+            self.file_manager.select(Some(path));
+        }
+        self.editor.status =
+            "Choose a folder in My Computer, enter a file name, then click Save Here.".to_string();
+        self.desktop_active_window = Some(DesktopWindow::FileManager);
+    }
+
+    fn complete_editor_save_as_from_picker(&mut self) {
+        let Some(name_draft) = self.editor.save_as_input.clone() else {
+            return;
+        };
+        let file_name = name_draft.trim();
+        if file_name.is_empty() {
+            self.editor.status = "Enter a file name first.".to_string();
+            return;
+        }
+        let name_path = Path::new(file_name);
+        if name_path.file_name().and_then(|name| name.to_str()) != Some(file_name)
+            || name_path.components().count() != 1
+        {
+            self.editor.status =
+                "Enter a file name only. Use My Computer to choose the folder.".to_string();
+            return;
+        }
+        let requested_target = self.file_manager.cwd.join(file_name);
+        let target = Self::unique_path_in_dir(&self.file_manager.cwd, file_name);
+        let renamed_to_avoid_collision = target != requested_target;
+        match save_text_file(&target, &self.editor.text) {
+            Ok(()) => {
+                let label = target
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("document")
+                    .to_string();
+                self.editor.path = Some(target.clone());
+                self.editor.dirty = false;
+                self.editor.status = if renamed_to_avoid_collision {
+                    format!("Name already existed. Saved as {label}.")
+                } else {
+                    format!("Saved {label}.")
+                };
+                self.push_editor_recent_file(&target);
+                self.editor.save_as_input = None;
+                self.file_manager.open = false;
+                self.open_desktop_window(DesktopWindow::Editor);
+            }
+            Err(err) => {
+                self.editor.status = format!("Save failed: {err}");
+            }
+        }
     }
 
     fn launch_named_program_from_map(
@@ -4397,11 +4621,7 @@ impl RobcoNativeApp {
         };
         self.file_manager.open = false;
         self.file_manager.selected = None;
-        self.editor.open = false;
-        self.editor.path = None;
-        self.editor.text.clear();
-        self.editor.dirty = false;
-        self.editor.status.clear();
+        self.editor = EditorWindow::default();
         self.settings.draft = current_settings();
         self.settings.status.clear();
         self.settings.panel = NativeSettingsPanel::Home;
@@ -4410,8 +4630,9 @@ impl RobcoNativeApp {
         self.desktop_nuke_codes_open = false;
         self.desktop_installer = DesktopInstallerState::default();
         self.terminal_mode.status.clear();
-        let launch_default_desktop = matches!(self.settings.draft.default_open_mode, OpenMode::Desktop)
-            && session::take_default_mode_pending_for_active();
+        let launch_default_desktop =
+            matches!(self.settings.draft.default_open_mode, OpenMode::Desktop)
+                && session::take_default_mode_pending_for_active();
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
         self.start_open = !launch_default_desktop;
@@ -4697,9 +4918,7 @@ impl RobcoNativeApp {
             prompt: format!("Rename {} to:", entry.label),
             buffer: entry.label,
             confirm_yes: true,
-            action: TerminalPromptAction::FileManagerRename {
-                path: entry.path,
-            },
+            action: TerminalPromptAction::FileManagerRename { path: entry.path },
         });
     }
 
@@ -4714,9 +4933,7 @@ impl RobcoNativeApp {
             prompt: "Move to (dir or full path):".to_string(),
             buffer: String::new(),
             confirm_yes: true,
-            action: TerminalPromptAction::FileManagerMoveTo {
-                path: entry.path,
-            },
+            action: TerminalPromptAction::FileManagerMoveTo { path: entry.path },
         });
     }
 
@@ -5074,6 +5291,13 @@ impl RobcoNativeApp {
     fn file_manager_activate_or_pick(&mut self) {
         if let Some(selected_path) = self.file_manager.selected.clone() {
             if selected_path.is_file() {
+                if let Some(name) = selected_path.file_name().and_then(|name| name.to_str()) {
+                    if self.editor.save_as_input.is_some() {
+                        self.editor.save_as_input = Some(name.to_string());
+                        self.complete_editor_save_as_from_picker();
+                        return;
+                    }
+                }
                 if let Some(pick_idx) = self.picking_icon_for_shortcut {
                     let path_str = selected_path.to_string_lossy().to_string();
                     if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(pick_idx) {
@@ -5103,6 +5327,11 @@ impl RobcoNativeApp {
     }
 
     fn new_document(&mut self) {
+        if self.desktop_mode_open {
+            self.editor.reset_for_desktop_new_document();
+            self.open_desktop_window(DesktopWindow::Editor);
+            return;
+        }
         let Some(session) = &self.session else {
             return;
         };
@@ -5113,17 +5342,71 @@ impl RobcoNativeApp {
             path = base.join(format!("document-{idx}.txt"));
             idx += 1;
         }
-        self.editor.path = Some(path);
-        self.editor.text.clear();
-        self.editor.dirty = false;
+        self.editor.prepare_new_document_at(path);
         self.open_desktop_window(DesktopWindow::Editor);
-        self.editor.status = "New document.".to_string();
+    }
+
+    fn run_editor_command(&mut self, command: EditorCommand) {
+        match command {
+            EditorCommand::Save => self.save_editor(),
+            EditorCommand::SaveAs => self.open_editor_save_as_picker(),
+            EditorCommand::NewDocument => self.new_document(),
+            EditorCommand::OpenFind => self.editor.ui.open_find(),
+            EditorCommand::OpenFindReplace => self.editor.ui.open_find_replace(),
+            EditorCommand::CloseFind => self.editor.ui.close_find(),
+            EditorCommand::ToggleWordWrap => {
+                self.editor.word_wrap = !self.editor.word_wrap;
+            }
+            EditorCommand::IncreaseFontSize => {
+                self.editor.font_size = (self.editor.font_size + 2.0).min(32.0);
+            }
+            EditorCommand::DecreaseFontSize => {
+                self.editor.font_size = (self.editor.font_size - 2.0).max(10.0);
+            }
+            EditorCommand::ResetFontSize => {
+                self.editor.font_size = 16.0;
+            }
+            EditorCommand::SetTextAlign(alignment) => {
+                self.editor.ui.set_text_align(alignment);
+            }
+            EditorCommand::ToggleLineNumbers => {
+                self.editor.ui.toggle_line_numbers();
+            }
+        }
+    }
+
+    fn run_editor_text_command(
+        &mut self,
+        ctx: &Context,
+        text_edit_id: Id,
+        command: EditorTextCommand,
+    ) {
+        let key = match command {
+            EditorTextCommand::Undo => egui::Key::Z,
+            EditorTextCommand::Redo => egui::Key::Y,
+            EditorTextCommand::Cut => egui::Key::X,
+            EditorTextCommand::Copy => egui::Key::C,
+            EditorTextCommand::Paste => egui::Key::V,
+            EditorTextCommand::SelectAll => egui::Key::A,
+        };
+        ctx.memory_mut(|m| m.request_focus(text_edit_id));
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            })
+        });
     }
 
     fn editor_find_next(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
-        if self.editor_find_query.is_empty() { return; }
+        if self.editor.ui.find_query.is_empty() {
+            return;
+        }
         let text = self.editor.text.clone();
-        let query = self.editor_find_query.clone();
+        let query = self.editor.ui.find_query.clone();
         // Collect all match byte positions
         let matches: Vec<usize> = text
             .char_indices()
@@ -5139,40 +5422,47 @@ impl RobcoNativeApp {
             self.editor.status = format!("Not found: {}", query);
             return;
         }
-        let idx = self.editor_find_occurrence % matches.len();
-        self.editor_find_occurrence = idx + 1;
+        let idx = self.editor.ui.find_occurrence % matches.len();
+        self.editor.ui.find_occurrence = idx + 1;
         let byte_start = matches[idx];
         let byte_end = byte_start + query.len();
         // Convert byte offsets to char counts
         let char_start = text[..byte_start].chars().count();
         let char_end = text[..byte_end].chars().count();
         // Set TextEdit cursor/selection
-        let mut state = egui::text_edit::TextEditState::load(ctx, text_edit_id)
-            .unwrap_or_default();
-        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-            egui::text::CCursor::new(char_start),
-            egui::text::CCursor::new(char_end),
-        )));
+        let mut state = egui::text_edit::TextEditState::load(ctx, text_edit_id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(char_start),
+                egui::text::CCursor::new(char_end),
+            )));
         state.store(ctx, text_edit_id);
         ctx.memory_mut(|m| m.request_focus(text_edit_id));
         self.editor.status = format!("Match {} of {}", idx + 1, matches.len());
     }
 
     fn editor_replace_one(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
-        if self.editor_find_query.is_empty() { return; }
-        let query = self.editor_find_query.clone();
-        let replacement = self.editor_replace_query.clone();
+        if self.editor.ui.find_query.is_empty() {
+            return;
+        }
+        let query = self.editor.ui.find_query.clone();
+        let replacement = self.editor.ui.replace_query.clone();
         if let Some(pos) = self.editor.text.find(&query) {
-            self.editor.text.replace_range(pos..pos + query.len(), &replacement);
+            self.editor
+                .text
+                .replace_range(pos..pos + query.len(), &replacement);
             self.editor.dirty = true;
         }
         self.editor_find_next(ctx, text_edit_id);
     }
 
     fn editor_replace_all(&mut self) {
-        if self.editor_find_query.is_empty() { return; }
-        let query = self.editor_find_query.clone();
-        let replacement = self.editor_replace_query.clone();
+        if self.editor.ui.find_query.is_empty() {
+            return;
+        }
+        let query = self.editor.ui.find_query.clone();
+        let replacement = self.editor.ui.replace_query.clone();
         let count = self.editor.text.matches(query.as_str()).count();
         if count > 0 {
             self.editor.text = self.editor.text.replace(query.as_str(), &replacement);
@@ -5194,7 +5484,11 @@ impl RobcoNativeApp {
 
     fn save_editor(&mut self) {
         let Some(path) = self.editor.path.clone() else {
-            self.editor.status = "No document path set.".to_string();
+            if self.desktop_mode_open {
+                self.open_editor_save_as_picker();
+            } else {
+                self.editor.status = "No document path set.".to_string();
+            }
             return;
         };
         match save_text_file(&path, &self.editor.text) {
@@ -6215,9 +6509,637 @@ impl RobcoNativeApp {
         }
     }
 
+    fn draw_top_bar_app_menu(&mut self, ui: &mut egui::Ui, app_menu_name: &str) {
+        ui.menu_button(
+            RichText::new(app_menu_name).strong().color(Color32::BLACK),
+            |ui| {
+                Self::apply_top_dropdown_menu_style(ui);
+                if let Some(window) = self.desktop_active_window {
+                    if ui.button("Close Focused").clicked() {
+                        self.close_desktop_window(window);
+                        ui.close_menu();
+                    }
+                } else {
+                    ui.label("No active app");
+                }
+                if ui.button("Minimize").clicked() {
+                    if let Some(window) = self.desktop_active_window {
+                        self.set_desktop_window_minimized(window, true);
+                    }
+                    ui.close_menu();
+                }
+            },
+        );
+    }
+
+    fn draw_top_bar_file_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("File", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
+            let file_manager_active =
+                self.desktop_active_window == Some(DesktopWindow::FileManager);
+            if editor_active {
+                if ui.button("Save         Ctrl+S").clicked() {
+                    self.run_editor_command(EditorCommand::Save);
+                    ui.close_menu();
+                }
+                if ui.button("Save As…").clicked() {
+                    self.run_editor_command(EditorCommand::SaveAs);
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if ui.button("New Document").clicked() {
+                    self.run_editor_command(EditorCommand::NewDocument);
+                    ui.close_menu();
+                }
+                if ui.button("Open File Manager").clicked() {
+                    self.open_desktop_window(DesktopWindow::FileManager);
+                    ui.close_menu();
+                }
+                if !self.settings.draft.editor_recent_files.is_empty() {
+                    ui.menu_button("Open Recent…", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        ui.set_min_width(220.0);
+                        ui.set_max_width(360.0);
+                        let recents = self.settings.draft.editor_recent_files.clone();
+                        for path_str in &recents {
+                            let label = std::path::Path::new(path_str)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(path_str.as_str());
+                            if ui.button(label).clicked() {
+                                let path = std::path::PathBuf::from(path_str);
+                                self.open_path_in_editor(path);
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                }
+                Self::retro_separator(ui);
+            }
+            if file_manager_active {
+                let has_extra_tabs = self.file_manager.tabs.len() > 1;
+                let has_selection = self.file_manager.selected_row().is_some();
+                let has_editable_selection = self.file_manager_has_editable_selection();
+                let has_file_selection = self.file_manager_selected_file().is_some();
+                if ui.button("New Folder   Ctrl+Shift+N").clicked() {
+                    self.run_file_manager_action(FileManagerActionRequest::NewFolder);
+                    ui.close_menu();
+                }
+                if ui.button("New Tab").clicked() {
+                    self.file_manager.open_tab_here();
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if has_extra_tabs {
+                    if ui.button("Previous Tab").clicked() {
+                        let idx = if self.file_manager.active_tab == 0 {
+                            self.file_manager.tabs.len().saturating_sub(1)
+                        } else {
+                            self.file_manager.active_tab - 1
+                        };
+                        let _ = self.file_manager.switch_to_tab(idx);
+                        ui.close_menu();
+                    }
+                    if ui.button("Next Tab").clicked() {
+                        let idx = (self.file_manager.active_tab + 1)
+                            % self.file_manager.tabs.len().max(1);
+                        let _ = self.file_manager.switch_to_tab(idx);
+                        ui.close_menu();
+                    }
+                    if ui.button("Close Tab").clicked() {
+                        let _ = self.file_manager.close_active_tab();
+                        ui.close_menu();
+                    }
+                }
+                if has_selection && ui.button("Open Selected").clicked() {
+                    self.activate_file_manager_selection();
+                    ui.close_menu();
+                }
+                if has_file_selection {
+                    ui.menu_button("Open With", |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        let Some(entry) = self.file_manager_selected_file() else {
+                            return;
+                        };
+                        let ext_key = Self::open_with_extension_key(&entry.path);
+                        let ext_label = Self::open_with_extension_label(&ext_key);
+                        let saved = self.open_with_history_for_extension(&ext_key);
+                        let current_default = self.open_with_default_for_extension(&ext_key);
+
+                        for command in &saved {
+                            let is_default = current_default.as_deref() == Some(command.as_str());
+                            let label = if is_default {
+                                format!("Use: {command} [default]")
+                            } else {
+                                format!("Use: {command}")
+                            };
+                            if ui.button(label).clicked() {
+                                match self.launch_open_with_command(&entry.path, command) {
+                                    Ok(message) => {
+                                        self.record_open_with_command(&ext_key, command);
+                                        self.shell_status = message;
+                                    }
+                                    Err(err) => {
+                                        self.shell_status = format!("Open failed: {err}");
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        if !saved.is_empty() {
+                            Self::retro_separator(ui);
+                        }
+                        if ui.button("New Command...").clicked() {
+                            self.open_file_manager_open_with_new_command_prompt(
+                                entry.path.clone(),
+                                ext_key.clone(),
+                                false,
+                            );
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(format!("New Command + Always Use for {}", ext_label))
+                            .clicked()
+                        {
+                            self.open_file_manager_open_with_new_command_prompt(
+                                entry.path.clone(),
+                                ext_key.clone(),
+                                true,
+                            );
+                            ui.close_menu();
+                        }
+                        if !saved.is_empty() {
+                            ui.menu_button("Edit", |ui| {
+                                Self::apply_top_dropdown_menu_style(ui);
+                                for command in &saved {
+                                    let is_default =
+                                        current_default.as_deref() == Some(command.as_str());
+                                    ui.menu_button(command, |ui| {
+                                        Self::apply_top_dropdown_menu_style(ui);
+                                        let default_label = if is_default {
+                                            "Stop Always Using"
+                                        } else {
+                                            "Always Use"
+                                        };
+                                        if ui.button(default_label).clicked() {
+                                            if is_default {
+                                                self.set_open_with_default_command(&ext_key, None);
+                                                self.shell_status = format!(
+                                                    "Cleared always-use command for {}.",
+                                                    ext_label
+                                                );
+                                            } else {
+                                                self.set_open_with_default_command(
+                                                    &ext_key,
+                                                    Some(command.as_str()),
+                                                );
+                                                self.shell_status = format!(
+                                                    "Now always using {} for {}.",
+                                                    command, ext_label
+                                                );
+                                            }
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Edit Saved").clicked() {
+                                            self.open_file_manager_open_with_edit_command_prompt(
+                                                entry.path.clone(),
+                                                ext_key.clone(),
+                                                command.clone(),
+                                            );
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Remove Saved").clicked() {
+                                            self.remove_open_with_command(&ext_key, command);
+                                            self.shell_status =
+                                                format!("Removed saved command for {}.", ext_label);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
+                                if current_default.is_some() {
+                                    Self::retro_separator(ui);
+                                    if ui.button("Clear Always Use").clicked() {
+                                        self.set_open_with_default_command(&ext_key, None);
+                                        self.shell_status = format!(
+                                            "Cleared always-use command for {}.",
+                                            ext_label
+                                        );
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+                if ui.button("Home").clicked() {
+                    self.file_manager_open_home();
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if has_editable_selection {
+                    ui.label(
+                        RichText::new(format!("{} selected", self.file_manager_selection_count()))
+                            .small(),
+                    );
+                }
+            }
+            if ui.button("My Computer").clicked() {
+                self.open_desktop_window(DesktopWindow::FileManager);
+                ui.close_menu();
+            }
+            if ui.button("Applications").clicked() {
+                self.open_desktop_window(DesktopWindow::Applications);
+                ui.close_menu();
+            }
+            if ui.button("Settings").clicked() {
+                self.open_desktop_window(DesktopWindow::Settings);
+                ui.close_menu();
+            }
+            Self::retro_separator(ui);
+            if ui.button("Exit").clicked() {
+                if let Some(w) = self.desktop_active_window {
+                    self.close_desktop_window(w);
+                }
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn draw_top_bar_edit_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
+        ui.menu_button("Edit", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            if self.desktop_active_window == Some(DesktopWindow::Editor) {
+                let gen = self.desktop_window_generation(DesktopWindow::Editor);
+                let text_edit_id = Id::new(("editor_text_edit", gen));
+                if ui.button("Undo         Ctrl+Z").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Undo);
+                    ui.close_menu();
+                }
+                if ui.button("Redo         Ctrl+Y").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Redo);
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if ui.button("Cut          Ctrl+X").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Cut);
+                    ui.close_menu();
+                }
+                if ui.button("Copy         Ctrl+C").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Copy);
+                    ui.close_menu();
+                }
+                if ui.button("Paste        Ctrl+V").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Paste);
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if ui.button("Select All   Ctrl+A").clicked() {
+                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::SelectAll);
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+                if ui.button("Find          Ctrl+F").clicked() {
+                    self.run_editor_command(EditorCommand::OpenFind);
+                    ui.close_menu();
+                }
+                if ui.button("Find & Replace Ctrl+H").clicked() {
+                    self.run_editor_command(EditorCommand::OpenFindReplace);
+                    ui.close_menu();
+                }
+            } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
+                let has_selection = self.file_manager_has_editable_selection();
+                let has_clipboard = self
+                    .file_clipboard
+                    .as_ref()
+                    .is_some_and(|clip| !clip.paths.is_empty());
+                let has_history =
+                    !self.file_undo_stack.is_empty() || !self.file_redo_stack.is_empty();
+                let paste_label = if let Some(clip) = &self.file_clipboard {
+                    let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
+                        "Move"
+                    } else {
+                        "Paste"
+                    };
+                    if clip.paths.len() == 1 {
+                        format!("{mode} {}", Self::path_display_name(&clip.paths[0]))
+                    } else {
+                        format!("{mode} {} items", clip.paths.len())
+                    }
+                } else {
+                    "Paste".to_string()
+                };
+                if ui.button("Open Selected").clicked() {
+                    self.activate_file_manager_selection();
+                    ui.close_menu();
+                }
+                if ui.button("Clear Search").clicked() {
+                    self.file_manager.update_search_query(String::new());
+                    ui.close_menu();
+                }
+                if has_selection || has_clipboard || has_history {
+                    Self::retro_separator(ui);
+                }
+                if has_selection {
+                    if ui.button("Copy").clicked() {
+                        self.run_file_manager_action(FileManagerActionRequest::Copy);
+                        ui.close_menu();
+                    }
+                    if ui.button("Cut").clicked() {
+                        self.run_file_manager_action(FileManagerActionRequest::Cut);
+                        ui.close_menu();
+                    }
+                    if ui.button("Duplicate").clicked() {
+                        self.run_file_manager_action(FileManagerActionRequest::Duplicate);
+                        ui.close_menu();
+                    }
+                    if ui.button("Rename").clicked() {
+                        self.open_file_manager_rename_prompt();
+                        ui.close_menu();
+                    }
+                    if ui.button("Move To").clicked() {
+                        self.open_file_manager_move_prompt();
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete").clicked() {
+                        self.run_file_manager_action(FileManagerActionRequest::Delete);
+                        ui.close_menu();
+                    }
+                }
+                if has_clipboard && ui.button(paste_label).clicked() {
+                    self.run_file_manager_action(FileManagerActionRequest::Paste);
+                    ui.close_menu();
+                }
+                if !self.file_undo_stack.is_empty() && ui.button("Undo").clicked() {
+                    self.run_file_manager_action(FileManagerActionRequest::Undo);
+                    ui.close_menu();
+                }
+                if !self.file_redo_stack.is_empty() && ui.button("Redo").clicked() {
+                    self.run_file_manager_action(FileManagerActionRequest::Redo);
+                    ui.close_menu();
+                }
+                if has_selection || has_clipboard || has_history {
+                    Self::retro_separator(ui);
+                }
+                if ui.button("New Document").clicked() {
+                    self.run_editor_command(EditorCommand::NewDocument);
+                    ui.close_menu();
+                }
+            } else {
+                let _ = Self::retro_disabled_button(ui, "No edit actions");
+            }
+        });
+    }
+
+    fn draw_top_bar_format_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Format", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            ui.set_min_width(160.0);
+            ui.set_max_width(220.0);
+            let ww_label = if self.editor.word_wrap {
+                "[x] Word Wrap"
+            } else {
+                "[ ] Word Wrap"
+            };
+            if ui.button(ww_label).clicked() {
+                self.run_editor_command(EditorCommand::ToggleWordWrap);
+                ui.close_menu();
+            }
+            Self::retro_separator(ui);
+            if ui.button("Font Larger  Ctrl++").clicked() {
+                self.run_editor_command(EditorCommand::IncreaseFontSize);
+                ui.close_menu();
+            }
+            if ui.button("Font Smaller Ctrl+-").clicked() {
+                self.run_editor_command(EditorCommand::DecreaseFontSize);
+                ui.close_menu();
+            }
+            if ui.button("Reset Font").clicked() {
+                self.run_editor_command(EditorCommand::ResetFontSize);
+                ui.close_menu();
+            }
+            Self::retro_separator(ui);
+            let editor_text_align = self.editor.ui.text_align;
+            ui.menu_button("Align Text ▶", |ui| {
+                Self::apply_top_dropdown_menu_style(ui);
+                ui.set_min_width(120.0);
+                ui.set_max_width(160.0);
+                let a = editor_text_align;
+                let marker_left = if a == EditorTextAlign::Left {
+                    "[x] "
+                } else {
+                    "[ ] "
+                };
+                let marker_center = if a == EditorTextAlign::Center {
+                    "[x] "
+                } else {
+                    "[ ] "
+                };
+                let marker_right = if a == EditorTextAlign::Right {
+                    "[x] "
+                } else {
+                    "[ ] "
+                };
+                if ui.button(format!("{marker_left}Left")).clicked() {
+                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Left));
+                    ui.close_menu();
+                }
+                if ui.button(format!("{marker_center}Center")).clicked() {
+                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Center));
+                    ui.close_menu();
+                }
+                if ui.button(format!("{marker_right}Right")).clicked() {
+                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Right));
+                    ui.close_menu();
+                }
+            });
+        });
+    }
+
+    fn draw_top_bar_view_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("View", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
+            if editor_active {
+                let ln_label = if self.editor.ui.show_line_numbers {
+                    "[x] Line Numbers"
+                } else {
+                    "[ ] Line Numbers"
+                };
+                if ui.button(ln_label).clicked() {
+                    self.run_editor_command(EditorCommand::ToggleLineNumbers);
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+            }
+            let file_manager_active =
+                self.desktop_active_window == Some(DesktopWindow::FileManager);
+            if file_manager_active {
+                let show_tree = get_settings().desktop_file_manager.show_tree_panel;
+                let show_hidden = get_settings().desktop_file_manager.show_hidden_files;
+                let view_mode = self.file_manager_view_mode();
+                let sort_mode = self.file_manager_sort_mode();
+                if ui
+                    .button(if show_tree {
+                        "Hide Folder Tree"
+                    } else {
+                        "Show Folder Tree"
+                    })
+                    .clicked()
+                {
+                    self.toggle_file_manager_tree_panel();
+                    ui.close_menu();
+                }
+                if ui
+                    .button(if view_mode == FileManagerViewMode::Grid {
+                        "Grid View [Active]"
+                    } else {
+                        "Grid View"
+                    })
+                    .clicked()
+                {
+                    self.set_file_manager_view_mode(FileManagerViewMode::Grid);
+                    ui.close_menu();
+                }
+                if ui
+                    .button(if view_mode == FileManagerViewMode::List {
+                        "List View [Active]"
+                    } else {
+                        "List View"
+                    })
+                    .clicked()
+                {
+                    self.set_file_manager_view_mode(FileManagerViewMode::List);
+                    ui.close_menu();
+                }
+                if ui
+                    .button(if sort_mode == FileManagerSortMode::Name {
+                        "Sort By Name [Active]"
+                    } else {
+                        "Sort By Name"
+                    })
+                    .clicked()
+                {
+                    self.set_file_manager_sort_mode(FileManagerSortMode::Name);
+                    ui.close_menu();
+                }
+                if ui
+                    .button(if sort_mode == FileManagerSortMode::Type {
+                        "Sort By Type [Active]"
+                    } else {
+                        "Sort By Type"
+                    })
+                    .clicked()
+                {
+                    self.set_file_manager_sort_mode(FileManagerSortMode::Type);
+                    ui.close_menu();
+                }
+                if ui
+                    .button(if show_hidden {
+                        "Hide Hidden Files"
+                    } else {
+                        "Show Hidden Files"
+                    })
+                    .clicked()
+                {
+                    self.toggle_file_manager_hidden_files();
+                    ui.close_menu();
+                }
+                Self::retro_separator(ui);
+            }
+            if ui.button("My Computer").clicked() {
+                self.open_desktop_window(DesktopWindow::FileManager);
+                ui.close_menu();
+            }
+            if ui.button("Toggle Start Menu").clicked() {
+                if self.start_open {
+                    self.close_start_menu();
+                } else {
+                    self.open_start_menu();
+                }
+                ui.close_menu();
+            }
+            if ui.button("Settings").clicked() {
+                self.open_desktop_window(DesktopWindow::Settings);
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Window", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            for window in [
+                DesktopWindow::FileManager,
+                DesktopWindow::Editor,
+                DesktopWindow::Settings,
+                DesktopWindow::Applications,
+                DesktopWindow::DonkeyKong,
+                DesktopWindow::NukeCodes,
+                DesktopWindow::PtyApp,
+            ] {
+                let open = self.desktop_window_is_open(window);
+                let active = self.desktop_active_window == Some(window);
+                let marker = if active {
+                    "active"
+                } else if open {
+                    "open"
+                } else {
+                    "closed"
+                };
+                let label = format!("{marker}: {}", self.desktop_window_title(window));
+                if ui.button(label).clicked() {
+                    if window == DesktopWindow::Editor
+                        && !self.desktop_window_is_open(DesktopWindow::Editor)
+                        && self.editor.path.is_none()
+                    {
+                        self.new_document();
+                    } else if !open {
+                        self.open_desktop_window(window);
+                    } else {
+                        self.desktop_active_window = Some(window);
+                        self.close_start_menu();
+                    }
+                    ui.close_menu();
+                }
+            }
+        });
+    }
+
+    fn draw_top_bar_help_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Help", |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            if ui.button("App Manual").clicked() {
+                self.open_manual_file("README.md", "App Manual");
+                ui.close_menu();
+            }
+            if ui.button("User Manual").clicked() {
+                self.open_manual_file("USER_MANUAL.md", "User Manual");
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn draw_top_bar_menu_section(
+        &mut self,
+        ctx: &Context,
+        ui: &mut egui::Ui,
+        section: DesktopMenuSection,
+    ) {
+        match section {
+            DesktopMenuSection::File => self.draw_top_bar_file_menu(ui),
+            DesktopMenuSection::Edit => self.draw_top_bar_edit_menu(ui, ctx),
+            DesktopMenuSection::Format => self.draw_top_bar_format_menu(ui),
+            DesktopMenuSection::View => self.draw_top_bar_view_menu(ui),
+            DesktopMenuSection::Window => self.draw_top_bar_window_menu(ui),
+            DesktopMenuSection::Help => self.draw_top_bar_help_menu(ui),
+        }
+    }
+
     fn draw_top_bar(&mut self, ctx: &Context) {
         Self::apply_global_retro_menu_chrome(ctx);
         let app_menu_name = self.desktop_app_menu_name();
+        let active_app = self.active_desktop_app();
         TopBottomPanel::top("native_top_bar")
             .exact_height(30.0)
             .show_separator_line(false)
@@ -6228,609 +7150,18 @@ impl RobcoNativeApp {
                 ui.horizontal(|ui| {
                     Self::apply_top_bar_menu_button_style(ui);
                     ui.spacing_mut().item_spacing.x = 14.0;
-                    ui.menu_button(
-                        RichText::new(app_menu_name.clone())
-                            .strong()
-                            .color(Color32::BLACK),
-                        |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        if let Some(window) = self.desktop_active_window {
-                            if ui.button("Close Focused").clicked() {
-                                self.close_desktop_window(window);
-                                ui.close_menu();
-                            }
-                        } else {
-                            ui.label("No active app");
-                        }
-                        if ui.button("Minimize").clicked() {
-                            if let Some(window) = self.desktop_active_window {
-                                self.set_desktop_window_minimized(window, true);
-                            }
-                            ui.close_menu();
-                        }
-                    });
+                    self.draw_top_bar_app_menu(ui, &app_menu_name);
                     ui.add_space(10.0);
-                    ui.menu_button("File", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        let editor_active =
-                            self.desktop_active_window == Some(DesktopWindow::Editor);
-                        let file_manager_active =
-                            self.desktop_active_window == Some(DesktopWindow::FileManager);
-                        if editor_active {
-                            if ui.button("Save         Ctrl+S").clicked() {
-                                self.save_editor();
-                                ui.close_menu();
-                            }
-                            if ui.button("Save As…").clicked() {
-                                let current = self.editor.path
-                                    .as_ref()
-                                    .and_then(|p| p.to_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                self.editor_save_as_input = Some(current);
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            if ui.button("New Document").clicked() {
-                                self.new_document();
-                                ui.close_menu();
-                            }
-                            if ui.button("Open File Manager").clicked() {
-                                self.open_desktop_window(DesktopWindow::FileManager);
-                                ui.close_menu();
-                            }
-                            if !self.settings.draft.editor_recent_files.is_empty() {
-                                ui.menu_button("Open Recent…", |ui| {
-                                    Self::apply_top_dropdown_menu_style(ui);
-                                    ui.set_min_width(220.0);
-                                    ui.set_max_width(360.0);
-                                    let recents = self.settings.draft.editor_recent_files.clone();
-                                    for path_str in &recents {
-                                        let label = std::path::Path::new(path_str)
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or(path_str.as_str());
-                                        if ui.button(label).clicked() {
-                                            let path = std::path::PathBuf::from(path_str);
-                                            self.open_path_in_editor(path);
-                                            ui.close_menu();
-                                        }
-                                    }
-                                });
-                            }
-                            Self::retro_separator(ui);
-                        }
-                        if file_manager_active {
-                            let has_extra_tabs = self.file_manager.tabs.len() > 1;
-                            let has_selection = self.file_manager.selected_row().is_some();
-                            let has_file_selection = self.file_manager_selected_file().is_some();
-                            if ui.button("New Tab").clicked() {
-                                self.file_manager.open_tab_here();
-                                ui.close_menu();
-                            }
-                            if has_extra_tabs {
-                                if ui.button("Previous Tab").clicked() {
-                                    let idx = if self.file_manager.active_tab == 0 {
-                                        self.file_manager.tabs.len().saturating_sub(1)
-                                    } else {
-                                        self.file_manager.active_tab - 1
-                                    };
-                                    let _ = self.file_manager.switch_to_tab(idx);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Next Tab").clicked() {
-                                    let idx = (self.file_manager.active_tab + 1)
-                                        % self.file_manager.tabs.len().max(1);
-                                    let _ = self.file_manager.switch_to_tab(idx);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Close Tab").clicked() {
-                                    let _ = self.file_manager.close_active_tab();
-                                    ui.close_menu();
-                                }
-                            }
-                            if has_selection {
-                                if ui.button("Open Selected").clicked() {
-                                    self.activate_file_manager_selection();
-                                    ui.close_menu();
-                                }
-                            }
-                            if has_file_selection {
-                                ui.menu_button("Open With", |ui| {
-                                    Self::apply_top_dropdown_menu_style(ui);
-                                    let Some(entry) = self.file_manager_selected_file() else {
-                                        return;
-                                    };
-                                    let ext_key = Self::open_with_extension_key(&entry.path);
-                                    let ext_label = Self::open_with_extension_label(&ext_key);
-                                    let saved = self.open_with_history_for_extension(&ext_key);
-                                    let current_default =
-                                        self.open_with_default_for_extension(&ext_key);
-
-                                    for command in &saved {
-                                        let is_default =
-                                            current_default.as_deref() == Some(command.as_str());
-                                        let label = if is_default {
-                                            format!("Use: {command} [default]")
-                                        } else {
-                                            format!("Use: {command}")
-                                        };
-                                        if ui.button(label).clicked() {
-                                            match self.launch_open_with_command(&entry.path, command) {
-                                                Ok(message) => {
-                                                    self.record_open_with_command(&ext_key, command);
-                                                    self.shell_status = message;
-                                                }
-                                                Err(err) => {
-                                                    self.shell_status = format!("Open failed: {err}");
-                                                }
-                                            }
-                                            ui.close_menu();
-                                        }
-                                    }
-                                    if !saved.is_empty() {
-                                        Self::retro_separator(ui);
-                                    }
-                                    if ui.button("New Command...").clicked() {
-                                        self.open_file_manager_open_with_new_command_prompt(
-                                            entry.path.clone(),
-                                            ext_key.clone(),
-                                            false,
-                                        );
-                                        ui.close_menu();
-                                    }
-                                    if ui
-                                        .button(format!(
-                                            "New Command + Always Use for {}",
-                                            ext_label
-                                        ))
-                                        .clicked()
-                                    {
-                                        self.open_file_manager_open_with_new_command_prompt(
-                                            entry.path.clone(),
-                                            ext_key.clone(),
-                                            true,
-                                        );
-                                        ui.close_menu();
-                                    }
-                                    if !saved.is_empty() {
-                                        ui.menu_button("Edit", |ui| {
-                                            Self::apply_top_dropdown_menu_style(ui);
-                                            for command in &saved {
-                                                let is_default =
-                                                    current_default.as_deref() == Some(command.as_str());
-                                                ui.menu_button(command, |ui| {
-                                                    Self::apply_top_dropdown_menu_style(ui);
-                                                    let default_label = if is_default {
-                                                        "Stop Always Using"
-                                                    } else {
-                                                        "Always Use"
-                                                    };
-                                                    if ui.button(default_label).clicked() {
-                                                        if is_default {
-                                                            self.set_open_with_default_command(
-                                                                &ext_key,
-                                                                None,
-                                                            );
-                                                            self.shell_status = format!(
-                                                                "Cleared always-use command for {}.",
-                                                                ext_label
-                                                            );
-                                                        } else {
-                                                            self.set_open_with_default_command(
-                                                                &ext_key,
-                                                                Some(command.as_str()),
-                                                            );
-                                                            self.shell_status = format!(
-                                                                "Now always using {} for {}.",
-                                                                command, ext_label
-                                                            );
-                                                        }
-                                                        ui.close_menu();
-                                                    }
-                                                    if ui.button("Edit Saved").clicked() {
-                                                        self.open_file_manager_open_with_edit_command_prompt(
-                                                            entry.path.clone(),
-                                                            ext_key.clone(),
-                                                            command.clone(),
-                                                        );
-                                                        ui.close_menu();
-                                                    }
-                                                    if ui.button("Remove Saved").clicked() {
-                                                        self.remove_open_with_command(&ext_key, command);
-                                                        self.shell_status = format!(
-                                                            "Removed saved command for {}.",
-                                                            ext_label
-                                                        );
-                                                        ui.close_menu();
-                                                    }
-                                                });
-                                            }
-                                            if current_default.is_some() {
-                                                Self::retro_separator(ui);
-                                                if ui.button("Clear Always Use").clicked() {
-                                                    self.set_open_with_default_command(&ext_key, None);
-                                                    self.shell_status = format!(
-                                                        "Cleared always-use command for {}.",
-                                                        ext_label
-                                                    );
-                                                    ui.close_menu();
-                                                }
-                                            }
-                                        });
-                                    }
-                                });
-                            }
-                            if ui.button("Home").clicked() {
-                                self.file_manager_open_home();
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                        }
-                        if ui.button("My Computer").clicked() {
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                            ui.close_menu();
-                        }
-                        if ui.button("Applications").clicked() {
-                            self.open_desktop_window(DesktopWindow::Applications);
-                            ui.close_menu();
-                        }
-                        if ui.button("Settings").clicked() {
-                            self.open_desktop_window(DesktopWindow::Settings);
-                            ui.close_menu();
-                        }
-                        Self::retro_separator(ui);
-                        if ui.button("Exit").clicked() {
-                            if let Some(w) = self.desktop_active_window {
-                                self.close_desktop_window(w);
-                            }
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Edit", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        if self.desktop_active_window == Some(DesktopWindow::Editor) {
-                            let gen = self.desktop_window_generation(DesktopWindow::Editor);
-                            let text_edit_id = Id::new(("editor_text_edit", gen));
-                            let inject_key = |ctx: &Context, key: egui::Key, modifiers: egui::Modifiers| {
-                                ctx.memory_mut(|m| m.request_focus(text_edit_id));
-                                ctx.input_mut(|i| i.events.push(egui::Event::Key {
-                                    key,
-                                    physical_key: None,
-                                    pressed: true,
-                                    repeat: false,
-                                    modifiers,
-                                }));
-                            };
-                            if ui.button("Undo         Ctrl+Z").clicked() {
-                                inject_key(ctx, egui::Key::Z, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            if ui.button("Redo         Ctrl+Y").clicked() {
-                                inject_key(ctx, egui::Key::Y, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            if ui.button("Cut          Ctrl+X").clicked() {
-                                inject_key(ctx, egui::Key::X, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            if ui.button("Copy         Ctrl+C").clicked() {
-                                inject_key(ctx, egui::Key::C, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            if ui.button("Paste        Ctrl+V").clicked() {
-                                inject_key(ctx, egui::Key::V, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            if ui.button("Select All   Ctrl+A").clicked() {
-                                inject_key(ctx, egui::Key::A, egui::Modifiers::COMMAND);
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            if ui.button("Find          Ctrl+F").clicked() {
-                                self.editor_find_open = true;
-                                self.editor_find_replace_visible = false;
-                                self.editor_find_occurrence = 0;
-                                ui.close_menu();
-                            }
-                            if ui.button("Find & Replace Ctrl+H").clicked() {
-                                self.editor_find_open = true;
-                                self.editor_find_replace_visible = true;
-                                self.editor_find_occurrence = 0;
-                                ui.close_menu();
-                            }
-                        } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
-                            let has_selection = self.file_manager.selected_row().is_some();
-                            let has_clipboard = self
-                                .file_clipboard
-                                .as_ref()
-                                .is_some_and(|clip| !clip.paths.is_empty());
-                            let has_history =
-                                !self.file_undo_stack.is_empty() || !self.file_redo_stack.is_empty();
-                            let paste_label = if let Some(clip) = &self.file_clipboard {
-                                let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
-                                    "Move"
-                                } else {
-                                    "Paste"
-                                };
-                                if clip.paths.len() == 1 {
-                                    format!("{mode} {}", Self::path_display_name(&clip.paths[0]))
-                                } else {
-                                    format!("{mode} {} items", clip.paths.len())
-                                }
-                            } else {
-                                "Paste".to_string()
-                            };
-                            if ui.button("Open Selected").clicked() {
-                                self.activate_file_manager_selection();
-                                ui.close_menu();
-                            }
-                            if ui.button("Clear Search").clicked() {
-                                self.file_manager.update_search_query(String::new());
-                                ui.close_menu();
-                            }
-                            if has_selection || has_clipboard || has_history {
-                                Self::retro_separator(ui);
-                            }
-                            if has_selection {
-                                if ui.button("Copy").clicked() {
-                                    self.run_file_manager_action(FileManagerActionRequest::Copy);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Cut").clicked() {
-                                    self.run_file_manager_action(FileManagerActionRequest::Cut);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Duplicate").clicked() {
-                                    self.run_file_manager_action(FileManagerActionRequest::Duplicate);
-                                    ui.close_menu();
-                                }
-                                if ui.button("Rename").clicked() {
-                                    self.open_file_manager_rename_prompt();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Move To").clicked() {
-                                    self.open_file_manager_move_prompt();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Delete").clicked() {
-                                    self.run_file_manager_action(FileManagerActionRequest::Delete);
-                                    ui.close_menu();
-                                }
-                            }
-                            if has_clipboard && ui.button(paste_label).clicked() {
-                                self.run_file_manager_action(FileManagerActionRequest::Paste);
-                                ui.close_menu();
-                            }
-                            if !self.file_undo_stack.is_empty() && ui.button("Undo").clicked() {
-                                self.run_file_manager_action(FileManagerActionRequest::Undo);
-                                ui.close_menu();
-                            }
-                            if !self.file_redo_stack.is_empty() && ui.button("Redo").clicked() {
-                                self.run_file_manager_action(FileManagerActionRequest::Redo);
-                                ui.close_menu();
-                            }
-                            if has_selection || has_clipboard || has_history {
-                                Self::retro_separator(ui);
-                            }
-                            if ui.button("New Document").clicked() {
-                                self.new_document();
-                                ui.close_menu();
-                            }
-                        } else {
-                            let _ = Self::retro_disabled_button(ui, "No edit actions");
-                        }
-                    });
-                    if self.desktop_active_window == Some(DesktopWindow::Editor) {
-                        ui.menu_button("Format", |ui| {
-                            Self::apply_top_dropdown_menu_style(ui);
-                            ui.set_min_width(160.0);
-                            ui.set_max_width(220.0);
-                            let ww_label = if self.editor.word_wrap {
-                                "[x] Word Wrap"
-                            } else {
-                                "[ ] Word Wrap"
-                            };
-                            if ui.button(ww_label).clicked() {
-                                self.editor.word_wrap = !self.editor.word_wrap;
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            if ui.button("Font Larger  Ctrl++").clicked() {
-                                self.editor.font_size = (self.editor.font_size + 2.0).min(32.0);
-                                ui.close_menu();
-                            }
-                            if ui.button("Font Smaller Ctrl+-").clicked() {
-                                self.editor.font_size = (self.editor.font_size - 2.0).max(10.0);
-                                ui.close_menu();
-                            }
-                            if ui.button("Reset Font").clicked() {
-                                self.editor.font_size = 16.0;
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                            let editor_text_align = self.editor_text_align;
-                            ui.menu_button("Align Text ▶", |ui| {
-                                Self::apply_top_dropdown_menu_style(ui);
-                                ui.set_min_width(120.0);
-                                ui.set_max_width(160.0);
-                                let a = editor_text_align;
-                                let marker_left = if a == 0 { "[x] " } else { "[ ] " };
-                                let marker_center = if a == 1 { "[x] " } else { "[ ] " };
-                                let marker_right = if a == 2 { "[x] " } else { "[ ] " };
-                                if ui.button(format!("{marker_left}Left")).clicked() {
-                                    self.editor_text_align = 0;
-                                    ui.close_menu();
-                                }
-                                if ui.button(format!("{marker_center}Center")).clicked() {
-                                    self.editor_text_align = 1;
-                                    ui.close_menu();
-                                }
-                                if ui.button(format!("{marker_right}Right")).clicked() {
-                                    self.editor_text_align = 2;
-                                    ui.close_menu();
-                                }
-                            });
-                        });
+                    for section in active_app.menu_sections() {
+                        self.draw_top_bar_menu_section(ctx, ui, *section);
                     }
-                    ui.menu_button("View", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
-                        if editor_active {
-                            let ln_label = if self.editor_show_line_numbers { "[x] Line Numbers" } else { "[ ] Line Numbers" };
-                            if ui.button(ln_label).clicked() {
-                                self.editor_show_line_numbers = !self.editor_show_line_numbers;
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                        }
-                        let file_manager_active =
-                            self.desktop_active_window == Some(DesktopWindow::FileManager);
-                        if file_manager_active {
-                            let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-                            let show_hidden = get_settings().desktop_file_manager.show_hidden_files;
-                            let view_mode = self.file_manager_view_mode();
-                            let sort_mode = self.file_manager_sort_mode();
-                            if ui
-                                .button(if show_tree {
-                                    "Hide Folder Tree"
-                                } else {
-                                    "Show Folder Tree"
-                                })
-                                .clicked()
-                            {
-                                self.toggle_file_manager_tree_panel();
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(if view_mode == FileManagerViewMode::Grid {
-                                    "Grid View [Active]"
-                                } else {
-                                    "Grid View"
-                                })
-                                .clicked()
-                            {
-                                self.set_file_manager_view_mode(FileManagerViewMode::Grid);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(if view_mode == FileManagerViewMode::List {
-                                    "List View [Active]"
-                                } else {
-                                    "List View"
-                                })
-                                .clicked()
-                            {
-                                self.set_file_manager_view_mode(FileManagerViewMode::List);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(if sort_mode == FileManagerSortMode::Name {
-                                    "Sort By Name [Active]"
-                                } else {
-                                    "Sort By Name"
-                                })
-                                .clicked()
-                            {
-                                self.set_file_manager_sort_mode(FileManagerSortMode::Name);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(if sort_mode == FileManagerSortMode::Type {
-                                    "Sort By Type [Active]"
-                                } else {
-                                    "Sort By Type"
-                                })
-                                .clicked()
-                            {
-                                self.set_file_manager_sort_mode(FileManagerSortMode::Type);
-                                ui.close_menu();
-                            }
-                            if ui
-                                .button(if show_hidden {
-                                    "Hide Hidden Files"
-                                } else {
-                                    "Show Hidden Files"
-                                })
-                                .clicked()
-                            {
-                                self.toggle_file_manager_hidden_files();
-                                ui.close_menu();
-                            }
-                            Self::retro_separator(ui);
-                        }
-                        if ui.button("My Computer").clicked() {
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                            ui.close_menu();
-                        }
-                        if ui.button("Toggle Start Menu").clicked() {
-                            if self.start_open {
-                                self.close_start_menu();
-                            } else {
-                                self.open_start_menu();
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button("Settings").clicked() {
-                            self.open_desktop_window(DesktopWindow::Settings);
-                            ui.close_menu();
-                        }
-                    });
-                    ui.menu_button("Window", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        for window in [
-                            DesktopWindow::FileManager,
-                            DesktopWindow::Editor,
-                            DesktopWindow::Settings,
-                            DesktopWindow::Applications,
-                            DesktopWindow::DonkeyKong,
-                            DesktopWindow::NukeCodes,
-                            DesktopWindow::PtyApp,
-                        ] {
-                            let open = self.desktop_window_is_open(window);
-                            let active = self.desktop_active_window == Some(window);
-                            let marker = if active {
-                                "active"
-                            } else if open {
-                                "open"
-                            } else {
-                                "closed"
-                            };
-                            let label = format!("{marker}: {}", self.desktop_window_title(window));
-                            if ui.button(label).clicked() {
-                                if window == DesktopWindow::Editor
-                                    && !self.desktop_window_is_open(DesktopWindow::Editor)
-                                    && self.editor.path.is_none()
-                                {
-                                    self.new_document();
-                                } else if !open {
-                                    self.open_desktop_window(window);
-                                } else {
-                                    self.desktop_active_window = Some(window);
-                                    self.close_start_menu();
-                                }
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                    ui.menu_button("Help", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        if ui.button("App Manual").clicked() {
-                            self.open_manual_file("README.md", "App Manual");
-                            ui.close_menu();
-                        }
-                        if ui.button("User Manual").clicked() {
-                            self.open_manual_file("USER_MANUAL.md", "User Manual");
-                            ui.close_menu();
-                        }
-                    });
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let now = Local::now().format("%a %d %b %H:%M").to_string();
                         ui.label(RichText::new(now).color(Color32::BLACK));
                         ui.add_space(10.0);
-                        if ui.button(RichText::new("Search").color(Color32::BLACK)).clicked()
+                        if ui
+                            .button(RichText::new("Search").color(Color32::BLACK))
+                            .clicked()
                             || ctx.input(|i| i.key_pressed(Key::Space) && i.modifiers.command)
                         {
                             self.spotlight_open = !self.spotlight_open;
@@ -6984,20 +7315,18 @@ impl RobcoNativeApp {
                             ui.set_max_width(LEAF_W);
                             for (idx, item) in items.iter().enumerate() {
                                 let selected = self.start_leaf_selected == idx;
-                                let response = Self::start_menu_row(
-                                    ui,
-                                    &item.label,
-                                    selected,
-                                    LEAF_W - 16.0,
-                                );
+                                let response =
+                                    Self::start_menu_row(ui, &item.label, selected, LEAF_W - 16.0);
                                 if response.hovered() {
                                     self.start_leaf_selected = idx;
                                 }
                                 if response.clicked() {
                                     self.run_start_leaf_action(item.action.clone());
                                 }
-                                if matches!(leaf, StartLeaf::Applications | StartLeaf::Games | StartLeaf::Network)
-                                    && !matches!(item.action, StartLeafAction::None)
+                                if matches!(
+                                    leaf,
+                                    StartLeaf::Applications | StartLeaf::Games | StartLeaf::Network
+                                ) && !matches!(item.action, StartLeafAction::None)
                                 {
                                     let item_label = item.label.clone();
                                     let item_action = item.action.clone();
@@ -7008,21 +7337,21 @@ impl RobcoNativeApp {
                                         ui.set_max_width(180.0);
                                         if let Some((target, name)) = removable_item.as_ref() {
                                             if ui.button("Rename").clicked() {
-                                                leaf_context_action = Some(
-                                                    ContextMenuAction::RenameStartMenuEntry {
+                                                leaf_context_action =
+                                                    Some(ContextMenuAction::RenameStartMenuEntry {
                                                         target: *target,
                                                         name: name.clone(),
-                                                    },
-                                                );
+                                                    });
                                                 ui.close_menu();
                                             }
                                             Self::retro_separator(ui);
                                         }
                                         if ui.button("Create Shortcut").clicked() {
-                                            leaf_context_action = Some(ContextMenuAction::CreateShortcut {
-                                                label: item_label.clone(),
-                                                action: item_action.clone(),
-                                            });
+                                            leaf_context_action =
+                                                Some(ContextMenuAction::CreateShortcut {
+                                                    label: item_label.clone(),
+                                                    action: item_action.clone(),
+                                                });
                                             ui.close_menu();
                                         }
                                         if let Some((target, name)) = removable_item.as_ref() {
@@ -7031,12 +7360,11 @@ impl RobcoNativeApp {
                                                 .button(format!("Remove from {}", target.title()))
                                                 .clicked()
                                             {
-                                                leaf_context_action = Some(
-                                                    ContextMenuAction::RemoveStartMenuEntry {
+                                                leaf_context_action =
+                                                    Some(ContextMenuAction::RemoveStartMenuEntry {
                                                         target: *target,
                                                         name: name.clone(),
-                                                    },
-                                                );
+                                                    });
                                                 ui.close_menu();
                                             }
                                         }
@@ -7137,7 +7465,10 @@ impl RobcoNativeApp {
                 if !self.draw_wallpaper(ui.painter(), rect) {
                     ui.painter().rect_filled(rect, 0.0, current_palette().bg);
                 }
-                if !matches!(self.settings.draft.desktop_icon_style, DesktopIconStyle::NoIcons) {
+                if !matches!(
+                    self.settings.draft.desktop_icon_style,
+                    DesktopIconStyle::NoIcons
+                ) {
                     self.draw_desktop_icons(ui);
                 }
                 Self::attach_desktop_empty_context_menu(
@@ -8260,7 +8591,10 @@ impl RobcoNativeApp {
         let screen = ctx.screen_rect();
         let top = screen.top() + TOP_BAR_H;
         let bottom = (screen.bottom() - TASKBAR_H).max(top + 120.0);
-        egui::Rect::from_min_max(egui::pos2(screen.left(), top), egui::pos2(screen.right(), bottom))
+        egui::Rect::from_min_max(
+            egui::pos2(screen.left(), top),
+            egui::pos2(screen.right(), bottom),
+        )
     }
 
     fn desktop_window_frame() -> egui::Frame {
@@ -8340,6 +8674,8 @@ impl RobcoNativeApp {
         let mut style = ui.style().as_ref().clone();
         // Popup/window fill must be set HERE on the parent UI — menu_button
         // reads these when creating the popup frame, before the inner closure runs.
+        style.visuals.panel_fill = palette.bg;
+        style.visuals.extreme_bg_color = palette.bg;
         style.visuals.window_fill = palette.bg;
         style.visuals.window_stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.window_rounding = egui::Rounding::ZERO;
@@ -8380,7 +8716,9 @@ impl RobcoNativeApp {
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.button_frame = true;
-        style.visuals.window_fill = palette.panel;
+        style.visuals.panel_fill = palette.bg;
+        style.visuals.extreme_bg_color = palette.bg;
+        style.visuals.window_fill = palette.bg;
         style.visuals.window_stroke = stroke;
         style.visuals.window_rounding = egui::Rounding::ZERO;
         style.visuals.menu_rounding = egui::Rounding::ZERO;
@@ -8388,14 +8726,14 @@ impl RobcoNativeApp {
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         style.visuals.override_text_color = None;
         style.spacing.item_spacing.y = 0.0;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.noninteractive.bg_fill = palette.bg;
+        style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
         style.visuals.widgets.noninteractive.fg_stroke.color = palette.fg;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        style.visuals.widgets.inactive.bg_fill = palette.bg;
+        style.visuals.widgets.inactive.weak_bg_fill = palette.bg;
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
         style.visuals.widgets.inactive.fg_stroke.color = palette.fg;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
@@ -8413,6 +8751,9 @@ impl RobcoNativeApp {
             visuals.expansion = 0.0;
         }
         ui.set_style(style);
+        ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
+        ui.painter()
+            .rect_stroke(ui.max_rect(), 0.0, egui::Stroke::new(2.0, palette.fg));
     }
 
     fn apply_context_menu_style(ui: &mut egui::Ui) {
@@ -8716,8 +9057,16 @@ impl RobcoNativeApp {
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
         let hovered = response.hovered();
         let highlighted = active || hovered;
-        let fill = if highlighted { palette.fg } else { Color32::TRANSPARENT };
-        let text_color = if highlighted { Color32::BLACK } else { palette.fg };
+        let fill = if highlighted {
+            palette.fg
+        } else {
+            Color32::TRANSPARENT
+        };
+        let text_color = if highlighted {
+            Color32::BLACK
+        } else {
+            palette.fg
+        };
         let stroke = if stroked {
             egui::Stroke::new(1.0, palette.fg)
         } else {
@@ -8754,11 +9103,19 @@ impl RobcoNativeApp {
         grid_mode: bool,
     ) -> egui::Response {
         let palette = current_palette();
-        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let hovered = response.hovered();
         let highlighted = active || hovered;
-        let fill = if highlighted { palette.fg } else { Color32::TRANSPARENT };
-        let text_color = if highlighted { Color32::BLACK } else { palette.fg };
+        let fill = if highlighted {
+            palette.fg
+        } else {
+            Color32::TRANSPARENT
+        };
+        let text_color = if highlighted {
+            Color32::BLACK
+        } else {
+            palette.fg
+        };
         let stroke = if stroked {
             egui::Stroke::new(1.0, palette.fg)
         } else {
@@ -8830,12 +9187,7 @@ impl RobcoNativeApp {
         )
     }
 
-    fn responsive_input_width(
-        ui: &egui::Ui,
-        fraction: f32,
-        min: f32,
-        max: f32,
-    ) -> f32 {
+    fn responsive_input_width(ui: &egui::Ui, fraction: f32, min: f32, max: f32) -> f32 {
         (ui.available_width() * fraction).clamp(min, max)
     }
 
@@ -8914,16 +9266,86 @@ impl RobcoNativeApp {
         action
     }
 
+    fn handle_file_manager_row_interaction(
+        &mut self,
+        ctx: &Context,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        row: &super::file_manager::FileEntryRow,
+        save_picker_mode: bool,
+        action_selection_paths: &[PathBuf],
+        has_editable_selection: bool,
+        has_single_file_selection: bool,
+        has_clipboard: bool,
+    ) {
+        let allow_multi = !save_picker_mode
+            && self.picking_icon_for_shortcut.is_none()
+            && !self.picking_wallpaper;
+        let ctrl_toggle = allow_multi && ctx.input(|i| i.modifiers.ctrl);
+
+        if response.secondary_clicked() && !self.file_manager.is_path_selected(&row.path) {
+            self.file_manager.select(Some(row.path.clone()));
+        }
+        if response.clicked() {
+            self.file_manager_select_path(row.path.clone(), ctrl_toggle, allow_multi);
+        }
+        if response.drag_started() && !save_picker_mode && !row.is_parent_dir() {
+            if !self.file_manager.is_path_selected(&row.path) {
+                self.file_manager.select(Some(row.path.clone()));
+            }
+        }
+        if !save_picker_mode && !row.is_parent_dir() {
+            let drag_paths = if action_selection_paths.iter().any(|path| path == &row.path) {
+                action_selection_paths.to_vec()
+            } else {
+                vec![row.path.clone()]
+            };
+            if !drag_paths.is_empty() {
+                response.dnd_set_drag_payload(NativeFileManagerDragPayload { paths: drag_paths });
+            }
+        }
+        if row.is_dir && !save_picker_mode {
+            let drop_hover = response
+                .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                .is_some_and(|payload| Self::file_manager_drop_allowed(&payload.paths, &row.path));
+            if drop_hover {
+                ui.painter().rect_stroke(
+                    response.rect,
+                    0.0,
+                    egui::Stroke::new(2.0, current_palette().fg),
+                );
+            }
+            if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>() {
+                if Self::file_manager_drop_allowed(&payload.paths, &row.path) {
+                    self.file_manager_handle_drop_to_dir(payload.paths.clone(), row.path.clone());
+                }
+            }
+        }
+        if response.double_clicked() {
+            self.file_manager.select(Some(row.path.clone()));
+            self.file_manager_activate_or_pick();
+        }
+        Self::attach_file_manager_context_menu(
+            &mut self.context_menu_action,
+            response,
+            has_editable_selection,
+            has_single_file_selection,
+            has_clipboard,
+        );
+    }
+
     fn draw_file_manager(&mut self, ctx: &Context) {
         if !self.file_manager.open || self.desktop_window_is_minimized(DesktopWindow::FileManager) {
             return;
         }
+        let save_picker_mode = self.editor.save_as_input.is_some();
         let mut open = self.file_manager.open;
         let maximized = self.desktop_window_is_maximized(DesktopWindow::FileManager);
         let restore = self.take_desktop_window_restore_dims(DesktopWindow::FileManager);
         let mut header_action = DesktopHeaderAction::None;
         let generation = self.desktop_window_generation(DesktopWindow::FileManager);
         let default_size = Self::desktop_default_window_size(DesktopWindow::FileManager);
+        let save_picker_size = egui::vec2(860.0, 560.0);
         let mut window = egui::Window::new("File Manager")
             .id(Id::new(("native_file_manager", generation)))
             .open(&mut open)
@@ -8932,7 +9354,15 @@ impl RobcoNativeApp {
             .resizable(true)
             .min_size([400.0, 300.0])
             .default_size([default_size.x, default_size.y]);
-        if maximized {
+        if save_picker_mode {
+            window = window.resizable(false);
+            if let Some((pos, _)) = restore {
+                window = window.current_pos(pos).fixed_size(save_picker_size);
+            } else {
+                let pos = Self::desktop_default_window_pos(ctx, save_picker_size);
+                window = window.current_pos(pos).fixed_size(save_picker_size);
+            }
+        } else if maximized {
             let rect = Self::desktop_workspace_rect(ctx);
             window = window
                 .movable(false)
@@ -8949,10 +9379,13 @@ impl RobcoNativeApp {
         // Pre-load SVG previews for all .svg files in the current directory.
         // Uses shortcut_icon_cache (same path→TextureHandle map). One-time cost per directory.
         {
-            let svg_paths: Vec<std::path::PathBuf> = self.file_manager.rows()
+            let svg_paths: Vec<std::path::PathBuf> = self
+                .file_manager
+                .rows()
                 .into_iter()
                 .filter(|r| {
-                    r.path.extension()
+                    r.path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .map(|e| e.eq_ignore_ascii_case("svg"))
                         .unwrap_or(false)
@@ -8972,121 +9405,279 @@ impl RobcoNativeApp {
 
         let search_id = Id::new(("native_file_manager_search", generation));
         let shown = window.show(ctx, |ui| {
-                Self::apply_settings_control_style(ui);
+            Self::apply_settings_control_style(ui);
 
-                // ── TOP PANEL: header + chrome ─────────────────────────────────────
-                // show_inside panels carve from the window rect directly and never
-                // feed back into the Resize widget — this is the correct egui pattern
-                // for resizable windows that behave like Win95 explorer.
-                egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
-                    .frame(egui::Frame::none())
-                    .show_inside(ui, |ui| {
-                        header_action = Self::draw_desktop_window_header(ui, "My Computer", maximized);
+            // ── TOP PANEL: header + chrome ─────────────────────────────────────
+            // show_inside panels carve from the window rect directly and never
+            // feed back into the Resize widget — this is the correct egui pattern
+            // for resizable windows that behave like Win95 explorer.
+            egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
+                .frame(egui::Frame::none())
+                .exact_height(136.0)
+                .show_inside(ui, |ui| {
+                    let drives = NativeFileManagerState::drive_roots();
+                    let current_drive = self.file_manager.current_drive_root();
+                    header_action = Self::draw_desktop_window_header(ui, "My Computer", maximized);
 
-                        if self.picking_icon_for_shortcut.is_some() {
-                            let banner_color = current_palette().fg;
-                            ui.colored_label(banner_color, "[ Selecting Icon — choose an .svg file and click Choose Icon ]");
-                        } else if self.picking_wallpaper {
-                            let banner_color = current_palette().fg;
-                            ui.colored_label(banner_color, "[ Selecting Wallpaper — choose an image file and click Choose Wallpaper ]");
-                        }
+                    if self.picking_icon_for_shortcut.is_some() {
+                        let banner_color = current_palette().fg;
+                        ui.colored_label(banner_color, "[ Pick icon mode ]");
+                    } else if self.editor.save_as_input.is_some() {
+                        let banner_color = current_palette().fg;
+                        ui.colored_label(banner_color, "[ Save As mode ]");
+                    } else if self.picking_wallpaper {
+                        let banner_color = current_palette().fg;
+                        ui.colored_label(banner_color, "[ Pick wallpaper mode ]");
+                    }
 
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new("Tabs").strong());
-                            for idx in 0..self.file_manager.tabs.len() {
-                                let title = NativeFileManagerState::tab_title(&self.file_manager.tabs[idx]);
-                                let title = Self::truncate_file_manager_label(&title, 12);
-                                let active = idx == self.file_manager.active_tab;
-                                let response = Self::retro_file_manager_button(
-                                    ui,
-                                    format!("[{}:{}{}]", idx + 1, title, if active { "*" } else { "" }),
-                                    egui::vec2(132.0, 28.0),
-                                    active,
-                                    false,
-                                );
-                                if response.clicked() {
-                                    let _ = self.file_manager.switch_to_tab(idx);
-                                }
-                            }
-                            if ui.button("+").clicked() {
-                                self.file_manager.open_tab_here();
-                            }
-                            let close_tab = if self.file_manager.tabs.len() > 1 {
-                                ui.button("x")
-                            } else {
-                                Self::retro_disabled_button(ui, "x")
-                            };
-                            if close_tab.clicked() {
-                                let _ = self.file_manager.close_active_tab();
-                            }
-                        });
-
-                        let search_requested = self.desktop_active_window == Some(DesktopWindow::FileManager)
-                            && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F));
-                        if search_requested {
-                            ui.memory_mut(|mem| mem.request_focus(search_id));
-                        }
-
-                        let mut search_query = self.file_manager.search_query.clone();
-                        ui.horizontal(|ui| {
-                            let search_label = if search_query.is_empty() { "Search: (Ctrl+F)" } else { "Search:" };
-                            ui.label(RichText::new(search_label).strong());
-                            let search_width = (ui.available_width() - 240.0).max(180.0);
-                            let search = ui.add_sized(
-                                [search_width, 0.0],
-                                TextEdit::singleline(&mut search_query)
-                                    .id(search_id)
-                                    .hint_text("filter files and folders"),
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Tabs").strong());
+                        for idx in 0..self.file_manager.tabs.len() {
+                            let title =
+                                NativeFileManagerState::tab_title(&self.file_manager.tabs[idx]);
+                            let title = Self::truncate_file_manager_label(&title, 12);
+                            let active = idx == self.file_manager.active_tab;
+                            let response = Self::retro_file_manager_button(
+                                ui,
+                                format!("[{}:{}{}]", idx + 1, title, if active { "*" } else { "" }),
+                                egui::vec2(132.0, 28.0),
+                                active,
+                                false,
                             );
-                            if search.changed() {
-                                self.file_manager.update_search_query(search_query.clone());
+                            if response.clicked() {
+                                let _ = self.file_manager.switch_to_tab(idx);
                             }
-                            ui.add_space(8.0);
-                            {
-                                let tree_on = get_settings().desktop_file_manager.show_tree_panel;
-                                let list_on = self.file_manager_view_mode() == FileManagerViewMode::List;
-                                let grid_on = self.file_manager_view_mode() == FileManagerViewMode::Grid;
-                                let fg = current_palette().fg;
-                                let sel_color = |on: bool| if on { Color32::BLACK } else { fg };
-                                if ui.selectable_label(tree_on, RichText::new("Tree").color(sel_color(tree_on))).clicked() {
-                                    self.toggle_file_manager_tree_panel();
-                                }
-                                if ui.selectable_label(list_on, RichText::new("List").color(sel_color(list_on))).clicked() {
-                                    self.set_file_manager_view_mode(FileManagerViewMode::List);
-                                }
-                                if ui.selectable_label(grid_on, RichText::new("Grid").color(sel_color(grid_on))).clicked() {
-                                    self.set_file_manager_view_mode(FileManagerViewMode::Grid);
-                                }
-                            }
-                        });
-
-                        ui.label(RichText::new(format!("Path: {}", self.file_manager.cwd.display())).strong());
-                        ui.separator();
+                        }
+                        if ui.button("+").clicked() {
+                            self.file_manager.open_tab_here();
+                        }
+                        let close_tab = if self.file_manager.tabs.len() > 1 {
+                            ui.button("x")
+                        } else {
+                            Self::retro_disabled_button(ui, "x")
+                        };
+                        if close_tab.clicked() {
+                            let _ = self.file_manager.close_active_tab();
+                        }
                     });
 
-                // ── BOTTOM PANEL: status bar + buttons ────────────────────────────
-                let view_mode = self.file_manager_view_mode();
-                let show_tree_panel = get_settings().desktop_file_manager.show_tree_panel;
-                let rows = self.file_manager.rows();
-                egui::TopBottomPanel::bottom(Id::new(("fm_bottom", generation)))
-                    .frame(egui::Frame::none())
-                    .exact_height(34.0)
-                    .show_inside(ui, |ui| {
-                        ui.painter().hline(
-                            ui.max_rect().x_range(),
-                            ui.max_rect().top() + 1.0,
-                            egui::Stroke::new(1.0, current_palette().fg),
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Drives").strong());
+                        for drive in &drives {
+                            let active = current_drive.as_ref() == Some(drive);
+                            let label = NativeFileManagerState::drive_label(drive);
+                            let response = Self::retro_file_manager_button(
+                                ui,
+                                label,
+                                egui::vec2(120.0, 26.0),
+                                active,
+                                true,
+                            );
+                            let drop_hover = !save_picker_mode
+                                && response
+                                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                                    .is_some_and(|payload| {
+                                        Self::file_manager_drop_allowed(&payload.paths, drive)
+                                    });
+                            if drop_hover {
+                                ui.painter().rect_stroke(
+                                    response.rect,
+                                    0.0,
+                                    egui::Stroke::new(2.0, current_palette().fg),
+                                );
+                            }
+                            if response.clicked() {
+                                self.file_manager.open_selected_tree_path(drive.clone());
+                            }
+                            if let Some(payload) =
+                                response.dnd_release_payload::<NativeFileManagerDragPayload>()
+                            {
+                                if !save_picker_mode
+                                    && Self::file_manager_drop_allowed(&payload.paths, drive)
+                                {
+                                    self.file_manager_handle_drop_to_dir(
+                                        payload.paths.clone(),
+                                        drive.clone(),
+                                    );
+                                }
+                            }
+                        }
+                    });
+
+                    let search_requested = self.desktop_active_window
+                        == Some(DesktopWindow::FileManager)
+                        && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F));
+                    if search_requested {
+                        ui.memory_mut(|mem| mem.request_focus(search_id));
+                    }
+
+                    let mut search_query = self.file_manager.search_query.clone();
+                    ui.horizontal(|ui| {
+                        let search_label = if search_query.is_empty() {
+                            "Search: (Ctrl+F)"
+                        } else {
+                            "Search:"
+                        };
+                        ui.label(RichText::new(search_label).strong());
+                        let search_width = (ui.available_width() - 240.0).max(180.0);
+                        let search = ui.add_sized(
+                            [search_width, 0.0],
+                            TextEdit::singleline(&mut search_query)
+                                .id(search_id)
+                                .hint_text("filter files and folders"),
                         );
-                        ui.add_space(4.0);
+                        if search.changed() {
+                            self.file_manager.update_search_query(search_query.clone());
+                        }
+                        ui.add_space(8.0);
+                        {
+                            let tree_on = get_settings().desktop_file_manager.show_tree_panel;
+                            let list_on =
+                                self.file_manager_view_mode() == FileManagerViewMode::List;
+                            let grid_on =
+                                self.file_manager_view_mode() == FileManagerViewMode::Grid;
+                            let fg = current_palette().fg;
+                            let sel_color = |on: bool| if on { Color32::BLACK } else { fg };
+                            if ui
+                                .selectable_label(
+                                    tree_on,
+                                    RichText::new("Tree").color(sel_color(tree_on)),
+                                )
+                                .clicked()
+                            {
+                                self.toggle_file_manager_tree_panel();
+                            }
+                            if ui
+                                .selectable_label(
+                                    list_on,
+                                    RichText::new("List").color(sel_color(list_on)),
+                                )
+                                .clicked()
+                            {
+                                self.set_file_manager_view_mode(FileManagerViewMode::List);
+                            }
+                            if ui
+                                .selectable_label(
+                                    grid_on,
+                                    RichText::new("Grid").color(sel_color(grid_on)),
+                                )
+                                .clicked()
+                            {
+                                self.set_file_manager_view_mode(FileManagerViewMode::Grid);
+                            }
+                        }
+                    });
+
+                    let path_label = if self.editor.save_as_input.is_some() {
+                        format!("Save Folder: {}", self.file_manager.cwd.display())
+                    } else {
+                        format!("Path: {}", self.file_manager.cwd.display())
+                    };
+                    if let Some(drive) = current_drive {
+                        ui.label(
+                            RichText::new(format!(
+                                "Drive: {}",
+                                NativeFileManagerState::drive_label(&drive)
+                            ))
+                            .strong(),
+                        );
+                    }
+                    ui.label(RichText::new(path_label).strong());
+                    ui.separator();
+                });
+
+            // ── BOTTOM PANEL: status bar + buttons ────────────────────────────
+            let view_mode = self.file_manager_view_mode();
+            let show_tree_panel = get_settings().desktop_file_manager.show_tree_panel;
+            let rows = self.file_manager.rows();
+            let action_selection_paths: Vec<PathBuf> = self
+                .file_manager_selected_entries()
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect();
+            let has_editable_selection = !action_selection_paths.is_empty();
+            let has_single_file_selection =
+                action_selection_paths.len() == 1 && action_selection_paths[0].is_file();
+            let has_clipboard = self
+                .file_clipboard
+                .as_ref()
+                .is_some_and(|clip| !clip.paths.is_empty());
+            egui::TopBottomPanel::bottom(Id::new(("fm_bottom", generation)))
+                .frame(egui::Frame::none())
+                .exact_height(if save_picker_mode { 56.0 } else { 44.0 })
+                .show_inside(ui, |ui| {
+                    ui.painter().hline(
+                        ui.max_rect().x_range(),
+                        ui.max_rect().top() + 1.0,
+                        egui::Stroke::new(1.0, current_palette().fg),
+                    );
+                    ui.add_space(4.0);
+                    if let Some(current_name) = self.editor.save_as_input.clone() {
+                        let mut file_name = current_name;
+                        let mut cancel_save = false;
+                        let mut save_here = false;
+                        let mut new_folder = false;
+                        ui.horizontal(|ui| {
+                            ui.small("Save picker");
+                            ui.separator();
+                            if ui.button("Home").clicked() {
+                                self.file_manager_open_home();
+                            }
+                            if ui.button("Up").clicked() {
+                                self.file_manager.up();
+                            }
+                            if ui.button("New Folder").clicked() {
+                                new_folder = true;
+                            }
+                            ui.separator();
+                            ui.label("Name");
+                            ui.add_sized(
+                                [280.0, 28.0],
+                                TextEdit::singleline(&mut file_name).hint_text("document.txt"),
+                            );
+                            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .add_sized([100.0, 28.0], egui::Button::new("Cancel"))
+                                    .clicked()
+                                {
+                                    cancel_save = true;
+                                }
+                                if ui
+                                    .add_sized([132.0, 28.0], egui::Button::new("Save Here"))
+                                    .clicked()
+                                {
+                                    save_here = true;
+                                }
+                            });
+                        });
+                        self.editor.save_as_input = Some(file_name);
+                        if new_folder {
+                            self.run_file_manager_action(FileManagerActionRequest::NewFolder);
+                        } else if cancel_save {
+                            self.editor.save_as_input = None;
+                            self.editor.status = "Save canceled.".to_string();
+                            self.file_manager.open = false;
+                            self.open_desktop_window(DesktopWindow::Editor);
+                        } else if save_here {
+                            self.complete_editor_save_as_from_picker();
+                        }
+                    } else {
                         ui.horizontal(|ui| {
                             ui.small(format!("{} item(s)", rows.len()));
+                            ui.separator();
+                            let selected_count = self.file_manager_selection_count();
+                            ui.small(format!("{selected_count} selected"));
                             ui.separator();
                             ui.small(match view_mode {
                                 FileManagerViewMode::Grid => "Grid View",
                                 FileManagerViewMode::List => "List View",
                             });
                             ui.separator();
-                            ui.small(if show_tree_panel { "Tree On" } else { "Tree Off" });
+                            ui.small(if show_tree_panel {
+                                "Tree On"
+                            } else {
+                                "Tree Off"
+                            });
                             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                                 if let Some(pick_idx) = self.picking_icon_for_shortcut {
                                     if ui.button("Cancel").clicked() {
@@ -9095,10 +9686,14 @@ impl RobcoNativeApp {
                                     if ui.button("Choose Icon").clicked() {
                                         if let Some(entry) = self.file_manager_selected_file() {
                                             let path_str = entry.path.to_string_lossy().to_string();
-                                            if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(pick_idx) {
+                                            if let Some(sc) = self
+                                                .settings
+                                                .draft
+                                                .desktop_shortcuts
+                                                .get_mut(pick_idx)
+                                            {
                                                 sc.icon_path = Some(path_str.clone());
                                             }
-                                            // Invalidate cache for this path so it reloads
                                             self.shortcut_icon_cache.remove(&path_str);
                                             if let Some(props) = &mut self.shortcut_properties {
                                                 if props.shortcut_idx == pick_idx {
@@ -9109,11 +9704,16 @@ impl RobcoNativeApp {
                                             self.file_manager.open = false;
                                             self.persist_native_settings();
                                         } else {
-                                            self.shell_status = "Select an SVG file first.".to_string();
+                                            self.shell_status =
+                                                "Select an SVG file first.".to_string();
                                         }
                                     }
-                                    if ui.button("Up").clicked() { self.file_manager.up(); }
-                                    if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                    if ui.button("Up").clicked() {
+                                        self.file_manager.up();
+                                    }
+                                    if ui.button("Home").clicked() {
+                                        self.file_manager_open_home();
+                                    }
                                 } else if self.picking_wallpaper {
                                     if ui.button("Cancel").clicked() {
                                         self.picking_wallpaper = false;
@@ -9125,191 +9725,225 @@ impl RobcoNativeApp {
                                             self.picking_wallpaper = false;
                                             self.file_manager.open = false;
                                         } else {
-                                            self.shell_status = "Select an image file first.".to_string();
+                                            self.shell_status =
+                                                "Select an image file first.".to_string();
                                         }
                                     }
-                                    if ui.button("Up").clicked() { self.file_manager.up(); }
-                                    if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                    if ui.button("Up").clicked() {
+                                        self.file_manager.up();
+                                    }
+                                    if ui.button("Home").clicked() {
+                                        self.file_manager_open_home();
+                                    }
                                 } else {
-                                    if ui.button("New Document").clicked() { self.new_document(); }
-                                    if ui.button("Open").clicked() { self.activate_file_manager_selection(); }
-                                    if ui.button("Up").clicked() { self.file_manager.up(); }
-                                    if ui.button("Home").clicked() { self.file_manager_open_home(); }
+                                    if ui.button("New Folder").clicked() {
+                                        self.run_file_manager_action(
+                                            FileManagerActionRequest::NewFolder,
+                                        );
+                                    }
+                                    if ui.button("New Document").clicked() {
+                                        self.new_document();
+                                    }
+                                    if ui.button("Open").clicked() {
+                                        self.activate_file_manager_selection();
+                                    }
+                                    if ui.button("Up").clicked() {
+                                        self.file_manager.up();
+                                    }
+                                    if ui.button("Home").clicked() {
+                                        self.file_manager_open_home();
+                                    }
                                 }
                             });
                         });
-                    });
+                    }
+                });
 
-                // ── LEFT PANEL: folder tree (optional) ────────────────────────────
-                if show_tree_panel {
-                    let tree_items = self.file_manager.tree_items();
-                    egui::SidePanel::left(Id::new(("fm_tree", generation)))
-                        .frame(egui::Frame::none())
-                        .width_range(140.0..=280.0)
-                        .default_width(200.0)
-                        .show_inside(ui, |ui| {
-                            ui.label(RichText::new("Folders").strong());
-                            egui::ScrollArea::vertical()
-                                .id_salt(("native_file_manager_tree", generation))
-                                .show(ui, |ui| {
-                                    for item in &tree_items {
-                                        let selected = item.path.as_ref()
-                                            .is_some_and(|p| Some(p) == self.file_manager.tree_selected.as_ref());
-                                        let response = Self::retro_file_manager_button(
-                                            ui,
-                                            item.line.clone(),
-                                            egui::vec2(ui.available_width(), 26.0),
-                                            selected,
-                                            false,
+            // ── LEFT PANEL: folder tree (optional) ────────────────────────────
+            if show_tree_panel {
+                let tree_items = self.file_manager.tree_items();
+                egui::SidePanel::left(Id::new(("fm_tree", generation)))
+                    .frame(egui::Frame::none())
+                    .width_range(140.0..=280.0)
+                    .default_width(200.0)
+                    .show_inside(ui, |ui| {
+                        ui.label(RichText::new("Locations").strong());
+                        egui::ScrollArea::vertical()
+                            .id_salt(("native_file_manager_tree", generation))
+                            .show(ui, |ui| {
+                                for item in &tree_items {
+                                    if item.path.is_none() {
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new(&item.line).strong());
+                                        continue;
+                                    }
+                                    let Some(path) = item.path.as_ref() else {
+                                        continue;
+                                    };
+                                    let selected =
+                                        Some(path) == self.file_manager.tree_selected.as_ref();
+                                    let response = Self::retro_file_manager_button(
+                                        ui,
+                                        item.line.clone(),
+                                        egui::vec2(ui.available_width(), 26.0),
+                                        selected,
+                                        false,
+                                    );
+                                    let drop_hover = !save_picker_mode
+                                        && response
+                                            .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                                            .is_some_and(|payload| {
+                                                Self::file_manager_drop_allowed(
+                                                    &payload.paths,
+                                                    path,
+                                                )
+                                            });
+                                    if drop_hover {
+                                        ui.painter().rect_stroke(
+                                            response.rect,
+                                            0.0,
+                                            egui::Stroke::new(2.0, current_palette().fg),
                                         );
-                                        if response.clicked() {
-                                            if let Some(path) = &item.path {
-                                                self.file_manager.open_selected_tree_path(path.clone());
-                                            }
+                                    }
+                                    if response.clicked() {
+                                        self.file_manager.open_selected_tree_path(path.clone());
+                                    }
+                                    if let Some(payload) = response
+                                        .dnd_release_payload::<NativeFileManagerDragPayload>()
+                                    {
+                                        if !save_picker_mode
+                                            && Self::file_manager_drop_allowed(&payload.paths, path)
+                                        {
+                                            self.file_manager_handle_drop_to_dir(
+                                                payload.paths.clone(),
+                                                path.clone(),
+                                            );
                                         }
                                     }
-                                });
-                        });
-                }
-
-                // ── CENTRAL PANEL: file list ──────────────────────────────────────
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none())
-                    .show_inside(ui, |ui| {
-                        if rows.is_empty() {
-                            ui.label("No files match the current search.");
-                            return;
-                        }
-                        match view_mode {
-                            FileManagerViewMode::List => {
-                                egui::ScrollArea::vertical()
-                                    .id_salt(("native_file_manager_list", generation))
-                                    .show(ui, |ui| {
-                                        for row in &rows {
-                                            let selected = self.file_manager.selected.as_ref() == Some(&row.path);
-                                            let preview = self.svg_preview_texture(row);
-                                            let response = Self::retro_file_manager_item(
-                                                ui,
-                                                preview.as_ref(),
-                                                row.icon(),
-                                                &row.label,
-                                                egui::vec2(ui.available_width(), 28.0),
-                                                selected,
-                                                false,
-                                                false,
-                                            );
-                                            if response.secondary_clicked() {
-                                                self.file_manager.select(Some(row.path.clone()));
-                                            }
-                                            if response.clicked() { self.file_manager.select(Some(row.path.clone())); }
-                                            if response.double_clicked() {
-                                                self.file_manager.select(Some(row.path.clone()));
-                                                self.file_manager_activate_or_pick();
-                                            }
-                                            let has_clipboard = self
-                                                .file_clipboard
-                                                .as_ref()
-                                                .is_some_and(|clip| !clip.paths.is_empty());
-                                            Self::attach_file_manager_context_menu(
-                                                &mut self.context_menu_action,
-                                                &response,
-                                                true,
-                                                row.path.is_file(),
-                                                has_clipboard,
-                                            );
-                                        }
-                                        let background = ui.allocate_rect(
-                                            ui.available_rect_before_wrap(),
-                                            egui::Sense::click(),
-                                        );
-                                        let has_selection = self.file_manager.selected.is_some();
-                                        let has_file_selection =
-                                            self.file_manager_selected_file().is_some();
-                                        let has_clipboard = self
-                                            .file_clipboard
-                                            .as_ref()
-                                            .is_some_and(|clip| !clip.paths.is_empty());
-                                        Self::attach_file_manager_context_menu(
-                                            &mut self.context_menu_action,
-                                            &background,
-                                            has_selection,
-                                            has_file_selection,
-                                            has_clipboard,
-                                        );
-                                    });
-                            }
-                            FileManagerViewMode::Grid => {
-                                let tile_width = 150.0;
-                                let available_w = ui.available_width();
-                                let cols = ((available_w / tile_width).floor() as usize).max(1);
-                                egui::ScrollArea::vertical()
-                                    .id_salt(("native_file_manager_grid", generation))
-                                    .show(ui, |ui| {
-                                        for chunk in rows.chunks(cols) {
-                                            ui.allocate_ui_with_layout(
-                                                egui::vec2(available_w, 64.0),
-                                                Layout::left_to_right(egui::Align::Min),
-                                                |ui| {
-                                                    for row in chunk {
-                                                    let selected = self.file_manager.selected.as_ref() == Some(&row.path);
-                                                    let label = Self::truncate_file_manager_label(&row.label, 16);
-                                                    let preview = self.svg_preview_texture(row);
-                                                        let response = Self::retro_file_manager_item(
-                                                            ui,
-                                                            preview.as_ref(),
-                                                            row.icon(),
-                                                            &label,
-                                                            egui::vec2(tile_width - 8.0, 60.0),
-                                                            selected,
-                                                            true,
-                                                            true,
-                                                        );
-                                                        if response.secondary_clicked() {
-                                                            self.file_manager.select(Some(row.path.clone()));
-                                                        }
-                                                        if response.clicked() { self.file_manager.select(Some(row.path.clone())); }
-                                                        if response.double_clicked() {
-                                                            self.file_manager.select(Some(row.path.clone()));
-                                                            self.file_manager_activate_or_pick();
-                                                        }
-                                                        let has_clipboard = self
-                                                            .file_clipboard
-                                                            .as_ref()
-                                                            .is_some_and(|clip| !clip.paths.is_empty());
-                                                        Self::attach_file_manager_context_menu(
-                                                            &mut self.context_menu_action,
-                                                            &response,
-                                                            true,
-                                                            row.path.is_file(),
-                                                            has_clipboard,
-                                                        );
-                                                    }
-                                                },
-                                            );
-                                        }
-                                        let background = ui.allocate_rect(
-                                            ui.available_rect_before_wrap(),
-                                            egui::Sense::click(),
-                                        );
-                                        let has_selection = self.file_manager.selected.is_some();
-                                        let has_file_selection =
-                                            self.file_manager_selected_file().is_some();
-                                        let has_clipboard = self
-                                            .file_clipboard
-                                            .as_ref()
-                                            .is_some_and(|clip| !clip.paths.is_empty());
-                                        Self::attach_file_manager_context_menu(
-                                            &mut self.context_menu_action,
-                                            &background,
-                                            has_selection,
-                                            has_file_selection,
-                                            has_clipboard,
-                                        );
-                                    });
-                            }
-                        }
+                                }
+                            });
                     });
-            });
+            }
+
+            // ── CENTRAL PANEL: file list ──────────────────────────────────────
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show_inside(ui, |ui| {
+                    if rows.is_empty() {
+                        ui.label("No files match the current search.");
+                        return;
+                    }
+                    match view_mode {
+                        FileManagerViewMode::List => {
+                            egui::ScrollArea::vertical()
+                                .id_salt(("native_file_manager_list", generation))
+                                .show(ui, |ui| {
+                                    for row in &rows {
+                                        let selected =
+                                            self.file_manager.is_path_selected(&row.path);
+                                        let preview = self.svg_preview_texture(row);
+                                        let response = Self::retro_file_manager_item(
+                                            ui,
+                                            preview.as_ref(),
+                                            row.icon(),
+                                            &row.label,
+                                            egui::vec2(ui.available_width(), 28.0),
+                                            selected,
+                                            false,
+                                            false,
+                                        );
+                                        self.handle_file_manager_row_interaction(
+                                            ctx,
+                                            ui,
+                                            &response,
+                                            row,
+                                            save_picker_mode,
+                                            &action_selection_paths,
+                                            has_editable_selection,
+                                            has_single_file_selection,
+                                            has_clipboard,
+                                        );
+                                    }
+                                    let background = ui.allocate_rect(
+                                        ui.available_rect_before_wrap(),
+                                        egui::Sense::click(),
+                                    );
+                                    if background.clicked() && !save_picker_mode {
+                                        self.file_manager.clear_multi_selection();
+                                    }
+                                    Self::attach_file_manager_context_menu(
+                                        &mut self.context_menu_action,
+                                        &background,
+                                        has_editable_selection,
+                                        has_single_file_selection,
+                                        has_clipboard,
+                                    );
+                                });
+                        }
+                        FileManagerViewMode::Grid => {
+                            let tile_width = 150.0;
+                            let available_w = ui.available_width();
+                            let cols = ((available_w / tile_width).floor() as usize).max(1);
+                            egui::ScrollArea::vertical()
+                                .id_salt(("native_file_manager_grid", generation))
+                                .show(ui, |ui| {
+                                    for chunk in rows.chunks(cols) {
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(available_w, 64.0),
+                                            Layout::left_to_right(egui::Align::Min),
+                                            |ui| {
+                                                for row in chunk {
+                                                    let selected = self
+                                                        .file_manager
+                                                        .is_path_selected(&row.path);
+                                                    let label = Self::truncate_file_manager_label(
+                                                        &row.label, 16,
+                                                    );
+                                                    let preview = self.svg_preview_texture(row);
+                                                    let response = Self::retro_file_manager_item(
+                                                        ui,
+                                                        preview.as_ref(),
+                                                        row.icon(),
+                                                        &label,
+                                                        egui::vec2(tile_width - 8.0, 60.0),
+                                                        selected,
+                                                        true,
+                                                        true,
+                                                    );
+                                                    self.handle_file_manager_row_interaction(
+                                                        ctx,
+                                                        ui,
+                                                        &response,
+                                                        row,
+                                                        save_picker_mode,
+                                                        &action_selection_paths,
+                                                        has_editable_selection,
+                                                        has_single_file_selection,
+                                                        has_clipboard,
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    }
+                                    let background = ui.allocate_rect(
+                                        ui.available_rect_before_wrap(),
+                                        egui::Sense::click(),
+                                    );
+                                    if background.clicked() && !save_picker_mode {
+                                        self.file_manager.clear_multi_selection();
+                                    }
+                                    Self::attach_file_manager_context_menu(
+                                        &mut self.context_menu_action,
+                                        &background,
+                                        has_editable_selection,
+                                        has_single_file_selection,
+                                        has_clipboard,
+                                    );
+                                });
+                        }
+                    }
+                });
+        });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
             .as_ref()
@@ -9319,7 +9953,7 @@ impl RobcoNativeApp {
             DesktopWindow::FileManager,
             shown_contains_pointer,
         );
-        if !maximized {
+        if !maximized && !save_picker_mode {
             // Always save the full rect. egui owns window sizing for resizable windows
             // and will not inflate it — only user drag changes it.
             if let Some(rect) = shown_rect {
@@ -9329,7 +9963,9 @@ impl RobcoNativeApp {
         match header_action {
             DesktopHeaderAction::None => {}
             DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::FileManager, true),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::FileManager, true)
+            }
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::FileManager, shown_rect)
             }
@@ -9341,6 +9977,7 @@ impl RobcoNativeApp {
         }
         // If the file manager was closed while in a pick mode, cancel the pick.
         if !open {
+            self.editor.save_as_input = None;
             self.picking_icon_for_shortcut = None;
             self.picking_wallpaper = false;
         }
@@ -9355,20 +9992,16 @@ impl RobcoNativeApp {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
-            self.save_editor();
+            self.run_editor_command(EditorCommand::Save);
         }
         if ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command) {
-            self.editor_find_open = true;
-            self.editor_find_replace_visible = false;
-            self.editor_find_occurrence = 0;
+            self.run_editor_command(EditorCommand::OpenFind);
         }
         if ctx.input(|i| i.key_pressed(Key::H) && i.modifiers.command) {
-            self.editor_find_open = true;
-            self.editor_find_replace_visible = true;
-            self.editor_find_occurrence = 0;
+            self.run_editor_command(EditorCommand::OpenFindReplace);
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.editor_find_open {
-            self.editor_find_open = false;
+        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.editor.ui.find_open {
+            self.run_editor_command(EditorCommand::CloseFind);
         }
         let title = self
             .editor
@@ -9376,7 +10009,7 @@ impl RobcoNativeApp {
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|p| p.to_str())
-            .unwrap_or("ROBCO Word Processor")
+            .unwrap_or(EDITOR_APP_TITLE)
             .to_string();
 
         if !self.desktop_mode_open {
@@ -9386,7 +10019,7 @@ impl RobcoNativeApp {
                 return;
             }
             if ctx.input(|i| i.key_pressed(Key::N) && i.modifiers.command) {
-                self.new_document();
+                self.run_editor_command(EditorCommand::NewDocument);
             }
             let palette = current_palette();
 
@@ -9402,20 +10035,31 @@ impl RobcoNativeApp {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&title).color(palette.fg).strong());
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new("Esc:Back  ^S:Save  ^N:New  ^F:Find").color(palette.dim).small());
+                            ui.label(
+                                RichText::new("Esc:Back  ^S:Save  ^N:New  ^F:Find")
+                                    .color(palette.dim)
+                                    .small(),
+                            );
                         });
                     });
                     if let Some(path) = &self.editor.path {
-                        ui.label(RichText::new(path.display().to_string()).color(palette.dim).small());
+                        ui.label(
+                            RichText::new(path.display().to_string())
+                                .color(palette.dim)
+                                .small(),
+                        );
                     }
                     if !self.editor.status.is_empty() {
-                        ui.label(RichText::new(&self.editor.status).color(palette.dim).small());
+                        ui.label(
+                            RichText::new(&self.editor.status)
+                                .color(palette.dim)
+                                .small(),
+                        );
                     }
 
                     // Block cursor in theme color
                     let char_width = 16.0 * 0.6;
-                    ui.visuals_mut().text_cursor.stroke =
-                        egui::Stroke::new(char_width, palette.fg);
+                    ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(char_width, palette.fg);
                     let edit = TextEdit::multiline(&mut self.editor.text)
                         .lock_focus(true)
                         .frame(false)
@@ -9463,7 +10107,7 @@ impl RobcoNativeApp {
             }
 
             // ── FIND/REPLACE BAR ─────────────────────────────────────────────
-            if self.editor_find_open {
+            if self.editor.ui.find_open {
                 let palette = current_palette();
                 egui::Frame::none()
                     .fill(palette.panel)
@@ -9473,21 +10117,23 @@ impl RobcoNativeApp {
                             ui.label(RichText::new("Find:").color(palette.dim));
                             ui.add_space(4.0);
                             let find_resp = ui.add(
-                                TextEdit::singleline(&mut self.editor_find_query)
+                                TextEdit::singleline(&mut self.editor.ui.find_query)
                                     .desired_width(180.0)
                                     .hint_text("search text"),
                             );
-                            if find_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if find_resp.lost_focus()
+                                && ctx.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
                                 self.editor_find_next(ctx, text_edit_id);
                             }
                             if ui.button("Find Next").clicked() {
                                 self.editor_find_next(ctx, text_edit_id);
                             }
-                            if self.editor_find_replace_visible {
+                            if self.editor.ui.find_replace_visible {
                                 ui.separator();
                                 ui.label(RichText::new("Replace:").color(palette.dim));
                                 ui.add(
-                                    TextEdit::singleline(&mut self.editor_replace_query)
+                                    TextEdit::singleline(&mut self.editor.ui.replace_query)
                                         .desired_width(180.0)
                                         .hint_text("replacement"),
                                 );
@@ -9498,11 +10144,14 @@ impl RobcoNativeApp {
                                     self.editor_replace_all();
                                 }
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("[X]").clicked() {
-                                    self.editor_find_open = false;
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("[X]").clicked() {
+                                        self.run_editor_command(EditorCommand::CloseFind);
+                                    }
+                                },
+                            );
                         });
                     });
             }
@@ -9510,18 +10159,17 @@ impl RobcoNativeApp {
             // ── TEXT EDITOR AREA ─────────────────────────────────────────────
             let palette = current_palette();
             let char_width = self.editor.font_size * 0.6;
-            ui.visuals_mut().text_cursor.stroke =
-                egui::Stroke::new(char_width, palette.fg);
+            ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(char_width, palette.fg);
             if (self.editor.font_size - 16.0).abs() > 0.1 {
                 ui.style_mut().text_styles.insert(
                     egui::TextStyle::Monospace,
                     egui::FontId::new(self.editor.font_size, egui::FontFamily::Monospace),
                 );
             }
-            let text_align = match self.editor_text_align {
-                1 => egui::Align::Center,
-                2 => egui::Align::RIGHT,
-                _ => egui::Align::LEFT,
+            let text_align = match self.editor.ui.text_align {
+                EditorTextAlign::Center => egui::Align::Center,
+                EditorTextAlign::Right => egui::Align::RIGHT,
+                EditorTextAlign::Left => egui::Align::LEFT,
             };
 
             // Fill all remaining space with the TextEdit.
@@ -9536,10 +10184,7 @@ impl RobcoNativeApp {
                 edit = edit.desired_width(f32::INFINITY);
             }
             let response = ui.add_sized(remaining, edit);
-            Self::attach_generic_context_menu(
-                &mut self.context_menu_action,
-                &response,
-            );
+            Self::attach_generic_context_menu(&mut self.context_menu_action, &response);
             if response.changed() {
                 self.editor.dirty = true;
             }
@@ -9548,15 +10193,6 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        // Paint visible border on Foreground layer — guarantees it's above all content.
-        if let Some(rect) = shown_rect {
-            let palette = current_palette();
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                Id::new(("editor_border", generation)),
-            ))
-            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
-        }
         self.maybe_activate_desktop_window_from_click(
             ctx,
             DesktopWindow::Editor,
@@ -9570,7 +10206,9 @@ impl RobcoNativeApp {
         match header_action {
             DesktopHeaderAction::None => {}
             DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Editor, true),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::Editor, true)
+            }
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::Editor, shown_rect)
             }
@@ -9656,11 +10294,21 @@ impl RobcoNativeApp {
                         &[
                             (NativeSettingsPanel::General, "General", "[*]", true),
                             (NativeSettingsPanel::Appearance, "Appearance", "[A]", true),
-                            (NativeSettingsPanel::DefaultApps, "Default Apps", "[D]", true),
+                            (
+                                NativeSettingsPanel::DefaultApps,
+                                "Default Apps",
+                                "[D]",
+                                true,
+                            ),
                             (NativeSettingsPanel::Connections, "Connections", "[C]", true),
                         ],
                         &[
-                            (NativeSettingsPanel::CliProfiles, "CLI Profiles", "[=]", true),
+                            (
+                                NativeSettingsPanel::CliProfiles,
+                                "CLI Profiles",
+                                "[=]",
+                                true,
+                            ),
                             (NativeSettingsPanel::EditMenus, "Edit Menus", "[M]", true),
                             (
                                 NativeSettingsPanel::UserManagement,
@@ -9707,7 +10355,11 @@ impl RobcoNativeApp {
                                 ui.add_space(tile_w);
                             }
                         });
-                        ui.add_space(if row_idx == rows.len() - 1 { 0.0 } else { row_gap });
+                        ui.add_space(if row_idx == rows.len() - 1 {
+                            0.0
+                        } else {
+                            row_gap
+                        });
                     }
                     if !is_admin {
                         ui.small("User Management requires an admin session.");
@@ -9754,7 +10406,9 @@ impl RobcoNativeApp {
                                             }
                                         });
                                         left.add_space(8.0);
-                                        left.small("Choose which interface opens first after login.");
+                                        left.small(
+                                            "Choose which interface opens first after login.",
+                                        );
                                     });
 
                                     Self::settings_section(right, "Options", |right| {
@@ -9838,18 +10492,30 @@ impl RobcoNativeApp {
                                         Self::settings_section(ui, "Wallpaper", |ui| {
                                             ui.label("Wallpaper Path");
                                             ui.horizontal(|ui| {
-                                                let w = Self::responsive_input_width(ui, 0.72, 160.0, 400.0);
-                                                if ui.add(
-                                                    TextEdit::singleline(&mut self.settings.draft.desktop_wallpaper)
+                                                let w = Self::responsive_input_width(
+                                                    ui, 0.72, 160.0, 400.0,
+                                                );
+                                                if ui
+                                                    .add(
+                                                        TextEdit::singleline(
+                                                            &mut self
+                                                                .settings
+                                                                .draft
+                                                                .desktop_wallpaper,
+                                                        )
                                                         .desired_width(w)
                                                         .hint_text("/path/to/image.png"),
-                                                ).changed() {
+                                                    )
+                                                    .changed()
+                                                {
                                                     changed = true;
                                                 }
                                                 if ui.button("Browse…").clicked() {
                                                     let start = dirs::picture_dir()
                                                         .or_else(dirs::home_dir)
-                                                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                                                        .unwrap_or_else(|| {
+                                                            std::path::PathBuf::from(".")
+                                                        });
                                                     self.picking_wallpaper = true;
                                                     self.open_file_manager_at(start);
                                                 }
@@ -9857,31 +10523,60 @@ impl RobcoNativeApp {
                                             ui.add_space(8.0);
                                             ui.horizontal(|ui| {
                                                 ui.label("Wallpaper Mode");
-                                                let selected = match self.settings.draft.desktop_wallpaper_size_mode {
-                                                    WallpaperSizeMode::DefaultSize => "Default Size",
-                                                    WallpaperSizeMode::FitToScreen => "Fit To Screen",
+                                                let selected = match self
+                                                    .settings
+                                                    .draft
+                                                    .desktop_wallpaper_size_mode
+                                                {
+                                                    WallpaperSizeMode::DefaultSize => {
+                                                        "Default Size"
+                                                    }
+                                                    WallpaperSizeMode::FitToScreen => {
+                                                        "Fit To Screen"
+                                                    }
                                                     WallpaperSizeMode::Centered => "Centered",
                                                     WallpaperSizeMode::Tile => "Tile",
                                                     WallpaperSizeMode::Stretch => "Stretch",
                                                 };
-                                                egui::ComboBox::from_id_salt("native_settings_wallpaper_mode")
-                                                    .selected_text(RichText::new(selected).color(palette.fg))
-                                                    .show_ui(ui, |ui| {
-                                                        Self::apply_settings_control_style(ui);
-                                                        for (mode, label) in [
-                                                            (WallpaperSizeMode::DefaultSize, "Default Size"),
-                                                            (WallpaperSizeMode::FitToScreen, "Fit To Screen"),
-                                                            (WallpaperSizeMode::Centered, "Centered"),
-                                                            (WallpaperSizeMode::Tile, "Tile"),
-                                                            (WallpaperSizeMode::Stretch, "Stretch"),
-                                                        ] {
-                                                            if Self::retro_choice_button(ui, label, self.settings.draft.desktop_wallpaper_size_mode == mode).clicked() {
-                                                                self.settings.draft.desktop_wallpaper_size_mode = mode;
-                                                                changed = true;
-                                                                ui.close_menu();
-                                                            }
+                                                egui::ComboBox::from_id_salt(
+                                                    "native_settings_wallpaper_mode",
+                                                )
+                                                .selected_text(
+                                                    RichText::new(selected).color(palette.fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (mode, label) in [
+                                                        (
+                                                            WallpaperSizeMode::DefaultSize,
+                                                            "Default Size",
+                                                        ),
+                                                        (
+                                                            WallpaperSizeMode::FitToScreen,
+                                                            "Fit To Screen",
+                                                        ),
+                                                        (WallpaperSizeMode::Centered, "Centered"),
+                                                        (WallpaperSizeMode::Tile, "Tile"),
+                                                        (WallpaperSizeMode::Stretch, "Stretch"),
+                                                    ] {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            label,
+                                                            self.settings
+                                                                .draft
+                                                                .desktop_wallpaper_size_mode
+                                                                == mode,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            self.settings
+                                                                .draft
+                                                                .desktop_wallpaper_size_mode = mode;
+                                                            changed = true;
+                                                            ui.close_menu();
                                                         }
-                                                    });
+                                                    }
+                                                });
                                             });
                                         });
                                     }
@@ -9892,33 +10587,66 @@ impl RobcoNativeApp {
                                                 ui.label("Theme");
                                                 let mut current_idx = THEMES
                                                     .iter()
-                                                    .position(|(name, _)| *name == self.settings.draft.theme)
+                                                    .position(|(name, _)| {
+                                                        *name == self.settings.draft.theme
+                                                    })
                                                     .unwrap_or(0);
-                                                egui::ComboBox::from_id_salt("native_settings_theme")
-                                                    .selected_text(RichText::new(THEMES[current_idx].0).color(palette.fg))
-                                                    .show_ui(ui, |ui| {
-                                                        Self::apply_settings_control_style(ui);
-                                                        for (idx, (name, _)) in THEMES.iter().enumerate() {
-                                                            if Self::retro_choice_button(ui, *name, current_idx == idx).clicked() {
-                                                                current_idx = idx;
-                                                                self.settings.draft.theme = (*name).to_string();
-                                                                changed = true;
-                                                                ui.close_menu();
-                                                            }
+                                                egui::ComboBox::from_id_salt(
+                                                    "native_settings_theme",
+                                                )
+                                                .selected_text(
+                                                    RichText::new(THEMES[current_idx].0)
+                                                        .color(palette.fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (idx, (name, _)) in
+                                                        THEMES.iter().enumerate()
+                                                    {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            *name,
+                                                            current_idx == idx,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            current_idx = idx;
+                                                            self.settings.draft.theme =
+                                                                (*name).to_string();
+                                                            changed = true;
+                                                            ui.close_menu();
                                                         }
-                                                    });
+                                                    }
+                                                });
                                             });
                                             if self.settings.draft.theme == CUSTOM_THEME_NAME {
                                                 let mut rgb = self.settings.draft.custom_theme_rgb;
-                                                let preview_color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                                let preview_color =
+                                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                                                 // Make slider rails visible: track in custom color,
                                                 // unfilled portion in dim. Without this, the rail
                                                 // is BLACK-on-BLACK (invisible) due to settings style.
                                                 ui.visuals_mut().selection.bg_fill = preview_color;
-                                                ui.visuals_mut().widgets.inactive.bg_fill = palette.dim;
-                                                changed |= ui.add(egui::Slider::new(&mut rgb[0], 0..=255).text("Red")).changed();
-                                                changed |= ui.add(egui::Slider::new(&mut rgb[1], 0..=255).text("Green")).changed();
-                                                changed |= ui.add(egui::Slider::new(&mut rgb[2], 0..=255).text("Blue")).changed();
+                                                ui.visuals_mut().widgets.inactive.bg_fill =
+                                                    palette.dim;
+                                                changed |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[0], 0..=255)
+                                                            .text("Red"),
+                                                    )
+                                                    .changed();
+                                                changed |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[1], 0..=255)
+                                                            .text("Green"),
+                                                    )
+                                                    .changed();
+                                                changed |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[2], 0..=255)
+                                                            .text("Blue"),
+                                                    )
+                                                    .changed();
                                                 if rgb != self.settings.draft.custom_theme_rgb {
                                                     self.settings.draft.custom_theme_rgb = rgb;
                                                 }
@@ -9930,32 +10658,50 @@ impl RobcoNativeApp {
                                         Self::settings_section(ui, "Desktop Icons", |ui| {
                                             ui.horizontal(|ui| {
                                                 ui.label("Icon Style");
-                                                let selected = match self.settings.draft.desktop_icon_style {
-                                                    DesktopIconStyle::Dos => "DOS",
-                                                    DesktopIconStyle::Win95 => "Win95",
-                                                    DesktopIconStyle::Minimal => "Minimal",
-                                                    DesktopIconStyle::NoIcons => "No Icons",
-                                                };
-                                                egui::ComboBox::from_id_salt("native_settings_desktop_icons")
-                                                    .selected_text(RichText::new(selected).color(palette.fg))
-                                                    .show_ui(ui, |ui| {
-                                                        Self::apply_settings_control_style(ui);
-                                                        for (style, label) in [
-                                                            (DesktopIconStyle::Dos, "DOS"),
-                                                            (DesktopIconStyle::Win95, "Win95"),
-                                                            (DesktopIconStyle::Minimal, "Minimal"),
-                                                            (DesktopIconStyle::NoIcons, "No Icons"),
-                                                        ] {
-                                                            if Self::retro_choice_button(ui, label, self.settings.draft.desktop_icon_style == style).clicked() {
-                                                                self.settings.draft.desktop_icon_style = style;
-                                                                changed = true;
-                                                                ui.close_menu();
-                                                            }
+                                                let selected =
+                                                    match self.settings.draft.desktop_icon_style {
+                                                        DesktopIconStyle::Dos => "DOS",
+                                                        DesktopIconStyle::Win95 => "Win95",
+                                                        DesktopIconStyle::Minimal => "Minimal",
+                                                        DesktopIconStyle::NoIcons => "No Icons",
+                                                    };
+                                                egui::ComboBox::from_id_salt(
+                                                    "native_settings_desktop_icons",
+                                                )
+                                                .selected_text(
+                                                    RichText::new(selected).color(palette.fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (style, label) in [
+                                                        (DesktopIconStyle::Dos, "DOS"),
+                                                        (DesktopIconStyle::Win95, "Win95"),
+                                                        (DesktopIconStyle::Minimal, "Minimal"),
+                                                        (DesktopIconStyle::NoIcons, "No Icons"),
+                                                    ] {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            label,
+                                                            self.settings.draft.desktop_icon_style
+                                                                == style,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            self.settings
+                                                                .draft
+                                                                .desktop_icon_style = style;
+                                                            changed = true;
+                                                            ui.close_menu();
                                                         }
-                                                    });
+                                                    }
+                                                });
                                             });
                                             ui.add_space(8.0);
-                                            ui.label(RichText::new("Built-in Desktop Icons").color(palette.fg).strong());
+                                            ui.label(
+                                                RichText::new("Built-in Desktop Icons")
+                                                    .color(palette.fg)
+                                                    .strong(),
+                                            );
                                             ui.add_space(4.0);
                                             let icon_entries: [(&str, &str); 6] = [
                                                 ("builtin_0", "Files"),
@@ -9967,18 +10713,40 @@ impl RobcoNativeApp {
                                             ];
                                             for (key, label) in &icon_entries {
                                                 let key_s = key.to_string();
-                                                let mut visible = !self.settings.draft.desktop_hidden_builtin_icons.contains(&key_s);
-                                                if Self::retro_checkbox_row(ui, &mut visible, &format!("Show {label}")).clicked() {
+                                                let mut visible = !self
+                                                    .settings
+                                                    .draft
+                                                    .desktop_hidden_builtin_icons
+                                                    .contains(&key_s);
+                                                if Self::retro_checkbox_row(
+                                                    ui,
+                                                    &mut visible,
+                                                    &format!("Show {label}"),
+                                                )
+                                                .clicked()
+                                                {
                                                     if visible {
-                                                        self.settings.draft.desktop_hidden_builtin_icons.remove(&key_s);
+                                                        self.settings
+                                                            .draft
+                                                            .desktop_hidden_builtin_icons
+                                                            .remove(&key_s);
                                                     } else {
-                                                        self.settings.draft.desktop_hidden_builtin_icons.insert(key_s);
+                                                        self.settings
+                                                            .draft
+                                                            .desktop_hidden_builtin_icons
+                                                            .insert(key_s);
                                                     }
                                                     changed = true;
                                                 }
                                             }
                                             ui.add_space(8.0);
-                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.desktop_show_cursor, "Show desktop cursor").clicked() {
+                                            if Self::retro_checkbox_row(
+                                                ui,
+                                                &mut self.settings.draft.desktop_show_cursor,
+                                                "Show desktop cursor",
+                                            )
+                                            .clicked()
+                                            {
                                                 changed = true;
                                             }
                                         });
@@ -9986,47 +10754,72 @@ impl RobcoNativeApp {
                                     // ── Terminal ───────────────────────────────────────────────
                                     _ => {
                                         Self::settings_section(ui, "PTY Display", |ui| {
-                                            if Self::retro_checkbox_row(ui, &mut self.settings.draft.cli_styled_render, "Styled PTY rendering").clicked() {
+                                            if Self::retro_checkbox_row(
+                                                ui,
+                                                &mut self.settings.draft.cli_styled_render,
+                                                "Styled PTY rendering",
+                                            )
+                                            .clicked()
+                                            {
                                                 changed = true;
                                             }
                                             ui.add_space(8.0);
                                             ui.horizontal(|ui| {
                                                 ui.label("PTY Color Mode");
-                                                let selected = match self.settings.draft.cli_color_mode {
-                                                    CliColorMode::ThemeLock => "Theme Lock",
-                                                    CliColorMode::PaletteMap => "Palette-map",
-                                                    CliColorMode::Color => "Color",
-                                                    CliColorMode::Monochrome => "Monochrome",
-                                                };
-                                                egui::ComboBox::from_id_salt("native_settings_cli_color")
-                                                    .selected_text(RichText::new(selected).color(palette.fg))
-                                                    .show_ui(ui, |ui| {
-                                                        Self::apply_settings_control_style(ui);
-                                                        for (mode, label) in [
-                                                            (CliColorMode::ThemeLock, "Theme Lock"),
-                                                            (CliColorMode::PaletteMap, "Palette-map"),
-                                                            (CliColorMode::Color, "Color"),
-                                                            (CliColorMode::Monochrome, "Monochrome"),
-                                                        ] {
-                                                            if Self::retro_choice_button(ui, label, self.settings.draft.cli_color_mode == mode).clicked()
-                                                                && self.settings.draft.cli_color_mode != mode
-                                                            {
-                                                                self.settings.draft.cli_color_mode = mode;
-                                                                changed = true;
-                                                                ui.close_menu();
-                                                            }
+                                                let selected =
+                                                    match self.settings.draft.cli_color_mode {
+                                                        CliColorMode::ThemeLock => "Theme Lock",
+                                                        CliColorMode::PaletteMap => "Palette-map",
+                                                        CliColorMode::Color => "Color",
+                                                        CliColorMode::Monochrome => "Monochrome",
+                                                    };
+                                                egui::ComboBox::from_id_salt(
+                                                    "native_settings_cli_color",
+                                                )
+                                                .selected_text(
+                                                    RichText::new(selected).color(palette.fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (mode, label) in [
+                                                        (CliColorMode::ThemeLock, "Theme Lock"),
+                                                        (CliColorMode::PaletteMap, "Palette-map"),
+                                                        (CliColorMode::Color, "Color"),
+                                                        (CliColorMode::Monochrome, "Monochrome"),
+                                                    ] {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            label,
+                                                            self.settings.draft.cli_color_mode
+                                                                == mode,
+                                                        )
+                                                        .clicked()
+                                                            && self.settings.draft.cli_color_mode
+                                                                != mode
+                                                        {
+                                                            self.settings.draft.cli_color_mode =
+                                                                mode;
+                                                            changed = true;
+                                                            ui.close_menu();
                                                         }
-                                                    });
+                                                    }
+                                                });
                                             });
                                             ui.add_space(8.0);
-                                            if ui.button(match self.settings.draft.cli_acs_mode {
-                                                CliAcsMode::Ascii => "Border Glyphs: ASCII",
-                                                CliAcsMode::Unicode => "Border Glyphs: Unicode Smooth",
-                                            }).clicked() {
-                                                self.settings.draft.cli_acs_mode = match self.settings.draft.cli_acs_mode {
-                                                    CliAcsMode::Ascii => CliAcsMode::Unicode,
-                                                    CliAcsMode::Unicode => CliAcsMode::Ascii,
-                                                };
+                                            if ui
+                                                .button(match self.settings.draft.cli_acs_mode {
+                                                    CliAcsMode::Ascii => "Border Glyphs: ASCII",
+                                                    CliAcsMode::Unicode => {
+                                                        "Border Glyphs: Unicode Smooth"
+                                                    }
+                                                })
+                                                .clicked()
+                                            {
+                                                self.settings.draft.cli_acs_mode =
+                                                    match self.settings.draft.cli_acs_mode {
+                                                        CliAcsMode::Ascii => CliAcsMode::Unicode,
+                                                        CliAcsMode::Unicode => CliAcsMode::Ascii,
+                                                    };
                                                 changed = true;
                                             }
                                         });
@@ -10048,7 +10841,10 @@ impl RobcoNativeApp {
                                 });
                             }
                             NativeSettingsPanel::ConnectionsNetwork => {
-                                self.draw_settings_connections_kind_panel(ui, ConnectionKind::Network);
+                                self.draw_settings_connections_kind_panel(
+                                    ui,
+                                    ConnectionKind::Network,
+                                );
                             }
                             NativeSettingsPanel::ConnectionsBluetooth => {
                                 self.draw_settings_connections_kind_panel(
@@ -10065,23 +10861,24 @@ impl RobcoNativeApp {
                             NativeSettingsPanel::UserManagement => {
                                 if is_admin {
                                     ui.vertical(|ui| {
-                                        if Self::retro_full_width_button(ui, "View Users").clicked() {
+                                        if Self::retro_full_width_button(ui, "View Users").clicked()
+                                        {
                                             next_panel =
                                                 Some(NativeSettingsPanel::UserManagementViewUsers);
                                         }
-                                        if Self::retro_full_width_button(ui, "Create User").clicked() {
+                                        if Self::retro_full_width_button(ui, "Create User")
+                                            .clicked()
+                                        {
                                             next_panel =
                                                 Some(NativeSettingsPanel::UserManagementCreateUser);
                                         }
-                                        if Self::retro_full_width_button(ui, "Edit Users").clicked() {
+                                        if Self::retro_full_width_button(ui, "Edit Users").clicked()
+                                        {
                                             next_panel =
                                                 Some(NativeSettingsPanel::UserManagementEditUsers);
                                         }
-                                        if Self::retro_full_width_button(
-                                            ui,
-                                            "Edit Current User",
-                                        )
-                                        .clicked()
+                                        if Self::retro_full_width_button(ui, "Edit Current User")
+                                            .clicked()
                                         {
                                             next_panel = Some(
                                                 NativeSettingsPanel::UserManagementEditCurrentUser,
@@ -10174,7 +10971,9 @@ impl RobcoNativeApp {
         match header_action {
             DesktopHeaderAction::None => {}
             DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Settings, true),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::Settings, true)
+            }
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::Settings, shown_rect)
             }
@@ -10220,38 +11019,44 @@ impl RobcoNativeApp {
                                 Self::responsive_input_width(right, 0.85, 220.0, 620.0);
                             right.horizontal(|ui| {
                                 ui.label("Chooser");
-                                egui::ComboBox::from_id_salt(format!("native_default_app_slot_{slot:?}"))
-                                    .selected_text(
-                                        RichText::new(current_label.clone()).color(current_palette().fg),
-                                    )
-                                    .show_ui(ui, |ui| {
-                                        Self::apply_settings_control_style(ui);
-                                        for choice in crate::default_apps::default_app_choices(slot) {
-                                            if let crate::default_apps::DefaultAppChoiceAction::Set(binding) =
-                                                choice.action
-                                            {
-                                                let selected = match slot {
-                                                    DefaultAppSlot::TextCode => {
-                                                        self.settings.draft.default_apps.text_code == binding
-                                                    }
-                                                    DefaultAppSlot::Ebook => {
-                                                        self.settings.draft.default_apps.ebook == binding
-                                                    }
-                                                };
-                                                if Self::retro_choice_button(ui, choice.label, selected)
-                                                    .clicked()
-                                                {
-                                                    set_binding_for_slot(
-                                                        &mut self.settings.draft,
-                                                        slot,
-                                                        binding,
-                                                    );
-                                                    changed = true;
-                                                    ui.close_menu();
+                                egui::ComboBox::from_id_salt(format!(
+                                    "native_default_app_slot_{slot:?}"
+                                ))
+                                .selected_text(
+                                    RichText::new(current_label.clone())
+                                        .color(current_palette().fg),
+                                )
+                                .show_ui(ui, |ui| {
+                                    Self::apply_settings_control_style(ui);
+                                    for choice in crate::default_apps::default_app_choices(slot) {
+                                        if let crate::default_apps::DefaultAppChoiceAction::Set(
+                                            binding,
+                                        ) = choice.action
+                                        {
+                                            let selected = match slot {
+                                                DefaultAppSlot::TextCode => {
+                                                    self.settings.draft.default_apps.text_code
+                                                        == binding
                                                 }
+                                                DefaultAppSlot::Ebook => {
+                                                    self.settings.draft.default_apps.ebook
+                                                        == binding
+                                                }
+                                            };
+                                            if Self::retro_choice_button(ui, choice.label, selected)
+                                                .clicked()
+                                            {
+                                                set_binding_for_slot(
+                                                    &mut self.settings.draft,
+                                                    slot,
+                                                    binding,
+                                                );
+                                                changed = true;
+                                                ui.close_menu();
                                             }
                                         }
-                                    });
+                                    }
+                                });
                             });
                             right.add_space(6.0);
                             right.label("Custom Command");
@@ -10260,7 +11065,9 @@ impl RobcoNativeApp {
                                     .desired_width(field_width)
                                     .hint_text("epy"),
                             );
-                            if Self::retro_full_width_button(right, "Apply Custom Command").clicked() {
+                            if Self::retro_full_width_button(right, "Apply Custom Command")
+                                .clicked()
+                            {
                                 match parse_custom_command_line(custom_buffer.trim()) {
                                     Some(argv) if !argv.is_empty() => {
                                         set_binding_for_slot(
@@ -10285,11 +11092,7 @@ impl RobcoNativeApp {
         changed
     }
 
-    fn draw_settings_connections_kind_panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        kind: ConnectionKind,
-    ) {
+    fn draw_settings_connections_kind_panel(&mut self, ui: &mut egui::Ui, kind: ConnectionKind) {
         if crate::connections::macos_connections_disabled() {
             ui.small(crate::connections::macos_connections_disabled_hint());
             return;
@@ -10398,8 +11201,10 @@ impl RobcoNativeApp {
     fn draw_settings_cli_profiles_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         let custom_profile_count = self.settings.draft.desktop_cli_profiles.custom.len();
-        let profile =
-            Self::gui_cli_profile_mut(&mut self.settings.draft.desktop_cli_profiles, self.settings.cli_profile_slot);
+        let profile = Self::gui_cli_profile_mut(
+            &mut self.settings.draft.desktop_cli_profiles,
+            self.settings.cli_profile_slot,
+        );
         let mut min_w = profile.min_w;
         let mut min_h = profile.min_h;
         Self::settings_two_columns(ui, |left, right| {
@@ -10437,14 +11242,23 @@ impl RobcoNativeApp {
                 });
                 left.add_space(8.0);
                 changed |= left
-                    .add(egui::DragValue::new(&mut min_w).range(20..=240).prefix("Min W "))
+                    .add(
+                        egui::DragValue::new(&mut min_w)
+                            .range(20..=240)
+                            .prefix("Min W "),
+                    )
                     .changed();
                 changed |= left
-                    .add(egui::DragValue::new(&mut min_h).range(10..=120).prefix("Min H "))
+                    .add(
+                        egui::DragValue::new(&mut min_h)
+                            .range(10..=120)
+                            .prefix("Min H "),
+                    )
                     .changed();
 
                 let mut use_pref_w = profile.preferred_w.is_some();
-                if Self::retro_checkbox_row(left, &mut use_pref_w, "Use Preferred Width").clicked() {
+                if Self::retro_checkbox_row(left, &mut use_pref_w, "Use Preferred Width").clicked()
+                {
                     profile.preferred_w = if use_pref_w {
                         Some(profile.min_w)
                     } else {
@@ -10465,7 +11279,8 @@ impl RobcoNativeApp {
 
             Self::settings_section(right, "Behavior", |right| {
                 let mut use_pref_h = profile.preferred_h.is_some();
-                if Self::retro_checkbox_row(right, &mut use_pref_h, "Use Preferred Height").clicked()
+                if Self::retro_checkbox_row(right, &mut use_pref_h, "Use Preferred Height")
+                    .clicked()
                 {
                     profile.preferred_h = if use_pref_h {
                         Some(profile.min_h)
@@ -10483,8 +11298,12 @@ impl RobcoNativeApp {
                         )
                         .changed();
                 }
-                if Self::retro_checkbox_row(right, &mut profile.mouse_passthrough, "Mouse passthrough")
-                    .clicked()
+                if Self::retro_checkbox_row(
+                    right,
+                    &mut profile.mouse_passthrough,
+                    "Mouse passthrough",
+                )
+                .clicked()
                 {
                     changed = true;
                 }
@@ -10557,7 +11376,7 @@ impl RobcoNativeApp {
                     if Self::retro_checkbox_row(
                         left,
                         &mut self.settings.draft.builtin_menu_visibility.text_editor,
-                        "Show ROBCO Word Processor",
+                        &format!("Show {EDITOR_APP_TITLE}"),
                     )
                     .clicked()
                     {
@@ -10597,7 +11416,8 @@ impl RobcoNativeApp {
                         .desired_width(name_width),
                 );
                 right.add_space(6.0);
-                let value_label = if matches!(self.settings.edit_target, EditMenuTarget::Documents) {
+                let value_label = if matches!(self.settings.edit_target, EditMenuTarget::Documents)
+                {
                     "Folder Path"
                 } else {
                     "Command"
@@ -10619,7 +11439,12 @@ impl RobcoNativeApp {
                             target => self.add_program_entry(target, name, value),
                         }
                         self.settings.status = self.shell_status.clone();
-                        if !self.settings.status.to_ascii_lowercase().starts_with("error") {
+                        if !self
+                            .settings
+                            .status
+                            .to_ascii_lowercase()
+                            .starts_with("error")
+                        {
                             self.settings.edit_name_input.clear();
                             self.settings.edit_value_input.clear();
                         }
@@ -10664,11 +11489,14 @@ impl RobcoNativeApp {
                     left.add_space(6.0);
                     left.label("Authentication");
                     egui::ComboBox::from_id_salt("native_settings_user_create_auth")
-                        .selected_text(RichText::new(match self.settings.user_create_auth {
-                            AuthMethod::Password => "Password",
-                            AuthMethod::NoPassword => "No Password",
-                            AuthMethod::HackingMinigame => "Hacking Minigame",
-                        }).color(current_palette().fg))
+                        .selected_text(
+                            RichText::new(match self.settings.user_create_auth {
+                                AuthMethod::Password => "Password",
+                                AuthMethod::NoPassword => "No Password",
+                                AuthMethod::HackingMinigame => "Hacking Minigame",
+                            })
+                            .color(current_palette().fg),
+                        )
                         .show_ui(left, |ui| {
                             Self::apply_settings_control_style(ui);
                             for auth in [
@@ -10786,7 +11614,10 @@ impl RobcoNativeApp {
         }
         if current_only {
             self.settings.user_selected = current_username.clone().unwrap_or_default();
-        } else if !names.iter().any(|name| name == &self.settings.user_selected) {
+        } else if !names
+            .iter()
+            .any(|name| name == &self.settings.user_selected)
+        {
             self.settings.user_selected = names[0].clone();
         }
         if self.settings.user_selected_loaded_for != self.settings.user_selected {
@@ -10806,7 +11637,11 @@ impl RobcoNativeApp {
                 let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
                 Self::settings_section(
                     left,
-                    if current_only { "Edit Current User" } else { "Edit User" },
+                    if current_only {
+                        "Edit Current User"
+                    } else {
+                        "Edit User"
+                    },
                     |left| {
                         left.label("User");
                         if current_only {
@@ -10850,11 +11685,14 @@ impl RobcoNativeApp {
                         left.add_space(8.0);
                         left.label("New Auth");
                         egui::ComboBox::from_id_salt("native_settings_user_edit_auth")
-                            .selected_text(RichText::new(match self.settings.user_edit_auth {
-                                AuthMethod::Password => "Password",
-                                AuthMethod::NoPassword => "No Password",
-                                AuthMethod::HackingMinigame => "Hacking Minigame",
-                            }).color(current_palette().fg))
+                            .selected_text(
+                                RichText::new(match self.settings.user_edit_auth {
+                                    AuthMethod::Password => "Password",
+                                    AuthMethod::NoPassword => "No Password",
+                                    AuthMethod::HackingMinigame => "Hacking Minigame",
+                                })
+                                .color(current_palette().fg),
+                            )
                             .show_ui(left, |ui| {
                                 Self::apply_settings_control_style(ui);
                                 for auth in [
@@ -10912,8 +11750,9 @@ impl RobcoNativeApp {
                             {
                                 self.settings.status = "Passwords do not match.".to_string();
                             } else {
-                                let password_hash =
-                                    crate::core::auth::hash_password(&self.settings.user_edit_password);
+                                let password_hash = crate::core::auth::hash_password(
+                                    &self.settings.user_edit_password,
+                                );
                                 self.update_user_record(
                                     &username,
                                     |record| {
@@ -10950,7 +11789,11 @@ impl RobcoNativeApp {
                         let mut db = load_users();
                         if let Some(record) = db.get_mut(&username) {
                             record.is_admin = !record.is_admin;
-                            let label = if record.is_admin { "granted" } else { "revoked" };
+                            let label = if record.is_admin {
+                                "granted"
+                            } else {
+                                "revoked"
+                            };
                             save_users(&db);
                             self.settings.status = format!("Admin {label} for '{username}'.");
                             self.settings.user_selected_loaded_for.clear();
@@ -11065,9 +11908,15 @@ impl RobcoNativeApp {
         let status = self.desktop_installer.status.clone();
         let has_confirm = self.desktop_installer.confirm_dialog.is_some();
         let notice = self.desktop_installer.notice.clone();
-        let tex_apps = self.asset_cache.as_ref().map(|c| c.icon_applications.clone());
+        let tex_apps = self
+            .asset_cache
+            .as_ref()
+            .map(|c| c.icon_applications.clone());
         let tex_tools = self.asset_cache.as_ref().map(|c| c.icon_terminal.clone());
-        let tex_network = self.asset_cache.as_ref().map(|c| c.icon_connections.clone());
+        let tex_network = self
+            .asset_cache
+            .as_ref()
+            .map(|c| c.icon_connections.clone());
         let tex_games = self.asset_cache.as_ref().map(|c| c.icon_gaming.clone());
 
         let shown = window.show(ctx, |ui| {
@@ -11114,11 +11963,17 @@ impl RobcoNativeApp {
                             );
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if ui.button(RichText::new("[ Yes ]").color(palette.fg)).clicked() {
+                                if ui
+                                    .button(RichText::new("[ Yes ]").color(palette.fg))
+                                    .clicked()
+                                {
                                     deferred_confirm_yes = true;
                                 }
                                 ui.add_space(12.0);
-                                if ui.button(RichText::new("[ No ]").color(palette.fg)).clicked() {
+                                if ui
+                                    .button(RichText::new("[ No ]").color(palette.fg))
+                                    .clicked()
+                                {
                                     deferred_confirm_no = true;
                                 }
                             });
@@ -11151,7 +12006,10 @@ impl RobcoNativeApp {
                                 ui.add_space(8.0);
                                 ui.label(RichText::new(&notice.message).color(palette.fg));
                                 ui.add_space(12.0);
-                                if ui.button(RichText::new("[ OK ]").color(palette.fg)).clicked() {
+                                if ui
+                                    .button(RichText::new("[ OK ]").color(palette.fg))
+                                    .clicked()
+                                {
                                     deferred_notice_close = true;
                                 }
                             });
@@ -11320,10 +12178,7 @@ impl RobcoNativeApp {
 
     // ── Installer sub-views ─────────────────────────────────────────────────
 
-    fn apply_installer_widget_style(
-        ui: &mut egui::Ui,
-        palette: super::retro_ui::RetroPalette,
-    ) {
+    fn apply_installer_widget_style(ui: &mut egui::Ui, palette: super::retro_ui::RetroPalette) {
         ui.visuals_mut().window_fill = palette.bg;
         ui.visuals_mut().panel_fill = palette.bg;
         ui.visuals_mut().faint_bg_color = palette.bg;
@@ -11357,16 +12212,11 @@ impl RobcoNativeApp {
         ui.visuals_mut().selection.bg_fill = palette.selection_bg;
         ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, palette.fg);
         ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(1.5, palette.fg);
-        ui.visuals_mut().widgets.noninteractive.bg_stroke =
-            egui::Stroke::new(1.0, palette.dim);
-        ui.visuals_mut().widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0, palette.fg);
+        ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.dim);
+        ui.visuals_mut().widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
     }
 
-    fn apply_installer_dropdown_style(
-        ui: &mut egui::Ui,
-        palette: super::retro_ui::RetroPalette,
-    ) {
+    fn apply_installer_dropdown_style(ui: &mut egui::Ui, palette: super::retro_ui::RetroPalette) {
         let mut style = ui.style().as_ref().clone();
         style.visuals.window_fill = palette.bg;
         style.visuals.panel_fill = palette.bg;
@@ -11469,9 +12319,7 @@ impl RobcoNativeApp {
                             .text_color(palette.fg)
                             .frame(true),
                     );
-                    if search_field.lost_focus()
-                        && ui.input(|i| i.key_pressed(Key::Enter))
-                    {
+                    if search_field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         *deferred_search = true;
                     }
                     if ui
@@ -11565,25 +12413,18 @@ impl RobcoNativeApp {
             // ── Package manager selector ─────────────────────────────────
             if state.available_pms.len() > 1 {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Package Manager:").color(palette.dim).small(),
-                    );
+                    ui.label(RichText::new("Package Manager:").color(palette.dim).small());
                     let current_label = state.pm_label().to_string();
                     ui.scope(|ui| {
                         Self::apply_installer_dropdown_style(ui, palette);
                         egui::ComboBox::from_id_salt("pm_selector")
-                            .selected_text(
-                                RichText::new(&current_label).color(palette.fg).small(),
-                            )
+                            .selected_text(RichText::new(&current_label).color(palette.fg).small())
                             .show_ui(ui, |ui| {
                                 Self::apply_installer_dropdown_style(ui, palette);
                                 for (idx, pm) in state.available_pms.clone().iter().enumerate() {
                                     let selected = idx == state.selected_pm_idx;
-                                    let text_color = if selected {
-                                        Color32::BLACK
-                                    } else {
-                                        palette.fg
-                                    };
+                                    let text_color =
+                                        if selected { Color32::BLACK } else { palette.fg };
                                     if ui
                                         .selectable_label(
                                             selected,
@@ -11724,7 +12565,9 @@ impl RobcoNativeApp {
                                             } else {
                                                 palette.fg
                                             };
-                                            ui.label(RichText::new(status_text).color(status_color));
+                                            ui.label(
+                                                RichText::new(status_text).color(status_color),
+                                            );
                                             ui.add_space(6.0);
                                             ui.add_sized(
                                                 [ui.available_width().max(80.0), 0.0],
@@ -11772,8 +12615,10 @@ impl RobcoNativeApp {
                                 if !desc_text.is_empty() {
                                     ui.add_sized(
                                         [(content_width - 8.0).max(80.0), 0.0],
-                                        egui::Label::new(RichText::new(desc_text).color(palette.dim))
-                                            .truncate(),
+                                        egui::Label::new(
+                                            RichText::new(desc_text).color(palette.dim),
+                                        )
+                                        .truncate(),
                                     );
                                 }
                             });
@@ -11905,7 +12750,8 @@ impl RobcoNativeApp {
                                                 .add_sized(
                                                     [button_width, 24.0],
                                                     egui::Button::new(
-                                                        RichText::new("[ Actions ]").color(palette.fg),
+                                                        RichText::new("[ Actions ]")
+                                                            .color(palette.fg),
                                                     ),
                                                 )
                                                 .clicked()
@@ -11926,8 +12772,10 @@ impl RobcoNativeApp {
                                 if !desc_text.is_empty() {
                                     ui.add_sized(
                                         [(content_width - 8.0).max(80.0), 0.0],
-                                        egui::Label::new(RichText::new(desc_text).color(palette.dim))
-                                            .truncate(),
+                                        egui::Label::new(
+                                            RichText::new(desc_text).color(palette.dim),
+                                        )
+                                        .truncate(),
                                     );
                                 }
                             });
@@ -11961,11 +12809,7 @@ impl RobcoNativeApp {
         ui.add_space(12.0);
 
         let description = state.fetch_package_description(pkg);
-        let status_label = if installed {
-            "Installed"
-        } else {
-            "Available"
-        };
+        let status_label = if installed { "Installed" } else { "Available" };
 
         egui::Frame::none()
             .fill(palette.panel)
@@ -12008,24 +12852,21 @@ impl RobcoNativeApp {
                     .button(RichText::new("[ Update ]").color(palette.fg))
                     .clicked()
                 {
-                    *deferred_confirm =
-                        Some((pkg.to_string(), InstallerPackageAction::Update));
+                    *deferred_confirm = Some((pkg.to_string(), InstallerPackageAction::Update));
                 }
                 ui.add_space(8.0);
                 if ui
                     .button(RichText::new("[ Reinstall ]").color(palette.fg))
                     .clicked()
                 {
-                    *deferred_confirm =
-                        Some((pkg.to_string(), InstallerPackageAction::Reinstall));
+                    *deferred_confirm = Some((pkg.to_string(), InstallerPackageAction::Reinstall));
                 }
                 ui.add_space(8.0);
                 if ui
                     .button(RichText::new("[ Uninstall ]").color(palette.fg))
                     .clicked()
                 {
-                    *deferred_confirm =
-                        Some((pkg.to_string(), InstallerPackageAction::Uninstall));
+                    *deferred_confirm = Some((pkg.to_string(), InstallerPackageAction::Uninstall));
                 }
                 ui.add_space(8.0);
                 if ui
@@ -12039,8 +12880,7 @@ impl RobcoNativeApp {
             .button(RichText::new("[ Install ]").color(palette.fg))
             .clicked()
         {
-            *deferred_confirm =
-                Some((pkg.to_string(), InstallerPackageAction::Install));
+            *deferred_confirm = Some((pkg.to_string(), InstallerPackageAction::Install));
         }
     }
 
@@ -12232,7 +13072,8 @@ impl RobcoNativeApp {
     }
 
     fn draw_applications(&mut self, ctx: &Context) {
-        if !self.applications.open || self.desktop_window_is_minimized(DesktopWindow::Applications) {
+        if !self.applications.open || self.desktop_window_is_minimized(DesktopWindow::Applications)
+        {
             return;
         }
         let mut open = self.applications.open;
@@ -12260,43 +13101,43 @@ impl RobcoNativeApp {
             window = window.current_pos(pos).default_size(size);
         }
         let shown = window.show(ctx, |ui| {
-                Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Built-in");
-                    if self.settings.draft.builtin_menu_visibility.text_editor
-                        && Self::retro_full_width_button(ui, "ROBCO Word Processor").clicked()
-                    {
-                        if self.editor.path.is_none() {
-                            self.new_document();
-                        } else {
-                            self.open_desktop_window(DesktopWindow::Editor);
-                        }
+            Self::apply_settings_control_style(ui);
+            header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading("Built-in");
+                if self.settings.draft.builtin_menu_visibility.text_editor
+                    && Self::retro_full_width_button(ui, EDITOR_APP_TITLE).clicked()
+                {
+                    if self.editor.path.is_none() {
+                        self.new_document();
+                    } else {
+                        self.open_desktop_window(DesktopWindow::Editor);
                     }
-                    if self.settings.draft.builtin_menu_visibility.nuke_codes
-                        && Self::retro_full_width_button(ui, "Nuke Codes").clicked()
-                    {
+                }
+                if self.settings.draft.builtin_menu_visibility.nuke_codes
+                    && Self::retro_full_width_button(ui, "Nuke Codes").clicked()
+                {
+                    close_after_launch = true;
+                    self.open_desktop_nuke_codes();
+                }
+                ui.separator();
+                ui.heading("Configured Apps");
+                for name in app_names() {
+                    if Self::retro_full_width_button(ui, &name).clicked() {
                         close_after_launch = true;
-                        self.open_desktop_nuke_codes();
-                    }
-                    ui.separator();
-                    ui.heading("Configured Apps");
-                    for name in app_names() {
-                        if Self::retro_full_width_button(ui, &name).clicked() {
-                            close_after_launch = true;
-                            let apps = load_apps();
-                            match resolve_program_command(&name, &apps) {
-                                Ok(cmd) => self.open_desktop_pty(&name, &cmd),
-                                Err(err) => self.shell_status = err,
-                            }
+                        let apps = load_apps();
+                        match resolve_program_command(&name, &apps) {
+                            Ok(cmd) => self.open_desktop_pty(&name, &cmd),
+                            Err(err) => self.shell_status = err,
                         }
                     }
-                    if !self.applications.status.is_empty() {
-                        ui.separator();
-                        ui.small(&self.applications.status);
-                    }
-                });
+                }
+                if !self.applications.status.is_empty() {
+                    ui.separator();
+                    ui.small(&self.applications.status);
+                }
             });
+        });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
             .as_ref()
@@ -12320,7 +13161,9 @@ impl RobcoNativeApp {
         match header_action {
             DesktopHeaderAction::None => {}
             DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::Applications, true),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::Applications, true)
+            }
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::Applications, shown_rect)
             }
@@ -12329,7 +13172,9 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_donkey_kong(&mut self, ctx: &Context) {
-        if !self.donkey_kong_window.open || self.desktop_window_is_minimized(DesktopWindow::DonkeyKong) {
+        if !self.donkey_kong_window.open
+            || self.desktop_window_is_minimized(DesktopWindow::DonkeyKong)
+        {
             return;
         }
         ctx.request_repaint();
@@ -12439,31 +13284,31 @@ impl RobcoNativeApp {
             window = window.current_pos(pos).default_size(size);
         }
         let shown = window.show(ctx, |ui| {
-                Self::apply_settings_control_style(ui);
-                header_action = Self::draw_desktop_window_header(ui, "Nuke Codes", maximized);
-                if Self::retro_full_width_button(ui, "Refresh").clicked() {
-                    refresh = true;
+            Self::apply_settings_control_style(ui);
+            header_action = Self::draw_desktop_window_header(ui, "Nuke Codes", maximized);
+            if Self::retro_full_width_button(ui, "Refresh").clicked() {
+                refresh = true;
+            }
+            ui.separator();
+            ui.add_space(12.0);
+            match &self.terminal_nuke_codes {
+                NukeCodesView::Unloaded => {
+                    ui.monospace("Codes are not loaded yet.");
                 }
-                ui.separator();
-                ui.add_space(12.0);
-                match &self.terminal_nuke_codes {
-                    NukeCodesView::Unloaded => {
-                        ui.monospace("Codes are not loaded yet.");
-                    }
-                    NukeCodesView::Error(err) => {
-                        ui.monospace("UNABLE TO FETCH LIVE CODES");
-                        ui.small(format!("ERROR: {err}"));
-                    }
-                    NukeCodesView::Data(codes) => {
-                        ui.monospace(format!("ALPHA   : {}", codes.alpha));
-                        ui.monospace(format!("BRAVO   : {}", codes.bravo));
-                        ui.monospace(format!("CHARLIE : {}", codes.charlie));
-                        ui.add_space(6.0);
-                        ui.small(format!("Source: {}", codes.source));
-                        ui.small(format!("Fetched: {}", codes.fetched_at));
-                    }
+                NukeCodesView::Error(err) => {
+                    ui.monospace("UNABLE TO FETCH LIVE CODES");
+                    ui.small(format!("ERROR: {err}"));
                 }
-            });
+                NukeCodesView::Data(codes) => {
+                    ui.monospace(format!("ALPHA   : {}", codes.alpha));
+                    ui.monospace(format!("BRAVO   : {}", codes.bravo));
+                    ui.monospace(format!("CHARLIE : {}", codes.charlie));
+                    ui.add_space(6.0);
+                    ui.small(format!("Source: {}", codes.source));
+                    ui.small(format!("Fetched: {}", codes.fetched_at));
+                }
+            }
+        });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
             .as_ref()
@@ -12538,32 +13383,29 @@ impl RobcoNativeApp {
             window = window.current_pos(pos).default_size(size);
         }
         let shown = window.show(ctx, |ui| {
-                // NOTE: do NOT call apply_settings_control_style here — it changes
-                // extreme_bg_color and margins, which destabilizes available_size()
-                // causing resize oscillation (constant SIGWINCH) for ncurses apps.
-                header_action = Self::draw_desktop_window_header(ui, &title, maximized);
-                let available = ui.available_size();
-                let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
-                let rows_floor = state
-                    .desktop_rows_floor
-                    .unwrap_or(20)
-                    .saturating_add(1) as usize;
-                let (cols, rows) = if state.desktop_live_resize {
-                    (
-                        ((available.x / FIXED_PTY_CELL_W).floor() as usize)
-                            .max(cols_floor)
-                            .clamp(40, 220),
-                        ((available.y / FIXED_PTY_CELL_H).floor() as usize)
-                            .max(rows_floor)
-                            .clamp(20, 60),
-                    )
-                } else {
-                    (cols_floor, rows_floor)
-                };
-                ui.allocate_ui_with_layout(available, Layout::top_down(egui::Align::Min), |ui| {
-                    event = draw_embedded_pty_in_ui_focused(ui, ctx, state, cols, rows, pty_focused);
-                });
+            // NOTE: do NOT call apply_settings_control_style here — it changes
+            // extreme_bg_color and margins, which destabilizes available_size()
+            // causing resize oscillation (constant SIGWINCH) for ncurses apps.
+            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            let available = ui.available_size();
+            let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
+            let rows_floor = state.desktop_rows_floor.unwrap_or(20).saturating_add(1) as usize;
+            let (cols, rows) = if state.desktop_live_resize {
+                (
+                    ((available.x / FIXED_PTY_CELL_W).floor() as usize)
+                        .max(cols_floor)
+                        .clamp(40, 220),
+                    ((available.y / FIXED_PTY_CELL_H).floor() as usize)
+                        .max(rows_floor)
+                        .clamp(20, 60),
+                )
+            } else {
+                (cols_floor, rows_floor)
+            };
+            ui.allocate_ui_with_layout(available, Layout::top_down(egui::Align::Min), |ui| {
+                event = draw_embedded_pty_in_ui_focused(ui, ctx, state, cols, rows, pty_focused);
             });
+        });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
             .as_ref()
@@ -12602,10 +13444,7 @@ impl RobcoNativeApp {
                 open = false;
                 self.shell_status = message.clone();
                 if title_for_exit == "Program Installer" {
-                    installer_notice = Some(DesktopInstallerNotice {
-                        message,
-                        success,
-                    });
+                    installer_notice = Some(DesktopInstallerNotice { message, success });
                     reopen_installer = true;
                 }
             }
@@ -12632,7 +13471,9 @@ impl RobcoNativeApp {
         match header_action {
             DesktopHeaderAction::None => {}
             DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => self.set_desktop_window_minimized(DesktopWindow::PtyApp, true),
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(DesktopWindow::PtyApp, true)
+            }
             DesktopHeaderAction::ToggleMaximize => {
                 self.toggle_desktop_window_maximized(DesktopWindow::PtyApp, shown_rect)
             }
@@ -12641,17 +13482,21 @@ impl RobcoNativeApp {
     }
 
     fn draw_terminal_mode(&mut self, ctx: &Context) {
-        if !self.terminal_mode.open || self.desktop_window_is_minimized(DesktopWindow::TerminalMode) {
+        if !self.terminal_mode.open || self.desktop_window_is_minimized(DesktopWindow::TerminalMode)
+        {
             return;
         }
         let _ = ctx;
         self.terminal_mode.open = false;
-        self.desktop_window_states.remove(&DesktopWindow::TerminalMode);
+        self.desktop_window_states
+            .remove(&DesktopWindow::TerminalMode);
         self.open_desktop_terminal_shell();
     }
 
     fn handle_desktop_file_manager_shortcuts(&mut self, ctx: &Context) {
-        if self.desktop_active_window != Some(DesktopWindow::FileManager) || self.terminal_prompt.is_some() {
+        if self.desktop_active_window != Some(DesktopWindow::FileManager)
+            || self.terminal_prompt.is_some()
+        {
             return;
         }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::C)) {
@@ -12660,6 +13505,8 @@ impl RobcoNativeApp {
             self.run_file_manager_action(FileManagerActionRequest::Cut);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::V)) {
             self.run_file_manager_action(FileManagerActionRequest::Paste);
+        } else if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::N)) {
+            self.run_file_manager_action(FileManagerActionRequest::NewFolder);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::D)) {
             self.run_file_manager_action(FileManagerActionRequest::Duplicate);
         } else if ctx.input(|i| i.key_pressed(Key::F2)) {
@@ -12704,9 +13551,12 @@ impl eframe::App for RobcoNativeApp {
                 // Clear keyboard events so the later draw pass doesn't
                 // double-process them.
                 ctx.input_mut(|i| {
-                    i.events.retain(|e| !matches!(e,
-                        egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
-                    ));
+                    i.events.retain(|e| {
+                        !matches!(
+                            e,
+                            egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
+                        )
+                    });
                 });
             }
         }
@@ -12927,6 +13777,32 @@ mod tests {
         UsersRestore { backup }
     }
 
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "robco_native_{prefix}_{}_{}",
+                std::process::id(),
+                unique
+            ));
+            std::fs::create_dir_all(&path).expect("create temp test dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn set_runtime_marker(app: &mut RobcoNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
         app.desktop_mode_open = false;
         app.start_open = true;
@@ -12955,6 +13831,17 @@ mod tests {
         app.editor.text = tag.to_string();
         app.editor.dirty = idx % 2 == 0;
         app.editor.status = format!("status-{tag}");
+        app.editor.ui.show_line_numbers = idx % 2 == 0;
+        app.editor.ui.find_open = idx % 2 == 1;
+        app.editor.ui.find_replace_visible = idx % 3 == 0;
+        app.editor.ui.find_query = format!("find-{tag}");
+        app.editor.ui.replace_query = format!("replace-{tag}");
+        app.editor.ui.find_occurrence = idx;
+        app.editor.ui.text_align = match idx % 3 {
+            1 => EditorTextAlign::Center,
+            2 => EditorTextAlign::Right,
+            _ => EditorTextAlign::Left,
+        };
         app.settings.open = idx % 2 == 1;
         app.settings.status = format!("settings-{tag}");
         app.applications.open = idx % 2 == 0;
@@ -13031,6 +13918,7 @@ mod tests {
         app.editor.text.clear();
         app.editor.dirty = false;
         app.editor.status.clear();
+        app.editor.ui = crate::native::editor_app::EditorUiState::default();
         app.settings.open = false;
         app.settings.status.clear();
         app.settings.draft.theme = "Green (Default)".to_string();
@@ -13067,6 +13955,13 @@ mod tests {
         assert_eq!(app.editor.text, "hello");
         assert!(app.editor.dirty);
         assert_eq!(app.editor.status, "dirty");
+        assert!(!app.editor.ui.show_line_numbers);
+        assert!(!app.editor.ui.find_open);
+        assert!(!app.editor.ui.find_replace_visible);
+        assert!(app.editor.ui.find_query.is_empty());
+        assert!(app.editor.ui.replace_query.is_empty());
+        assert_eq!(app.editor.ui.find_occurrence, 0);
+        assert_eq!(app.editor.ui.text_align, EditorTextAlign::Left);
         assert!(app.settings.open);
         assert_eq!(app.settings.status, "saved");
         assert_eq!(app.settings.draft.theme, CUSTOM_THEME_NAME);
@@ -13119,6 +14014,7 @@ mod tests {
         assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
         assert_eq!(app.main_menu_idx, 2);
         assert_eq!(app.editor.text, "u1-a");
+        assert_eq!(app.editor.ui.find_query, "find-u1-a");
 
         session::request_switch(s2);
         app.apply_pending_session_switch();
@@ -13126,6 +14022,7 @@ mod tests {
         assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
         assert_eq!(app.main_menu_idx, 7);
         assert_eq!(app.editor.text, "u2-b");
+        assert_eq!(app.editor.ui.find_query, "find-u2-b");
 
         session::request_switch(s1);
         app.apply_pending_session_switch();
@@ -13133,6 +14030,7 @@ mod tests {
         assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
         assert_eq!(app.main_menu_idx, 2);
         assert_eq!(app.editor.text, "u1-a");
+        assert_eq!(app.editor.ui.find_query, "find-u1-a");
     }
 
     #[test]
@@ -13172,6 +14070,7 @@ mod tests {
         ));
         assert_eq!(app.main_menu_idx, 5);
         assert_eq!(app.editor.text, "u2");
+        assert_eq!(app.editor.ui.find_query, "find-u2");
         assert_eq!(app.shell_status, "Closed session 3.");
     }
 
@@ -13226,18 +14125,21 @@ mod tests {
             assert!(app.restore_active_session_runtime_if_any());
             assert_eq!(app.terminal_screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
+            assert_eq!(app.editor.ui.find_query, format!("find-u1-{idx}"));
 
             session::request_switch(s2);
             app.apply_pending_session_switch();
             assert_eq!(session::active_idx(), s2);
             assert!(matches!(app.terminal_screen, TerminalScreen::MainMenu));
             assert_eq!(app.editor.text, format!("u2-{idx}"));
+            assert_eq!(app.editor.ui.find_query, format!("find-u2-{idx}"));
 
             session::request_switch(s1);
             app.apply_pending_session_switch();
             assert_eq!(session::active_idx(), s1);
             assert_eq!(app.terminal_screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
+            assert_eq!(app.editor.ui.find_query, format!("find-u1-{idx}"));
         }
     }
 
@@ -13286,5 +14188,137 @@ mod tests {
             }
             other => panic!("expected NukeCodes data, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn editor_command_open_find_replace_sets_editor_search_mode() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.editor.ui.find_open = false;
+        app.editor.ui.find_replace_visible = false;
+        app.editor.ui.find_occurrence = 9;
+
+        app.run_editor_command(EditorCommand::OpenFindReplace);
+
+        assert!(app.editor.ui.find_open);
+        assert!(app.editor.ui.find_replace_visible);
+        assert_eq!(app.editor.ui.find_occurrence, 0);
+
+        app.run_editor_command(EditorCommand::CloseFind);
+        assert!(!app.editor.ui.find_open);
+    }
+
+    #[test]
+    fn editor_commands_update_view_and_format_state() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.editor.word_wrap = true;
+        app.editor.font_size = 16.0;
+        app.editor.ui.show_line_numbers = false;
+        app.editor.ui.text_align = EditorTextAlign::Left;
+
+        app.run_editor_command(EditorCommand::ToggleWordWrap);
+        app.run_editor_command(EditorCommand::IncreaseFontSize);
+        app.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Right));
+        app.run_editor_command(EditorCommand::ToggleLineNumbers);
+        app.run_editor_command(EditorCommand::ResetFontSize);
+
+        assert!(!app.editor.word_wrap);
+        assert_eq!(app.editor.font_size, 16.0);
+        assert_eq!(app.editor.ui.text_align, EditorTextAlign::Right);
+        assert!(app.editor.ui.show_line_numbers);
+    }
+
+    #[test]
+    fn closing_desktop_editor_resets_document_for_next_launch() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.editor.open = true;
+        app.editor.path = Some(PathBuf::from("/tmp/existing.txt"));
+        app.editor.text = "keep me?".to_string();
+        app.editor.dirty = true;
+        app.editor.status = "Unsaved changes".to_string();
+        app.editor.ui.find_open = true;
+        app.editor.ui.find_replace_visible = true;
+        app.editor.ui.find_query = "keep".to_string();
+        app.editor.ui.replace_query = "drop".to_string();
+        app.editor.ui.find_occurrence = 3;
+
+        app.update_desktop_window_state(DesktopWindow::Editor, false);
+
+        assert!(!app.editor.open);
+        assert_eq!(app.editor.path, None);
+        assert!(app.editor.text.is_empty());
+        assert!(!app.editor.dirty);
+        assert_eq!(
+            app.editor.status,
+            "New document. Save to choose where it goes."
+        );
+        assert!(!app.editor.ui.find_open);
+        assert!(!app.editor.ui.find_replace_visible);
+        assert!(app.editor.ui.find_query.is_empty());
+        assert!(app.editor.ui.replace_query.is_empty());
+        assert_eq!(app.editor.ui.find_occurrence, 0);
+    }
+
+    #[test]
+    fn save_as_picker_numbers_duplicate_names() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("save_as_collision");
+        let existing = temp.path.join("document.txt");
+        std::fs::write(&existing, "existing").expect("seed existing document");
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.file_manager.cwd = temp.path.clone();
+        app.file_manager.open = true;
+        app.editor.text = "new content".to_string();
+        app.editor.dirty = true;
+        app.editor.save_as_input = Some("document.txt".to_string());
+
+        app.complete_editor_save_as_from_picker();
+
+        let saved = temp.path.join("document (1).txt");
+        assert_eq!(app.editor.path, Some(saved.clone()));
+        assert!(!app.editor.dirty);
+        assert_eq!(
+            app.editor.status,
+            "Name already existed. Saved as document (1).txt."
+        );
+        assert_eq!(
+            std::fs::read_to_string(&existing).expect("read existing document"),
+            "existing"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&saved).expect("read numbered document"),
+            "new content"
+        );
+        assert!(!app.file_manager.open);
+        assert!(app.editor.open);
+        assert!(app.editor.save_as_input.is_none());
+    }
+
+    #[test]
+    fn file_manager_new_folder_uses_numbered_suffix() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("new_folder_collision");
+        let existing = temp.path.join("New Folder");
+        std::fs::create_dir_all(&existing).expect("seed existing folder");
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.cwd = temp.path.clone();
+
+        let message = app
+            .file_manager_create_new_folder()
+            .expect("create unique folder");
+
+        let created = temp.path.join("New Folder (1)");
+        assert!(created.is_dir());
+        assert_eq!(app.file_manager.selected, Some(created.clone()));
+        assert_eq!(message, "Created New Folder (1)");
     }
 }

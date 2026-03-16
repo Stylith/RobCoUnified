@@ -1,5 +1,6 @@
 use crate::config::{get_settings, FileManagerSortMode};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,7 @@ pub struct NativeFileManagerState {
     pub open: bool,
     pub cwd: PathBuf,
     pub selected: Option<PathBuf>,
+    pub selected_paths: HashSet<PathBuf>,
     pub tabs: Vec<PathBuf>,
     pub active_tab: usize,
     pub tree_selected: Option<PathBuf>,
@@ -68,6 +70,7 @@ impl NativeFileManagerState {
             open: false,
             cwd: cwd.clone(),
             selected: None,
+            selected_paths: HashSet::new(),
             tabs: vec![cwd.clone()],
             active_tab: 0,
             tree_selected: Some(cwd),
@@ -94,6 +97,7 @@ impl NativeFileManagerState {
     pub fn set_cwd(&mut self, path: PathBuf) {
         self.cwd = path.clone();
         self.selected = None;
+        self.selected_paths.clear();
         self.tree_selected = Some(path);
         self.sync_active_tab_path();
         self.ensure_selection_valid();
@@ -101,7 +105,49 @@ impl NativeFileManagerState {
 
     pub fn select(&mut self, path: Option<PathBuf>) {
         self.selected = path;
+        self.selected_paths.clear();
         self.ensure_selection_valid();
+    }
+
+    pub fn clear_multi_selection(&mut self) {
+        self.selected_paths.clear();
+    }
+
+    pub fn toggle_selected_path(&mut self, path: &Path) {
+        let Some(row) = self.rows().into_iter().find(|row| row.path == path) else {
+            return;
+        };
+        self.selected = Some(row.path.clone());
+        if row.is_parent_dir() {
+            return;
+        }
+        if !self.selected_paths.insert(row.path.clone()) {
+            self.selected_paths.remove(&row.path);
+        }
+    }
+
+    pub fn is_path_selected(&self, path: &Path) -> bool {
+        self.selected.as_deref() == Some(path) || self.selected_paths.contains(path)
+    }
+
+    pub fn selected_rows_for_action(&self) -> Vec<FileEntryRow> {
+        let rows = self.rows();
+        let mut selected_rows: Vec<FileEntryRow> = rows
+            .iter()
+            .filter(|row| !row.is_parent_dir() && self.selected_paths.contains(&row.path))
+            .cloned()
+            .collect();
+        if selected_rows.is_empty() {
+            if let Some(row) = rows
+                .into_iter()
+                .find(|row| self.selected.as_ref() == Some(&row.path))
+            {
+                if !row.is_parent_dir() {
+                    selected_rows.push(row);
+                }
+            }
+        }
+        selected_rows
     }
 
     pub fn update_search_query(&mut self, query: String) {
@@ -123,17 +169,24 @@ impl NativeFileManagerState {
 
     pub fn tree_items(&self) -> Vec<FileTreeItem> {
         let show_hidden = get_settings().desktop_file_manager.show_hidden_files;
-        let root = PathBuf::from("/");
         let mut items = vec![FileTreeItem {
-            line: "Folders".to_string(),
+            line: "Drives".to_string(),
             path: None,
         }];
+        let drives = Self::drive_roots();
+        for drive in &drives {
+            items.push(FileTreeItem {
+                line: format!("* {}", Self::drive_label(drive)),
+                path: Some(drive.clone()),
+            });
+        }
         items.push(FileTreeItem {
-            line: "* /".to_string(),
-            path: Some(root.clone()),
+            line: "Folders".to_string(),
+            path: None,
         });
-
-        let rel = self.cwd.strip_prefix(&root).unwrap_or(&self.cwd);
+        let current_drive = Self::current_drive_root_for_path(&self.cwd, &drives)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let rel = self.cwd.strip_prefix(&current_drive).unwrap_or(&self.cwd);
         let comps: Vec<String> = rel
             .components()
             .filter_map(|c| {
@@ -146,7 +199,7 @@ impl NativeFileManagerState {
             })
             .collect();
 
-        let mut running = root.clone();
+        let mut running = current_drive.clone();
         for (depth, comp) in comps.iter().enumerate() {
             running = running.join(comp);
             items.push(FileTreeItem {
@@ -214,6 +267,7 @@ impl NativeFileManagerState {
         self.active_tab = idx;
         self.cwd = self.tabs[idx].clone();
         self.selected = None;
+        self.selected_paths.clear();
         self.tree_selected = Some(self.cwd.clone());
         true
     }
@@ -235,6 +289,10 @@ impl NativeFileManagerState {
 
     pub fn ensure_selection_valid(&mut self) {
         let rows = self.rows();
+        self.selected_paths.retain(|selected| {
+            rows.iter()
+                .any(|row| &row.path == selected && !row.is_parent_dir())
+        });
         if rows.is_empty() {
             self.selected = None;
             return;
@@ -323,5 +381,146 @@ impl NativeFileManagerState {
         });
 
         rows
+    }
+
+    pub fn drive_roots() -> Vec<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut drives = Vec::new();
+            for letter in b'A'..=b'Z' {
+                let path = PathBuf::from(format!("{}:\\", letter as char));
+                if path.exists() {
+                    drives.push(path);
+                }
+            }
+            return drives;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut drives = vec![PathBuf::from("/")];
+            for mount_root in ["/Volumes", "/mnt", "/media"] {
+                let mount_root = Path::new(mount_root);
+                if let Ok(entries) = std::fs::read_dir(mount_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() && !drives.iter().any(|existing| existing == &path) {
+                            drives.push(path);
+                        }
+                    }
+                }
+            }
+            drives.sort_by(|a, b| {
+                let a_root = a == Path::new("/");
+                let b_root = b == Path::new("/");
+                match (a_root, b_root) {
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
+                    _ => a
+                        .display()
+                        .to_string()
+                        .to_lowercase()
+                        .cmp(&b.display().to_string().to_lowercase()),
+                }
+            });
+            drives
+        }
+    }
+
+    pub fn current_drive_root(&self) -> Option<PathBuf> {
+        Self::current_drive_root_for_path(&self.cwd, &Self::drive_roots())
+    }
+
+    fn current_drive_root_for_path(path: &Path, drives: &[PathBuf]) -> Option<PathBuf> {
+        drives
+            .iter()
+            .filter(|drive| path.starts_with(drive))
+            .max_by_key(|drive| drive.components().count())
+            .cloned()
+    }
+
+    pub fn drive_label(path: &Path) -> String {
+        #[cfg(target_os = "windows")]
+        {
+            return path.display().to_string();
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if path == Path::new("/") {
+                return "/".to_string();
+            }
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| path.display().to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "robco_native_file_manager_{prefix}_{}_{}",
+                std::process::id(),
+                unique
+            ));
+            std::fs::create_dir_all(&path).expect("create temp test dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn selected_rows_for_action_prefers_multi_selection() {
+        let temp = TempDirGuard::new("selection");
+        let a = temp.path.join("a.txt");
+        let b = temp.path.join("b.txt");
+        std::fs::write(&a, "a").expect("write a");
+        std::fs::write(&b, "b").expect("write b");
+
+        let mut fm = NativeFileManagerState::new(temp.path.clone());
+        fm.ensure_selection_valid();
+        fm.select(Some(a.clone()));
+        fm.toggle_selected_path(&a);
+        fm.toggle_selected_path(&b);
+
+        let selected: Vec<PathBuf> = fm
+            .selected_rows_for_action()
+            .into_iter()
+            .map(|row| row.path)
+            .collect();
+
+        assert_eq!(selected.len(), 2);
+        assert!(selected.contains(&a));
+        assert!(selected.contains(&b));
+    }
+
+    #[test]
+    fn tree_items_include_drive_and_folder_sections() {
+        let fm = NativeFileManagerState::new(std::env::temp_dir());
+        let items = fm.tree_items();
+
+        assert_eq!(items.first().map(|item| item.line.as_str()), Some("Drives"));
+        assert!(items.iter().any(|item| item.line == "Folders"));
+        assert!(items.iter().any(|item| item.path.is_some()));
     }
 }

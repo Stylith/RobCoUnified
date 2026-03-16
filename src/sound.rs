@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +31,6 @@ const NAVIGATE_REPEAT_GAP_MS: u64 = 80;
 const NAVIGATE_HOLD_WINDOW_MS: u64 = 120;
 const KEYPRESS_GAP_MS: u64 = 16;
 const BOOT_KEY_GAP_MS: u64 = 0;
-
 
 pub fn stop_audio() {
     STOPPED.store(true, Ordering::SeqCst);
@@ -321,7 +320,6 @@ fn run_spawn(path: PathBuf) {
         }
     }
 }
-
 
 pub fn wait_boot_audio_ready(_timeout_ms: u64) {
     if !sound_enabled() {
