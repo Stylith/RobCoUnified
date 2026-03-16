@@ -4,15 +4,40 @@ use super::connections_screen::{
     TerminalConnectionsState,
 };
 use super::data::{
-    app_names, authenticate, bind_login_session, current_settings, documents_dir,
-    home_dir_fallback, logs_dir, read_shell_snapshot, read_text_file, save_settings,
-    save_text_file, word_processor_dir, write_shell_snapshot,
+    authenticate, bind_login_session, documents_dir, home_dir_fallback, logs_dir,
+    read_shell_snapshot, save_text_file, word_processor_dir, write_shell_snapshot,
 };
-use super::default_apps_screen::{
-    apply_custom_command as apply_default_app_custom_command, draw_default_apps_screen,
-    DefaultAppsEvent,
+use super::desktop_connections_service::{
+    connect_connection_and_refresh_settings, forget_saved_connection_and_refresh_settings,
+    scan_discovered_connections,
 };
-use super::desktop_app::{DesktopHostedApp, DesktopMenuSection};
+use super::desktop_file_service::{
+    load_text_document, open_directory_location, reveal_path_location, FileManagerLocation,
+};
+use super::desktop_default_apps_service::{
+    apply_default_app_binding, binding_label_for_slot, custom_command_input_for_slot,
+    resolve_custom_default_app_binding,
+};
+use super::default_apps_screen::{draw_default_apps_screen, DefaultAppsEvent};
+use super::desktop_launcher_service::{
+    add_catalog_entry, catalog_names, delete_catalog_entry, rename_catalog_entry,
+    resolve_catalog_command_line, resolve_catalog_launch, ProgramCatalog,
+};
+use super::desktop_settings_service::{
+    load_settings_snapshot, persist_settings_draft, reload_settings_snapshot,
+};
+use super::desktop_status_service::{
+    cancelled_shell_status, clear_settings_status, clear_shell_status,
+    invalid_input_settings_status, invalid_input_shell_status, mirror_shell_to_settings,
+    saved_settings_status, saved_shell_status, NativeStatusUpdate, NativeStatusValue,
+};
+use super::desktop_app::{
+    build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
+    build_taskbar_entries, build_window_menu_section, desktop_app_menu_name,
+    hosted_app_for_window, taskbar_window_order, DesktopHostedApp, DesktopMenuAction,
+    DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection, DesktopShellAction,
+    DesktopWindow, DesktopWindowMenuEntry,
+};
 use super::document_browser::{activate_browser_selection, draw_terminal_document_browser};
 use super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
@@ -27,13 +52,13 @@ use super::editor_app::{
 };
 use super::file_manager::{FileManagerAction, FileManagerCommand, NativeFileManagerState};
 use super::file_manager_app::{
-    self, FileManagerClipboardMode, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate,
-    FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode, FileManagerPickerCommit,
+    self, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate, FileManagerEditRuntime,
+    FileManagerOpenTarget, FileManagerPickMode, FileManagerPickerCommit,
     FileManagerPromptAction, FileManagerPromptRequest, FileManagerSelectionActivation,
     FileManagerSettingsUpdate, NativeFileManagerDragPayload, OpenWithLaunchRequest,
 };
 use super::file_manager_desktop::{
-    self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest, FILE_MANAGER_APP_TITLE,
+    self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest,
 };
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
 use super::installer_screen::{
@@ -51,7 +76,7 @@ use super::menu::{
 use super::nuke_codes_screen::{
     draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView,
 };
-use super::programs_screen::{draw_programs_menu, resolve_program_command, ProgramMenuEvent};
+use super::programs_screen::{draw_programs_menu, ProgramMenuEvent};
 use super::prompt::{
     draw_terminal_flash, draw_terminal_flash_boxed, draw_terminal_prompt_overlay, FlashAction,
     TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
@@ -77,22 +102,21 @@ use super::user_management::{
 };
 use crate::config::ConnectionKind;
 use crate::config::{
-    cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
-    persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
-    update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopIconSortMode,
-    DesktopIconStyle, DesktopPtyProfileSettings, DesktopShortcut, FileManagerSortMode,
-    FileManagerViewMode, OpenMode, Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
+    cycle_hacking_difficulty, get_settings, load_categories, persist_settings, save_categories,
+    set_current_user, update_settings, CliAcsMode, CliColorMode, DesktopIconSortMode,
+    DesktopIconStyle, DesktopPtyProfileSettings, DesktopShortcut, OpenMode, Settings,
+    WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{
-    connect_connection, discovered_row_label, forget_saved_connection, network_requires_password,
-    refresh_discovered_connections, saved_connections, saved_row_label, DiscoveredConnection,
+    discovered_row_label, network_requires_password, saved_connections, saved_row_label,
+    DiscoveredConnection,
 };
 use crate::core::auth::{
     ensure_default_admin, load_users, read_session, save_users, AuthMethod, UserRecord,
 };
 use crate::core::hacking::HackingGame;
 use crate::default_apps::{
-    binding_label, parse_custom_command_line, set_binding_for_slot, slot_label, DefaultAppSlot,
+    binding_for_slot, parse_custom_command_line, slot_label, DefaultAppSlot,
 };
 use crate::session;
 use anyhow::Result;
@@ -108,7 +132,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod file_manager_desktop_presenter;
-mod file_manager_menu_presenter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NativeShellSnapshot {
@@ -305,19 +328,6 @@ enum ContextMenuAction {
     ToggleSnapToGrid,
     LaunchShortcut(String),
     OpenShortcutProperties(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum DesktopWindow {
-    FileManager,
-    Editor,
-    Settings,
-    Applications,
-    DonkeyKong,
-    NukeCodes,
-    TerminalMode,
-    PtyApp,
-    Installer,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -716,7 +726,7 @@ impl Default for RobcoNativeApp {
         }
         session::clear_sessions();
         session::take_switch_request();
-        let settings_draft = current_settings();
+        let settings_draft = load_settings_snapshot();
         Self {
             login: LoginState::default(),
             login_mode: LoginScreenMode::SelectUser,
@@ -816,10 +826,18 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
-    fn default_app_custom_value(binding: &DefaultAppBinding) -> String {
-        match binding {
-            DefaultAppBinding::CustomArgv { argv } => argv.join(" "),
-            _ => String::new(),
+    fn apply_status_update(&mut self, update: NativeStatusUpdate) {
+        if let Some(shell) = update.shell {
+            match shell {
+                NativeStatusValue::Set(message) => self.shell_status = message,
+                NativeStatusValue::Clear => self.shell_status.clear(),
+            }
+        }
+        if let Some(settings) = update.settings {
+            match settings {
+                NativeStatusValue::Set(message) => self.settings.status = message,
+                NativeStatusValue::Clear => self.settings.status.clear(),
+            }
         }
     }
 
@@ -1116,13 +1134,13 @@ impl RobcoNativeApp {
     }
 
     fn reset_desktop_settings_window(&mut self) {
-        self.settings.draft = current_settings();
-        self.settings.status.clear();
+        self.settings.draft = load_settings_snapshot();
+        self.apply_status_update(clear_settings_status());
         self.settings.panel = NativeSettingsPanel::Home;
         self.settings.default_app_custom_text_code =
-            Self::default_app_custom_value(&self.settings.draft.default_apps.text_code);
+            custom_command_input_for_slot(&self.settings.draft, DefaultAppSlot::TextCode);
         self.settings.default_app_custom_ebook =
-            Self::default_app_custom_value(&self.settings.draft.default_apps.ebook);
+            custom_command_input_for_slot(&self.settings.draft, DefaultAppSlot::Ebook);
         self.settings.scanned_networks.clear();
         self.settings.scanned_bluetooth.clear();
         self.settings.connection_password.clear();
@@ -1926,69 +1944,8 @@ impl RobcoNativeApp {
         }
     }
 
-    fn handle_desktop_taskbar_window_click(&mut self, window: DesktopWindow) {
-        if !self.desktop_window_is_open(window) {
-            self.open_desktop_window(window);
-            return;
-        }
-        if self.desktop_window_is_minimized(window) {
-            self.set_desktop_window_minimized(window, false);
-            self.close_start_menu();
-        } else {
-            self.desktop_active_window = Some(window);
-            self.close_start_menu();
-        }
-    }
-
-    fn desktop_taskbar_label(&self, window: DesktopWindow) -> String {
-        self.desktop_window_title(window)
-    }
-
-    fn desktop_window_title(&self, window: DesktopWindow) -> String {
-        match window {
-            DesktopWindow::FileManager => FILE_MANAGER_APP_TITLE.to_string(),
-            DesktopWindow::Editor => EDITOR_APP_TITLE.to_string(),
-            DesktopWindow::Settings => "Settings".to_string(),
-            DesktopWindow::Applications => "Applications".to_string(),
-            DesktopWindow::DonkeyKong => BUILTIN_DONKEY_KONG_GAME.to_string(),
-            DesktopWindow::NukeCodes => "Nuke Codes".to_string(),
-            DesktopWindow::Installer => "Program Installer".to_string(),
-            DesktopWindow::TerminalMode => "Terminal".to_string(),
-            DesktopWindow::PtyApp => self
-                .terminal_pty
-                .as_ref()
-                .map(|pty| pty.title.clone())
-                .unwrap_or_else(|| "PTY App".to_string()),
-        }
-    }
-
-    fn desktop_app_menu_name(&self) -> String {
-        self.desktop_active_window
-            .map(|w| self.desktop_window_title(w))
-            .unwrap_or_else(|| "Desktop".to_string())
-    }
-
     fn active_desktop_app(&self) -> DesktopHostedApp {
-        match self.desktop_active_window {
-            Some(DesktopWindow::FileManager) => DesktopHostedApp::FileManager,
-            Some(DesktopWindow::Editor) => DesktopHostedApp::Editor,
-            Some(DesktopWindow::Settings) => DesktopHostedApp::Settings,
-            Some(DesktopWindow::Applications) => DesktopHostedApp::Applications,
-            Some(DesktopWindow::DonkeyKong) => DesktopHostedApp::Game,
-            Some(DesktopWindow::NukeCodes) => DesktopHostedApp::Utility,
-            Some(DesktopWindow::TerminalMode) => DesktopHostedApp::Terminal,
-            Some(DesktopWindow::PtyApp) => DesktopHostedApp::PtyApp,
-            Some(DesktopWindow::Installer) => DesktopHostedApp::Installer,
-            None => DesktopHostedApp::Desktop,
-        }
-    }
-
-    fn file_manager_view_mode(&self) -> FileManagerViewMode {
-        get_settings().desktop_file_manager.view_mode
-    }
-
-    fn file_manager_sort_mode(&self) -> FileManagerSortMode {
-        get_settings().desktop_file_manager.sort_mode
+        hosted_app_for_window(self.desktop_active_window)
     }
 
     fn file_manager_home_path(&self) -> PathBuf {
@@ -1997,6 +1954,14 @@ impl RobcoNativeApp {
         } else {
             home_dir_fallback()
         }
+    }
+
+    fn apply_file_manager_location(&mut self, location: FileManagerLocation) {
+        self.file_manager.set_cwd(location.cwd);
+        if let Some(selected) = location.selected {
+            self.file_manager.select(Some(selected));
+        }
+        self.open_desktop_window(DesktopWindow::FileManager);
     }
 
     fn apply_file_manager_display_settings_update(
@@ -2086,10 +2051,6 @@ impl RobcoNativeApp {
         self.file_manager.selected_rows_for_action()
     }
 
-    fn file_manager_has_editable_selection(&self) -> bool {
-        !self.file_manager_selected_entries().is_empty()
-    }
-
     fn file_manager_selection_count(&self) -> usize {
         self.file_manager_selected_entries().len()
     }
@@ -2130,13 +2091,6 @@ impl RobcoNativeApp {
             }
         }
         (name, "")
-    }
-
-    fn path_display_name(path: &Path) -> String {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_string())
-            .unwrap_or_else(|| path.display().to_string())
     }
 
     fn sync_open_with_settings_to_draft(&mut self) {
@@ -2301,21 +2255,16 @@ impl RobcoNativeApp {
             ContextMenuAction::CreateShortcut { label, action } => {
                 let (app_name, launch_command, shortcut_kind) = match &action {
                     StartLeafAction::LaunchConfiguredApp(name) => {
-                        let cmd = resolve_program_command(name, &load_apps())
-                            .ok()
-                            .map(|args| args.join(" "));
+                        let cmd =
+                            resolve_catalog_command_line(name, ProgramCatalog::Applications);
                         (name.clone(), cmd, "app".to_string())
                     }
                     StartLeafAction::LaunchNetworkProgram(name) => {
-                        let cmd = resolve_program_command(name, &load_networks())
-                            .ok()
-                            .map(|args| args.join(" "));
+                        let cmd = resolve_catalog_command_line(name, ProgramCatalog::Network);
                         (name.clone(), cmd, "network".to_string())
                     }
                     StartLeafAction::LaunchGameProgram(name) => {
-                        let cmd = resolve_program_command(name, &load_games())
-                            .ok()
-                            .map(|args| args.join(" "));
+                        let cmd = resolve_catalog_command_line(name, ProgramCatalog::Games);
                         (name.clone(), cmd, "game".to_string())
                     }
                     StartLeafAction::LaunchNukeCodes => {
@@ -2997,7 +2946,7 @@ impl RobcoNativeApp {
                 }
             }
             // Configured apps
-            for name in app_names() {
+            for name in catalog_names(ProgramCatalog::Applications) {
                 if name != BUILTIN_NUKE_CODES_APP
                     && name != BUILTIN_TEXT_EDITOR_APP
                     && matches_query(&name)
@@ -3020,10 +2969,10 @@ impl RobcoNativeApp {
                 }
             }
             // Network programs
-            for name in load_networks().keys() {
-                if matches_query(name) {
+            for name in catalog_names(ProgramCatalog::Network) {
+                if matches_query(&name) {
                     self.spotlight_results.push(SpotlightResult {
-                        name: name.clone(),
+                        name,
                         category: SpotlightCategory::Network,
                         path: None,
                     });
@@ -3088,50 +3037,8 @@ impl RobcoNativeApp {
     fn spotlight_activate_result(&mut self, result: &SpotlightResult) {
         self.spotlight_open = false;
         self.spotlight_query.clear();
-        match &result.category {
-            SpotlightCategory::System => match result.name.as_str() {
-                "File Manager" => self.open_desktop_window(DesktopWindow::FileManager),
-                "Settings" => self.open_desktop_window(DesktopWindow::Settings),
-                "Terminal" => self.open_desktop_window(DesktopWindow::TerminalMode),
-                n if n == BUILTIN_TEXT_EDITOR_APP => {
-                    if self.editor.path.is_none() {
-                        self.new_document();
-                    }
-                    self.open_desktop_window(DesktopWindow::Editor);
-                }
-                n if n == BUILTIN_NUKE_CODES_APP => {
-                    self.open_desktop_window(DesktopWindow::NukeCodes);
-                }
-                _ => {}
-            },
-            SpotlightCategory::App => {
-                self.launch_named_program_from_map(&result.name, &load_apps(), &result.name);
-            }
-            SpotlightCategory::Game => {
-                if result.name == BUILTIN_DONKEY_KONG_GAME {
-                    self.open_desktop_window(DesktopWindow::DonkeyKong);
-                } else {
-                    self.launch_named_program_from_map(&result.name, &load_games(), &result.name);
-                }
-            }
-            SpotlightCategory::Network => {
-                self.launch_named_program_from_map(&result.name, &load_networks(), &result.name);
-            }
-            SpotlightCategory::Document => {
-                if let Some(path) = &result.path {
-                    self.open_path_in_editor(path.clone());
-                }
-            }
-            SpotlightCategory::File => {
-                if let Some(path) = &result.path {
-                    if path.is_dir() {
-                        self.file_manager.set_cwd(path.clone());
-                    } else if let Some(parent) = path.parent() {
-                        self.file_manager.set_cwd(parent.to_path_buf());
-                    }
-                    self.open_desktop_window(DesktopWindow::FileManager);
-                }
-            }
+        if let Some(action) = self.spotlight_action_for_result(result) {
+            self.execute_desktop_shell_action(action);
         }
     }
 
@@ -3538,7 +3445,7 @@ impl RobcoNativeApp {
                         action: StartLeafAction::OpenTextEditor,
                     });
                 }
-                for name in app_names() {
+                for name in catalog_names(ProgramCatalog::Applications) {
                     if name == BUILTIN_NUKE_CODES_APP || name == BUILTIN_TEXT_EDITOR_APP {
                         continue;
                     }
@@ -3584,7 +3491,7 @@ impl RobcoNativeApp {
             }
             StartLeaf::Network => {
                 let mut items = Vec::new();
-                for key in Self::sorted_keys(&load_networks()) {
+                for key in catalog_names(ProgramCatalog::Network) {
                     items.push(StartLeafItem {
                         label: key.clone(),
                         action: StartLeafAction::LaunchNetworkProgram(key),
@@ -3618,13 +3525,10 @@ impl RobcoNativeApp {
     }
 
     fn open_file_manager_at(&mut self, path: PathBuf) {
-        if !path.is_dir() {
-            self.shell_status = format!("Error: '{}' not found.", path.display());
-            return;
+        match open_directory_location(path) {
+            Ok(location) => self.apply_file_manager_location(location),
+            Err(status) => self.shell_status = status,
         }
-        self.file_manager.set_cwd(path);
-        self.file_manager.selected = None;
-        self.open_desktop_window(DesktopWindow::FileManager);
     }
 
     fn default_editor_save_name(&self) -> String {
@@ -3704,14 +3608,21 @@ impl RobcoNativeApp {
         }
     }
 
-    fn launch_named_program_from_map(
+    fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
+        match resolve_catalog_launch(name, catalog) {
+            Ok(launch) => self.open_desktop_pty(&launch.title, &launch.argv),
+            Err(err) => self.shell_status = err,
+        }
+    }
+
+    fn open_embedded_catalog_launch(
         &mut self,
         name: &str,
-        map: &serde_json::Map<String, Value>,
-        status_label: &str,
+        catalog: ProgramCatalog,
+        return_screen: TerminalScreen,
     ) {
-        match resolve_program_command(name, map) {
-            Ok(cmd) => self.open_desktop_pty(status_label, &cmd),
+        match resolve_catalog_launch(name, catalog) {
+            Ok(launch) => self.open_embedded_pty(&launch.title, &launch.argv, return_screen),
             Err(err) => self.shell_status = err,
         }
     }
@@ -3721,6 +3632,52 @@ impl RobcoNativeApp {
             self.terminal_nuke_codes = fetch_nuke_codes();
         }
         self.open_desktop_window(DesktopWindow::NukeCodes);
+    }
+
+    fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
+        match action {
+            DesktopShellAction::OpenWindow(window) => self.open_desktop_window(window),
+            DesktopShellAction::OpenTextEditor => {
+                if self.editor.path.is_none() {
+                    self.new_document();
+                } else {
+                    self.open_desktop_window(DesktopWindow::Editor);
+                }
+            }
+            DesktopShellAction::OpenNukeCodes => self.open_desktop_nuke_codes(),
+            DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
+            DesktopShellAction::OpenConnectionsSettings => {
+                if crate::connections::macos_connections_disabled() {
+                    self.shell_status =
+                        crate::connections::macos_connections_disabled_hint().to_string();
+                } else {
+                    self.open_desktop_window(DesktopWindow::Settings);
+                    self.settings.panel = NativeSettingsPanel::Connections;
+                    self.apply_status_update(clear_shell_status());
+                }
+            }
+            DesktopShellAction::LaunchConfiguredApp(name) => {
+                self.open_desktop_catalog_launch(&name, ProgramCatalog::Applications);
+            }
+            DesktopShellAction::OpenFileManagerAt(path) => self.open_file_manager_at(path),
+            DesktopShellAction::LaunchNetworkProgram(name) => {
+                self.open_desktop_catalog_launch(&name, ProgramCatalog::Network);
+            }
+            DesktopShellAction::LaunchGameProgram(name) => {
+                if name == BUILTIN_DONKEY_KONG_GAME {
+                    self.open_desktop_donkey_kong();
+                } else {
+                    self.open_desktop_catalog_launch(&name, ProgramCatalog::Games);
+                }
+            }
+            DesktopShellAction::OpenPathInEditor(path) => self.open_path_in_editor(path),
+            DesktopShellAction::RevealPathInFileManager(path) => {
+                match reveal_path_location(path) {
+                    Ok(location) => self.apply_file_manager_location(location),
+                    Err(status) => self.shell_status = status,
+                }
+            }
+        }
     }
 
     fn run_start_root_action(&mut self, action: StartRootAction) {
@@ -3742,75 +3699,72 @@ impl RobcoNativeApp {
     }
 
     fn run_start_system_action(&mut self, action: StartSystemAction) {
-        match action {
-            StartSystemAction::ProgramInstaller => {
-                self.close_start_menu();
-                self.open_desktop_window(DesktopWindow::Installer);
-            }
-            StartSystemAction::Terminal => self.open_desktop_terminal_shell(),
-            StartSystemAction::FileManager => self.open_desktop_window(DesktopWindow::FileManager),
-            StartSystemAction::Settings => self.open_desktop_window(DesktopWindow::Settings),
-            StartSystemAction::Connections => {
-                if crate::connections::macos_connections_disabled() {
-                    self.shell_status =
-                        crate::connections::macos_connections_disabled_hint().to_string();
-                } else {
-                    self.close_start_menu();
-                    self.open_desktop_window(DesktopWindow::Settings);
-                    self.settings.panel = NativeSettingsPanel::Connections;
-                    self.shell_status.clear();
-                }
-            }
-        }
+        self.close_start_menu();
+        let action = match action {
+            StartSystemAction::ProgramInstaller => DesktopShellAction::OpenWindow(DesktopWindow::Installer),
+            StartSystemAction::Terminal => DesktopShellAction::OpenDesktopTerminalShell,
+            StartSystemAction::FileManager => DesktopShellAction::OpenWindow(DesktopWindow::FileManager),
+            StartSystemAction::Settings => DesktopShellAction::OpenWindow(DesktopWindow::Settings),
+            StartSystemAction::Connections => DesktopShellAction::OpenConnectionsSettings,
+        };
+        self.execute_desktop_shell_action(action);
     }
 
     fn run_start_leaf_action(&mut self, action: StartLeafAction) {
-        match action {
-            StartLeafAction::None => {}
-            StartLeafAction::LaunchNukeCodes => {
-                self.close_start_menu();
-                self.open_desktop_nuke_codes();
+        let action = match action {
+            StartLeafAction::None => return,
+            StartLeafAction::LaunchNukeCodes => DesktopShellAction::OpenNukeCodes,
+            StartLeafAction::OpenTextEditor => DesktopShellAction::OpenTextEditor,
+            StartLeafAction::LaunchConfiguredApp(name) => DesktopShellAction::LaunchConfiguredApp(name),
+            StartLeafAction::OpenDocumentCategory(path) => DesktopShellAction::OpenFileManagerAt(path),
+            StartLeafAction::LaunchNetworkProgram(name) => DesktopShellAction::LaunchNetworkProgram(name),
+            StartLeafAction::LaunchGameProgram(name) => DesktopShellAction::LaunchGameProgram(name),
+        };
+        self.execute_desktop_shell_action(action);
+    }
+
+    fn spotlight_action_for_result(&self, result: &SpotlightResult) -> Option<DesktopShellAction> {
+        match &result.category {
+            SpotlightCategory::System => match result.name.as_str() {
+                "File Manager" => Some(DesktopShellAction::OpenWindow(DesktopWindow::FileManager)),
+                "Settings" => Some(DesktopShellAction::OpenWindow(DesktopWindow::Settings)),
+                "Terminal" => Some(DesktopShellAction::OpenWindow(DesktopWindow::TerminalMode)),
+                n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::OpenTextEditor),
+                n if n == BUILTIN_NUKE_CODES_APP => Some(DesktopShellAction::OpenWindow(DesktopWindow::NukeCodes)),
+                _ => None,
+            },
+            SpotlightCategory::App => {
+                Some(DesktopShellAction::LaunchConfiguredApp(result.name.clone()))
             }
-            StartLeafAction::OpenTextEditor => {
-                if self.editor.path.is_none() {
-                    self.new_document();
-                } else {
-                    self.open_desktop_window(DesktopWindow::Editor);
-                }
+            SpotlightCategory::Game => {
+                Some(DesktopShellAction::LaunchGameProgram(result.name.clone()))
             }
-            StartLeafAction::LaunchConfiguredApp(name) => {
-                let apps = load_apps();
-                match resolve_program_command(&name, &apps) {
-                    Ok(cmd) => self.open_desktop_pty(&name, &cmd),
-                    Err(err) => self.shell_status = err,
-                }
+            SpotlightCategory::Network => {
+                Some(DesktopShellAction::LaunchNetworkProgram(result.name.clone()))
             }
-            StartLeafAction::OpenDocumentCategory(path) => self.open_file_manager_at(path),
-            StartLeafAction::LaunchNetworkProgram(name) => {
-                self.launch_named_program_from_map(&name, &load_networks(), &name);
-            }
-            StartLeafAction::LaunchGameProgram(name) => {
-                if name == BUILTIN_DONKEY_KONG_GAME {
-                    self.open_desktop_donkey_kong();
-                } else {
-                    self.launch_named_program_from_map(&name, &load_games(), &name);
-                }
-            }
+            SpotlightCategory::Document => result
+                .path
+                .clone()
+                .map(DesktopShellAction::OpenPathInEditor),
+            SpotlightCategory::File => result
+                .path
+                .clone()
+                .map(DesktopShellAction::RevealPathInFileManager),
         }
     }
 
     fn open_manual_file(&mut self, path: &str, status_label: &str) {
         let manual = PathBuf::from(path);
-        match read_text_file(&manual) {
-            Ok(text) => {
-                self.editor.path = Some(manual);
-                self.editor.text = text;
+        match load_text_document(manual) {
+            Ok(document) => {
+                self.editor.path = Some(document.path);
+                self.editor.text = document.text;
                 self.editor.dirty = false;
                 self.editor.status = format!("Opened {status_label}.");
                 self.open_desktop_window(DesktopWindow::Editor);
             }
-            Err(err) => {
-                self.shell_status = format!("{status_label} unavailable: {err}");
+            Err(status) => {
+                self.shell_status = format!("{status_label} unavailable: {status}");
             }
         }
     }
@@ -3861,7 +3815,6 @@ impl RobcoNativeApp {
     }
 
     fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
-        crate::config::reload_settings();
         let snapshot: NativeShellSnapshot = read_shell_snapshot(username);
         self.session = Some(SessionState {
             username: username.to_string(),
@@ -3876,8 +3829,8 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.file_manager.selected = None;
         self.editor = EditorWindow::default();
-        self.settings.draft = current_settings();
-        self.settings.status.clear();
+        self.settings.draft = reload_settings_snapshot();
+        self.apply_status_update(clear_settings_status());
         self.settings.panel = NativeSettingsPanel::Home;
         self.donkey_kong_window.open = false;
         self.donkey_kong = None;
@@ -3922,7 +3875,7 @@ impl RobcoNativeApp {
         self.suppress_next_menu_submit = false;
         self.terminal_flash = None;
         self.session_leader_until = None;
-        self.shell_status.clear();
+        self.apply_status_update(clear_shell_status());
     }
 
     fn persist_snapshot(&self) {
@@ -4044,7 +3997,7 @@ impl RobcoNativeApp {
     }
 
     fn finish_logout(&mut self) {
-        crate::config::reload_settings();
+        let _ = reload_settings_snapshot();
         self.terminate_all_native_pty_children();
         session::clear_sessions();
         session::take_switch_request();
@@ -4095,7 +4048,7 @@ impl RobcoNativeApp {
         self.terminal_prompt = None;
         self.terminal_flash = None;
         self.session_leader_until = None;
-        self.shell_status.clear();
+        self.apply_status_update(clear_shell_status());
     }
 
     fn open_password_prompt(&mut self, title: impl Into<String>, prompt: impl Into<String>) {
@@ -4434,17 +4387,17 @@ impl RobcoNativeApp {
     }
 
     fn open_path_in_editor(&mut self, path: PathBuf) {
-        match read_text_file(&path) {
-            Ok(text) => {
-                self.editor.path = Some(path.clone());
-                self.editor.text = text;
+        match load_text_document(path.clone()) {
+            Ok(document) => {
+                self.editor.path = Some(document.path.clone());
+                self.editor.text = document.text;
                 self.editor.dirty = false;
                 self.editor.status = "Opened document.".to_string();
-                self.push_editor_recent_file(&path);
+                self.push_editor_recent_file(&document.path);
                 self.open_desktop_window(DesktopWindow::Editor);
             }
-            Err(err) => {
-                self.editor.status = format!("Open failed: {err}");
+            Err(status) => {
+                self.editor.status = format!("Open failed: {status}");
                 self.open_desktop_window(DesktopWindow::Editor);
             }
         }
@@ -4692,7 +4645,7 @@ impl RobcoNativeApp {
             items.push(BUILTIN_TEXT_EDITOR_APP.to_string());
         }
         items.extend(
-            app_names()
+            catalog_names(ProgramCatalog::Applications)
                 .into_iter()
                 .filter(|name| name != BUILTIN_NUKE_CODES_APP && name != BUILTIN_TEXT_EDITOR_APP),
         );
@@ -4710,7 +4663,7 @@ impl RobcoNativeApp {
     fn game_names(&self) -> Vec<String> {
         let mut names = vec![BUILTIN_DONKEY_KONG_GAME.to_string()];
         names.extend(
-            Self::sorted_keys(&load_games())
+            catalog_names(ProgramCatalog::Games)
                 .into_iter()
                 .filter(|name| name != BUILTIN_DONKEY_KONG_GAME),
         );
@@ -4743,20 +4696,29 @@ impl RobcoNativeApp {
 
     fn open_terminal_donkey_kong(&mut self) {
         self.navigate_to_screen(TerminalScreen::DonkeyKong);
-        self.shell_status.clear();
+        self.apply_status_update(clear_shell_status());
     }
 
     fn open_desktop_donkey_kong(&mut self) {
         self.open_desktop_window(DesktopWindow::DonkeyKong);
-        self.shell_status.clear();
+        self.apply_status_update(clear_shell_status());
     }
 
     fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
         match target {
-            EditMenuTarget::Applications => Self::sorted_keys(&load_apps()),
+            EditMenuTarget::Applications => catalog_names(ProgramCatalog::Applications),
             EditMenuTarget::Documents => Self::sorted_keys(&load_categories()),
-            EditMenuTarget::Network => Self::sorted_keys(&load_networks()),
-            EditMenuTarget::Games => Self::sorted_keys(&load_games()),
+            EditMenuTarget::Network => catalog_names(ProgramCatalog::Network),
+            EditMenuTarget::Games => catalog_names(ProgramCatalog::Games),
+        }
+    }
+
+    fn program_catalog_for_edit_target(target: EditMenuTarget) -> Option<ProgramCatalog> {
+        match target {
+            EditMenuTarget::Applications => Some(ProgramCatalog::Applications),
+            EditMenuTarget::Network => Some(ProgramCatalog::Network),
+            EditMenuTarget::Games => Some(ProgramCatalog::Games),
+            EditMenuTarget::Documents => None,
         }
     }
 
@@ -4769,54 +4731,34 @@ impl RobcoNativeApp {
             self.shell_status = "Error: invalid command line".to_string();
             return;
         }
-        let json_argv = Value::Array(argv.into_iter().map(Value::String).collect());
         match target {
-            EditMenuTarget::Applications => {
-                let mut apps = load_apps();
-                apps.insert(name.clone(), json_argv);
-                save_apps(&apps);
-            }
             EditMenuTarget::Documents => {
                 self.shell_status = "Error: invalid target for command entry.".to_string();
                 return;
             }
-            EditMenuTarget::Network => {
-                let mut network = load_networks();
-                network.insert(name.clone(), json_argv);
-                save_networks(&network);
-            }
-            EditMenuTarget::Games => {
-                let mut games = load_games();
-                games.insert(name.clone(), json_argv);
-                save_games(&games);
+            other => {
+                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
+                    self.shell_status = "Error: invalid target for command entry.".to_string();
+                    return;
+                };
+                self.shell_status = add_catalog_entry(catalog, name, argv);
             }
         }
-        self.shell_status = format!("{name} added.");
     }
 
     fn delete_program_entry(&mut self, target: EditMenuTarget, name: &str) {
         match target {
-            EditMenuTarget::Applications => {
-                let mut apps = load_apps();
-                apps.remove(name);
-                save_apps(&apps);
-            }
             EditMenuTarget::Documents => {
                 self.delete_document_category(name);
                 return;
             }
-            EditMenuTarget::Network => {
-                let mut network = load_networks();
-                network.remove(name);
-                save_networks(&network);
-            }
-            EditMenuTarget::Games => {
-                let mut games = load_games();
-                games.remove(name);
-                save_games(&games);
+            other => {
+                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
+                    return;
+                };
+                self.shell_status = delete_catalog_entry(catalog, name);
             }
         }
-        self.shell_status = format!("{name} deleted.");
     }
 
     fn rename_program_entry(&mut self, target: EditMenuTarget, old_name: &str, new_name: &str) {
@@ -4831,19 +4773,6 @@ impl RobcoNativeApp {
         }
 
         match target {
-            EditMenuTarget::Applications => {
-                let mut apps = load_apps();
-                if apps.contains_key(new_name) {
-                    self.shell_status = format!("{new_name} already exists.");
-                    return;
-                }
-                let Some(entry) = apps.remove(old_name) else {
-                    self.shell_status = format!("{old_name} was not found.");
-                    return;
-                };
-                apps.insert(new_name.to_string(), entry);
-                save_apps(&apps);
-            }
             EditMenuTarget::Documents => {
                 let mut categories = load_categories();
                 if categories.contains_key(new_name) {
@@ -4857,31 +4786,15 @@ impl RobcoNativeApp {
                 categories.insert(new_name.to_string(), entry);
                 save_categories(&categories);
             }
-            EditMenuTarget::Network => {
-                let mut network = load_networks();
-                if network.contains_key(new_name) {
-                    self.shell_status = format!("{new_name} already exists.");
-                    return;
-                }
-                let Some(entry) = network.remove(old_name) else {
-                    self.shell_status = format!("{old_name} was not found.");
+            other => {
+                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
                     return;
                 };
-                network.insert(new_name.to_string(), entry);
-                save_networks(&network);
-            }
-            EditMenuTarget::Games => {
-                let mut games = load_games();
-                if games.contains_key(new_name) {
-                    self.shell_status = format!("{new_name} already exists.");
-                    return;
+                match rename_catalog_entry(catalog, old_name, new_name) {
+                    Ok(status) => self.shell_status = status,
+                    Err(err) => self.shell_status = err,
                 }
-                let Some(entry) = games.remove(old_name) else {
-                    self.shell_status = format!("{old_name} was not found.");
-                    return;
-                };
-                games.insert(new_name.to_string(), entry);
-                save_games(&games);
+                return;
             }
         }
 
@@ -4985,10 +4898,8 @@ impl RobcoNativeApp {
     }
 
     fn persist_native_settings(&mut self) {
-        save_settings(self.settings.draft.clone());
-        crate::config::reload_settings();
-        self.settings.draft = current_settings();
-        self.shell_status = "Settings saved.".to_string();
+        self.settings.draft = persist_settings_draft(&self.settings.draft);
+        self.apply_status_update(saved_shell_status());
     }
 
     fn apply_login_selection_action(&mut self, action: LoginSelectionAction) {
@@ -5070,7 +4981,7 @@ impl RobcoNativeApp {
                     TerminalScreen::PtyApp => {}
                 }
                 if clear_status {
-                    self.shell_status.clear();
+                    self.apply_status_update(clear_shell_status());
                 }
             }
             MainMenuSelectionAction::OpenTerminalMode => {
@@ -5084,12 +4995,12 @@ impl RobcoNativeApp {
                 self.shell_status = "Entered Desktop Mode.".to_string();
             }
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
-                self.settings.draft = current_settings();
+                self.settings.draft = reload_settings_snapshot();
                 self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
                 self.terminal_connections.reset();
                 self.terminal_default_app_slot = None;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             MainMenuSelectionAction::BeginLogout => self.begin_logout(),
         }
@@ -5110,14 +5021,14 @@ impl RobcoNativeApp {
             && !self.terminal_connections.back()
         {
             crate::sound::play_navigate();
-            self.shell_status.clear();
+            self.apply_status_update(clear_shell_status());
             return;
         }
         if matches!(self.terminal_screen, TerminalScreen::ProgramInstaller)
             && !self.terminal_installer.back()
         {
             crate::sound::play_navigate();
-            self.shell_status.clear();
+            self.apply_status_update(clear_shell_status());
             return;
         }
         match self.terminal_screen {
@@ -5129,15 +5040,15 @@ impl RobcoNativeApp {
             | TerminalScreen::Settings
             | TerminalScreen::UserManagement => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalScreen::DonkeyKong => {
                 self.navigate_to_screen(TerminalScreen::Games);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalScreen::Logs => {
                 self.navigate_to_screen(TerminalScreen::Documents);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalScreen::PtyApp => {
                 if let Some(mut pty) = self.terminal_pty.take() {
@@ -5146,12 +5057,12 @@ impl RobcoNativeApp {
                     self.shell_status = format!("Closed {}.", pty.title);
                 } else {
                     self.navigate_to_screen(TerminalScreen::MainMenu);
-                    self.shell_status.clear();
+                    self.apply_status_update(clear_shell_status());
                 }
             }
             TerminalScreen::ProgramInstaller => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
                 self.terminal_installer.reset();
             }
             TerminalScreen::Connections
@@ -5159,15 +5070,15 @@ impl RobcoNativeApp {
             | TerminalScreen::About
             | TerminalScreen::EditMenus => {
                 self.navigate_to_screen(TerminalScreen::Settings);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalScreen::NukeCodes => {
                 self.navigate_to_screen(self.terminal_nuke_codes_return);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalScreen::DocumentBrowser => {
                 self.navigate_to_screen(self.terminal_browser_return);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
         }
     }
@@ -5362,7 +5273,7 @@ impl RobcoNativeApp {
                 self.terminal_prompt = None;
                 let name = name.trim().to_string();
                 if name.is_empty() {
-                    self.shell_status = "Error: Invalid input.".to_string();
+                    self.apply_status_update(invalid_input_shell_status());
                     return;
                 }
                 self.open_input_prompt(
@@ -5383,7 +5294,7 @@ impl RobcoNativeApp {
                 self.terminal_prompt = None;
                 let name = name.trim().to_string();
                 if name.is_empty() {
-                    self.shell_status = "Error: Invalid input.".to_string();
+                    self.apply_status_update(invalid_input_shell_status());
                     return;
                 }
                 self.open_input_prompt(
@@ -5395,7 +5306,7 @@ impl RobcoNativeApp {
             PromptOutcome::EditMenuAddCategoryPath { name, path } => {
                 self.terminal_prompt = None;
                 if path.trim().is_empty() {
-                    self.shell_status = "Error: Invalid input.".to_string();
+                    self.apply_status_update(invalid_input_shell_status());
                     return;
                 }
                 self.add_document_category(name, path);
@@ -5415,7 +5326,7 @@ impl RobcoNativeApp {
                 if confirmed {
                     self.delete_program_entry(target, &name);
                 } else {
-                    self.shell_status = "Cancelled.".to_string();
+                    self.apply_status_update(cancelled_shell_status());
                 }
             }
             PromptOutcome::NewLogName(name) => {
@@ -5427,15 +5338,14 @@ impl RobcoNativeApp {
             }
             PromptOutcome::DefaultAppCustom { slot, raw } => {
                 self.terminal_prompt = None;
-                match apply_default_app_custom_command(slot, &raw) {
-                    DefaultAppsEvent::SetBinding { slot, binding } => {
-                        set_binding_for_slot(&mut self.settings.draft, slot, binding);
+                match resolve_custom_default_app_binding(&raw) {
+                    Ok(binding) => {
+                        apply_default_app_binding(&mut self.settings.draft, slot, binding);
                         self.persist_native_settings();
                     }
-                    DefaultAppsEvent::Status(status) => {
+                    Err(status) => {
                         self.shell_status = status;
                     }
-                    _ => {}
                 }
             }
             PromptOutcome::InstallerSearch(query) => {
@@ -5467,7 +5377,7 @@ impl RobcoNativeApp {
                     let event = build_package_command(&self.terminal_installer, &pkg, action);
                     self.apply_installer_event(event);
                 } else {
-                    self.shell_status = "Cancelled.".to_string();
+                    self.apply_status_update(cancelled_shell_status());
                 }
             }
             PromptOutcome::ConnectionSearch { kind, group, query } => {
@@ -5491,7 +5401,7 @@ impl RobcoNativeApp {
                     && network_requires_password(&detail)
                     && password.trim().is_empty()
                 {
-                    self.shell_status = "Cancelled.".to_string();
+                    self.apply_status_update(cancelled_shell_status());
                     return;
                 }
                 let target = DiscoveredConnection { name, detail };
@@ -5530,13 +5440,11 @@ impl RobcoNativeApp {
         target: DiscoveredConnection,
         password: Option<String>,
     ) {
-        match connect_connection(
-            kind,
-            &target.name,
-            Some(target.detail.as_str()),
-            password.as_deref(),
-        ) {
-            Ok(msg) => self.shell_status = msg,
+        match connect_connection_and_refresh_settings(kind, &target, password.as_deref()) {
+            Ok((settings, status)) => {
+                self.settings.draft = settings;
+                self.shell_status = status;
+            }
             Err(err) => self.shell_status = err.to_string(),
         }
     }
@@ -5624,257 +5532,200 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_top_bar_app_menu(&mut self, ui: &mut egui::Ui, app_menu_name: &str) {
+    fn draw_top_bar_app_menu(&mut self, ui: &mut egui::Ui, ctx: &Context, app_menu_name: &str) {
         ui.menu_button(
             RichText::new(app_menu_name).strong().color(Color32::BLACK),
             |ui| {
                 Self::apply_top_dropdown_menu_style(ui);
-                if let Some(window) = self.desktop_active_window {
-                    if ui.button("Close Focused").clicked() {
-                        self.close_desktop_window(window);
-                        ui.close_menu();
-                    }
-                } else {
-                    ui.label("No active app");
-                }
-                if ui.button("Minimize").clicked() {
-                    if let Some(window) = self.desktop_active_window {
-                        self.set_desktop_window_minimized(window, true);
-                    }
-                    ui.close_menu();
-                }
+                let items = build_app_control_menu(self.desktop_active_window.is_some());
+                self.draw_desktop_menu_items(ui, ctx, &items);
             },
         );
     }
 
-    fn draw_top_bar_file_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("File", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
-            let file_manager_active =
-                self.desktop_active_window == Some(DesktopWindow::FileManager);
-            if editor_active {
-                if ui.button("Save         Ctrl+S").clicked() {
-                    self.run_editor_command(EditorCommand::Save);
-                    ui.close_menu();
-                }
-                if ui.button("Save As…").clicked() {
-                    self.run_editor_command(EditorCommand::SaveAs);
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("New Document").clicked() {
-                    self.run_editor_command(EditorCommand::NewDocument);
-                    ui.close_menu();
-                }
-                if ui.button("Open File Manager").clicked() {
-                    self.open_desktop_window(DesktopWindow::FileManager);
-                    ui.close_menu();
-                }
-                if !self.settings.draft.editor_recent_files.is_empty() {
-                    ui.menu_button("Open Recent…", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        ui.set_min_width(220.0);
-                        ui.set_max_width(360.0);
-                        let recents = self.settings.draft.editor_recent_files.clone();
-                        for path_str in &recents {
-                            let label = std::path::Path::new(path_str)
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or(path_str.as_str());
-                            if ui.button(label).clicked() {
-                                let path = std::path::PathBuf::from(path_str);
-                                self.open_path_in_editor(path);
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                }
-                Self::retro_separator(ui);
+    fn active_editor_text_edit_id(&self) -> Id {
+        let generation = self.desktop_window_generation(DesktopWindow::Editor);
+        Id::new(("editor_text_edit", generation))
+    }
+
+    fn apply_desktop_menu_action(&mut self, ctx: &Context, action: &DesktopMenuAction) {
+        match action {
+            DesktopMenuAction::EditorCommand(command) => self.run_editor_command(*command),
+            DesktopMenuAction::EditorTextCommand(command) => {
+                self.run_editor_text_command(ctx, self.active_editor_text_edit_id(), *command);
             }
-            if file_manager_active {
-                self.draw_file_manager_file_menu_section(ui);
+            DesktopMenuAction::OpenRecentEditorFile(path) => {
+                self.open_path_in_editor(path.clone());
             }
-            if ui.button("My Computer").clicked() {
+            DesktopMenuAction::FileManagerCommand(command) => {
+                self.run_file_manager_command(*command);
+            }
+            DesktopMenuAction::OpenFileManagerPrompt(request) => {
+                self.open_file_manager_prompt(request.clone());
+            }
+            DesktopMenuAction::FileManagerLaunchOpenWithCommand {
+                path,
+                ext_key,
+                command,
+            } => match self.launch_open_with_command(path, command) {
+                Ok(message) => {
+                    self.apply_file_manager_settings_update(
+                        FileManagerSettingsUpdate::RecordOpenWithCommand {
+                            ext_key: ext_key.clone(),
+                            command: command.clone(),
+                        },
+                    );
+                    self.shell_status = message;
+                }
+                Err(err) => {
+                    self.shell_status = format!("Open failed: {err}");
+                }
+            },
+            DesktopMenuAction::FileManagerSetOpenWithDefault { ext_key, command } => {
+                self.apply_file_manager_settings_update(
+                    FileManagerSettingsUpdate::SetOpenWithDefaultCommand {
+                        ext_key: ext_key.clone(),
+                        command: command.clone(),
+                    },
+                );
+                self.shell_status = if let Some(command) = command {
+                    file_manager_app::open_with_set_default_status(command, ext_key)
+                } else {
+                    file_manager_app::open_with_cleared_default_status(ext_key)
+                };
+            }
+            DesktopMenuAction::FileManagerRemoveOpenWithCommand { ext_key, command } => {
+                self.apply_file_manager_settings_update(
+                    FileManagerSettingsUpdate::RemoveOpenWithCommand {
+                        ext_key: ext_key.clone(),
+                        command: command.clone(),
+                    },
+                );
+                self.shell_status = file_manager_app::open_with_removed_saved_status(ext_key);
+            }
+            DesktopMenuAction::OpenFileManager => {
                 self.open_desktop_window(DesktopWindow::FileManager);
-                ui.close_menu();
             }
-            if ui.button("Applications").clicked() {
+            DesktopMenuAction::OpenApplications => {
                 self.open_desktop_window(DesktopWindow::Applications);
-                ui.close_menu();
             }
-            if ui.button("Settings").clicked() {
+            DesktopMenuAction::OpenSettings => {
                 self.open_desktop_window(DesktopWindow::Settings);
-                ui.close_menu();
             }
-            Self::retro_separator(ui);
-            if ui.button("Exit").clicked() {
-                if let Some(w) = self.desktop_active_window {
-                    self.close_desktop_window(w);
-                }
-                ui.close_menu();
-            }
-        });
-    }
-
-    fn draw_top_bar_edit_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
-        ui.menu_button("Edit", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            if self.desktop_active_window == Some(DesktopWindow::Editor) {
-                let gen = self.desktop_window_generation(DesktopWindow::Editor);
-                let text_edit_id = Id::new(("editor_text_edit", gen));
-                if ui.button("Undo         Ctrl+Z").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Undo);
-                    ui.close_menu();
-                }
-                if ui.button("Redo         Ctrl+Y").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Redo);
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Cut          Ctrl+X").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Cut);
-                    ui.close_menu();
-                }
-                if ui.button("Copy         Ctrl+C").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Copy);
-                    ui.close_menu();
-                }
-                if ui.button("Paste        Ctrl+V").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::Paste);
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Select All   Ctrl+A").clicked() {
-                    self.run_editor_text_command(ctx, text_edit_id, EditorTextCommand::SelectAll);
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Find          Ctrl+F").clicked() {
-                    self.run_editor_command(EditorCommand::OpenFind);
-                    ui.close_menu();
-                }
-                if ui.button("Find & Replace Ctrl+H").clicked() {
-                    self.run_editor_command(EditorCommand::OpenFindReplace);
-                    ui.close_menu();
-                }
-            } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
-                self.draw_file_manager_edit_menu_section(ui);
-            } else {
-                let _ = Self::retro_disabled_button(ui, "No edit actions");
-            }
-        });
-    }
-
-    fn draw_top_bar_format_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Format", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            ui.set_min_width(160.0);
-            ui.set_max_width(220.0);
-            let ww_label = if self.editor.word_wrap {
-                "[x] Word Wrap"
-            } else {
-                "[ ] Word Wrap"
-            };
-            if ui.button(ww_label).clicked() {
-                self.run_editor_command(EditorCommand::ToggleWordWrap);
-                ui.close_menu();
-            }
-            Self::retro_separator(ui);
-            if ui.button("Font Larger  Ctrl++").clicked() {
-                self.run_editor_command(EditorCommand::IncreaseFontSize);
-                ui.close_menu();
-            }
-            if ui.button("Font Smaller Ctrl+-").clicked() {
-                self.run_editor_command(EditorCommand::DecreaseFontSize);
-                ui.close_menu();
-            }
-            if ui.button("Reset Font").clicked() {
-                self.run_editor_command(EditorCommand::ResetFontSize);
-                ui.close_menu();
-            }
-            Self::retro_separator(ui);
-            let editor_text_align = self.editor.ui.text_align;
-            ui.menu_button("Align Text ▶", |ui| {
-                Self::apply_top_dropdown_menu_style(ui);
-                ui.set_min_width(120.0);
-                ui.set_max_width(160.0);
-                let a = editor_text_align;
-                let marker_left = if a == EditorTextAlign::Left {
-                    "[x] "
-                } else {
-                    "[ ] "
-                };
-                let marker_center = if a == EditorTextAlign::Center {
-                    "[x] "
-                } else {
-                    "[ ] "
-                };
-                let marker_right = if a == EditorTextAlign::Right {
-                    "[x] "
-                } else {
-                    "[ ] "
-                };
-                if ui.button(format!("{marker_left}Left")).clicked() {
-                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Left));
-                    ui.close_menu();
-                }
-                if ui.button(format!("{marker_center}Center")).clicked() {
-                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Center));
-                    ui.close_menu();
-                }
-                if ui.button(format!("{marker_right}Right")).clicked() {
-                    self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Right));
-                    ui.close_menu();
-                }
-            });
-        });
-    }
-
-    fn draw_top_bar_view_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("View", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            let editor_active = self.desktop_active_window == Some(DesktopWindow::Editor);
-            if editor_active {
-                let ln_label = if self.editor.ui.show_line_numbers {
-                    "[x] Line Numbers"
-                } else {
-                    "[ ] Line Numbers"
-                };
-                if ui.button(ln_label).clicked() {
-                    self.run_editor_command(EditorCommand::ToggleLineNumbers);
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-            }
-            let file_manager_active =
-                self.desktop_active_window == Some(DesktopWindow::FileManager);
-            if file_manager_active {
-                self.draw_file_manager_view_menu_section(ui);
-            }
-            if ui.button("My Computer").clicked() {
-                self.open_desktop_window(DesktopWindow::FileManager);
-                ui.close_menu();
-            }
-            if ui.button("Toggle Start Menu").clicked() {
+            DesktopMenuAction::ToggleStartMenu => {
                 if self.start_open {
                     self.close_start_menu();
                 } else {
                     self.open_start_menu();
                 }
-                ui.close_menu();
             }
-            if ui.button("Settings").clicked() {
-                self.open_desktop_window(DesktopWindow::Settings);
-                ui.close_menu();
+            DesktopMenuAction::CloseActiveDesktopWindow => {
+                if let Some(window) = self.desktop_active_window {
+                    self.close_desktop_window(window);
+                }
+            }
+            DesktopMenuAction::MinimizeActiveDesktopWindow => {
+                if let Some(window) = self.desktop_active_window {
+                    self.set_desktop_window_minimized(window, true);
+                }
+            }
+            DesktopMenuAction::ActivateDesktopWindow(window) => {
+                if *window == DesktopWindow::Editor
+                    && !self.desktop_window_is_open(DesktopWindow::Editor)
+                    && self.editor.path.is_none()
+                {
+                    self.new_document();
+                } else if !self.desktop_window_is_open(*window) {
+                    self.open_desktop_window(*window);
+                } else {
+                    self.desktop_active_window = Some(*window);
+                    self.close_start_menu();
+                }
+            }
+            DesktopMenuAction::ActivateTaskbarWindow(window) => {
+                if !self.desktop_window_is_open(*window) {
+                    self.open_desktop_window(*window);
+                } else if self.desktop_window_is_minimized(*window) {
+                    self.set_desktop_window_minimized(*window, false);
+                    self.close_start_menu();
+                } else {
+                    self.desktop_active_window = Some(*window);
+                    self.close_start_menu();
+                }
+            }
+            DesktopMenuAction::OpenManual { path, status_label } => {
+                self.open_manual_file(path, status_label);
+            }
+        }
+    }
+
+    fn draw_desktop_menu_items(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &Context,
+        items: &[DesktopMenuItem],
+    ) {
+        for item in items {
+            match item {
+                DesktopMenuItem::Action { label, action } => {
+                    if ui.button(label).clicked() {
+                        self.apply_desktop_menu_action(ctx, action);
+                        ui.close_menu();
+                    }
+                }
+                DesktopMenuItem::Disabled { label } => {
+                    let _ = Self::retro_disabled_button(ui, label);
+                }
+                DesktopMenuItem::Label { label } => {
+                    ui.label(RichText::new(label).small());
+                }
+                DesktopMenuItem::Separator => Self::retro_separator(ui),
+                DesktopMenuItem::Submenu { label, items } => {
+                    ui.menu_button(label, |ui| {
+                        Self::apply_top_dropdown_menu_style(ui);
+                        self.draw_desktop_menu_items(ui, ctx, items);
+                    });
+                }
+            }
+        }
+    }
+
+    fn draw_top_bar_standard_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &Context,
+        section: DesktopMenuSection,
+    ) {
+        ui.menu_button(section.label(), |ui| {
+            Self::apply_top_dropdown_menu_style(ui);
+            if section == DesktopMenuSection::Format {
+                ui.set_min_width(160.0);
+                ui.set_max_width(220.0);
+            }
+            let active_app = self.active_desktop_app();
+            let settings = get_settings();
+            let menu_context = DesktopMenuBuildContext {
+                editor: &self.editor,
+                editor_recent_files: &self.settings.draft.editor_recent_files,
+                file_manager: &self.file_manager,
+                file_manager_runtime: &self.file_manager_runtime,
+                file_manager_settings: &settings.desktop_file_manager,
+            };
+            let items = build_active_desktop_menu_section(active_app, section, &menu_context);
+            if !items.is_empty() {
+                self.draw_desktop_menu_items(ui, ctx, &items);
+            }
+            let shared_items = build_shared_desktop_menu_section(section);
+            if !shared_items.is_empty() {
+                self.draw_desktop_menu_items(ui, ctx, &shared_items);
             }
         });
     }
 
-    fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui) {
+    fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
-            for window in [
+            let entries: Vec<DesktopWindowMenuEntry> = [
                 DesktopWindow::FileManager,
                 DesktopWindow::Editor,
                 DesktopWindow::Settings,
@@ -5882,46 +5733,27 @@ impl RobcoNativeApp {
                 DesktopWindow::DonkeyKong,
                 DesktopWindow::NukeCodes,
                 DesktopWindow::PtyApp,
-            ] {
-                let open = self.desktop_window_is_open(window);
-                let active = self.desktop_active_window == Some(window);
-                let marker = if active {
-                    "active"
-                } else if open {
-                    "open"
-                } else {
-                    "closed"
-                };
-                let label = format!("{marker}: {}", self.desktop_window_title(window));
-                if ui.button(label).clicked() {
-                    if window == DesktopWindow::Editor
-                        && !self.desktop_window_is_open(DesktopWindow::Editor)
-                        && self.editor.path.is_none()
-                    {
-                        self.new_document();
-                    } else if !open {
-                        self.open_desktop_window(window);
-                    } else {
-                        self.desktop_active_window = Some(window);
-                        self.close_start_menu();
-                    }
-                    ui.close_menu();
-                }
-            }
+            ]
+            .into_iter()
+            .map(|window| DesktopWindowMenuEntry {
+                window,
+                open: self.desktop_window_is_open(window),
+                active: self.desktop_active_window == Some(window),
+            })
+            .collect();
+            let items = build_window_menu_section(
+                &entries,
+                self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
+            );
+            self.draw_desktop_menu_items(ui, ctx, &items);
         });
     }
 
-    fn draw_top_bar_help_menu(&mut self, ui: &mut egui::Ui) {
+    fn draw_top_bar_help_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         ui.menu_button("Help", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
-            if ui.button("App Manual").clicked() {
-                self.open_manual_file("README.md", "App Manual");
-                ui.close_menu();
-            }
-            if ui.button("User Manual").clicked() {
-                self.open_manual_file("USER_MANUAL.md", "User Manual");
-                ui.close_menu();
-            }
+            let items = build_shared_desktop_menu_section(DesktopMenuSection::Help);
+            self.draw_desktop_menu_items(ui, ctx, &items);
         });
     }
 
@@ -5932,18 +5764,21 @@ impl RobcoNativeApp {
         section: DesktopMenuSection,
     ) {
         match section {
-            DesktopMenuSection::File => self.draw_top_bar_file_menu(ui),
-            DesktopMenuSection::Edit => self.draw_top_bar_edit_menu(ui, ctx),
-            DesktopMenuSection::Format => self.draw_top_bar_format_menu(ui),
-            DesktopMenuSection::View => self.draw_top_bar_view_menu(ui),
-            DesktopMenuSection::Window => self.draw_top_bar_window_menu(ui),
-            DesktopMenuSection::Help => self.draw_top_bar_help_menu(ui),
+            DesktopMenuSection::File
+            | DesktopMenuSection::Edit
+            | DesktopMenuSection::Format
+            | DesktopMenuSection::View => self.draw_top_bar_standard_menu(ui, ctx, section),
+            DesktopMenuSection::Window => self.draw_top_bar_window_menu(ui, ctx),
+            DesktopMenuSection::Help => self.draw_top_bar_help_menu(ui, ctx),
         }
     }
 
     fn draw_top_bar(&mut self, ctx: &Context) {
         Self::apply_global_retro_menu_chrome(ctx);
-        let app_menu_name = self.desktop_app_menu_name();
+        let app_menu_name = desktop_app_menu_name(
+            self.desktop_active_window,
+            self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
+        );
         let active_app = self.active_desktop_app();
         TopBottomPanel::top("native_top_bar")
             .exact_height(30.0)
@@ -5955,7 +5790,7 @@ impl RobcoNativeApp {
                 ui.horizontal(|ui| {
                     Self::apply_top_bar_menu_button_style(ui);
                     ui.spacing_mut().item_spacing.x = 14.0;
-                    self.draw_top_bar_app_menu(ui, &app_menu_name);
+                    self.draw_top_bar_app_menu(ui, ctx, &app_menu_name);
                     ui.add_space(10.0);
                     for section in active_app.menu_sections() {
                         self.draw_top_bar_menu_section(ctx, ui, *section);
@@ -6289,16 +6124,6 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_taskbar(&mut self, ctx: &Context) {
-        const WINDOW_ORDER: [DesktopWindow; 8] = [
-            DesktopWindow::FileManager,
-            DesktopWindow::Editor,
-            DesktopWindow::Settings,
-            DesktopWindow::Applications,
-            DesktopWindow::DonkeyKong,
-            DesktopWindow::NukeCodes,
-            DesktopWindow::Installer,
-            DesktopWindow::PtyApp,
-        ];
         self.sync_desktop_active_window();
         TopBottomPanel::bottom("native_desktop_taskbar")
             .exact_height(32.0)
@@ -6330,28 +6155,29 @@ impl RobcoNativeApp {
                     }
                     ui.label(RichText::new("|").monospace().color(Color32::BLACK));
                     ui.add_space(8.0);
-                    for window in WINDOW_ORDER {
-                        if !self.desktop_window_is_open(window) {
-                            continue;
-                        }
-                        let label = self.desktop_taskbar_label(window);
-                        // Taskbar chrome renders the "active" look in the inverse branch.
-                        let active = self.desktop_active_window != Some(window);
-                        if Self::desktop_bar_button(ui, label, active, false).clicked() {
-                            let opening_editor = window == DesktopWindow::Editor
-                                && !self.desktop_window_is_open(DesktopWindow::Editor)
-                                && self.editor.path.is_none();
-                            if opening_editor {
-                                self.new_document();
-                            } else {
-                                self.handle_desktop_taskbar_window_click(window);
-                                // Bring the window to the top of the egui layer stack.
-                                let layer_id = egui::LayerId::new(
-                                    egui::Order::Middle,
-                                    self.desktop_window_egui_id(window),
-                                );
-                                ctx.move_to_top(layer_id);
-                            }
+                    let open_windows: Vec<DesktopWindow> = taskbar_window_order()
+                        .iter()
+                        .copied()
+                        .filter(|window| self.desktop_window_is_open(*window))
+                        .collect();
+                    let entries = build_taskbar_entries(
+                        &open_windows,
+                        self.desktop_active_window,
+                        self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
+                    );
+                    for entry in entries {
+                        if Self::desktop_bar_button(ui, entry.label, entry.inactive, false).clicked()
+                        {
+                            self.apply_desktop_menu_action(
+                                ctx,
+                                &DesktopMenuAction::ActivateTaskbarWindow(entry.window),
+                            );
+                            // Bring the window to the top of the egui layer stack.
+                            let layer_id = egui::LayerId::new(
+                                egui::Order::Middle,
+                                self.desktop_window_egui_id(entry.window),
+                            );
+                            ctx.move_to_top(layer_id);
                         }
                     }
                 });
@@ -6417,7 +6243,7 @@ impl RobcoNativeApp {
                 self.open_nuke_codes_screen(TerminalScreen::Applications);
             } else if label == "Back" {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             } else {
                 self.launch_configured_app_in_pty(label, TerminalScreen::Applications);
             }
@@ -6425,22 +6251,19 @@ impl RobcoNativeApp {
     }
 
     fn launch_configured_app_in_pty(&mut self, name: &str, return_screen: TerminalScreen) {
-        let source = match return_screen {
-            TerminalScreen::Network => load_networks(),
-            TerminalScreen::Games => load_games(),
-            _ => load_apps(),
+        let catalog = match return_screen {
+            TerminalScreen::Network => ProgramCatalog::Network,
+            TerminalScreen::Games => ProgramCatalog::Games,
+            _ => ProgramCatalog::Applications,
         };
-        match resolve_program_command(name, &source) {
-            Ok(cmd) => self.open_embedded_pty(name, &cmd, return_screen),
-            Err(err) => self.shell_status = err,
-        }
+        self.open_embedded_catalog_launch(name, catalog, return_screen);
     }
 
     fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
         self.terminal_nuke_codes = fetch_nuke_codes();
         self.terminal_nuke_codes_return = return_screen;
         self.navigate_to_screen(TerminalScreen::NukeCodes);
-        self.shell_status.clear();
+        self.apply_status_update(clear_shell_status());
     }
 
     fn draw_terminal_documents(&mut self, ctx: &Context) {
@@ -6477,11 +6300,11 @@ impl RobcoNativeApp {
                 "Logs" => {
                     self.navigate_to_screen(TerminalScreen::Logs);
                     self.terminal_logs_idx = 0;
-                    self.shell_status.clear();
+                    self.apply_status_update(clear_shell_status());
                 }
                 "Back" => {
                     self.navigate_to_screen(TerminalScreen::MainMenu);
-                    self.shell_status.clear();
+                    self.apply_status_update(clear_shell_status());
                 }
                 "---" => {}
                 category => {
@@ -6540,7 +6363,7 @@ impl RobcoNativeApp {
                 "View Logs" => self.open_log_view(),
                 "Back" => {
                     self.navigate_to_screen(TerminalScreen::Documents);
-                    self.shell_status.clear();
+                    self.apply_status_update(clear_shell_status());
                 }
                 _ => {}
             }
@@ -6605,34 +6428,34 @@ impl RobcoNativeApp {
             TerminalSettingsEvent::Persist => self.persist_native_settings(),
             TerminalSettingsEvent::Back => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::OpenConnections => {
                 self.navigate_to_screen(TerminalScreen::Connections);
                 self.terminal_connections.reset();
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::OpenEditMenus => {
                 self.navigate_to_screen(TerminalScreen::EditMenus);
                 self.terminal_edit_menus.reset();
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::OpenDefaultApps => {
                 self.navigate_to_screen(TerminalScreen::DefaultApps);
                 self.terminal_default_apps_idx = 0;
                 self.terminal_default_app_choice_idx = 0;
                 self.terminal_default_app_slot = None;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::OpenAbout => {
                 self.navigate_to_screen(TerminalScreen::About);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::EnterUserManagement => {
                 self.navigate_to_screen(TerminalScreen::UserManagement);
                 self.terminal_user_management_mode = UserManagementMode::Root;
                 self.terminal_user_management_idx = 0;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
         }
     }
@@ -6671,7 +6494,7 @@ impl RobcoNativeApp {
             EditMenusEvent::BackToSettings => {
                 self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             EditMenusEvent::ToggleBuiltinNukeCodes => {
                 self.settings.draft.builtin_menu_visibility.nuke_codes =
@@ -6726,13 +6549,13 @@ impl RobcoNativeApp {
             ConnectionsEvent::BackToSettings => {
                 self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             ConnectionsEvent::OpenNetworkGroups => {
                 crate::sound::play_navigate();
                 self.terminal_connections.view =
                     super::connections_screen::ConnectionsView::NetworkGroups;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             ConnectionsEvent::OpenBluetooth => {
                 crate::sound::play_navigate();
@@ -6741,7 +6564,7 @@ impl RobcoNativeApp {
                     group: None,
                 };
                 self.terminal_connections.kind_idx = 0;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             ConnectionsEvent::OpenPromptSearch { kind, group } => {
                 self.open_input_prompt(
@@ -6836,7 +6659,7 @@ impl RobcoNativeApp {
             DefaultAppsEvent::Back => {
                 self.navigate_to_screen(TerminalScreen::Settings);
                 self.terminal_settings_idx = 0;
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             DefaultAppsEvent::OpenSlot(slot) => {
                 crate::sound::play_navigate();
@@ -6848,7 +6671,7 @@ impl RobcoNativeApp {
                 self.terminal_default_app_slot = None;
             }
             DefaultAppsEvent::SetBinding { slot, binding } => {
-                set_binding_for_slot(&mut self.settings.draft, slot, binding);
+                apply_default_app_binding(&mut self.settings.draft, slot, binding);
                 self.persist_native_settings();
                 self.terminal_default_app_slot = None;
             }
@@ -6861,9 +6684,6 @@ impl RobcoNativeApp {
                     ),
                     TerminalPromptAction::DefaultAppCustom { slot },
                 );
-            }
-            DefaultAppsEvent::Status(status) => {
-                self.shell_status = status;
             }
         }
     }
@@ -6885,14 +6705,13 @@ impl RobcoNativeApp {
         ) {
             self.navigate_to_screen(TerminalScreen::Settings);
             self.terminal_settings_idx = 0;
-            self.shell_status.clear();
+            self.apply_status_update(clear_shell_status());
         }
     }
 
     fn draw_terminal_network(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let networks = load_networks();
-        let entries: Vec<String> = networks.keys().cloned().collect();
+        let entries = catalog_names(ProgramCatalog::Network);
         let event = draw_programs_menu(
             ctx,
             "Network",
@@ -6915,18 +6734,20 @@ impl RobcoNativeApp {
             ProgramMenuEvent::None => {}
             ProgramMenuEvent::Back => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
-            ProgramMenuEvent::Launch(name) => match resolve_program_command(&name, &networks) {
-                Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Network),
-                Err(err) => self.shell_status = err,
-            },
+            ProgramMenuEvent::Launch(name) => {
+                self.open_embedded_catalog_launch(
+                    &name,
+                    ProgramCatalog::Network,
+                    TerminalScreen::Network,
+                );
+            }
         }
     }
 
     fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let games = load_games();
         let entries = self.game_names();
         let event = draw_programs_menu(
             ctx,
@@ -6950,16 +6771,17 @@ impl RobcoNativeApp {
             ProgramMenuEvent::None => {}
             ProgramMenuEvent::Back => {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             ProgramMenuEvent::Launch(name) => {
                 if name == BUILTIN_DONKEY_KONG_GAME {
                     self.open_terminal_donkey_kong();
                 } else {
-                    match resolve_program_command(&name, &games) {
-                        Ok(cmd) => self.open_embedded_pty(&name, &cmd, TerminalScreen::Games),
-                        Err(err) => self.shell_status = err,
-                    }
+                    self.open_embedded_catalog_launch(
+                        &name,
+                        ProgramCatalog::Games,
+                        TerminalScreen::Games,
+                    );
                 }
             }
         }
@@ -7018,7 +6840,7 @@ impl RobcoNativeApp {
             }
             NukeCodesEvent::Back => {
                 self.navigate_to_screen(self.terminal_nuke_codes_return);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
         }
     }
@@ -7075,7 +6897,7 @@ impl RobcoNativeApp {
             InstallerEvent::BackToMainMenu => {
                 self.terminal_installer.reset();
                 self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.shell_status.clear();
+                self.apply_status_update(clear_shell_status());
             }
             InstallerEvent::OpenSearchPrompt => {
                 self.open_input_prompt(
@@ -7211,7 +7033,7 @@ impl RobcoNativeApp {
                         s.hacking_difficulty = cycle_hacking_difficulty(s.hacking_difficulty, true);
                     });
                     persist_settings();
-                    self.shell_status = "Settings saved.".to_string();
+                    self.apply_status_update(saved_shell_status());
                 }
                 UserManagementAction::SetMode { mode, selected_idx } => {
                     self.set_user_management_mode(mode, selected_idx);
@@ -9092,12 +8914,12 @@ impl RobcoNativeApp {
 
             if let Some(panel) = next_panel {
                 self.settings.panel = panel;
-                self.settings.status.clear();
+                self.apply_status_update(clear_settings_status());
             }
             ui.separator();
             if changed {
-                save_settings(self.settings.draft.clone());
-                self.settings.status = "Settings saved.".to_string();
+                self.settings.draft = persist_settings_draft(&self.settings.draft);
+                self.apply_status_update(saved_settings_status());
             }
             if !self.settings.status.is_empty() {
                 ui.small(&self.settings.status);
@@ -9142,12 +8964,7 @@ impl RobcoNativeApp {
         let mut changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             for slot in [DefaultAppSlot::TextCode, DefaultAppSlot::Ebook] {
-                let current_label = match slot {
-                    DefaultAppSlot::TextCode => {
-                        binding_label(&self.settings.draft.default_apps.text_code)
-                    }
-                    DefaultAppSlot::Ebook => binding_label(&self.settings.draft.default_apps.ebook),
-                };
+                let current_label = binding_label_for_slot(&self.settings.draft, slot);
                 let custom_buffer = match slot {
                     DefaultAppSlot::TextCode => &mut self.settings.default_app_custom_text_code,
                     DefaultAppSlot::Ebook => &mut self.settings.default_app_custom_ebook,
@@ -9190,20 +9007,13 @@ impl RobcoNativeApp {
                                             binding,
                                         ) = choice.action
                                         {
-                                            let selected = match slot {
-                                                DefaultAppSlot::TextCode => {
-                                                    self.settings.draft.default_apps.text_code
-                                                        == binding
-                                                }
-                                                DefaultAppSlot::Ebook => {
-                                                    self.settings.draft.default_apps.ebook
-                                                        == binding
-                                                }
-                                            };
+                                            let selected =
+                                                binding_for_slot(&self.settings.draft, slot)
+                                                    == binding;
                                             if Self::retro_choice_button(ui, choice.label, selected)
                                                 .clicked()
                                             {
-                                                set_binding_for_slot(
+                                                apply_default_app_binding(
                                                     &mut self.settings.draft,
                                                     slot,
                                                     binding,
@@ -9225,16 +9035,16 @@ impl RobcoNativeApp {
                             if Self::retro_full_width_button(right, "Apply Custom Command")
                                 .clicked()
                             {
-                                match parse_custom_command_line(custom_buffer.trim()) {
-                                    Some(argv) if !argv.is_empty() => {
-                                        set_binding_for_slot(
+                                match resolve_custom_default_app_binding(custom_buffer.trim()) {
+                                    Ok(binding) => {
+                                        apply_default_app_binding(
                                             &mut self.settings.draft,
                                             slot,
-                                            DefaultAppBinding::CustomArgv { argv },
+                                            binding,
                                         );
                                         changed = true;
                                     }
-                                    _ => {
+                                    Err(_) => {
                                         self.settings.status =
                                             "Error: invalid command line".to_string();
                                     }
@@ -9271,8 +9081,9 @@ impl RobcoNativeApp {
         };
 
         if Self::retro_full_width_button(ui, scan_label).clicked() {
-            *scanned_items = refresh_discovered_connections(kind);
-            self.settings.status = format!("Found {} items.", scanned_items.len());
+            let (discovered, status) = scan_discovered_connections(kind);
+            *scanned_items = discovered;
+            self.settings.status = status;
         }
         if matches!(kind, ConnectionKind::Network) {
             ui.add_space(6.0);
@@ -9300,11 +9111,16 @@ impl RobcoNativeApp {
                             for entry in saved {
                                 ui.horizontal(|ui| {
                                     ui.label(saved_row_label(&entry));
-                                    if ui.button("Forget").clicked()
-                                        && forget_saved_connection(kind, &entry.name)
-                                    {
-                                        self.settings.draft = current_settings();
-                                        self.settings.status = format!("Forgot '{}'.", entry.name);
+                                    if ui.button("Forget").clicked() {
+                                        if let Some((settings, status)) =
+                                            forget_saved_connection_and_refresh_settings(
+                                                kind,
+                                                &entry.name,
+                                            )
+                                        {
+                                            self.settings.draft = settings;
+                                            self.settings.status = status;
+                                        }
                                     }
                                 });
                             }
@@ -9331,15 +9147,14 @@ impl RobcoNativeApp {
                                         } else {
                                             None
                                         };
-                                        match connect_connection(
+                                        match connect_connection_and_refresh_settings(
                                             kind,
-                                            &entry.name,
-                                            Some(&entry.detail),
+                                            &entry,
                                             password.as_deref(),
                                         ) {
-                                            Ok(status) => {
+                                            Ok((settings, status)) => {
                                                 self.settings.status = status;
-                                                self.settings.draft = current_settings();
+                                                self.settings.draft = settings;
                                             }
                                             Err(err) => {
                                                 self.settings.status =
@@ -9557,7 +9372,9 @@ impl RobcoNativeApp {
                                 ui.label(&name);
                                 if ui.button("Delete").clicked() {
                                     self.delete_program_entry(self.settings.edit_target, &name);
-                                    self.settings.status = self.shell_status.clone();
+                                    self.apply_status_update(mirror_shell_to_settings(
+                                        &self.shell_status,
+                                    ));
                                 }
                             });
                         }
@@ -9589,13 +9406,13 @@ impl RobcoNativeApp {
                     let name = self.settings.edit_name_input.trim().to_string();
                     let value = self.settings.edit_value_input.trim().to_string();
                     if name.is_empty() || value.is_empty() {
-                        self.settings.status = "Error: Invalid input.".to_string();
+                        self.apply_status_update(invalid_input_settings_status());
                     } else {
                         match self.settings.edit_target {
                             EditMenuTarget::Documents => self.add_document_category(name, value),
                             target => self.add_program_entry(target, name, value),
                         }
-                        self.settings.status = self.shell_status.clone();
+                        self.apply_status_update(mirror_shell_to_settings(&self.shell_status));
                         if !self
                             .settings
                             .status
@@ -9731,7 +9548,9 @@ impl RobcoNativeApp {
                                     },
                                     format!("User '{username}' created."),
                                 );
-                                self.settings.status = self.shell_status.clone();
+                                self.apply_status_update(mirror_shell_to_settings(
+                                    &self.shell_status,
+                                ));
                                 self.settings.user_create_username.clear();
                                 self.settings.user_create_password.clear();
                                 self.settings.user_create_password_confirm.clear();
@@ -9749,7 +9568,9 @@ impl RobcoNativeApp {
                                 },
                                 format!("User '{username}' created."),
                             );
-                            self.settings.status = self.shell_status.clone();
+                            self.apply_status_update(mirror_shell_to_settings(
+                                &self.shell_status,
+                            ));
                             self.settings.user_create_username.clear();
                             self.settings.user_selected = username;
                             self.settings.user_selected_loaded_for.clear();
@@ -9918,7 +9739,9 @@ impl RobcoNativeApp {
                                     },
                                     format!("Auth method updated for '{username}'."),
                                 );
-                                self.settings.status = self.shell_status.clone();
+                                self.apply_status_update(mirror_shell_to_settings(
+                                    &self.shell_status,
+                                ));
                                 self.settings.user_edit_password.clear();
                                 self.settings.user_edit_password_confirm.clear();
                                 self.settings.user_selected_loaded_for.clear();
@@ -9934,7 +9757,9 @@ impl RobcoNativeApp {
                                 },
                                 format!("Auth method updated for '{username}'."),
                             );
-                            self.settings.status = self.shell_status.clone();
+                            self.apply_status_update(mirror_shell_to_settings(
+                                &self.shell_status,
+                            ));
                             self.settings.user_selected_loaded_for.clear();
                         }
                     }
@@ -11279,14 +11104,12 @@ impl RobcoNativeApp {
                 }
                 ui.separator();
                 ui.heading("Configured Apps");
-                for name in app_names() {
+                for name in catalog_names(ProgramCatalog::Applications) {
                     if Self::retro_full_width_button(ui, &name).clicked() {
                         close_after_launch = true;
-                        let apps = load_apps();
-                        match resolve_program_command(&name, &apps) {
-                            Ok(cmd) => self.open_desktop_pty(&name, &cmd),
-                            Err(err) => self.shell_status = err,
-                        }
+                        self.execute_desktop_shell_action(DesktopShellAction::LaunchConfiguredApp(
+                            name,
+                        ));
                     }
                 }
                 if !self.applications.status.is_empty() {
@@ -11896,7 +11719,9 @@ impl eframe::App for RobcoNativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{FileManagerSortMode, FileManagerViewMode};
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
+    use crate::native::file_manager_app::FileManagerClipboardMode;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -12589,5 +12414,45 @@ mod tests {
         assert!(created.is_dir());
         assert_eq!(app.file_manager.selected, Some(created.clone()));
         assert_eq!(app.shell_status, "Created New Folder (1)");
+    }
+
+    #[test]
+    fn desktop_shell_action_reveals_file_in_file_manager() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("shell_action_reveal");
+        let file_path = temp.path.join("demo.txt");
+        std::fs::write(&file_path, "demo").expect("write temp file");
+
+        let mut app = RobcoNativeApp::default();
+        app.execute_desktop_shell_action(DesktopShellAction::RevealPathInFileManager(
+            file_path.clone(),
+        ));
+
+        assert!(app.file_manager.open);
+        assert_eq!(app.file_manager.cwd, temp.path);
+        assert_eq!(app.file_manager.selected, Some(file_path));
+    }
+
+    #[test]
+    fn spotlight_file_result_reveals_target_in_file_manager() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("spotlight_reveal");
+        let file_path = temp.path.join("demo.txt");
+        std::fs::write(&file_path, "demo").expect("write temp file");
+
+        let mut app = RobcoNativeApp::default();
+        app.spotlight_open = true;
+        app.spotlight_query = "demo".to_string();
+
+        app.spotlight_activate_result(&SpotlightResult {
+            name: "demo.txt".to_string(),
+            category: SpotlightCategory::File,
+            path: Some(file_path.clone()),
+        });
+
+        assert!(!app.spotlight_open);
+        assert!(app.file_manager.open);
+        assert_eq!(app.file_manager.cwd, temp.path);
+        assert_eq!(app.file_manager.selected, Some(file_path));
     }
 }

@@ -1,6 +1,4 @@
-use crate::config::{
-    get_settings, load_apps, persist_settings, set_current_user, update_settings, Settings,
-};
+use crate::config::set_current_user;
 use crate::core::auth::{hash_password, load_users, write_session, AuthMethod, UserRecord};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -32,21 +30,6 @@ pub fn authenticate(username: &str, password: &str) -> Result<UserRecord, &'stat
 pub fn bind_login_session(username: &str) {
     set_current_user(Some(username));
     write_session(username);
-}
-
-pub fn current_settings() -> Settings {
-    get_settings()
-}
-
-pub fn save_settings(settings: Settings) {
-    update_settings(|s| *s = settings);
-    persist_settings();
-}
-
-pub fn app_names() -> Vec<String> {
-    let mut names: Vec<String> = load_apps().keys().cloned().collect();
-    names.sort();
-    names
 }
 
 pub fn home_dir_fallback() -> PathBuf {

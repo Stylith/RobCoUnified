@@ -1,4 +1,6 @@
 use super::*;
+use crate::config::FileManagerViewMode;
+use crate::native::file_manager_desktop::FILE_MANAGER_APP_TITLE;
 
 impl RobcoNativeApp {
     fn attach_file_manager_context_menu(

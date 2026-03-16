@@ -42,6 +42,7 @@ enum RuntimeTool {
 #[derive(Debug, Clone)]
 enum InstallerView {
     Root,
+    PackageManagerSelect,
     RuntimeTools,
     RuntimeToolActions { tool: RuntimeTool },
     SearchResults,
@@ -55,6 +56,7 @@ enum InstallerView {
 pub struct TerminalInstallerState {
     view: InstallerView,
     pub root_idx: usize,
+    pub pm_select_idx: usize,
     pub search_idx: usize,
     pub search_page: usize,
     pub installed_idx: usize,
@@ -66,7 +68,8 @@ pub struct TerminalInstallerState {
     pub search_query: String,
     pub installed_packages: Vec<String>,
     pub installed_filter: String,
-    package_manager: Option<PackageManager>,
+    pub available_pms: Vec<PackageManager>,
+    pub selected_pm_idx: usize,
     package_descriptions: HashMap<String, Option<String>>,
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
@@ -74,9 +77,11 @@ pub struct TerminalInstallerState {
 
 impl Default for TerminalInstallerState {
     fn default() -> Self {
+        let available = PackageManager::detect_all();
         Self {
             view: InstallerView::Root,
             root_idx: 0,
+            pm_select_idx: 0,
             search_idx: 0,
             search_page: 0,
             installed_idx: 0,
@@ -88,7 +93,8 @@ impl Default for TerminalInstallerState {
             search_query: String::new(),
             installed_packages: Vec::new(),
             installed_filter: String::new(),
-            package_manager: PackageManager::detect(),
+            available_pms: available,
+            selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
@@ -118,7 +124,7 @@ pub enum InstallerEvent {
     Status(String),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PackageManager {
     Brew,
     Apt,
@@ -129,10 +135,6 @@ pub(crate) enum PackageManager {
 }
 
 impl PackageManager {
-    fn detect() -> Option<Self> {
-        Self::detect_all().into_iter().next()
-    }
-
     pub(crate) fn detect_all() -> Vec<Self> {
         let pms: &[(&str, PackageManager)] = &[
             ("brew", PackageManager::Brew),
@@ -180,12 +182,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-S".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -220,12 +219,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-R".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-R".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -260,12 +256,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-S".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -301,12 +294,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-S".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -634,6 +624,10 @@ impl TerminalInstallerState {
     pub fn back(&mut self) -> bool {
         match self.view {
             InstallerView::Root => true,
+            InstallerView::PackageManagerSelect => {
+                self.view = InstallerView::Root;
+                false
+            }
             InstallerView::SearchResults | InstallerView::Installed => {
                 self.view = InstallerView::Root;
                 false
@@ -667,7 +661,7 @@ impl TerminalInstallerState {
             .find(|r| r.pkg == pkg)
             .and_then(|r| r.description.clone())
             .or_else(|| {
-                self.package_manager
+                self.selected_pm()
                     .and_then(|manager| manager.package_description(pkg))
             });
         self.package_descriptions
@@ -705,6 +699,43 @@ impl TerminalInstallerState {
             _ => {}
         }
     }
+
+    fn selected_pm(&self) -> Option<PackageManager> {
+        self.available_pms.get(self.selected_pm_idx).copied()
+    }
+
+    fn pm_label(&self) -> &str {
+        self.selected_pm()
+            .map(|pm| pm.name())
+            .unwrap_or("Not Found")
+    }
+
+    fn reset_for_package_manager_change(&mut self) {
+        self.search_results.clear();
+        self.search_query.clear();
+        self.search_idx = 0;
+        self.search_page = 0;
+        self.installed_packages.clear();
+        self.installed_filter.clear();
+        self.installed_idx = 0;
+        self.installed_page = 0;
+        self.action_idx = 0;
+        self.add_menu_idx = 0;
+        self.package_descriptions.clear();
+    }
+
+    fn select_package_manager(&mut self, idx: usize) -> bool {
+        if idx >= self.available_pms.len() || idx == self.selected_pm_idx {
+            self.pm_select_idx = self
+                .selected_pm_idx
+                .min(self.available_pms.len().saturating_sub(1));
+            return false;
+        }
+        self.selected_pm_idx = idx;
+        self.pm_select_idx = idx;
+        self.reset_for_package_manager_change();
+        true
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -729,6 +760,21 @@ pub fn draw_installer_screen(
 
     match state.view.clone() {
         InstallerView::Root => draw_root(
+            ctx,
+            state,
+            shell_status,
+            cols,
+            rows,
+            header_start_row,
+            separator_top_row,
+            title_row,
+            separator_bottom_row,
+            subtitle_row,
+            menu_start_row,
+            status_row,
+            content_col,
+        ),
+        InstallerView::PackageManagerSelect => draw_package_manager_select(
             ctx,
             state,
             shell_status,
@@ -871,15 +917,15 @@ fn draw_root(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
-    let pm_label = state
-        .package_manager
-        .map(|p| p.name().to_string())
-        .unwrap_or_else(|| "Not Found".to_string());
+    let pm_label = state.pm_label().to_string();
     let mut items = vec![
         "Search".to_string(),
         "Installed Apps".to_string(),
         "Runtime Tools".to_string(),
     ];
+    if state.available_pms.len() > 1 {
+        items.push("Package Manager".to_string());
+    }
     items.push("---".to_string());
     items.push("Back".to_string());
     let activated = draw_terminal_menu_screen(
@@ -904,7 +950,7 @@ fn draw_root(
         Some(0) => InstallerEvent::OpenSearchPrompt,
         Some(1) => {
             state.installed_packages = state
-                .package_manager
+                .selected_pm()
                 .map(|p| p.list_installed())
                 .unwrap_or_default();
             state.installed_idx = 0;
@@ -922,7 +968,79 @@ fn draw_root(
             state.runtime_tools_idx = 0;
             InstallerEvent::None
         }
+        Some(3) if state.available_pms.len() > 1 => {
+            state.pm_select_idx = state.selected_pm_idx;
+            state.view = InstallerView::PackageManagerSelect;
+            InstallerEvent::None
+        }
         Some(_) => InstallerEvent::BackToMainMenu,
+        None => InstallerEvent::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_package_manager_select(
+    ctx: &eframe::egui::Context,
+    state: &mut TerminalInstallerState,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> InstallerEvent {
+    let mut items: Vec<String> = state
+        .available_pms
+        .iter()
+        .enumerate()
+        .map(|(idx, pm)| {
+            if idx == state.selected_pm_idx {
+                format!("[selected] {}", pm.name())
+            } else {
+                pm.name().to_string()
+            }
+        })
+        .collect();
+    items.push("---".to_string());
+    items.push("Back".to_string());
+    let subtitle = format!("Current: {}", state.pm_label());
+    let activated = draw_terminal_menu_screen(
+        ctx,
+        "Package Manager",
+        Some(&subtitle),
+        &items,
+        &mut state.pm_select_idx,
+        cols,
+        rows,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        content_col,
+        shell_status,
+    );
+    match activated {
+        Some(idx) if idx < state.available_pms.len() => {
+            let changed = state.select_package_manager(idx);
+            state.view = InstallerView::Root;
+            if changed {
+                InstallerEvent::Status(format!("Package manager set to {}.", state.pm_label()))
+            } else {
+                InstallerEvent::None
+            }
+        }
+        Some(_) => {
+            state.view = InstallerView::Root;
+            InstallerEvent::None
+        }
         None => InstallerEvent::None,
     }
 }
@@ -950,11 +1068,17 @@ fn draw_runtime_tools(
         Ignore,
     }
     let playsound_installed = state.runtime_tool_installed_cached(RuntimeTool::PlaySound);
-    let mut items = vec![runtime_tool_menu_label(RuntimeTool::PlaySound, playsound_installed)];
+    let mut items = vec![runtime_tool_menu_label(
+        RuntimeTool::PlaySound,
+        playsound_installed,
+    )];
     let mut runtime_rows = vec![RuntimeRow::Tool(RuntimeTool::PlaySound)];
     if cfg!(target_os = "macos") {
         let blueutil_installed = state.runtime_tool_installed_cached(RuntimeTool::Blueutil);
-        items.push(runtime_tool_menu_label(RuntimeTool::Blueutil, blueutil_installed));
+        items.push(runtime_tool_menu_label(
+            RuntimeTool::Blueutil,
+            blueutil_installed,
+        ));
         runtime_rows.push(RuntimeRow::Tool(RuntimeTool::Blueutil));
     }
     items.push("---".to_string());
@@ -1065,7 +1189,11 @@ fn draw_runtime_tool_actions(
     let subtitle = format!(
         "{} | {}",
         runtime_tool_description(tool),
-        if installed { "Installed" } else { "Not installed" }
+        if installed {
+            "Installed"
+        } else {
+            "Not installed"
+        }
     );
     let activated = draw_terminal_menu_screen(
         ctx,
@@ -1554,7 +1682,7 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
     if !has_internet() {
         return InstallerEvent::Status("Error: No internet connection.".to_string());
     }
-    let Some(pm) = state.package_manager else {
+    let Some(pm) = state.selected_pm() else {
         return InstallerEvent::Status("Error: No supported package manager found.".to_string());
     };
     state.search_results = pm.search(&query);
@@ -1565,10 +1693,7 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
         InstallerEvent::Status("No results found.".to_string())
     } else {
         state.view = InstallerView::SearchResults;
-        InstallerEvent::Status(format!(
-            "Found {} result(s).",
-            state.search_results.len()
-        ))
+        InstallerEvent::Status(format!("Found {} result(s).", state.search_results.len()))
     }
 }
 
@@ -1602,7 +1727,7 @@ pub fn build_package_command(
     pkg: &str,
     action: InstallerPackageAction,
 ) -> InstallerEvent {
-    let Some(pm) = state.package_manager else {
+    let Some(pm) = state.selected_pm() else {
         return InstallerEvent::Status("Error: No supported package manager found.".to_string());
     };
     if !has_internet()
@@ -1618,7 +1743,9 @@ pub fn build_package_command(
             if pkg == "playsound" {
                 if is_arch_based_linux() {
                     if !which("yay") {
-                        return InstallerEvent::Status("yay not found. Install yay first.".to_string());
+                        return InstallerEvent::Status(
+                            "yay not found. Install yay first.".to_string(),
+                        );
                     }
                     vec![
                         "yay".to_string(),
@@ -1650,7 +1777,9 @@ pub fn build_package_command(
             if pkg == "playsound" {
                 if is_arch_based_linux() {
                     if !which("yay") {
-                        return InstallerEvent::Status("yay not found. Install yay first.".to_string());
+                        return InstallerEvent::Status(
+                            "yay not found. Install yay first.".to_string(),
+                        );
                     }
                     vec![
                         "yay".to_string(),
@@ -1683,7 +1812,9 @@ pub fn build_package_command(
             if pkg == "playsound" {
                 if is_arch_based_linux() {
                     if !which("yay") {
-                        return InstallerEvent::Status("yay not found. Install yay first.".to_string());
+                        return InstallerEvent::Status(
+                            "yay not found. Install yay first.".to_string(),
+                        );
                     }
                     vec![
                         "yay".to_string(),
@@ -1715,7 +1846,9 @@ pub fn build_package_command(
             if pkg == "playsound" {
                 if is_arch_based_linux() {
                     if !which("yay") {
-                        return InstallerEvent::Status("yay not found. Install yay first.".to_string());
+                        return InstallerEvent::Status(
+                            "yay not found. Install yay first.".to_string(),
+                        );
                     }
                     vec![
                         "yay".to_string(),
@@ -1907,23 +2040,14 @@ impl DesktopInstallerState {
         pm.name().to_string()
     }
 
-    fn installed_description_cached_for_pm(
-        &self,
-        pm: PackageManager,
-        pkg: &str,
-    ) -> Option<String> {
+    fn installed_description_cached_for_pm(&self, pm: PackageManager, pkg: &str) -> Option<String> {
         self.installed_description_cache
             .get(&Self::installed_cache_key(pm))
             .and_then(|pkgs| pkgs.get(pkg))
             .cloned()
     }
 
-    fn persist_installed_description(
-        &mut self,
-        pm: PackageManager,
-        pkg: &str,
-        desc: &str,
-    ) {
+    fn persist_installed_description(&mut self, pm: PackageManager, pkg: &str, desc: &str) {
         self.installed_description_cache
             .entry(Self::installed_cache_key(pm))
             .or_default()
@@ -1948,12 +2072,10 @@ impl DesktopInstallerState {
                     DesktopInstallerView::SearchResults
                 }
             }
-            DesktopInstallerView::AddToMenu { pkg } => {
-                DesktopInstallerView::PackageActions {
-                    pkg: pkg.clone(),
-                    installed: true,
-                }
-            }
+            DesktopInstallerView::AddToMenu { pkg } => DesktopInstallerView::PackageActions {
+                pkg: pkg.clone(),
+                installed: true,
+            },
             DesktopInstallerView::RuntimeTools => DesktopInstallerView::Home,
         };
     }
@@ -2024,8 +2146,7 @@ impl DesktopInstallerState {
         if let Some(pm) = selected_pm {
             for pkg in &self.installed_packages {
                 if let Some(desc) = self.installed_description_cached_for_pm(pm, pkg) {
-                    self.package_descriptions
-                        .insert(pkg.clone(), Some(desc));
+                    self.package_descriptions.insert(pkg.clone(), Some(desc));
                 }
             }
         }
@@ -2059,7 +2180,10 @@ impl DesktopInstallerState {
             return desc.clone();
         }
         let selected_pm = self.selected_pm();
-        let installed_pkg = self.installed_packages.iter().any(|installed| installed == pkg);
+        let installed_pkg = self
+            .installed_packages
+            .iter()
+            .any(|installed| installed == pkg);
         if installed_pkg {
             if let Some(pm) = selected_pm {
                 if let Some(desc) = self.installed_description_cached_for_pm(pm, pkg) {
@@ -2092,9 +2216,7 @@ impl DesktopInstallerState {
     }
 
     pub fn pm_label(&self) -> &str {
-        self.selected_pm()
-            .map(|p| p.name())
-            .unwrap_or("Not Found")
+        self.selected_pm().map(|p| p.name()).unwrap_or("Not Found")
     }
 
     pub fn confirm_action(&mut self) -> DesktopInstallerEvent {
@@ -2232,13 +2354,20 @@ fn save_installed_description_cache(cache: &HashMap<String, HashMap<String, Stri
 fn playsound_install_cmd() -> Vec<String> {
     if is_arch_based_linux() {
         vec![
-            "yay".into(), "-S".into(), "--noconfirm".into(),
+            "yay".into(),
+            "-S".into(),
+            "--noconfirm".into(),
             "python-playsound".into(),
         ]
     } else {
         vec![
-            "python3".into(), "-m".into(), "pip".into(), "install".into(),
-            "--user".into(), "--upgrade".into(), "playsound".into(),
+            "python3".into(),
+            "-m".into(),
+            "pip".into(),
+            "install".into(),
+            "--user".into(),
+            "--upgrade".into(),
+            "playsound".into(),
         ]
     }
 }
@@ -2248,8 +2377,13 @@ fn playsound_reinstall_cmd() -> Vec<String> {
         playsound_install_cmd()
     } else {
         vec![
-            "python3".into(), "-m".into(), "pip".into(), "install".into(),
-            "--user".into(), "--upgrade".into(), "--force-reinstall".into(),
+            "python3".into(),
+            "-m".into(),
+            "pip".into(),
+            "install".into(),
+            "--user".into(),
+            "--upgrade".into(),
+            "--force-reinstall".into(),
             "playsound".into(),
         ]
     }
@@ -2262,13 +2396,19 @@ fn playsound_update_cmd() -> Vec<String> {
 fn playsound_uninstall_cmd() -> Vec<String> {
     if is_arch_based_linux() {
         vec![
-            "yay".into(), "-R".into(), "--noconfirm".into(),
+            "yay".into(),
+            "-R".into(),
+            "--noconfirm".into(),
             "python-playsound".into(),
         ]
     } else {
         vec![
-            "python3".into(), "-m".into(), "pip".into(), "uninstall".into(),
-            "-y".into(), "playsound".into(),
+            "python3".into(),
+            "-m".into(),
+            "pip".into(),
+            "uninstall".into(),
+            "-y".into(),
+            "playsound".into(),
         ]
     }
 }
@@ -2297,5 +2437,46 @@ mod tests {
             event,
             InstallerEvent::Status(ref s) if s == "Search cancelled."
         ));
+    }
+
+    #[test]
+    fn back_from_pm_selection_returns_to_root() {
+        let mut state = TerminalInstallerState {
+            view: InstallerView::PackageManagerSelect,
+            ..Default::default()
+        };
+        assert!(!state.back());
+        assert!(matches!(state.view, InstallerView::Root));
+    }
+
+    #[test]
+    fn changing_pm_clears_terminal_installer_results() {
+        let mut state = TerminalInstallerState {
+            available_pms: vec![PackageManager::Brew, PackageManager::Apt],
+            selected_pm_idx: 0,
+            pm_select_idx: 0,
+            search_query: "ripgrep".to_string(),
+            search_results: vec![SearchResult {
+                raw: "ripgrep".to_string(),
+                pkg: "ripgrep".to_string(),
+                description: Some("fast grep".to_string()),
+                installed: false,
+            }],
+            installed_packages: vec!["fd".to_string()],
+            installed_filter: "fd".to_string(),
+            package_descriptions: HashMap::from([(
+                "fd".to_string(),
+                Some("find alternative".to_string()),
+            )]),
+            ..Default::default()
+        };
+
+        assert!(state.select_package_manager(1));
+        assert_eq!(state.selected_pm(), Some(PackageManager::Apt));
+        assert!(state.search_query.is_empty());
+        assert!(state.search_results.is_empty());
+        assert!(state.installed_packages.is_empty());
+        assert!(state.installed_filter.is_empty());
+        assert!(state.package_descriptions.is_empty());
     }
 }

@@ -1,8 +1,8 @@
 use super::menu::draw_terminal_menu_screen;
 use crate::config::{DefaultAppBinding, Settings};
 use crate::default_apps::{
-    binding_for_slot, binding_label, default_app_choices, parse_custom_command_line, slot_label,
-    DefaultAppChoiceAction, DefaultAppSlot,
+    binding_for_slot, binding_label, default_app_choices, slot_label, DefaultAppChoiceAction,
+    DefaultAppSlot,
 };
 use eframe::egui::Context;
 
@@ -17,7 +17,6 @@ pub enum DefaultAppsEvent {
         binding: DefaultAppBinding,
     },
     PromptCustom(DefaultAppSlot),
-    Status(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,46 +121,5 @@ pub fn draw_default_apps_screen(
             }
             DefaultAppsEvent::None
         }
-    }
-}
-
-pub fn apply_custom_command(slot: DefaultAppSlot, raw: &str) -> DefaultAppsEvent {
-    let Some(argv) = parse_custom_command_line(raw.trim()) else {
-        return DefaultAppsEvent::Status("Error: invalid command line".to_string());
-    };
-    DefaultAppsEvent::SetBinding {
-        slot,
-        binding: DefaultAppBinding::CustomArgv { argv },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn apply_custom_command_returns_custom_binding() {
-        let event = apply_custom_command(DefaultAppSlot::TextCode, "epy --foo");
-        match event {
-            DefaultAppsEvent::SetBinding { slot, binding } => {
-                assert_eq!(slot, DefaultAppSlot::TextCode);
-                assert_eq!(
-                    binding,
-                    DefaultAppBinding::CustomArgv {
-                        argv: vec!["epy".to_string(), "--foo".to_string()]
-                    }
-                );
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn apply_custom_command_rejects_invalid_command_line() {
-        let event = apply_custom_command(DefaultAppSlot::Ebook, "\"unterminated");
-        assert!(matches!(
-            event,
-            DefaultAppsEvent::Status(ref status) if status == "Error: invalid command line"
-        ));
     }
 }

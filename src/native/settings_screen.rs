@@ -299,7 +299,10 @@ fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<(String, Sett
             SettingsRowId::Sound,
         ),
         (
-            format!("System Sound Volume: {}% [adjust]", draft.system_sound_volume),
+            format!(
+                "System Sound Volume: {}% [adjust]",
+                draft.system_sound_volume
+            ),
             SettingsRowId::SystemSoundVolume,
         ),
         (

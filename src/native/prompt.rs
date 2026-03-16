@@ -16,8 +16,13 @@ pub enum FlashAction {
     Noop,
     ExitApp,
     FinishLogout,
-    FinishLogin { username: String, user: UserRecord },
-    StartHacking { username: String },
+    FinishLogin {
+        username: String,
+        user: UserRecord,
+    },
+    StartHacking {
+        username: String,
+    },
     LaunchPty {
         title: String,
         argv: Vec<String>,
@@ -256,7 +261,10 @@ pub fn draw_terminal_flash_boxed(
             let rect = screen.panel_rect(box_x, box_y, box_w, box_h);
             painter.rect_filled(rect, 0.0, palette.bg);
             painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
-            let center = Pos2::new(screen.snap_value(rect.center().x), screen.snap_value(rect.center().y));
+            let center = Pos2::new(
+                screen.snap_value(rect.center().x),
+                screen.snap_value(rect.center().y),
+            );
             painter.text(
                 center,
                 Align2::CENTER_CENTER,

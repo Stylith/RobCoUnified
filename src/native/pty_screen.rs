@@ -352,8 +352,7 @@ pub fn draw_embedded_pty_in_ui_sized(
     };
     if let Some(label) = state.session.top_bar_label() {
         let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
-        let bar_font =
-            FontId::monospace((bar_rect.height() * 0.72).max(screen.font().size + 2.0));
+        let bar_font = FontId::monospace((bar_rect.height() * 0.72).max(screen.font().size + 2.0));
         painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
         painter.text(
             bar_rect.center(),
@@ -416,7 +415,13 @@ pub fn draw_embedded_pty_in_ui_sized(
             );
         }
         let mut row_requires_cell_draw = vec![false; render_rows_count];
-        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+        for (row_idx, row) in frame
+            .styled
+            .cells
+            .iter()
+            .enumerate()
+            .take(render_rows_count)
+        {
             row_requires_cell_draw[row_idx] = row.iter().take(render_cols).any(|cell| {
                 let (fg, _bg) = resolve_cell_colors(*cell);
                 cell.ch != ' ' && (fg != palette.fg || cell.bold || cell.italic || cell.underline)
@@ -442,7 +447,13 @@ pub fn draw_embedded_pty_in_ui_sized(
         let glyph_advance = screen.row_rect(0, row_offset, 1).width().max(1.0);
         let x_origin = content_rect.left();
         // Background colors from the styled cells of the committed frame.
-        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+        for (row_idx, row) in frame
+            .styled
+            .cells
+            .iter()
+            .enumerate()
+            .take(render_rows_count)
+        {
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let (_fg, bg) = resolve_cell_colors(*cell);
                 if bg == palette.bg {
@@ -480,7 +491,13 @@ pub fn draw_embedded_pty_in_ui_sized(
                 );
             }
         }
-        for (row_idx, row) in frame.styled.cells.iter().enumerate().take(render_rows_count) {
+        for (row_idx, row) in frame
+            .styled
+            .cells
+            .iter()
+            .enumerate()
+            .take(render_rows_count)
+        {
             let force_row_cells = row_requires_cell_draw[row_idx];
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let (fg, _bg) = resolve_cell_colors(*cell);
@@ -563,8 +580,12 @@ pub fn draw_embedded_pty_in_ui_sized(
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
                 let mut cell_to_draw = *cell;
                 if smooth_borders {
-                    cell_to_draw.ch =
-                        smooth_border_char_from_snapshot(&snapshot.cells, row_idx, col_idx, cell.ch);
+                    cell_to_draw.ch = smooth_border_char_from_snapshot(
+                        &snapshot.cells,
+                        row_idx,
+                        col_idx,
+                        cell.ch,
+                    );
                 }
                 let border_conn = if smooth_borders {
                     vector_border_connections(&snapshot.cells, row_idx, col_idx, cell_to_draw.ch)
@@ -738,7 +759,8 @@ fn handle_pty_mouse(
                 if !content_rect.contains(pos) {
                     continue;
                 }
-                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos) {
+                if let Some((col, row)) = pointer_to_pty_cell(content_rect, pty_cols, pty_rows, pos)
+                {
                     if session.mouse_mode_enabled() {
                         let kind = if delta.y < 0.0 {
                             Some(MouseEventKind::ScrollDown)
@@ -752,7 +774,12 @@ fn handle_pty_mouse(
                             None
                         };
                         if let Some(kind) = kind {
-                            session.send_mouse_event(kind, egui_mods_to_crossterm(modifiers), col, row);
+                            session.send_mouse_event(
+                                kind,
+                                egui_mods_to_crossterm(modifiers),
+                                col,
+                                row,
+                            );
                         }
                     } else {
                         let (key, amount) = if delta.y > 0.0 {
@@ -1001,20 +1028,59 @@ pub fn handle_pty_input(ctx: &Context, session: &mut PtySession) -> bool {
 
                 // Simple control keys that don't depend on terminal mode
                 match key {
-                    Key::Enter => { session.write(b"\r"); had_input = true; continue; }
-                    Key::Tab => { session.write(b"\t"); had_input = true; continue; }
-                    Key::Backspace => { session.write(b"\x7f"); had_input = true; continue; }
-                    Key::Delete => { session.write(b"\x1b[3~"); had_input = true; continue; }
-                    Key::Home => { session.write(b"\x1b[H"); had_input = true; continue; }
-                    Key::End => { session.write(b"\x1b[F"); had_input = true; continue; }
-                    Key::PageUp => { session.write(b"\x1b[5~"); had_input = true; continue; }
-                    Key::PageDown => { session.write(b"\x1b[6~"); had_input = true; continue; }
-                    Key::Insert => { session.write(b"\x1b[2~"); had_input = true; continue; }
+                    Key::Enter => {
+                        session.write(b"\r");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::Tab => {
+                        session.write(b"\t");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::Backspace => {
+                        session.write(b"\x7f");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::Delete => {
+                        session.write(b"\x1b[3~");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::Home => {
+                        session.write(b"\x1b[H");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::End => {
+                        session.write(b"\x1b[F");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::PageUp => {
+                        session.write(b"\x1b[5~");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::PageDown => {
+                        session.write(b"\x1b[6~");
+                        had_input = true;
+                        continue;
+                    }
+                    Key::Insert => {
+                        session.write(b"\x1b[2~");
+                        had_input = true;
+                        continue;
+                    }
                     _ => {}
                 }
 
                 // Arrow keys — these need application_cursor check via send_key
-                if matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight) {
+                if matches!(
+                    key,
+                    Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight
+                ) {
                     if let Some((code, mods)) = map_key_event(key, modifiers) {
                         session.send_key(code, mods);
                         had_input = true;
@@ -1913,7 +1979,9 @@ fn spawn_with_fallback(
                             "Shell fallback launch failed for command '{cmdline}': {shell_err}"
                         ),
                     );
-                    anyhow::anyhow!("launch failed: {primary_err}; shell fallback failed: {shell_err}")
+                    anyhow::anyhow!(
+                        "launch failed: {primary_err}; shell fallback failed: {shell_err}"
+                    )
                 })
         }
     }
@@ -1924,7 +1992,10 @@ fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
         return Vec::new();
     }
     let mut out = cmd.to_vec();
-    if out[0] == "rtv" && !crate::launcher::command_exists("rtv") && crate::launcher::command_exists("tuir") {
+    if out[0] == "rtv"
+        && !crate::launcher::command_exists("rtv")
+        && crate::launcher::command_exists("tuir")
+    {
         out[0] = "tuir".to_string();
     }
     crate::launcher::normalize_command_aliases(&out)

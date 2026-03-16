@@ -374,7 +374,9 @@ impl DonkeyKongGame {
             }
         }
 
-        self.state.barrels.retain(|barrel| barrel.pos.y < WORLD_H + 24.0);
+        self.state
+            .barrels
+            .retain(|barrel| barrel.pos.y < WORLD_H + 24.0);
     }
 
     fn spawn_barrels(&mut self, dt: f32) {
@@ -397,7 +399,10 @@ impl DonkeyKongGame {
 
     fn check_goal(&mut self) {
         let goal = goal_rect();
-        let player = Rect::from_min_size(pos_to_screen(self.state.player.pos), egui::vec2(PLAYER_W, PLAYER_H));
+        let player = Rect::from_min_size(
+            pos_to_screen(self.state.player.pos),
+            egui::vec2(PLAYER_W, PLAYER_H),
+        );
         if player.intersects(goal) {
             self.state.won = true;
             self.state.score = self.state.score.saturating_add(500);
@@ -405,9 +410,15 @@ impl DonkeyKongGame {
     }
 
     fn player_hit_barrel(&self) -> bool {
-        let player = Rect::from_min_size(pos_to_screen(self.state.player.pos), egui::vec2(PLAYER_W, PLAYER_H));
+        let player = Rect::from_min_size(
+            pos_to_screen(self.state.player.pos),
+            egui::vec2(PLAYER_W, PLAYER_H),
+        );
         self.state.barrels.iter().any(|barrel| {
-            let rect = Rect::from_min_size(pos_to_screen(barrel.pos), egui::vec2(BARREL_SIZE, BARREL_SIZE));
+            let rect = Rect::from_min_size(
+                pos_to_screen(barrel.pos),
+                egui::vec2(BARREL_SIZE, BARREL_SIZE),
+            );
             player.intersects(rect)
         })
     }
@@ -477,14 +488,7 @@ impl DonkeyKongGame {
 
     fn draw_goal(&self, painter: &egui::Painter, rect: Rect) {
         let goal = goal_rect();
-        self.paint_frame(
-            painter,
-            rect,
-            FrameId::Goal,
-            goal.min,
-            goal.width(),
-            false,
-        );
+        self.paint_frame(painter, rect, FrameId::Goal, goal.min, goal.width(), false);
     }
 
     fn draw_barrels(&self, painter: &egui::Painter, rect: Rect) {
@@ -600,11 +604,17 @@ impl DonkeyKongGame {
                 let left = rect.left() + rect.width() * 0.3;
                 let right = rect.right() - rect.width() * 0.3;
                 painter.line_segment(
-                    [egui::pos2(left, rect.top()), egui::pos2(left, rect.bottom())],
+                    [
+                        egui::pos2(left, rect.top()),
+                        egui::pos2(left, rect.bottom()),
+                    ],
                     stroke_neutral,
                 );
                 painter.line_segment(
-                    [egui::pos2(right, rect.top()), egui::pos2(right, rect.bottom())],
+                    [
+                        egui::pos2(right, rect.top()),
+                        egui::pos2(right, rect.bottom()),
+                    ],
                     stroke_neutral,
                 );
                 for idx in 1..4 {
@@ -617,21 +627,41 @@ impl DonkeyKongGame {
             }
             FrameId::Goal => {
                 painter.rect_stroke(rect.shrink(1.0), 0.0, stroke_ui);
-                painter.circle_filled(rect.center(), rect.width().min(rect.height()) * 0.18, self.theme.ui);
+                painter.circle_filled(
+                    rect.center(),
+                    rect.width().min(rect.height()) * 0.18,
+                    self.theme.ui,
+                );
             }
             FrameId::BarrelRoll1 | FrameId::BarrelRoll2 | FrameId::BarrelBroken => {
-                painter.circle_stroke(rect.center(), rect.width().min(rect.height()) * 0.38, stroke_enemy);
+                painter.circle_stroke(
+                    rect.center(),
+                    rect.width().min(rect.height()) * 0.38,
+                    stroke_enemy,
+                );
                 painter.line_segment(
                     [
-                        egui::pos2(rect.left() + rect.width() * 0.28, rect.top() + rect.height() * 0.3),
-                        egui::pos2(rect.right() - rect.width() * 0.28, rect.bottom() - rect.height() * 0.3),
+                        egui::pos2(
+                            rect.left() + rect.width() * 0.28,
+                            rect.top() + rect.height() * 0.3,
+                        ),
+                        egui::pos2(
+                            rect.right() - rect.width() * 0.28,
+                            rect.bottom() - rect.height() * 0.3,
+                        ),
                     ],
                     Stroke::new(1.5, self.theme.enemy),
                 );
                 painter.line_segment(
                     [
-                        egui::pos2(rect.left() + rect.width() * 0.28, rect.bottom() - rect.height() * 0.3),
-                        egui::pos2(rect.right() - rect.width() * 0.28, rect.top() + rect.height() * 0.3),
+                        egui::pos2(
+                            rect.left() + rect.width() * 0.28,
+                            rect.bottom() - rect.height() * 0.3,
+                        ),
+                        egui::pos2(
+                            rect.right() - rect.width() * 0.28,
+                            rect.top() + rect.height() * 0.3,
+                        ),
                     ],
                     Stroke::new(1.5, self.theme.enemy),
                 );
@@ -639,10 +669,22 @@ impl DonkeyKongGame {
             FrameId::Fire | FrameId::Spark | FrameId::Explosion1 | FrameId::Explosion2 => {
                 let c = rect.center();
                 let r = rect.width().min(rect.height()) * 0.32;
-                painter.line_segment([egui::pos2(c.x, c.y - r), egui::pos2(c.x + r * 0.45, c.y)], stroke_enemy);
-                painter.line_segment([egui::pos2(c.x + r * 0.45, c.y), egui::pos2(c.x, c.y + r)], stroke_enemy);
-                painter.line_segment([egui::pos2(c.x, c.y + r), egui::pos2(c.x - r * 0.45, c.y)], stroke_enemy);
-                painter.line_segment([egui::pos2(c.x - r * 0.45, c.y), egui::pos2(c.x, c.y - r)], stroke_enemy);
+                painter.line_segment(
+                    [egui::pos2(c.x, c.y - r), egui::pos2(c.x + r * 0.45, c.y)],
+                    stroke_enemy,
+                );
+                painter.line_segment(
+                    [egui::pos2(c.x + r * 0.45, c.y), egui::pos2(c.x, c.y + r)],
+                    stroke_enemy,
+                );
+                painter.line_segment(
+                    [egui::pos2(c.x, c.y + r), egui::pos2(c.x - r * 0.45, c.y)],
+                    stroke_enemy,
+                );
+                painter.line_segment(
+                    [egui::pos2(c.x - r * 0.45, c.y), egui::pos2(c.x, c.y - r)],
+                    stroke_enemy,
+                );
             }
             FrameId::Heart | FrameId::ScoreIcon | FrameId::LifeIcon => {
                 painter.rect_stroke(rect.shrink(2.0), 0.0, stroke_ui);
@@ -672,8 +714,14 @@ impl DonkeyKongGame {
                 );
                 painter.rect_filled(
                     Rect::from_min_max(
-                        egui::pos2(body.left() + body.width() * 0.28, body.top() + body.height() * 0.24),
-                        egui::pos2(body.right() - body.width() * 0.28, body.bottom() - body.height() * 0.18),
+                        egui::pos2(
+                            body.left() + body.width() * 0.28,
+                            body.top() + body.height() * 0.24,
+                        ),
+                        egui::pos2(
+                            body.right() - body.width() * 0.28,
+                            body.bottom() - body.height() * 0.18,
+                        ),
                     ),
                     0.0,
                     self.theme.primary,
@@ -683,14 +731,20 @@ impl DonkeyKongGame {
                 painter.line_segment(
                     [
                         egui::pos2(body.center().x, arm_y),
-                        egui::pos2(body.center().x + dir * body.width() * 0.28, arm_y - body.height() * 0.08),
+                        egui::pos2(
+                            body.center().x + dir * body.width() * 0.28,
+                            arm_y - body.height() * 0.08,
+                        ),
                     ],
                     stroke_primary,
                 );
                 painter.line_segment(
                     [
                         egui::pos2(body.center().x, arm_y),
-                        egui::pos2(body.center().x - dir * body.width() * 0.25, arm_y + body.height() * 0.05),
+                        egui::pos2(
+                            body.center().x - dir * body.width() * 0.25,
+                            arm_y + body.height() * 0.05,
+                        ),
                     ],
                     stroke_primary,
                 );
@@ -796,7 +850,10 @@ impl SpriteCatalog {
                 Frame {
                     atlas: atlas_id,
                     uv: Rect::from_min_max(
-                        egui::pos2(frame.x as f32 / width as f32, frame.y as f32 / height as f32),
+                        egui::pos2(
+                            frame.x as f32 / width as f32,
+                            frame.y as f32 / height as f32,
+                        ),
                         egui::pos2(
                             (frame.x + frame.w) as f32 / width as f32,
                             (frame.y + frame.h) as f32 / height as f32,
