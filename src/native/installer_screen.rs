@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallerMenuTarget {
@@ -1846,6 +1848,11 @@ pub struct DesktopInstallerNotice {
     pub success: bool,
 }
 
+struct DesktopSearchResponse {
+    query: String,
+    results: Vec<SearchResult>,
+}
+
 pub struct DesktopInstallerState {
     pub open: bool,
     pub view: DesktopInstallerView,
@@ -1862,6 +1869,7 @@ pub struct DesktopInstallerState {
     installed_description_cache: HashMap<String, HashMap<String, String>>,
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
+    search_receiver: Option<Receiver<DesktopSearchResponse>>,
     pub confirm_dialog: Option<DesktopInstallerConfirm>,
     pub notice: Option<DesktopInstallerNotice>,
     pub display_name_input: String,
@@ -1886,6 +1894,7 @@ impl Default for DesktopInstallerState {
             installed_description_cache: load_installed_description_cache(),
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
+            search_receiver: None,
             confirm_dialog: None,
             notice: None,
             display_name_input: String::new(),
@@ -1968,13 +1977,44 @@ impl DesktopInstallerState {
             return;
         };
         self.notice = None;
-        self.search_results = pm.search(&query);
-        self.search_page = 0;
-        if self.search_results.is_empty() {
-            self.status = "No results found.".to_string();
-        } else {
-            self.status = format!("Found {} result(s).", self.search_results.len());
-            self.view = DesktopInstallerView::SearchResults;
+        self.search_receiver = None;
+        self.status = format!("Searching for \"{query}\"...");
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let results = pm.search(&query);
+            let _ = tx.send(DesktopSearchResponse { query, results });
+        });
+        self.search_receiver = Some(rx);
+    }
+
+    pub fn search_in_flight(&self) -> bool {
+        self.search_receiver.is_some()
+    }
+
+    pub fn poll_search(&mut self) -> bool {
+        let Some(rx) = self.search_receiver.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(response) => {
+                self.search_receiver = None;
+                self.search_results = response.results;
+                self.search_page = 0;
+                self.search_query = response.query;
+                if self.search_results.is_empty() {
+                    self.status = "No results found.".to_string();
+                } else {
+                    self.status = format!("Found {} result(s).", self.search_results.len());
+                    self.view = DesktopInstallerView::SearchResults;
+                }
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.search_receiver = None;
+                self.status = "Search failed.".to_string();
+                true
+            }
         }
     }
 

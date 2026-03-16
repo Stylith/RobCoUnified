@@ -348,6 +348,7 @@ struct DesktopWindowState {
     maximized: bool,
     restore_pos: Option<[f32; 2]>,
     restore_size: Option<[f32; 2]>,
+    user_resized: bool,
     apply_restore: bool,
     generation: u64,
 }
@@ -1780,6 +1781,7 @@ impl RobcoNativeApp {
                 state.restore_pos = Some([rect.min.x, rect.min.y]);
                 let restore_size = Self::desktop_window_restore_size(rect);
                 state.restore_size = Some([restore_size.x, restore_size.y]);
+                state.user_resized = true;
             }
             state.maximized = true;
             state.apply_restore = false;
@@ -1850,6 +1852,7 @@ impl RobcoNativeApp {
         let state = self.desktop_window_state_mut(window);
         state.restore_pos = None;
         state.restore_size = None;
+        state.user_resized = false;
         state.apply_restore = false;
         state.maximized = false;
         state.minimized = false;
@@ -1882,6 +1885,7 @@ impl RobcoNativeApp {
             let state = self.desktop_window_state_mut(window);
             state.minimized = false;
             state.maximized = false;
+            state.user_resized = false;
             state.generation = generation;
         } else {
             self.desktop_window_states.entry(window).or_default();
@@ -4245,6 +4249,7 @@ impl RobcoNativeApp {
         match action {
             StartRootAction::ReturnToTerminal => {
                 self.close_start_menu();
+                crate::sound::play_logout();
                 self.desktop_mode_open = false;
             }
             StartRootAction::Logout => {
@@ -5601,7 +5606,7 @@ impl RobcoNativeApp {
                 self.open_embedded_terminal_shell();
             }
             MainMenuSelectionAction::EnterDesktopMode => {
-                crate::sound::play_navigate();
+                crate::sound::play_login();
                 self.desktop_mode_open = true;
                 self.close_start_menu();
                 self.sync_desktop_active_window();
@@ -8873,7 +8878,7 @@ impl RobcoNativeApp {
 
     fn draw_desktop_window_header(
         ui: &mut egui::Ui,
-        title: &str,
+        _title: &str,
         maximized: bool,
     ) -> DesktopHeaderAction {
         let palette = current_palette();
@@ -8886,8 +8891,6 @@ impl RobcoNativeApp {
             .show(ui, |ui| {
                 ui.set_min_height(20.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(title).color(Color32::BLACK).strong());
-                    ui.add_space(6.0);
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
                         if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
@@ -10999,6 +11002,10 @@ impl RobcoNativeApp {
         {
             return;
         }
+        if self.desktop_installer.search_in_flight() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        let _ = self.desktop_installer.poll_search();
         {
             let state = self.desktop_window_state(DesktopWindow::Installer);
             if state.maximized && (state.restore_pos.is_none() || state.restore_size.is_none()) {
@@ -11008,29 +11015,36 @@ impl RobcoNativeApp {
         }
         let mut open = self.desktop_installer.open;
         let maximized = self.desktop_window_is_maximized(DesktopWindow::Installer);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Installer);
         let mut header_action = DesktopHeaderAction::None;
         let generation = self.desktop_window_generation(DesktopWindow::Installer);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Installer);
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let workspace_rect = Self::desktop_workspace_rect(ctx);
+        let live_pos = {
+            let state = self.desktop_window_state(DesktopWindow::Installer);
+            state.restore_pos.map(|pos| egui::pos2(pos[0], pos[1]))
+        };
         let mut window = egui::Window::new("Program Installer")
             .id(Id::new(("native_installer", generation)))
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
-            .resizable(true)
+            .resizable(false)
             .min_size([500.0, 400.0])
+            .max_size(workspace_rect.size())
+            .constrain_to(workspace_rect)
             .default_pos(default_pos)
             .default_size([default_size.x, default_size.y]);
         if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
             window = window
                 .movable(false)
                 .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            window = window.current_pos(pos).default_size(size);
+                .fixed_pos(workspace_rect.min)
+                .fixed_size(workspace_rect.size());
+        } else {
+            window = window
+                .current_pos(live_pos.unwrap_or(default_pos))
+                .fixed_size(default_size);
         }
 
         let palette = current_palette();
@@ -11051,18 +11065,14 @@ impl RobcoNativeApp {
         let status = self.desktop_installer.status.clone();
         let has_confirm = self.desktop_installer.confirm_dialog.is_some();
         let notice = self.desktop_installer.notice.clone();
-
-        // Pre-extract icon textures for the home view (avoids borrowing self in closure)
         let tex_apps = self.asset_cache.as_ref().map(|c| c.icon_applications.clone());
         let tex_tools = self.asset_cache.as_ref().map(|c| c.icon_terminal.clone());
         let tex_network = self.asset_cache.as_ref().map(|c| c.icon_connections.clone());
         let tex_games = self.asset_cache.as_ref().map(|c| c.icon_gaming.clone());
 
         let shown = window.show(ctx, |ui| {
-            // ── Monochrome styling for all widgets ──────────────────────────
             Self::apply_installer_widget_style(ui, palette);
 
-            // ── Header ──────────────────────────────────────────────────────
             egui::TopBottomPanel::top(Id::new(("inst_top", generation)))
                 .frame(egui::Frame::none())
                 .show_inside(ui, |ui| {
@@ -11070,7 +11080,6 @@ impl RobcoNativeApp {
                         Self::draw_desktop_window_header(ui, "RobCo Program Installer", maximized);
                 });
 
-            // ── Status bar at bottom ────────────────────────────────────────
             egui::TopBottomPanel::bottom(Id::new(("inst_bottom", generation)))
                 .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(8.0, 4.0)))
                 .exact_height(28.0)
@@ -11082,7 +11091,6 @@ impl RobcoNativeApp {
                     }
                 });
 
-            // ── Confirmation dialog overlay ─────────────────────────────────
             if has_confirm {
                 egui::TopBottomPanel::bottom(Id::new(("inst_confirm", generation)))
                     .frame(
@@ -11150,7 +11158,6 @@ impl RobcoNativeApp {
                     });
             }
 
-            // ── Main content ────────────────────────────────────────────────
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().inner_margin(egui::Margin::same(16.0)))
                 .show_inside(ui, |ui| match view {
@@ -11219,16 +11226,22 @@ impl RobcoNativeApp {
                 });
         });
 
-        // ── Post-show: handle deferred actions ──────────────────────────────
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
         if let Some(rect) = shown_rect {
             if !maximized {
-                self.note_desktop_window_rect(DesktopWindow::Installer, rect);
+                let state = self.desktop_window_state_mut(DesktopWindow::Installer);
+                state.restore_pos = Some([rect.min.x, rect.min.y]);
+                state.restore_size = Some([default_size.x, default_size.y]);
+                state.user_resized = false;
+                state.apply_restore = false;
             }
             self.maybe_activate_desktop_window_from_click(
                 ctx,
                 DesktopWindow::Installer,
-                rect.contains(ctx.input(|i| i.pointer.interact_pos().unwrap_or_default())),
+                shown_contains_pointer,
             );
         }
 
@@ -11601,115 +11614,172 @@ impl RobcoNativeApp {
         deferred_back: &mut bool,
         deferred_open_actions: &mut Option<(String, bool)>,
     ) {
-        // Back button + title
-        ui.horizontal(|ui| {
-            if ui
-                .button(RichText::new("< Back").color(palette.fg))
-                .clicked()
-            {
-                *deferred_back = true;
-            }
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(format!(
-                    "Search Results: \"{}\"  ({} found)",
-                    state.search_query,
-                    state.search_results.len()
-                ))
-                .color(palette.fg)
-                .strong(),
-            );
-        });
-        ui.separator();
-
-        // Paginated results
-        let page_size = 20usize;
+        const HEADER_H: f32 = 28.0;
+        const FOOTER_H: f32 = 40.0;
+        const RESULTS_PER_PAGE: usize = 20;
         let total = state.search_results.len();
+        let row_height = 58.0;
+        let page_size = RESULTS_PER_PAGE.max(1);
         let total_pages = total.div_ceil(page_size).max(1);
         state.search_page = state.search_page.min(total_pages.saturating_sub(1));
         let start = state.search_page * page_size;
         let end = (start + page_size).min(total);
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for idx in start..end {
-                let result = &state.search_results[idx];
-                let desc_preview = result
-                    .description
-                    .as_ref()
-                    .map(|desc| Self::installer_description_preview(desc, 88));
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        let status_text = if result.installed {
-                            "[installed]"
-                        } else {
-                            "[get]"
-                        };
-                        let status_color = if result.installed {
-                            palette.dim
-                        } else {
-                            palette.fg
-                        };
-                        ui.label(RichText::new(status_text).color(status_color));
-                        ui.label(RichText::new(&result.pkg).color(palette.fg).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let btn_label = if result.installed {
-                                "Actions"
-                            } else {
-                                "Install"
-                            };
-                            if ui
-                                .button(RichText::new(format!("[ {btn_label} ]")).color(palette.fg))
-                                .clicked()
-                            {
-                                *deferred_open_actions =
-                                    Some((result.pkg.clone(), result.installed));
-                            }
-                        });
-                    });
-                    if let Some(desc) = desc_preview {
-                        ui.add_space(2.0);
-                        ui.label(RichText::new(desc).color(palette.dim));
-                    } else if !state.can_fetch_descriptions() {
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new("Description unavailable while offline.")
-                                .color(palette.dim),
-                        );
-                    }
-                });
-                ui.separator();
-            }
-
-            // Pagination controls
-            if total_pages > 1 {
-                ui.add_space(8.0);
+        egui::TopBottomPanel::top("inst_search_top")
+            .frame(egui::Frame::none())
+            .exact_height(HEADER_H)
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if state.search_page > 0 {
-                        if ui
-                            .button(RichText::new("< Prev").color(palette.fg))
-                            .clicked()
-                        {
-                            state.search_page -= 1;
-                        }
+                    if ui
+                        .button(RichText::new("< Back").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_back = true;
                     }
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new(format!(
-                            "Page {}/{}",
-                            state.search_page + 1,
-                            total_pages
+                            "Search Results: \"{}\"  ({} found)",
+                            state.search_query,
+                            state.search_results.len()
                         ))
-                        .color(palette.dim),
+                        .color(palette.fg)
+                        .strong(),
                     );
-                    if state.search_page + 1 < total_pages {
-                        if ui
+                });
+            });
+
+        egui::TopBottomPanel::bottom("inst_search_bottom")
+            .frame(egui::Frame::none())
+            .exact_height(FOOTER_H)
+            .show_inside(ui, |ui| {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if state.search_page > 0
+                        && ui
+                            .button(RichText::new("< Prev").color(palette.fg))
+                            .clicked()
+                    {
+                        state.search_page -= 1;
+                    }
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Page {}/{}", state.search_page + 1, total_pages))
+                            .color(palette.dim),
+                    );
+                    ui.add_space(8.0);
+                    if state.search_page + 1 < total_pages
+                        && ui
                             .button(RichText::new("Next >").color(palette.fg))
                             .clicked()
-                        {
-                            state.search_page += 1;
-                        }
+                    {
+                        state.search_page += 1;
                     }
                 });
-            }
+            });
+
+        let available = ui.available_rect_before_wrap();
+        let body_size = egui::vec2(available.width().max(240.0), available.height().max(120.0));
+        let body_rect = egui::Rect::from_min_size(available.min, body_size);
+        ui.allocate_rect(body_rect, egui::Sense::hover());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+            ui.set_min_size(body_size);
+            ui.set_max_size(body_size);
+            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    let row_width = (ui.available_width() - 2.0).floor().max(220.0);
+                    for idx in start..end {
+                        let result = &state.search_results[idx];
+                        let desc_preview = result
+                            .description
+                            .as_ref()
+                            .map(|desc| Self::installer_description_preview(desc, 72));
+                        let (_, row_rect) =
+                            ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                            let frame = egui::Frame::none()
+                                .stroke(egui::Stroke::new(1.0, palette.fg))
+                                .inner_margin(egui::Margin::same(2.0));
+                            let content_width = (row_width - 4.0).max(80.0);
+                            frame.show(ui, |ui| {
+                                ui.set_min_width(content_width);
+                                ui.set_max_width(content_width);
+                                ui.set_min_height(row_height - 8.0);
+                                let button_width = 112.0;
+                                let text_width = (content_width - button_width - 24.0).max(140.0);
+                                ui.horizontal(|ui| {
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(text_width, 0.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            let status_text = if result.installed {
+                                                "[installed]"
+                                            } else {
+                                                "[get]"
+                                            };
+                                            let status_color = if result.installed {
+                                                palette.dim
+                                            } else {
+                                                palette.fg
+                                            };
+                                            ui.label(RichText::new(status_text).color(status_color));
+                                            ui.add_space(6.0);
+                                            ui.add_sized(
+                                                [ui.available_width().max(80.0), 0.0],
+                                                egui::Label::new(
+                                                    RichText::new(&result.pkg)
+                                                        .color(palette.fg)
+                                                        .strong(),
+                                                )
+                                                .truncate(),
+                                            );
+                                        },
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let btn_label = if result.installed {
+                                                "Actions"
+                                            } else {
+                                                "Install"
+                                            };
+                                            if ui
+                                                .add_sized(
+                                                    [button_width, 24.0],
+                                                    egui::Button::new(
+                                                        RichText::new(format!("[ {btn_label} ]"))
+                                                            .color(palette.fg),
+                                                    ),
+                                                )
+                                                .clicked()
+                                            {
+                                                *deferred_open_actions =
+                                                    Some((result.pkg.clone(), result.installed));
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(2.0);
+                                let desc_text = desc_preview.unwrap_or_else(|| {
+                                    if state.can_fetch_descriptions() {
+                                        String::new()
+                                    } else {
+                                        "Description unavailable while offline.".to_string()
+                                    }
+                                });
+                                if !desc_text.is_empty() {
+                                    ui.add_sized(
+                                        [(content_width - 8.0).max(80.0), 0.0],
+                                        egui::Label::new(RichText::new(desc_text).color(palette.dim))
+                                            .truncate(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+                });
         });
     }
 
@@ -11720,78 +11790,55 @@ impl RobcoNativeApp {
         deferred_back: &mut bool,
         deferred_open_actions: &mut Option<String>,
     ) {
-        // Header with back + filter
-        ui.horizontal(|ui| {
-            if ui
-                .button(RichText::new("< Back").color(palette.fg))
-                .clicked()
-            {
-                *deferred_back = true;
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new("Installed Apps").color(palette.fg).strong());
-            ui.add_space(16.0);
-            ui.label(RichText::new("Filter:").color(palette.dim));
-            ui.add_sized(
-                [200.0, 0.0],
-                egui::TextEdit::singleline(&mut state.installed_filter)
-                    .hint_text("type to filter...")
-                    .text_color(palette.fg),
-            );
-        });
-        ui.separator();
-
+        const HEADER_H: f32 = 28.0;
+        const FOOTER_H: f32 = 40.0;
+        const RESULTS_PER_PAGE: usize = 20;
         let filtered = state.filtered_installed();
-        let page_size = 30usize;
         let total = filtered.len();
+        let row_height = 58.0;
+        let page_size = RESULTS_PER_PAGE.max(1);
         let total_pages = total.div_ceil(page_size).max(1);
         state.installed_page = state.installed_page.min(total_pages.saturating_sub(1));
         let start = state.installed_page * page_size;
         let end = (start + page_size).min(total);
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for pkg in &filtered[start..end] {
-                let desc_preview = state
-                    .fetch_package_description(pkg)
-                    .map(|desc| Self::installer_description_preview(&desc, 88));
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(pkg).color(palette.fg).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button(RichText::new("[ Actions ]").color(palette.fg))
-                                .clicked()
-                            {
-                                *deferred_open_actions = Some(pkg.clone());
-                            }
-                        });
-                    });
-                    if let Some(desc) = desc_preview {
-                        ui.add_space(2.0);
-                        ui.label(RichText::new(desc).color(palette.dim));
-                    } else if !state.can_fetch_descriptions() {
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new("Description unavailable while offline.")
-                                .color(palette.dim),
-                        );
+        egui::TopBottomPanel::top("inst_installed_top")
+            .frame(egui::Frame::none())
+            .exact_height(HEADER_H)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(RichText::new("< Back").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_back = true;
                     }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Installed Apps").color(palette.fg).strong());
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("Filter:").color(palette.dim));
+                    ui.add_sized(
+                        [200.0, 0.0],
+                        egui::TextEdit::singleline(&mut state.installed_filter)
+                            .hint_text("type to filter...")
+                            .text_color(palette.fg),
+                    );
                 });
-                ui.separator();
-            }
+            });
 
-            // Pagination
-            if total_pages > 1 {
+        egui::TopBottomPanel::bottom("inst_installed_bottom")
+            .frame(egui::Frame::none())
+            .exact_height(FOOTER_H)
+            .show_inside(ui, |ui| {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if state.installed_page > 0 {
-                        if ui
+                    if state.installed_page > 0
+                        && ui
                             .button(RichText::new("< Prev").color(palette.fg))
                             .clicked()
-                        {
-                            state.installed_page -= 1;
-                        }
+                    {
+                        state.installed_page -= 1;
                     }
+                    ui.add_space(8.0);
                     ui.label(
                         RichText::new(format!(
                             "Page {}/{}  ({} packages)",
@@ -11801,16 +11848,92 @@ impl RobcoNativeApp {
                         ))
                         .color(palette.dim),
                     );
-                    if state.installed_page + 1 < total_pages {
-                        if ui
+                    ui.add_space(8.0);
+                    if state.installed_page + 1 < total_pages
+                        && ui
                             .button(RichText::new("Next >").color(palette.fg))
                             .clicked()
-                        {
-                            state.installed_page += 1;
-                        }
+                    {
+                        state.installed_page += 1;
                     }
                 });
-            }
+            });
+
+        let available = ui.available_rect_before_wrap();
+        let body_size = egui::vec2(available.width().max(240.0), available.height().max(120.0));
+        let body_rect = egui::Rect::from_min_size(available.min, body_size);
+        ui.allocate_rect(body_rect, egui::Sense::hover());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+            ui.set_min_size(body_size);
+            ui.set_max_size(body_size);
+            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    let row_width = (ui.available_width() - 2.0).floor().max(220.0);
+                    for idx in start..end {
+                        let pkg = &filtered[idx];
+                        let desc_preview = state
+                            .fetch_package_description(pkg)
+                            .map(|desc| Self::installer_description_preview(&desc, 72));
+                        let (_, row_rect) =
+                            ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                            let frame = egui::Frame::none()
+                                .stroke(egui::Stroke::new(1.0, palette.fg))
+                                .inner_margin(egui::Margin::same(2.0));
+                            let content_width = (row_width - 4.0).max(80.0);
+                            frame.show(ui, |ui| {
+                                ui.set_min_width(content_width);
+                                ui.set_max_width(content_width);
+                                ui.set_min_height(row_height - 8.0);
+                                let button_width = 112.0;
+                                let text_width = (content_width - button_width - 24.0).max(140.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [text_width, 0.0],
+                                        egui::Label::new(
+                                            RichText::new(pkg).color(palette.fg).strong(),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add_sized(
+                                                    [button_width, 24.0],
+                                                    egui::Button::new(
+                                                        RichText::new("[ Actions ]").color(palette.fg),
+                                                    ),
+                                                )
+                                                .clicked()
+                                            {
+                                                *deferred_open_actions = Some(pkg.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(2.0);
+                                let desc_text = desc_preview.unwrap_or_else(|| {
+                                    if state.can_fetch_descriptions() {
+                                        String::new()
+                                    } else {
+                                        "Description unavailable while offline.".to_string()
+                                    }
+                                });
+                                if !desc_text.is_empty() {
+                                    ui.add_sized(
+                                        [(content_width - 8.0).max(80.0), 0.0],
+                                        egui::Label::new(RichText::new(desc_text).color(palette.dim))
+                                            .truncate(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+                });
         });
     }
 
