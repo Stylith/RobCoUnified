@@ -25,7 +25,16 @@ use super::edit_menus_screen::{
 use super::editor_app::{
     EditorCommand, EditorTextAlign, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
-use super::file_manager::{FileManagerAction, NativeFileManagerState};
+use super::file_manager::{FileManagerAction, FileManagerCommand, NativeFileManagerState};
+use super::file_manager_app::{
+    self, FileManagerClipboardMode, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate,
+    FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode, FileManagerPickerCommit,
+    FileManagerPromptAction, FileManagerPromptRequest, FileManagerSelectionActivation,
+    FileManagerSettingsUpdate, NativeFileManagerDragPayload, OpenWithLaunchRequest,
+};
+use super::file_manager_desktop::{
+    self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest, FILE_MANAGER_APP_TITLE,
+};
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
 use super::installer_screen::{
     add_package_to_menu, apply_filter as apply_installer_filter,
@@ -70,10 +79,9 @@ use crate::config::ConnectionKind;
 use crate::config::{
     cycle_hacking_difficulty, get_settings, load_apps, load_categories, load_games, load_networks,
     persist_settings, save_apps, save_categories, save_games, save_networks, set_current_user,
-    update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopFileManagerSettings,
-    DesktopIconSortMode, DesktopIconStyle, DesktopPtyProfileSettings, DesktopShortcut,
-    FileManagerSortMode, FileManagerViewMode, OpenMode, Settings, WallpaperSizeMode,
-    CUSTOM_THEME_NAME, THEMES,
+    update_settings, CliAcsMode, CliColorMode, DefaultAppBinding, DesktopIconSortMode,
+    DesktopIconStyle, DesktopPtyProfileSettings, DesktopShortcut, FileManagerSortMode,
+    FileManagerViewMode, OpenMode, Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use crate::connections::{
     connect_connection, discovered_row_label, forget_saved_connection, network_requires_password,
@@ -87,7 +95,7 @@ use crate::default_apps::{
     binding_label, parse_custom_command_line, set_binding_for_slot, slot_label, DefaultAppSlot,
 };
 use crate::session;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
@@ -95,12 +103,12 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
-const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
+mod file_manager_desktop_presenter;
+mod file_manager_menu_presenter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NativeShellSnapshot {
@@ -245,41 +253,6 @@ struct AssetCache {
     icon_gaming: TextureHandle,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
-}
-
-#[derive(Debug, Clone)]
-enum FileManagerClipboardMode {
-    Copy,
-    Cut,
-}
-
-#[derive(Debug, Clone)]
-struct FileManagerClipboardItem {
-    paths: Vec<PathBuf>,
-    mode: FileManagerClipboardMode,
-}
-
-#[derive(Debug, Clone)]
-struct NativeFileManagerDragPayload {
-    paths: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-enum FileManagerEditOp {
-    CopyCreated { src: PathBuf, dst: PathBuf },
-    Moved { from: PathBuf, to: PathBuf },
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FileManagerActionRequest {
-    NewFolder,
-    Copy,
-    Cut,
-    Paste,
-    Duplicate,
-    Delete,
-    Undo,
-    Redo,
 }
 
 #[derive(Debug, Clone)]
@@ -660,9 +633,7 @@ pub struct RobcoNativeApp {
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
     desktop_window_generation_seed: u64,
-    file_clipboard: Option<FileManagerClipboardItem>,
-    file_undo_stack: Vec<FileManagerEditOp>,
-    file_redo_stack: Vec<FileManagerEditOp>,
+    file_manager_runtime: FileManagerEditRuntime,
     asset_cache: Option<AssetCache>,
     context_menu_action: Option<ContextMenuAction>,
     shell_status: String,
@@ -729,9 +700,7 @@ struct ParkedSessionState {
     session_leader_until: Option<Instant>,
     suppress_next_menu_submit: bool,
     desktop_window_generation_seed: u64,
-    file_clipboard: Option<FileManagerClipboardItem>,
-    file_undo_stack: Vec<FileManagerEditOp>,
-    file_redo_stack: Vec<FileManagerEditOp>,
+    file_manager_runtime: FileManagerEditRuntime,
     shell_status: String,
     start_menu_rename: Option<StartMenuRenameState>,
 }
@@ -825,9 +794,7 @@ impl Default for RobcoNativeApp {
             session_leader_until: None,
             session_runtime: HashMap::new(),
             desktop_window_generation_seed: 1,
-            file_clipboard: None,
-            file_undo_stack: Vec::new(),
-            file_redo_stack: Vec::new(),
+            file_manager_runtime: FileManagerEditRuntime::default(),
             asset_cache: None,
             context_menu_action: None,
             shell_status: String::new(),
@@ -1370,9 +1337,7 @@ impl RobcoNativeApp {
             session_leader_until: self.session_leader_until.take(),
             suppress_next_menu_submit: self.suppress_next_menu_submit,
             desktop_window_generation_seed: self.desktop_window_generation_seed,
-            file_clipboard: self.file_clipboard.clone(),
-            file_undo_stack: self.file_undo_stack.clone(),
-            file_redo_stack: self.file_redo_stack.clone(),
+            file_manager_runtime: self.file_manager_runtime.clone(),
             shell_status: std::mem::take(&mut self.shell_status),
             start_menu_rename: self.start_menu_rename.take(),
         };
@@ -1449,9 +1414,7 @@ impl RobcoNativeApp {
         self.session_leader_until = parked.session_leader_until;
         self.suppress_next_menu_submit = parked.suppress_next_menu_submit;
         self.desktop_window_generation_seed = parked.desktop_window_generation_seed;
-        self.file_clipboard = parked.file_clipboard;
-        self.file_undo_stack = parked.file_undo_stack;
-        self.file_redo_stack = parked.file_redo_stack;
+        self.file_manager_runtime = parked.file_manager_runtime;
         self.context_menu_action = None;
         self.shell_status = parked.shell_status;
         self.start_menu_rename = parked.start_menu_rename;
@@ -1983,7 +1946,7 @@ impl RobcoNativeApp {
 
     fn desktop_window_title(&self, window: DesktopWindow) -> String {
         match window {
-            DesktopWindow::FileManager => "My Computer".to_string(),
+            DesktopWindow::FileManager => FILE_MANAGER_APP_TITLE.to_string(),
             DesktopWindow::Editor => EDITOR_APP_TITLE.to_string(),
             DesktopWindow::Settings => "Settings".to_string(),
             DesktopWindow::Applications => "Applications".to_string(),
@@ -2028,45 +1991,36 @@ impl RobcoNativeApp {
         get_settings().desktop_file_manager.sort_mode
     }
 
-    fn toggle_file_manager_tree_panel(&mut self) {
-        update_settings(|s| {
-            s.desktop_file_manager.show_tree_panel = !s.desktop_file_manager.show_tree_panel;
-        });
-        persist_settings();
-        self.file_manager.ensure_selection_valid();
-    }
-
-    fn toggle_file_manager_hidden_files(&mut self) {
-        update_settings(|s| {
-            s.desktop_file_manager.show_hidden_files = !s.desktop_file_manager.show_hidden_files;
-        });
-        persist_settings();
-        self.file_manager.ensure_selection_valid();
-    }
-
-    fn set_file_manager_view_mode(&mut self, mode: FileManagerViewMode) {
-        update_settings(|s| {
-            s.desktop_file_manager.view_mode = mode;
-        });
-        persist_settings();
-        self.file_manager.ensure_selection_valid();
-    }
-
-    fn set_file_manager_sort_mode(&mut self, mode: FileManagerSortMode) {
-        update_settings(|s| {
-            s.desktop_file_manager.sort_mode = mode;
-        });
-        persist_settings();
-        self.file_manager.ensure_selection_valid();
-    }
-
-    fn file_manager_open_home(&mut self) {
+    fn file_manager_home_path(&self) -> PathBuf {
         if let Some(session) = &self.session {
-            self.file_manager
-                .set_cwd(word_processor_dir(&session.username));
+            word_processor_dir(&session.username)
         } else {
-            self.file_manager.set_cwd(home_dir_fallback());
+            home_dir_fallback()
         }
+    }
+
+    fn apply_file_manager_display_settings_update(
+        &mut self,
+        update: FileManagerDisplaySettingsUpdate,
+    ) {
+        update_settings(|settings| match update {
+            FileManagerDisplaySettingsUpdate::ToggleTreePanel => {
+                settings.desktop_file_manager.show_tree_panel =
+                    !settings.desktop_file_manager.show_tree_panel;
+            }
+            FileManagerDisplaySettingsUpdate::ToggleHiddenFiles => {
+                settings.desktop_file_manager.show_hidden_files =
+                    !settings.desktop_file_manager.show_hidden_files;
+            }
+            FileManagerDisplaySettingsUpdate::SetViewMode(mode) => {
+                settings.desktop_file_manager.view_mode = mode;
+            }
+            FileManagerDisplaySettingsUpdate::SetSortMode(mode) => {
+                settings.desktop_file_manager.sort_mode = mode;
+            }
+        });
+        persist_settings();
+        self.file_manager.ensure_selection_valid();
     }
 
     fn truncate_file_manager_label(text: &str, max_chars: usize) -> String {
@@ -2128,10 +2082,6 @@ impl RobcoNativeApp {
         })
     }
 
-    fn file_manager_selected_entry(&self) -> Option<super::file_manager::FileEntryRow> {
-        self.file_manager.selected_row()
-    }
-
     fn file_manager_selected_entries(&self) -> Vec<super::file_manager::FileEntryRow> {
         self.file_manager.selected_rows_for_action()
     }
@@ -2189,266 +2139,59 @@ impl RobcoNativeApp {
             .unwrap_or_else(|| path.display().to_string())
     }
 
-    fn open_with_extension_key(path: &Path) -> String {
-        path.extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| FILE_MANAGER_OPEN_WITH_NO_EXT_KEY.to_string())
-    }
-
-    fn open_with_extension_label(ext_key: &str) -> String {
-        if ext_key == FILE_MANAGER_OPEN_WITH_NO_EXT_KEY {
-            "(no extension)".to_string()
-        } else {
-            format!(".{ext_key}")
-        }
-    }
-
-    fn push_open_with_history(history: &mut Vec<String>, command: &str) {
-        let normalized = command.trim();
-        if normalized.is_empty() {
-            return;
-        }
-        history.retain(|entry| entry.trim() != normalized);
-        history.insert(0, normalized.to_string());
-        if history.len() > FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT {
-            history.truncate(FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT);
-        }
-    }
-
-    fn open_with_history_for_extension(&self, ext_key: &str) -> Vec<String> {
-        get_settings()
-            .desktop_file_manager
-            .open_with_by_extension
-            .get(ext_key)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn open_with_default_for_extension(&self, ext_key: &str) -> Option<String> {
-        get_settings()
-            .desktop_file_manager
-            .open_with_default_by_extension
-            .get(ext_key)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    }
-
     fn sync_open_with_settings_to_draft(&mut self) {
         let live = get_settings();
-        self.settings
-            .draft
-            .desktop_file_manager
-            .open_with_by_extension = live.desktop_file_manager.open_with_by_extension.clone();
-        self.settings
-            .draft
-            .desktop_file_manager
-            .open_with_default_by_extension = live
-            .desktop_file_manager
-            .open_with_default_by_extension
-            .clone();
+        file_manager_app::sync_open_with_settings_to_draft(
+            &live.desktop_file_manager,
+            &mut self.settings.draft.desktop_file_manager,
+        );
     }
 
-    fn set_open_with_default_in_settings(
-        fm: &mut DesktopFileManagerSettings,
-        ext_key: &str,
-        command: Option<&str>,
-    ) {
-        match command.map(str::trim).filter(|value| !value.is_empty()) {
-            Some(normalized) => {
-                let history = fm
-                    .open_with_by_extension
-                    .entry(ext_key.to_string())
-                    .or_default();
-                Self::push_open_with_history(history, normalized);
-                fm.open_with_default_by_extension
-                    .insert(ext_key.to_string(), normalized.to_string());
-            }
-            None => {
-                fm.open_with_default_by_extension.remove(ext_key);
-            }
-        }
-    }
-
-    fn record_open_with_command(&mut self, ext_key: &str, command: &str) {
-        let normalized = command.trim();
-        if normalized.is_empty() {
-            return;
-        }
+    fn apply_file_manager_settings_update(&mut self, update: FileManagerSettingsUpdate) {
         update_settings(|settings| {
-            let history = settings
-                .desktop_file_manager
-                .open_with_by_extension
-                .entry(ext_key.to_string())
-                .or_default();
-            Self::push_open_with_history(history, normalized);
+            update.apply(&mut settings.desktop_file_manager);
         });
         persist_settings();
         self.sync_open_with_settings_to_draft();
-    }
-
-    fn set_open_with_default_command(&mut self, ext_key: &str, command: Option<&str>) {
-        update_settings(|settings| {
-            Self::set_open_with_default_in_settings(
-                &mut settings.desktop_file_manager,
-                ext_key,
-                command,
-            );
-        });
-        persist_settings();
-        self.sync_open_with_settings_to_draft();
-    }
-
-    fn replace_open_with_command_in_settings(
-        fm: &mut DesktopFileManagerSettings,
-        ext_key: &str,
-        old_normalized: &str,
-        new_normalized: &str,
-    ) {
-        let was_default = fm
-            .open_with_default_by_extension
-            .get(ext_key)
-            .is_some_and(|current| current.trim() == old_normalized);
-
-        let remove_bucket = {
-            let history = fm
-                .open_with_by_extension
-                .entry(ext_key.to_string())
-                .or_default();
-            history.retain(|entry| entry.trim() != old_normalized);
-            Self::push_open_with_history(history, new_normalized);
-            history.is_empty()
-        };
-        if remove_bucket {
-            fm.open_with_by_extension.remove(ext_key);
-        }
-
-        if was_default {
-            fm.open_with_default_by_extension
-                .insert(ext_key.to_string(), new_normalized.to_string());
-        }
-    }
-
-    fn replace_open_with_command(&mut self, ext_key: &str, old_command: &str, new_command: &str) {
-        let old_normalized = old_command.trim();
-        let new_normalized = new_command.trim();
-        if old_normalized.is_empty() || new_normalized.is_empty() {
-            return;
-        }
-        update_settings(|settings| {
-            Self::replace_open_with_command_in_settings(
-                &mut settings.desktop_file_manager,
-                ext_key,
-                old_normalized,
-                new_normalized,
-            );
-        });
-        persist_settings();
-        self.sync_open_with_settings_to_draft();
-    }
-
-    fn remove_open_with_command_in_settings(
-        fm: &mut DesktopFileManagerSettings,
-        ext_key: &str,
-        normalized: &str,
-    ) {
-        let mut remove_bucket = false;
-        if let Some(history) = fm.open_with_by_extension.get_mut(ext_key) {
-            history.retain(|entry| entry.trim() != normalized);
-            remove_bucket = history.is_empty();
-        }
-        if remove_bucket {
-            fm.open_with_by_extension.remove(ext_key);
-        }
-        if fm
-            .open_with_default_by_extension
-            .get(ext_key)
-            .is_some_and(|current| current.trim() == normalized)
-        {
-            fm.open_with_default_by_extension.remove(ext_key);
-        }
-    }
-
-    fn remove_open_with_command(&mut self, ext_key: &str, command: &str) {
-        let normalized = command.trim();
-        if normalized.is_empty() {
-            return;
-        }
-        update_settings(|settings| {
-            Self::remove_open_with_command_in_settings(
-                &mut settings.desktop_file_manager,
-                ext_key,
-                normalized,
-            );
-        });
-        persist_settings();
-        self.sync_open_with_settings_to_draft();
-    }
-
-    fn open_with_command_title(program: &str) -> String {
-        let name = Path::new(program)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(program);
-        if name.eq_ignore_ascii_case("spotify_player") {
-            "spotify".to_string()
-        } else {
-            name.to_string()
-        }
     }
 
     fn launch_open_with_command(&mut self, path: &Path, command_line: &str) -> Result<String> {
-        let normalized = command_line.trim();
-        let Some(mut cmd) = parse_custom_command_line(normalized) else {
-            return Err(anyhow!("Invalid command line: {normalized}"));
+        let launch = file_manager_app::prepare_open_with_launch(path, command_line)?;
+        Ok(self.launch_open_with_request(launch))
+    }
+
+    fn launch_open_with_request(&mut self, launch: OpenWithLaunchRequest) -> String {
+        self.open_desktop_pty(&launch.title, &launch.argv);
+        launch.status_message
+    }
+
+    fn handle_file_manager_prompt_outcome(&mut self, outcome: &PromptOutcome) -> bool {
+        let Some(actions) = file_manager_app::apply_prompt_outcome(
+            outcome,
+            &mut self.file_manager,
+            &mut self.file_manager_runtime,
+        ) else {
+            return false;
         };
-        let program = cmd.first().cloned().unwrap_or_default();
-        if !program.is_empty() && !crate::launcher::command_exists(&program) {
-            return Err(anyhow!("Command `{program}` was not found in PATH."));
+        self.terminal_prompt = None;
+        for action in actions {
+            match action {
+                FileManagerPromptAction::Launch(launch) => {
+                    self.shell_status = self.launch_open_with_request(launch);
+                }
+                FileManagerPromptAction::ApplySettingsUpdate(update) => {
+                    self.apply_file_manager_settings_update(update);
+                }
+                FileManagerPromptAction::ReportStatus(status) => {
+                    self.shell_status = status;
+                }
+            }
         }
-        cmd.push(path.display().to_string());
-        let title = format!(
-            "{} - {}",
-            Self::open_with_command_title(&cmd[0]),
-            Self::path_display_name(path)
-        );
-        self.open_desktop_pty(&title, &cmd);
-        Ok(format!("Opened {} in PTY", Self::path_display_name(path)))
+        true
     }
 
     fn file_manager_selected_file(&self) -> Option<super::file_manager::FileEntryRow> {
-        let mut entries = self.file_manager_selected_entries();
-        if entries.len() != 1 {
-            return None;
-        }
-        let entry = entries.pop()?;
-        entry.path.is_file().then_some(entry)
-    }
-
-    fn unique_copy_path_in_dir(
-        dir: &Path,
-        original_name: &str,
-        prefer_copy_suffix: bool,
-    ) -> PathBuf {
-        let direct = dir.join(original_name);
-        if !prefer_copy_suffix && !direct.exists() {
-            return direct;
-        }
-        let (stem, ext) = Self::split_file_name(original_name);
-        for index in 1..=9999usize {
-            let candidate = if index == 1 {
-                format!("{stem} copy{ext}")
-            } else {
-                format!("{stem} copy {index}{ext}")
-            };
-            let path = dir.join(candidate);
-            if !path.exists() {
-                return path;
-            }
-        }
-        direct
+        file_manager_app::selected_file(self.file_manager_selected_entries())
     }
 
     fn unique_path_in_dir(dir: &Path, original_name: &str) -> PathBuf {
@@ -2466,281 +2209,17 @@ impl RobcoNativeApp {
         direct
     }
 
-    fn copy_path_recursive(src: &Path, dst: &Path) -> Result<()> {
-        let meta =
-            std::fs::metadata(src).map_err(|e| anyhow!("Failed reading {}: {e}", src.display()))?;
-        if meta.is_dir() {
-            std::fs::create_dir_all(dst)
-                .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
-            for item in std::fs::read_dir(src)
-                .map_err(|e| anyhow!("Failed listing {}: {e}", src.display()))?
-            {
-                let item =
-                    item.map_err(|e| anyhow!("Failed reading {} entry: {e}", src.display()))?;
-                let child_src = item.path();
-                let child_dst = dst.join(item.file_name());
-                Self::copy_path_recursive(&child_src, &child_dst)?;
-            }
-        } else {
-            if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| anyhow!("Failed creating {}: {e}", parent.display()))?;
-            }
-            std::fs::copy(src, dst).map_err(|e| {
-                anyhow!("Failed copying {} -> {}: {e}", src.display(), dst.display())
-            })?;
-        }
-        Ok(())
-    }
-
-    fn remove_path_recursive(path: &Path) -> Result<()> {
-        if !path.exists() {
-            return Ok(());
-        }
-        if path.is_dir() {
-            std::fs::remove_dir_all(path)
-                .map_err(|e| anyhow!("Failed deleting {}: {e}", path.display()))?;
-        } else {
-            std::fs::remove_file(path)
-                .map_err(|e| anyhow!("Failed deleting {}: {e}", path.display()))?;
-        }
-        Ok(())
-    }
-
-    fn move_path(src: &Path, dst: &Path) -> Result<()> {
-        if src == dst {
-            return Ok(());
-        }
-        if dst.exists() {
-            return Err(anyhow!("Destination already exists: {}", dst.display()));
-        }
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow!("Failed creating {}: {e}", parent.display()))?;
-        }
-        match std::fs::rename(src, dst) {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                Self::copy_path_recursive(src, dst)?;
-                Self::remove_path_recursive(src)
-            }
-        }
-    }
-
-    fn record_file_manager_edit_op(&mut self, op: FileManagerEditOp) {
-        self.file_undo_stack.push(op);
-        self.file_redo_stack.clear();
-        if self.file_undo_stack.len() > 100 {
-            let overflow = self.file_undo_stack.len().saturating_sub(100);
-            self.file_undo_stack.drain(0..overflow);
-        }
-    }
-
-    fn apply_file_manager_edit_op(op: &FileManagerEditOp, reverse: bool) -> Result<()> {
-        match op {
-            FileManagerEditOp::CopyCreated { src, dst } => {
-                if reverse {
-                    Self::remove_path_recursive(dst)
-                } else {
-                    Self::copy_path_recursive(src, dst)
-                }
-            }
-            FileManagerEditOp::Moved { from, to } => {
-                if reverse {
-                    Self::move_path(to, from)
-                } else {
-                    Self::move_path(from, to)
-                }
-            }
-        }
-    }
-
-    fn file_manager_set_clipboard_from_selected(
-        &mut self,
-        mode: FileManagerClipboardMode,
-    ) -> Result<String> {
-        let entries = self.file_manager_selected_entries();
-        if entries.is_empty() {
-            return Err(anyhow!("Select a file or folder first."));
-        }
-        let clipboard_paths: Vec<PathBuf> =
-            entries.iter().map(|entry| entry.path.clone()).collect();
-        self.file_clipboard = Some(FileManagerClipboardItem {
-            paths: clipboard_paths,
-            mode: mode.clone(),
-        });
-        let noun = if entries.len() == 1 {
-            entries[0].label.clone()
-        } else {
-            format!("{} items", entries.len())
-        };
-        Ok(match mode {
-            FileManagerClipboardMode::Copy => format!("Copied {noun}"),
-            FileManagerClipboardMode::Cut => format!("Cut {noun}"),
-        })
-    }
-
-    fn file_manager_create_new_folder(&mut self) -> Result<String> {
-        let dst = Self::unique_path_in_dir(&self.file_manager.cwd, "New Folder");
-        std::fs::create_dir_all(&dst)
-            .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
-        self.file_manager.select(Some(dst.clone()));
-        Ok(format!("Created {}", Self::path_display_name(&dst)))
-    }
-
-    fn file_manager_duplicate_selected(&mut self) -> Result<String> {
-        let entries = self.file_manager_selected_entries();
-        if entries.is_empty() {
-            return Err(anyhow!("Select a file or folder first."));
-        }
-        let mut created = Vec::new();
-        for entry in entries {
-            let Some(parent) = entry.path.parent() else {
-                continue;
-            };
-            let name = Self::path_display_name(&entry.path);
-            let dst = Self::unique_copy_path_in_dir(parent, &name, true);
-            Self::copy_path_recursive(&entry.path, &dst)?;
-            self.record_file_manager_edit_op(FileManagerEditOp::CopyCreated {
-                src: entry.path,
-                dst: dst.clone(),
-            });
-            created.push(dst);
-        }
-        let Some(last) = created.last().cloned() else {
-            return Err(anyhow!("Cannot duplicate this selection."));
-        };
-        self.file_manager.select(Some(last.clone()));
-        if created.len() == 1 {
-            Ok(format!("Duplicated as {}", Self::path_display_name(&last)))
-        } else {
-            Ok(format!("Duplicated {} items", created.len()))
-        }
-    }
-
-    fn file_manager_rename_selected(&mut self, new_name: String) -> Result<String> {
-        let Some(entry) = self.file_manager_selected_entry() else {
-            return Err(anyhow!("Select a file or folder first."));
-        };
-        let Some(parent) = entry.path.parent() else {
-            return Err(anyhow!("Cannot rename this item."));
-        };
-        let name = new_name.trim();
-        if name.is_empty() {
-            return Err(anyhow!("Name cannot be empty."));
-        }
-        if name.contains('/') || name.contains('\\') {
-            return Err(anyhow!("Name cannot contain path separators."));
-        }
-        if name == entry.label {
-            return Ok("Name unchanged.".to_string());
-        }
-        let dst = parent.join(name);
-        if dst.exists() {
-            return Err(anyhow!("Destination already exists: {}", dst.display()));
-        }
-        Self::move_path(&entry.path, &dst)?;
-        self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-            from: entry.path,
-            to: dst.clone(),
-        });
-        self.file_manager.select(Some(dst.clone()));
-        Ok(format!("Renamed to {}", Self::path_display_name(&dst)))
-    }
-
-    fn file_manager_move_selected(&mut self, raw_destination: String) -> Result<String> {
-        let Some(entry) = self.file_manager_selected_entry() else {
-            return Err(anyhow!("Select a file or folder first."));
-        };
-        let mut dst = PathBuf::from(raw_destination.trim());
-        if dst.as_os_str().is_empty() {
-            return Err(anyhow!("Destination cannot be empty."));
-        }
-        if dst.is_relative() {
-            dst = self.file_manager.cwd.join(dst);
-        }
-        if dst.exists() && dst.is_dir() {
-            dst = dst.join(Self::path_display_name(&entry.path));
-        }
-        if dst == entry.path {
-            return Ok("Item already at destination.".to_string());
-        }
-        Self::move_path(&entry.path, &dst)?;
-        self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-            from: entry.path.clone(),
-            to: dst.clone(),
-        });
-        if let Some(parent) = dst.parent() {
-            self.file_manager.set_cwd(parent.to_path_buf());
-        }
-        self.file_manager.select(Some(dst.clone()));
-        Ok(format!("Moved to {}", dst.display()))
-    }
-
-    fn file_manager_can_move_path_to_dir(src: &Path, target_dir: &Path) -> bool {
-        if src == target_dir {
-            return false;
-        }
-        if src.parent().is_some_and(|parent| parent == target_dir) {
-            return false;
-        }
-        !(src.is_dir() && target_dir.starts_with(src))
-    }
-
     fn file_manager_move_paths_to_dir(
         &mut self,
         paths: Vec<PathBuf>,
         target_dir: &Path,
     ) -> Result<String> {
-        if !target_dir.is_dir() {
-            return Err(anyhow!("Destination folder does not exist."));
-        }
-        let mut seen = HashSet::new();
-        let mut moved = Vec::new();
-        let target_dir = target_dir.to_path_buf();
-        for src in paths {
-            if !seen.insert(src.clone()) || !src.exists() {
-                continue;
-            }
-            if !Self::file_manager_can_move_path_to_dir(&src, &target_dir) {
-                continue;
-            }
-            let source_name = Self::path_display_name(&src);
-            let mut dst = target_dir.join(&source_name);
-            if dst.exists() {
-                dst = Self::unique_path_in_dir(&target_dir, &source_name);
-            }
-            if dst == src {
-                continue;
-            }
-            Self::move_path(&src, &dst)?;
-            self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-                from: src,
-                to: dst.clone(),
-            });
-            moved.push(dst);
-        }
-        if moved.is_empty() {
-            return Err(anyhow!("Nothing to move."));
-        }
-        if target_dir == self.file_manager.cwd {
-            if let Some(last) = moved.last().cloned() {
-                self.file_manager.select(Some(last));
-            }
-        } else {
-            self.file_manager.ensure_selection_valid();
-        }
-        if moved.len() == 1 {
-            Ok(format!("Moved {}", Self::path_display_name(&moved[0])))
-        } else {
-            Ok(format!("Moved {} items", moved.len()))
-        }
+        self.file_manager_runtime
+            .move_paths_to_dir(&mut self.file_manager, paths, target_dir)
     }
 
     fn file_manager_drop_allowed(paths: &[PathBuf], target_dir: &Path) -> bool {
-        paths
-            .iter()
-            .any(|src| src.exists() && Self::file_manager_can_move_path_to_dir(src, target_dir))
+        FileManagerEditRuntime::drop_allowed(paths, target_dir)
     }
 
     fn file_manager_handle_drop_to_dir(&mut self, paths: Vec<PathBuf>, target_dir: PathBuf) {
@@ -2750,141 +2229,28 @@ impl RobcoNativeApp {
         };
     }
 
-    fn file_manager_paste_clipboard(&mut self) -> Result<String> {
-        let Some(clip) = self.file_clipboard.clone() else {
-            return Err(anyhow!("Clipboard is empty."));
-        };
-        let target_dir = self.file_manager.cwd.clone();
-        let mut changed = 0usize;
-        let mut last_dst: Option<PathBuf> = None;
-
-        match clip.mode {
-            FileManagerClipboardMode::Copy => {
-                for src in clip.paths {
-                    if !src.exists() {
-                        continue;
-                    }
-                    let source_name = Self::path_display_name(&src);
-                    let mut dst = target_dir.join(&source_name);
-                    if dst.exists() {
-                        dst = Self::unique_copy_path_in_dir(&target_dir, &source_name, false);
-                    }
-                    Self::copy_path_recursive(&src, &dst)?;
-                    self.record_file_manager_edit_op(FileManagerEditOp::CopyCreated {
-                        src,
-                        dst: dst.clone(),
-                    });
-                    changed += 1;
-                    last_dst = Some(dst);
-                }
+    fn run_file_manager_command(&mut self, command: FileManagerCommand) {
+        let home_path = self.file_manager_home_path();
+        match file_manager_app::run_command(
+            command,
+            &mut self.file_manager,
+            &mut self.file_manager_runtime,
+            &home_path,
+        ) {
+            FileManagerCommandRequest::None => {}
+            FileManagerCommandRequest::ActivateSelection => {
+                self.activate_file_manager_selection();
             }
-            FileManagerClipboardMode::Cut => {
-                for src in clip.paths {
-                    if !src.exists() {
-                        continue;
-                    }
-                    let source_name = Self::path_display_name(&src);
-                    let source_parent = src.parent().map(Path::to_path_buf);
-                    if source_parent.as_deref() == Some(target_dir.as_path()) {
-                        continue;
-                    }
-                    let mut dst = target_dir.join(&source_name);
-                    if dst.exists() {
-                        dst = Self::unique_path_in_dir(&target_dir, &source_name);
-                    }
-                    Self::move_path(&src, &dst)?;
-                    self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-                        from: src,
-                        to: dst.clone(),
-                    });
-                    changed += 1;
-                    last_dst = Some(dst);
-                }
-                self.file_clipboard = None;
+            FileManagerCommandRequest::OpenPrompt(request) => {
+                self.open_file_manager_prompt(request);
+            }
+            FileManagerCommandRequest::ApplyDisplaySettings(update) => {
+                self.apply_file_manager_display_settings_update(update);
+            }
+            FileManagerCommandRequest::ReportStatus(status) => {
+                self.shell_status = status;
             }
         }
-
-        if changed == 0 {
-            return Err(anyhow!("Clipboard source no longer exists."));
-        }
-        if let Some(dst) = last_dst {
-            self.file_manager.select(Some(dst.clone()));
-            if changed == 1 {
-                Ok(format!("Pasted {}", Self::path_display_name(&dst)))
-            } else {
-                Ok(format!("Pasted {changed} items"))
-            }
-        } else {
-            Err(anyhow!("Clipboard source no longer exists."))
-        }
-    }
-
-    fn file_manager_delete_selected(&mut self) -> Result<String> {
-        let entries = self.file_manager_selected_entries();
-        if entries.is_empty() {
-            return Err(anyhow!("Select a file or folder first."));
-        }
-        let trash_dir = crate::config::base_dir().join(".fm_trash");
-        std::fs::create_dir_all(&trash_dir)
-            .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
-        let mut moved = 0usize;
-        for entry in entries {
-            let name = Self::path_display_name(&entry.path);
-            let trash_target = Self::unique_path_in_dir(&trash_dir, &name);
-            Self::move_path(&entry.path, &trash_target)?;
-            self.record_file_manager_edit_op(FileManagerEditOp::Moved {
-                from: entry.path,
-                to: trash_target,
-            });
-            moved += 1;
-        }
-        self.file_manager.ensure_selection_valid();
-        if moved == 1 {
-            Ok("Moved item to trash".to_string())
-        } else {
-            Ok(format!("Moved {moved} items to trash"))
-        }
-    }
-
-    fn file_manager_undo(&mut self) -> Result<String> {
-        let Some(op) = self.file_undo_stack.pop() else {
-            return Err(anyhow!("Nothing to undo."));
-        };
-        Self::apply_file_manager_edit_op(&op, true)?;
-        self.file_redo_stack.push(op);
-        self.file_manager.ensure_selection_valid();
-        Ok("Undo complete".to_string())
-    }
-
-    fn file_manager_redo(&mut self) -> Result<String> {
-        let Some(op) = self.file_redo_stack.pop() else {
-            return Err(anyhow!("Nothing to redo."));
-        };
-        Self::apply_file_manager_edit_op(&op, false)?;
-        self.file_undo_stack.push(op);
-        self.file_manager.ensure_selection_valid();
-        Ok("Redo complete".to_string())
-    }
-
-    fn run_file_manager_action(&mut self, action: FileManagerActionRequest) {
-        let outcome = match action {
-            FileManagerActionRequest::NewFolder => self.file_manager_create_new_folder(),
-            FileManagerActionRequest::Copy => {
-                self.file_manager_set_clipboard_from_selected(FileManagerClipboardMode::Copy)
-            }
-            FileManagerActionRequest::Cut => {
-                self.file_manager_set_clipboard_from_selected(FileManagerClipboardMode::Cut)
-            }
-            FileManagerActionRequest::Paste => self.file_manager_paste_clipboard(),
-            FileManagerActionRequest::Duplicate => self.file_manager_duplicate_selected(),
-            FileManagerActionRequest::Delete => self.file_manager_delete_selected(),
-            FileManagerActionRequest::Undo => self.file_manager_undo(),
-            FileManagerActionRequest::Redo => self.file_manager_redo(),
-        };
-        self.shell_status = match outcome {
-            Ok(message) => message,
-            Err(err) => format!("File action failed: {err}"),
-        };
     }
 
     fn dispatch_context_menu_action(&mut self, _ctx: &Context) {
@@ -2892,27 +2258,27 @@ impl RobcoNativeApp {
             return;
         };
         match action {
-            ContextMenuAction::Open => self.activate_file_manager_selection(),
+            ContextMenuAction::Open => {
+                self.run_file_manager_command(FileManagerCommand::OpenSelected)
+            }
             ContextMenuAction::OpenWith => {
                 if let Some(entry) = self.file_manager_selected_file() {
-                    let ext_key = Self::open_with_extension_key(&entry.path);
-                    self.open_file_manager_open_with_new_command_prompt(entry.path, ext_key, false);
+                    let ext_key = file_manager_app::open_with_extension_key(&entry.path);
+                    self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
+                        entry.path, ext_key, false,
+                    ));
                 } else {
                     self.shell_status = "Open With requires a file.".to_string();
                 }
             }
-            ContextMenuAction::Rename => self.open_file_manager_rename_prompt(),
-            ContextMenuAction::Cut => self.run_file_manager_action(FileManagerActionRequest::Cut),
-            ContextMenuAction::Copy => self.run_file_manager_action(FileManagerActionRequest::Copy),
-            ContextMenuAction::Paste => {
-                self.run_file_manager_action(FileManagerActionRequest::Paste)
-            }
+            ContextMenuAction::Rename => self.run_file_manager_command(FileManagerCommand::Rename),
+            ContextMenuAction::Cut => self.run_file_manager_command(FileManagerCommand::Cut),
+            ContextMenuAction::Copy => self.run_file_manager_command(FileManagerCommand::Copy),
+            ContextMenuAction::Paste => self.run_file_manager_command(FileManagerCommand::Paste),
             ContextMenuAction::Duplicate => {
-                self.run_file_manager_action(FileManagerActionRequest::Duplicate)
+                self.run_file_manager_command(FileManagerCommand::Duplicate)
             }
-            ContextMenuAction::Delete => {
-                self.run_file_manager_action(FileManagerActionRequest::Delete)
-            }
+            ContextMenuAction::Delete => self.run_file_manager_command(FileManagerCommand::Delete),
             ContextMenuAction::Properties => {
                 self.shell_status = "Properties dialog is not implemented yet.".to_string();
             }
@@ -2920,7 +2286,7 @@ impl RobcoNativeApp {
                 self.shell_status = "Desktop paste is not implemented yet.".to_string();
             }
             ContextMenuAction::NewFolder => {
-                self.run_file_manager_action(FileManagerActionRequest::NewFolder);
+                self.run_file_manager_command(FileManagerCommand::NewFolder);
             }
             ContextMenuAction::ChangeAppearance => {
                 self.open_desktop_window(DesktopWindow::Settings);
@@ -3040,118 +2406,6 @@ impl RobcoNativeApp {
                 }
             }
         }
-    }
-
-    fn attach_file_manager_context_menu(
-        action: &mut Option<ContextMenuAction>,
-        response: &egui::Response,
-        has_selection: bool,
-        has_file_selection: bool,
-        has_clipboard: bool,
-    ) {
-        response.context_menu(|ui| {
-            Self::apply_context_menu_style(ui);
-            ui.set_min_width(136.0);
-            ui.set_max_width(180.0);
-
-            let open = if has_selection {
-                ui.button("Open")
-            } else {
-                Self::retro_disabled_button(ui, "Open")
-            };
-            if open.clicked() {
-                *action = Some(ContextMenuAction::Open);
-                ui.close_menu();
-            }
-            let open_with = if has_file_selection {
-                ui.button("Open with...")
-            } else {
-                Self::retro_disabled_button(ui, "Open with...")
-            };
-            if open_with.clicked() {
-                *action = Some(ContextMenuAction::OpenWith);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            let rename = if has_selection {
-                ui.button("Rename")
-            } else {
-                Self::retro_disabled_button(ui, "Rename")
-            };
-            if rename.clicked() {
-                *action = Some(ContextMenuAction::Rename);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            let cut = if has_selection {
-                ui.button("Cut")
-            } else {
-                Self::retro_disabled_button(ui, "Cut")
-            };
-            if cut.clicked() {
-                *action = Some(ContextMenuAction::Cut);
-                ui.close_menu();
-            }
-            let copy = if has_selection {
-                ui.button("Copy")
-            } else {
-                Self::retro_disabled_button(ui, "Copy")
-            };
-            if copy.clicked() {
-                *action = Some(ContextMenuAction::Copy);
-                ui.close_menu();
-            }
-            let paste = if has_clipboard {
-                ui.button("Paste")
-            } else {
-                Self::retro_disabled_button(ui, "Paste")
-            };
-            if paste.clicked() {
-                *action = Some(ContextMenuAction::Paste);
-                ui.close_menu();
-            }
-            if ui.button("New Folder").clicked() {
-                *action = Some(ContextMenuAction::NewFolder);
-                ui.close_menu();
-            }
-            let duplicate = if has_selection {
-                ui.button("Duplicate")
-            } else {
-                Self::retro_disabled_button(ui, "Duplicate")
-            };
-            if duplicate.clicked() {
-                *action = Some(ContextMenuAction::Duplicate);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            let delete = if has_selection {
-                ui.button("Delete")
-            } else {
-                Self::retro_disabled_button(ui, "Delete")
-            };
-            if delete.clicked() {
-                *action = Some(ContextMenuAction::Delete);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            let properties = if has_selection {
-                ui.button("Properties")
-            } else {
-                Self::retro_disabled_button(ui, "Properties")
-            };
-            if properties.clicked() {
-                *action = Some(ContextMenuAction::Properties);
-                ui.close_menu();
-            }
-        });
     }
 
     fn attach_desktop_empty_context_menu(
@@ -4907,80 +4161,8 @@ impl RobcoNativeApp {
         });
     }
 
-    fn open_file_manager_rename_prompt(&mut self) {
-        let Some(entry) = self.file_manager_selected_entry() else {
-            self.shell_status = "Select a file or folder first.".to_string();
-            return;
-        };
-        self.terminal_prompt = Some(TerminalPrompt {
-            kind: TerminalPromptKind::Input,
-            title: "Rename".to_string(),
-            prompt: format!("Rename {} to:", entry.label),
-            buffer: entry.label,
-            confirm_yes: true,
-            action: TerminalPromptAction::FileManagerRename { path: entry.path },
-        });
-    }
-
-    fn open_file_manager_move_prompt(&mut self) {
-        let Some(entry) = self.file_manager_selected_entry() else {
-            self.shell_status = "Select a file or folder first.".to_string();
-            return;
-        };
-        self.terminal_prompt = Some(TerminalPrompt {
-            kind: TerminalPromptKind::Input,
-            title: "Move To".to_string(),
-            prompt: "Move to (dir or full path):".to_string(),
-            buffer: String::new(),
-            confirm_yes: true,
-            action: TerminalPromptAction::FileManagerMoveTo { path: entry.path },
-        });
-    }
-
-    fn open_file_manager_open_with_new_command_prompt(
-        &mut self,
-        path: PathBuf,
-        ext_key: String,
-        make_default: bool,
-    ) {
-        let ext_label = Self::open_with_extension_label(&ext_key);
-        self.terminal_prompt = Some(TerminalPrompt {
-            kind: TerminalPromptKind::Input,
-            title: format!("Open With {}", ext_label),
-            prompt: if make_default {
-                format!("Open with command for {} (saved as default):", ext_label)
-            } else {
-                format!("Open with command for {}:", ext_label)
-            },
-            buffer: String::new(),
-            confirm_yes: true,
-            action: TerminalPromptAction::FileManagerOpenWithNewCommand {
-                path,
-                ext_key,
-                make_default,
-            },
-        });
-    }
-
-    fn open_file_manager_open_with_edit_command_prompt(
-        &mut self,
-        path: PathBuf,
-        ext_key: String,
-        previous: String,
-    ) {
-        let ext_label = Self::open_with_extension_label(&ext_key);
-        self.terminal_prompt = Some(TerminalPrompt {
-            kind: TerminalPromptKind::Input,
-            title: format!("Open With {}", ext_label),
-            prompt: format!("Edit saved command for {}:", ext_label),
-            buffer: previous.clone(),
-            confirm_yes: true,
-            action: TerminalPromptAction::FileManagerOpenWithEditCommand {
-                path,
-                ext_key,
-                previous,
-            },
-        });
+    fn open_file_manager_prompt(&mut self, request: FileManagerPromptRequest) {
+        self.terminal_prompt = Some(request.to_terminal_prompt());
     }
 
     fn save_user_and_status(&mut self, username: &str, user: UserRecord, status: String) {
@@ -5269,19 +4451,17 @@ impl RobcoNativeApp {
     }
 
     fn activate_file_manager_selection(&mut self) {
-        match self.file_manager.activate_selected() {
-            FileManagerAction::None | FileManagerAction::ChangedDir => {}
-            FileManagerAction::OpenFile(path) => {
-                let ext_key = Self::open_with_extension_key(&path);
-                if let Some(command_line) = self.open_with_default_for_extension(&ext_key) {
-                    match self.launch_open_with_command(&path, &command_line) {
-                        Ok(message) => self.shell_status = message,
-                        Err(err) => self.shell_status = format!("Open failed: {err}"),
-                    }
-                } else {
-                    self.open_path_in_editor(path);
-                }
+        let settings = get_settings();
+        match file_manager_app::open_target_for_file_manager_action(
+            self.file_manager.activate_selected(),
+            &settings.desktop_file_manager,
+        ) {
+            Ok(FileManagerOpenTarget::NoOp) => {}
+            Ok(FileManagerOpenTarget::Launch(launch)) => {
+                self.shell_status = self.launch_open_with_request(launch);
             }
+            Ok(FileManagerOpenTarget::OpenInEditor(path)) => self.open_path_in_editor(path),
+            Err(status) => self.shell_status = status,
         }
     }
 
@@ -5289,38 +4469,35 @@ impl RobcoNativeApp {
     /// selection), clicking a file triggers the pick action immediately. For
     /// directories or normal mode, falls through to the regular open logic.
     fn file_manager_activate_or_pick(&mut self) {
-        if let Some(selected_path) = self.file_manager.selected.clone() {
-            if selected_path.is_file() {
-                if let Some(name) = selected_path.file_name().and_then(|name| name.to_str()) {
-                    if self.editor.save_as_input.is_some() {
-                        self.editor.save_as_input = Some(name.to_string());
-                        self.complete_editor_save_as_from_picker();
-                        return;
-                    }
-                }
-                if let Some(pick_idx) = self.picking_icon_for_shortcut {
-                    let path_str = selected_path.to_string_lossy().to_string();
-                    if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(pick_idx) {
-                        sc.icon_path = Some(path_str.clone());
-                    }
-                    self.shortcut_icon_cache.remove(&path_str);
-                    if let Some(props) = &mut self.shortcut_properties {
-                        if props.shortcut_idx == pick_idx {
-                            props.icon_path_draft = Some(path_str);
-                        }
-                    }
-                    self.picking_icon_for_shortcut = None;
-                    self.file_manager.open = false;
-                    self.persist_native_settings();
-                    return;
-                }
-                if self.picking_wallpaper {
-                    let path_str = selected_path.to_string_lossy().to_string();
-                    self.settings.draft.desktop_wallpaper = path_str;
-                    self.picking_wallpaper = false;
-                    self.file_manager.open = false;
-                    return;
-                }
+        let pick_mode = if self.editor.save_as_input.is_some() {
+            FileManagerPickMode::SaveAs
+        } else if let Some(pick_idx) = self.picking_icon_for_shortcut {
+            FileManagerPickMode::ShortcutIcon(pick_idx)
+        } else if self.picking_wallpaper {
+            FileManagerPickMode::Wallpaper
+        } else {
+            FileManagerPickMode::None
+        };
+        match file_manager_app::selection_activation_for_selected_path(
+            self.file_manager.selected.clone(),
+            pick_mode,
+        ) {
+            FileManagerSelectionActivation::ActivateSelection => {}
+            FileManagerSelectionActivation::FillSaveAsName(name) => {
+                self.editor.save_as_input = Some(name);
+                self.complete_editor_save_as_from_picker();
+                return;
+            }
+            FileManagerSelectionActivation::PickShortcutIcon { shortcut_idx, path } => {
+                self.apply_file_manager_picker_commit(FileManagerPickerCommit::SetShortcutIcon {
+                    shortcut_idx,
+                    path,
+                });
+                return;
+            }
+            FileManagerSelectionActivation::PickWallpaper(path) => {
+                self.apply_file_manager_picker_commit(FileManagerPickerCommit::SetWallpaper(path));
+                return;
             }
         }
         self.activate_file_manager_selection();
@@ -6000,7 +5177,11 @@ impl RobcoNativeApp {
             return;
         };
         let prompt_action = prompt.action.clone();
-        match handle_prompt_input(ctx, prompt) {
+        let outcome = handle_prompt_input(ctx, prompt);
+        if self.handle_file_manager_prompt_outcome(&outcome) {
+            return;
+        }
+        match outcome {
             PromptOutcome::Cancel => {
                 crate::sound::play_navigate();
                 self.terminal_prompt = None;
@@ -6219,77 +5400,11 @@ impl RobcoNativeApp {
                 }
                 self.add_document_category(name, path);
             }
-            PromptOutcome::FileManagerRename { path, name } => {
-                self.terminal_prompt = None;
-                if self.file_manager.selected.as_ref() != Some(&path) {
-                    self.file_manager.select(Some(path));
-                }
-                match self.file_manager_rename_selected(name) {
-                    Ok(message) => self.shell_status = message,
-                    Err(err) => self.shell_status = format!("File action failed: {err}"),
-                }
-            }
-            PromptOutcome::FileManagerMoveTo { path, destination } => {
-                self.terminal_prompt = None;
-                if self.file_manager.selected.as_ref() != Some(&path) {
-                    self.file_manager.select(Some(path));
-                }
-                match self.file_manager_move_selected(destination) {
-                    Ok(message) => self.shell_status = message,
-                    Err(err) => self.shell_status = format!("File action failed: {err}"),
-                }
-            }
-            PromptOutcome::FileManagerOpenWithNewCommand {
-                path,
-                ext_key,
-                make_default,
-                command,
-            } => {
-                self.terminal_prompt = None;
-                let command = command.trim().to_string();
-                if command.is_empty() {
-                    self.shell_status = "Open With canceled.".to_string();
-                    return;
-                }
-                if parse_custom_command_line(&command).is_none() {
-                    self.shell_status = "Error: invalid command line".to_string();
-                    return;
-                }
-                match self.launch_open_with_command(&path, &command) {
-                    Ok(message) => {
-                        self.record_open_with_command(&ext_key, &command);
-                        if make_default {
-                            self.set_open_with_default_command(&ext_key, Some(command.as_str()));
-                        }
-                        self.shell_status = message;
-                    }
-                    Err(err) => self.shell_status = format!("Open failed: {err}"),
-                }
-            }
-            PromptOutcome::FileManagerOpenWithEditCommand {
-                path,
-                ext_key,
-                previous,
-                command,
-            } => {
-                self.terminal_prompt = None;
-                let command = command.trim().to_string();
-                if command.is_empty() {
-                    self.shell_status = "Edited command cannot be empty.".to_string();
-                    return;
-                }
-                if parse_custom_command_line(&command).is_none() {
-                    self.shell_status = "Error: invalid command line".to_string();
-                    return;
-                }
-                self.replace_open_with_command(&ext_key, &previous, &command);
-                if self.file_manager.selected.as_ref() != Some(&path) {
-                    self.file_manager.select(Some(path));
-                }
-                self.shell_status = format!(
-                    "Updated saved command for {}.",
-                    Self::open_with_extension_label(&ext_key)
-                );
+            PromptOutcome::FileManagerRename { .. }
+            | PromptOutcome::FileManagerMoveTo { .. }
+            | PromptOutcome::FileManagerOpenWithNewCommand { .. }
+            | PromptOutcome::FileManagerOpenWithEditCommand { .. } => {
+                unreachable!("file manager prompt outcomes are handled before this match")
             }
             PromptOutcome::ConfirmEditMenuDelete {
                 target,
@@ -6578,171 +5693,7 @@ impl RobcoNativeApp {
                 Self::retro_separator(ui);
             }
             if file_manager_active {
-                let has_extra_tabs = self.file_manager.tabs.len() > 1;
-                let has_selection = self.file_manager.selected_row().is_some();
-                let has_editable_selection = self.file_manager_has_editable_selection();
-                let has_file_selection = self.file_manager_selected_file().is_some();
-                if ui.button("New Folder   Ctrl+Shift+N").clicked() {
-                    self.run_file_manager_action(FileManagerActionRequest::NewFolder);
-                    ui.close_menu();
-                }
-                if ui.button("New Tab").clicked() {
-                    self.file_manager.open_tab_here();
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if has_extra_tabs {
-                    if ui.button("Previous Tab").clicked() {
-                        let idx = if self.file_manager.active_tab == 0 {
-                            self.file_manager.tabs.len().saturating_sub(1)
-                        } else {
-                            self.file_manager.active_tab - 1
-                        };
-                        let _ = self.file_manager.switch_to_tab(idx);
-                        ui.close_menu();
-                    }
-                    if ui.button("Next Tab").clicked() {
-                        let idx = (self.file_manager.active_tab + 1)
-                            % self.file_manager.tabs.len().max(1);
-                        let _ = self.file_manager.switch_to_tab(idx);
-                        ui.close_menu();
-                    }
-                    if ui.button("Close Tab").clicked() {
-                        let _ = self.file_manager.close_active_tab();
-                        ui.close_menu();
-                    }
-                }
-                if has_selection && ui.button("Open Selected").clicked() {
-                    self.activate_file_manager_selection();
-                    ui.close_menu();
-                }
-                if has_file_selection {
-                    ui.menu_button("Open With", |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        let Some(entry) = self.file_manager_selected_file() else {
-                            return;
-                        };
-                        let ext_key = Self::open_with_extension_key(&entry.path);
-                        let ext_label = Self::open_with_extension_label(&ext_key);
-                        let saved = self.open_with_history_for_extension(&ext_key);
-                        let current_default = self.open_with_default_for_extension(&ext_key);
-
-                        for command in &saved {
-                            let is_default = current_default.as_deref() == Some(command.as_str());
-                            let label = if is_default {
-                                format!("Use: {command} [default]")
-                            } else {
-                                format!("Use: {command}")
-                            };
-                            if ui.button(label).clicked() {
-                                match self.launch_open_with_command(&entry.path, command) {
-                                    Ok(message) => {
-                                        self.record_open_with_command(&ext_key, command);
-                                        self.shell_status = message;
-                                    }
-                                    Err(err) => {
-                                        self.shell_status = format!("Open failed: {err}");
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                        }
-                        if !saved.is_empty() {
-                            Self::retro_separator(ui);
-                        }
-                        if ui.button("New Command...").clicked() {
-                            self.open_file_manager_open_with_new_command_prompt(
-                                entry.path.clone(),
-                                ext_key.clone(),
-                                false,
-                            );
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(format!("New Command + Always Use for {}", ext_label))
-                            .clicked()
-                        {
-                            self.open_file_manager_open_with_new_command_prompt(
-                                entry.path.clone(),
-                                ext_key.clone(),
-                                true,
-                            );
-                            ui.close_menu();
-                        }
-                        if !saved.is_empty() {
-                            ui.menu_button("Edit", |ui| {
-                                Self::apply_top_dropdown_menu_style(ui);
-                                for command in &saved {
-                                    let is_default =
-                                        current_default.as_deref() == Some(command.as_str());
-                                    ui.menu_button(command, |ui| {
-                                        Self::apply_top_dropdown_menu_style(ui);
-                                        let default_label = if is_default {
-                                            "Stop Always Using"
-                                        } else {
-                                            "Always Use"
-                                        };
-                                        if ui.button(default_label).clicked() {
-                                            if is_default {
-                                                self.set_open_with_default_command(&ext_key, None);
-                                                self.shell_status = format!(
-                                                    "Cleared always-use command for {}.",
-                                                    ext_label
-                                                );
-                                            } else {
-                                                self.set_open_with_default_command(
-                                                    &ext_key,
-                                                    Some(command.as_str()),
-                                                );
-                                                self.shell_status = format!(
-                                                    "Now always using {} for {}.",
-                                                    command, ext_label
-                                                );
-                                            }
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Edit Saved").clicked() {
-                                            self.open_file_manager_open_with_edit_command_prompt(
-                                                entry.path.clone(),
-                                                ext_key.clone(),
-                                                command.clone(),
-                                            );
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Remove Saved").clicked() {
-                                            self.remove_open_with_command(&ext_key, command);
-                                            self.shell_status =
-                                                format!("Removed saved command for {}.", ext_label);
-                                            ui.close_menu();
-                                        }
-                                    });
-                                }
-                                if current_default.is_some() {
-                                    Self::retro_separator(ui);
-                                    if ui.button("Clear Always Use").clicked() {
-                                        self.set_open_with_default_command(&ext_key, None);
-                                        self.shell_status = format!(
-                                            "Cleared always-use command for {}.",
-                                            ext_label
-                                        );
-                                        ui.close_menu();
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
-                if ui.button("Home").clicked() {
-                    self.file_manager_open_home();
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if has_editable_selection {
-                    ui.label(
-                        RichText::new(format!("{} selected", self.file_manager_selection_count()))
-                            .small(),
-                    );
-                }
+                self.draw_file_manager_file_menu_section(ui);
             }
             if ui.button("My Computer").clicked() {
                 self.open_desktop_window(DesktopWindow::FileManager);
@@ -6808,83 +5759,7 @@ impl RobcoNativeApp {
                     ui.close_menu();
                 }
             } else if self.desktop_active_window == Some(DesktopWindow::FileManager) {
-                let has_selection = self.file_manager_has_editable_selection();
-                let has_clipboard = self
-                    .file_clipboard
-                    .as_ref()
-                    .is_some_and(|clip| !clip.paths.is_empty());
-                let has_history =
-                    !self.file_undo_stack.is_empty() || !self.file_redo_stack.is_empty();
-                let paste_label = if let Some(clip) = &self.file_clipboard {
-                    let mode = if matches!(clip.mode, FileManagerClipboardMode::Cut) {
-                        "Move"
-                    } else {
-                        "Paste"
-                    };
-                    if clip.paths.len() == 1 {
-                        format!("{mode} {}", Self::path_display_name(&clip.paths[0]))
-                    } else {
-                        format!("{mode} {} items", clip.paths.len())
-                    }
-                } else {
-                    "Paste".to_string()
-                };
-                if ui.button("Open Selected").clicked() {
-                    self.activate_file_manager_selection();
-                    ui.close_menu();
-                }
-                if ui.button("Clear Search").clicked() {
-                    self.file_manager.update_search_query(String::new());
-                    ui.close_menu();
-                }
-                if has_selection || has_clipboard || has_history {
-                    Self::retro_separator(ui);
-                }
-                if has_selection {
-                    if ui.button("Copy").clicked() {
-                        self.run_file_manager_action(FileManagerActionRequest::Copy);
-                        ui.close_menu();
-                    }
-                    if ui.button("Cut").clicked() {
-                        self.run_file_manager_action(FileManagerActionRequest::Cut);
-                        ui.close_menu();
-                    }
-                    if ui.button("Duplicate").clicked() {
-                        self.run_file_manager_action(FileManagerActionRequest::Duplicate);
-                        ui.close_menu();
-                    }
-                    if ui.button("Rename").clicked() {
-                        self.open_file_manager_rename_prompt();
-                        ui.close_menu();
-                    }
-                    if ui.button("Move To").clicked() {
-                        self.open_file_manager_move_prompt();
-                        ui.close_menu();
-                    }
-                    if ui.button("Delete").clicked() {
-                        self.run_file_manager_action(FileManagerActionRequest::Delete);
-                        ui.close_menu();
-                    }
-                }
-                if has_clipboard && ui.button(paste_label).clicked() {
-                    self.run_file_manager_action(FileManagerActionRequest::Paste);
-                    ui.close_menu();
-                }
-                if !self.file_undo_stack.is_empty() && ui.button("Undo").clicked() {
-                    self.run_file_manager_action(FileManagerActionRequest::Undo);
-                    ui.close_menu();
-                }
-                if !self.file_redo_stack.is_empty() && ui.button("Redo").clicked() {
-                    self.run_file_manager_action(FileManagerActionRequest::Redo);
-                    ui.close_menu();
-                }
-                if has_selection || has_clipboard || has_history {
-                    Self::retro_separator(ui);
-                }
-                if ui.button("New Document").clicked() {
-                    self.run_editor_command(EditorCommand::NewDocument);
-                    ui.close_menu();
-                }
+                self.draw_file_manager_edit_menu_section(ui);
             } else {
                 let _ = Self::retro_disabled_button(ui, "No edit actions");
             }
@@ -6975,77 +5850,7 @@ impl RobcoNativeApp {
             let file_manager_active =
                 self.desktop_active_window == Some(DesktopWindow::FileManager);
             if file_manager_active {
-                let show_tree = get_settings().desktop_file_manager.show_tree_panel;
-                let show_hidden = get_settings().desktop_file_manager.show_hidden_files;
-                let view_mode = self.file_manager_view_mode();
-                let sort_mode = self.file_manager_sort_mode();
-                if ui
-                    .button(if show_tree {
-                        "Hide Folder Tree"
-                    } else {
-                        "Show Folder Tree"
-                    })
-                    .clicked()
-                {
-                    self.toggle_file_manager_tree_panel();
-                    ui.close_menu();
-                }
-                if ui
-                    .button(if view_mode == FileManagerViewMode::Grid {
-                        "Grid View [Active]"
-                    } else {
-                        "Grid View"
-                    })
-                    .clicked()
-                {
-                    self.set_file_manager_view_mode(FileManagerViewMode::Grid);
-                    ui.close_menu();
-                }
-                if ui
-                    .button(if view_mode == FileManagerViewMode::List {
-                        "List View [Active]"
-                    } else {
-                        "List View"
-                    })
-                    .clicked()
-                {
-                    self.set_file_manager_view_mode(FileManagerViewMode::List);
-                    ui.close_menu();
-                }
-                if ui
-                    .button(if sort_mode == FileManagerSortMode::Name {
-                        "Sort By Name [Active]"
-                    } else {
-                        "Sort By Name"
-                    })
-                    .clicked()
-                {
-                    self.set_file_manager_sort_mode(FileManagerSortMode::Name);
-                    ui.close_menu();
-                }
-                if ui
-                    .button(if sort_mode == FileManagerSortMode::Type {
-                        "Sort By Type [Active]"
-                    } else {
-                        "Sort By Type"
-                    })
-                    .clicked()
-                {
-                    self.set_file_manager_sort_mode(FileManagerSortMode::Type);
-                    ui.close_menu();
-                }
-                if ui
-                    .button(if show_hidden {
-                        "Hide Hidden Files"
-                    } else {
-                        "Show Hidden Files"
-                    })
-                    .clicked()
-                {
-                    self.toggle_file_manager_hidden_files();
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
+                self.draw_file_manager_view_menu_section(ui);
             }
             if ui.button("My Computer").clicked() {
                 self.open_desktop_window(DesktopWindow::FileManager);
@@ -9045,140 +7850,6 @@ impl RobcoNativeApp {
         response
     }
 
-    fn retro_file_manager_button(
-        ui: &mut egui::Ui,
-        label: impl Into<String>,
-        desired: egui::Vec2,
-        active: bool,
-        stroked: bool,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let label = label.into();
-        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
-        let hovered = response.hovered();
-        let highlighted = active || hovered;
-        let fill = if highlighted {
-            palette.fg
-        } else {
-            Color32::TRANSPARENT
-        };
-        let text_color = if highlighted {
-            Color32::BLACK
-        } else {
-            palette.fg
-        };
-        let stroke = if stroked {
-            egui::Stroke::new(1.0, palette.fg)
-        } else {
-            egui::Stroke::NONE
-        };
-        // Clip painter to the item rect intersected with the current clip rect.
-        // Using painter_at(rect) keeps the text anchor always inside the clip,
-        // preventing the "visible fill, invisible text" artifact.
-        let painter = ui.painter_at(rect.intersect(ui.clip_rect()));
-        if highlighted {
-            painter.rect_filled(rect, 0.0, fill);
-        }
-        if stroke != egui::Stroke::NONE {
-            painter.rect_stroke(rect, 0.0, stroke);
-        }
-        painter.text(
-            rect.left_top() + egui::vec2(8.0, 6.0),
-            Align2::LEFT_TOP,
-            label,
-            FontId::new(18.0, FontFamily::Monospace),
-            text_color,
-        );
-        response
-    }
-
-    fn retro_file_manager_item(
-        ui: &mut egui::Ui,
-        texture: Option<&TextureHandle>,
-        fallback_icon: &str,
-        label: &str,
-        desired: egui::Vec2,
-        active: bool,
-        stroked: bool,
-        grid_mode: bool,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
-        let hovered = response.hovered();
-        let highlighted = active || hovered;
-        let fill = if highlighted {
-            palette.fg
-        } else {
-            Color32::TRANSPARENT
-        };
-        let text_color = if highlighted {
-            Color32::BLACK
-        } else {
-            palette.fg
-        };
-        let stroke = if stroked {
-            egui::Stroke::new(1.0, palette.fg)
-        } else {
-            egui::Stroke::NONE
-        };
-        let painter = ui.painter_at(rect.intersect(ui.clip_rect()));
-        if highlighted {
-            painter.rect_filled(rect, 0.0, fill);
-        }
-        if stroke != egui::Stroke::NONE {
-            painter.rect_stroke(rect, 0.0, stroke);
-        }
-
-        if grid_mode {
-            let icon_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.center().x, rect.top() + 18.0),
-                egui::vec2(24.0, 24.0),
-            );
-            if let Some(texture) = texture {
-                Self::paint_tinted_texture(&painter, texture, icon_rect, text_color);
-            } else {
-                painter.text(
-                    icon_rect.center(),
-                    Align2::CENTER_CENTER,
-                    fallback_icon,
-                    FontId::new(16.0, FontFamily::Monospace),
-                    text_color,
-                );
-            }
-            painter.text(
-                egui::pos2(rect.center().x, rect.bottom() - 14.0),
-                Align2::CENTER_CENTER,
-                label,
-                FontId::new(16.0, FontFamily::Monospace),
-                text_color,
-            );
-        } else {
-            let icon_rect = egui::Rect::from_min_size(
-                rect.left_top() + egui::vec2(6.0, 4.0),
-                egui::vec2(18.0, 18.0),
-            );
-            if let Some(texture) = texture {
-                Self::paint_tinted_texture(&painter, texture, icon_rect, text_color);
-            } else {
-                painter.text(
-                    icon_rect.center(),
-                    Align2::CENTER_CENTER,
-                    fallback_icon,
-                    FontId::new(14.0, FontFamily::Monospace),
-                    text_color,
-                );
-            }
-            painter.text(
-                rect.left_top() + egui::vec2(30.0, 6.0),
-                Align2::LEFT_TOP,
-                label,
-                FontId::new(18.0, FontFamily::Monospace),
-                text_color,
-            );
-        }
-        response
-    }
-
     fn retro_full_width_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
         let palette = current_palette();
         ui.add_sized(
@@ -9266,72 +7937,73 @@ impl RobcoNativeApp {
         action
     }
 
-    fn handle_file_manager_row_interaction(
-        &mut self,
-        ctx: &Context,
-        ui: &egui::Ui,
-        response: &egui::Response,
-        row: &super::file_manager::FileEntryRow,
-        save_picker_mode: bool,
-        action_selection_paths: &[PathBuf],
-        has_editable_selection: bool,
-        has_single_file_selection: bool,
-        has_clipboard: bool,
-    ) {
-        let allow_multi = !save_picker_mode
-            && self.picking_icon_for_shortcut.is_none()
-            && !self.picking_wallpaper;
-        let ctrl_toggle = allow_multi && ctx.input(|i| i.modifiers.ctrl);
-
-        if response.secondary_clicked() && !self.file_manager.is_path_selected(&row.path) {
-            self.file_manager.select(Some(row.path.clone()));
-        }
-        if response.clicked() {
-            self.file_manager_select_path(row.path.clone(), ctrl_toggle, allow_multi);
-        }
-        if response.drag_started() && !save_picker_mode && !row.is_parent_dir() {
-            if !self.file_manager.is_path_selected(&row.path) {
-                self.file_manager.select(Some(row.path.clone()));
-            }
-        }
-        if !save_picker_mode && !row.is_parent_dir() {
-            let drag_paths = if action_selection_paths.iter().any(|path| path == &row.path) {
-                action_selection_paths.to_vec()
-            } else {
-                vec![row.path.clone()]
-            };
-            if !drag_paths.is_empty() {
-                response.dnd_set_drag_payload(NativeFileManagerDragPayload { paths: drag_paths });
-            }
-        }
-        if row.is_dir && !save_picker_mode {
-            let drop_hover = response
-                .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                .is_some_and(|payload| Self::file_manager_drop_allowed(&payload.paths, &row.path));
-            if drop_hover {
-                ui.painter().rect_stroke(
-                    response.rect,
-                    0.0,
-                    egui::Stroke::new(2.0, current_palette().fg),
-                );
-            }
-            if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>() {
-                if Self::file_manager_drop_allowed(&payload.paths, &row.path) {
-                    self.file_manager_handle_drop_to_dir(payload.paths.clone(), row.path.clone());
+    fn apply_file_manager_picker_commit(&mut self, commit: FileManagerPickerCommit) {
+        match commit {
+            FileManagerPickerCommit::SetShortcutIcon { shortcut_idx, path } => {
+                let path_str = path.to_string_lossy().to_string();
+                if let Some(sc) = self.settings.draft.desktop_shortcuts.get_mut(shortcut_idx) {
+                    sc.icon_path = Some(path_str.clone());
                 }
+                self.shortcut_icon_cache.remove(&path_str);
+                if let Some(props) = &mut self.shortcut_properties {
+                    if props.shortcut_idx == shortcut_idx {
+                        props.icon_path_draft = Some(path_str);
+                    }
+                }
+                self.picking_icon_for_shortcut = None;
+                self.file_manager.open = false;
+                self.persist_native_settings();
+            }
+            FileManagerPickerCommit::SetWallpaper(path) => {
+                self.settings.draft.desktop_wallpaper = path.to_string_lossy().to_string();
+                self.picking_wallpaper = false;
+                self.file_manager.open = false;
             }
         }
-        if response.double_clicked() {
-            self.file_manager.select(Some(row.path.clone()));
-            self.file_manager_activate_or_pick();
+    }
+
+    fn commit_file_manager_picker(&mut self, pick_mode: FileManagerPickMode) {
+        match file_manager_app::commit_picker_selection(
+            self.file_manager_selected_file(),
+            pick_mode,
+        ) {
+            Ok(commit) => self.apply_file_manager_picker_commit(commit),
+            Err(status) => self.shell_status = status,
         }
-        Self::attach_file_manager_context_menu(
-            &mut self.context_menu_action,
-            response,
-            has_editable_selection,
-            has_single_file_selection,
-            has_clipboard,
-        );
+    }
+
+    fn apply_file_manager_desktop_footer_action(&mut self, action: FileManagerDesktopFooterAction) {
+        match file_manager_desktop::resolve_footer_action(action) {
+            FileManagerDesktopFooterRequest::RunCommand(command) => {
+                self.run_file_manager_command(command);
+            }
+            FileManagerDesktopFooterRequest::NewDocument => self.new_document(),
+            FileManagerDesktopFooterRequest::CompleteSaveAs => {
+                self.complete_editor_save_as_from_picker()
+            }
+            FileManagerDesktopFooterRequest::CancelSavePicker => {
+                self.editor.save_as_input = None;
+                self.editor.status = "Save canceled.".to_string();
+                self.file_manager.open = false;
+                self.open_desktop_window(DesktopWindow::Editor);
+            }
+            FileManagerDesktopFooterRequest::CommitIconPicker => {
+                let pick_mode = self
+                    .picking_icon_for_shortcut
+                    .map(FileManagerPickMode::ShortcutIcon)
+                    .unwrap_or(FileManagerPickMode::None);
+                self.commit_file_manager_picker(pick_mode);
+            }
+            FileManagerDesktopFooterRequest::CancelIconPicker => {
+                self.picking_icon_for_shortcut = None;
+            }
+            FileManagerDesktopFooterRequest::CommitWallpaperPicker => {
+                self.commit_file_manager_picker(FileManagerPickMode::Wallpaper);
+            }
+            FileManagerDesktopFooterRequest::CancelWallpaperPicker => {
+                self.picking_wallpaper = false;
+            }
+        }
     }
 
     fn draw_file_manager(&mut self, ctx: &Context) {
@@ -9375,574 +8047,59 @@ impl RobcoNativeApp {
             window = window.current_pos(pos).default_size(size);
         }
         self.file_manager.ensure_selection_valid();
+        let rows = self.file_manager.rows();
+        let action_selection_paths: Vec<PathBuf> = self
+            .file_manager_selected_entries()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        let has_editable_selection = !action_selection_paths.is_empty();
+        let has_single_file_selection =
+            action_selection_paths.len() == 1 && action_selection_paths[0].is_file();
+        let has_clipboard = self.file_manager_runtime.has_clipboard();
+        let file_manager_settings = get_settings().desktop_file_manager;
+        let desktop_model = file_manager_desktop::build_desktop_view_model(
+            &self.file_manager,
+            &file_manager_settings,
+            &rows,
+            self.file_manager_selection_count(),
+            has_editable_selection,
+            has_single_file_selection,
+            has_clipboard,
+            self.editor.save_as_input.clone(),
+            self.picking_icon_for_shortcut,
+            self.picking_wallpaper,
+        );
+        let footer_model = file_manager_desktop::build_footer_model(&desktop_model);
 
-        // Pre-load SVG previews for all .svg files in the current directory.
-        // Uses shortcut_icon_cache (same path→TextureHandle map). One-time cost per directory.
-        {
-            let svg_paths: Vec<std::path::PathBuf> = self
-                .file_manager
-                .rows()
-                .into_iter()
-                .filter(|r| {
-                    r.path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.eq_ignore_ascii_case("svg"))
-                        .unwrap_or(false)
-                })
-                .map(|r| r.path)
-                .collect();
-            for path in svg_paths {
-                let key = path.to_string_lossy().to_string();
-                if !self.shortcut_icon_cache.contains_key(&key) {
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        let tex = Self::load_svg_icon(ctx, &key, &bytes, Some(32));
-                        self.shortcut_icon_cache.insert(key, tex);
-                    }
-                }
-            }
-        }
+        self.preload_file_manager_svg_previews(ctx, &desktop_model.rows);
 
         let search_id = Id::new(("native_file_manager_search", generation));
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-
-            // ── TOP PANEL: header + chrome ─────────────────────────────────────
-            // show_inside panels carve from the window rect directly and never
-            // feed back into the Resize widget — this is the correct egui pattern
-            // for resizable windows that behave like Win95 explorer.
-            egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
-                .frame(egui::Frame::none())
-                .exact_height(136.0)
-                .show_inside(ui, |ui| {
-                    let drives = NativeFileManagerState::drive_roots();
-                    let current_drive = self.file_manager.current_drive_root();
-                    header_action = Self::draw_desktop_window_header(ui, "My Computer", maximized);
-
-                    if self.picking_icon_for_shortcut.is_some() {
-                        let banner_color = current_palette().fg;
-                        ui.colored_label(banner_color, "[ Pick icon mode ]");
-                    } else if self.editor.save_as_input.is_some() {
-                        let banner_color = current_palette().fg;
-                        ui.colored_label(banner_color, "[ Save As mode ]");
-                    } else if self.picking_wallpaper {
-                        let banner_color = current_palette().fg;
-                        ui.colored_label(banner_color, "[ Pick wallpaper mode ]");
-                    }
-
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Tabs").strong());
-                        for idx in 0..self.file_manager.tabs.len() {
-                            let title =
-                                NativeFileManagerState::tab_title(&self.file_manager.tabs[idx]);
-                            let title = Self::truncate_file_manager_label(&title, 12);
-                            let active = idx == self.file_manager.active_tab;
-                            let response = Self::retro_file_manager_button(
-                                ui,
-                                format!("[{}:{}{}]", idx + 1, title, if active { "*" } else { "" }),
-                                egui::vec2(132.0, 28.0),
-                                active,
-                                false,
-                            );
-                            if response.clicked() {
-                                let _ = self.file_manager.switch_to_tab(idx);
-                            }
-                        }
-                        if ui.button("+").clicked() {
-                            self.file_manager.open_tab_here();
-                        }
-                        let close_tab = if self.file_manager.tabs.len() > 1 {
-                            ui.button("x")
-                        } else {
-                            Self::retro_disabled_button(ui, "x")
-                        };
-                        if close_tab.clicked() {
-                            let _ = self.file_manager.close_active_tab();
-                        }
-                    });
-
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Drives").strong());
-                        for drive in &drives {
-                            let active = current_drive.as_ref() == Some(drive);
-                            let label = NativeFileManagerState::drive_label(drive);
-                            let response = Self::retro_file_manager_button(
-                                ui,
-                                label,
-                                egui::vec2(120.0, 26.0),
-                                active,
-                                true,
-                            );
-                            let drop_hover = !save_picker_mode
-                                && response
-                                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                                    .is_some_and(|payload| {
-                                        Self::file_manager_drop_allowed(&payload.paths, drive)
-                                    });
-                            if drop_hover {
-                                ui.painter().rect_stroke(
-                                    response.rect,
-                                    0.0,
-                                    egui::Stroke::new(2.0, current_palette().fg),
-                                );
-                            }
-                            if response.clicked() {
-                                self.file_manager.open_selected_tree_path(drive.clone());
-                            }
-                            if let Some(payload) =
-                                response.dnd_release_payload::<NativeFileManagerDragPayload>()
-                            {
-                                if !save_picker_mode
-                                    && Self::file_manager_drop_allowed(&payload.paths, drive)
-                                {
-                                    self.file_manager_handle_drop_to_dir(
-                                        payload.paths.clone(),
-                                        drive.clone(),
-                                    );
-                                }
-                            }
-                        }
-                    });
-
-                    let search_requested = self.desktop_active_window
-                        == Some(DesktopWindow::FileManager)
-                        && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F));
-                    if search_requested {
-                        ui.memory_mut(|mem| mem.request_focus(search_id));
-                    }
-
-                    let mut search_query = self.file_manager.search_query.clone();
-                    ui.horizontal(|ui| {
-                        let search_label = if search_query.is_empty() {
-                            "Search: (Ctrl+F)"
-                        } else {
-                            "Search:"
-                        };
-                        ui.label(RichText::new(search_label).strong());
-                        let search_width = (ui.available_width() - 240.0).max(180.0);
-                        let search = ui.add_sized(
-                            [search_width, 0.0],
-                            TextEdit::singleline(&mut search_query)
-                                .id(search_id)
-                                .hint_text("filter files and folders"),
-                        );
-                        if search.changed() {
-                            self.file_manager.update_search_query(search_query.clone());
-                        }
-                        ui.add_space(8.0);
-                        {
-                            let tree_on = get_settings().desktop_file_manager.show_tree_panel;
-                            let list_on =
-                                self.file_manager_view_mode() == FileManagerViewMode::List;
-                            let grid_on =
-                                self.file_manager_view_mode() == FileManagerViewMode::Grid;
-                            let fg = current_palette().fg;
-                            let sel_color = |on: bool| if on { Color32::BLACK } else { fg };
-                            if ui
-                                .selectable_label(
-                                    tree_on,
-                                    RichText::new("Tree").color(sel_color(tree_on)),
-                                )
-                                .clicked()
-                            {
-                                self.toggle_file_manager_tree_panel();
-                            }
-                            if ui
-                                .selectable_label(
-                                    list_on,
-                                    RichText::new("List").color(sel_color(list_on)),
-                                )
-                                .clicked()
-                            {
-                                self.set_file_manager_view_mode(FileManagerViewMode::List);
-                            }
-                            if ui
-                                .selectable_label(
-                                    grid_on,
-                                    RichText::new("Grid").color(sel_color(grid_on)),
-                                )
-                                .clicked()
-                            {
-                                self.set_file_manager_view_mode(FileManagerViewMode::Grid);
-                            }
-                        }
-                    });
-
-                    let path_label = if self.editor.save_as_input.is_some() {
-                        format!("Save Folder: {}", self.file_manager.cwd.display())
-                    } else {
-                        format!("Path: {}", self.file_manager.cwd.display())
-                    };
-                    if let Some(drive) = current_drive {
-                        ui.label(
-                            RichText::new(format!(
-                                "Drive: {}",
-                                NativeFileManagerState::drive_label(&drive)
-                            ))
-                            .strong(),
-                        );
-                    }
-                    ui.label(RichText::new(path_label).strong());
-                    ui.separator();
-                });
-
-            // ── BOTTOM PANEL: status bar + buttons ────────────────────────────
-            let view_mode = self.file_manager_view_mode();
-            let show_tree_panel = get_settings().desktop_file_manager.show_tree_panel;
-            let rows = self.file_manager.rows();
-            let action_selection_paths: Vec<PathBuf> = self
-                .file_manager_selected_entries()
-                .into_iter()
-                .map(|entry| entry.path)
-                .collect();
-            let has_editable_selection = !action_selection_paths.is_empty();
-            let has_single_file_selection =
-                action_selection_paths.len() == 1 && action_selection_paths[0].is_file();
-            let has_clipboard = self
-                .file_clipboard
-                .as_ref()
-                .is_some_and(|clip| !clip.paths.is_empty());
-            egui::TopBottomPanel::bottom(Id::new(("fm_bottom", generation)))
-                .frame(egui::Frame::none())
-                .exact_height(if save_picker_mode { 56.0 } else { 44.0 })
-                .show_inside(ui, |ui| {
-                    ui.painter().hline(
-                        ui.max_rect().x_range(),
-                        ui.max_rect().top() + 1.0,
-                        egui::Stroke::new(1.0, current_palette().fg),
-                    );
-                    ui.add_space(4.0);
-                    if let Some(current_name) = self.editor.save_as_input.clone() {
-                        let mut file_name = current_name;
-                        let mut cancel_save = false;
-                        let mut save_here = false;
-                        let mut new_folder = false;
-                        ui.horizontal(|ui| {
-                            ui.small("Save picker");
-                            ui.separator();
-                            if ui.button("Home").clicked() {
-                                self.file_manager_open_home();
-                            }
-                            if ui.button("Up").clicked() {
-                                self.file_manager.up();
-                            }
-                            if ui.button("New Folder").clicked() {
-                                new_folder = true;
-                            }
-                            ui.separator();
-                            ui.label("Name");
-                            ui.add_sized(
-                                [280.0, 28.0],
-                                TextEdit::singleline(&mut file_name).hint_text("document.txt"),
-                            );
-                            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .add_sized([100.0, 28.0], egui::Button::new("Cancel"))
-                                    .clicked()
-                                {
-                                    cancel_save = true;
-                                }
-                                if ui
-                                    .add_sized([132.0, 28.0], egui::Button::new("Save Here"))
-                                    .clicked()
-                                {
-                                    save_here = true;
-                                }
-                            });
-                        });
-                        self.editor.save_as_input = Some(file_name);
-                        if new_folder {
-                            self.run_file_manager_action(FileManagerActionRequest::NewFolder);
-                        } else if cancel_save {
-                            self.editor.save_as_input = None;
-                            self.editor.status = "Save canceled.".to_string();
-                            self.file_manager.open = false;
-                            self.open_desktop_window(DesktopWindow::Editor);
-                        } else if save_here {
-                            self.complete_editor_save_as_from_picker();
-                        }
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.small(format!("{} item(s)", rows.len()));
-                            ui.separator();
-                            let selected_count = self.file_manager_selection_count();
-                            ui.small(format!("{selected_count} selected"));
-                            ui.separator();
-                            ui.small(match view_mode {
-                                FileManagerViewMode::Grid => "Grid View",
-                                FileManagerViewMode::List => "List View",
-                            });
-                            ui.separator();
-                            ui.small(if show_tree_panel {
-                                "Tree On"
-                            } else {
-                                "Tree Off"
-                            });
-                            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                if let Some(pick_idx) = self.picking_icon_for_shortcut {
-                                    if ui.button("Cancel").clicked() {
-                                        self.picking_icon_for_shortcut = None;
-                                    }
-                                    if ui.button("Choose Icon").clicked() {
-                                        if let Some(entry) = self.file_manager_selected_file() {
-                                            let path_str = entry.path.to_string_lossy().to_string();
-                                            if let Some(sc) = self
-                                                .settings
-                                                .draft
-                                                .desktop_shortcuts
-                                                .get_mut(pick_idx)
-                                            {
-                                                sc.icon_path = Some(path_str.clone());
-                                            }
-                                            self.shortcut_icon_cache.remove(&path_str);
-                                            if let Some(props) = &mut self.shortcut_properties {
-                                                if props.shortcut_idx == pick_idx {
-                                                    props.icon_path_draft = Some(path_str);
-                                                }
-                                            }
-                                            self.picking_icon_for_shortcut = None;
-                                            self.file_manager.open = false;
-                                            self.persist_native_settings();
-                                        } else {
-                                            self.shell_status =
-                                                "Select an SVG file first.".to_string();
-                                        }
-                                    }
-                                    if ui.button("Up").clicked() {
-                                        self.file_manager.up();
-                                    }
-                                    if ui.button("Home").clicked() {
-                                        self.file_manager_open_home();
-                                    }
-                                } else if self.picking_wallpaper {
-                                    if ui.button("Cancel").clicked() {
-                                        self.picking_wallpaper = false;
-                                    }
-                                    if ui.button("Choose Wallpaper").clicked() {
-                                        if let Some(entry) = self.file_manager_selected_file() {
-                                            let path_str = entry.path.to_string_lossy().to_string();
-                                            self.settings.draft.desktop_wallpaper = path_str;
-                                            self.picking_wallpaper = false;
-                                            self.file_manager.open = false;
-                                        } else {
-                                            self.shell_status =
-                                                "Select an image file first.".to_string();
-                                        }
-                                    }
-                                    if ui.button("Up").clicked() {
-                                        self.file_manager.up();
-                                    }
-                                    if ui.button("Home").clicked() {
-                                        self.file_manager_open_home();
-                                    }
-                                } else {
-                                    if ui.button("New Folder").clicked() {
-                                        self.run_file_manager_action(
-                                            FileManagerActionRequest::NewFolder,
-                                        );
-                                    }
-                                    if ui.button("New Document").clicked() {
-                                        self.new_document();
-                                    }
-                                    if ui.button("Open").clicked() {
-                                        self.activate_file_manager_selection();
-                                    }
-                                    if ui.button("Up").clicked() {
-                                        self.file_manager.up();
-                                    }
-                                    if ui.button("Home").clicked() {
-                                        self.file_manager_open_home();
-                                    }
-                                }
-                            });
-                        });
-                    }
-                });
-
-            // ── LEFT PANEL: folder tree (optional) ────────────────────────────
-            if show_tree_panel {
-                let tree_items = self.file_manager.tree_items();
-                egui::SidePanel::left(Id::new(("fm_tree", generation)))
-                    .frame(egui::Frame::none())
-                    .width_range(140.0..=280.0)
-                    .default_width(200.0)
-                    .show_inside(ui, |ui| {
-                        ui.label(RichText::new("Locations").strong());
-                        egui::ScrollArea::vertical()
-                            .id_salt(("native_file_manager_tree", generation))
-                            .show(ui, |ui| {
-                                for item in &tree_items {
-                                    if item.path.is_none() {
-                                        ui.add_space(4.0);
-                                        ui.label(RichText::new(&item.line).strong());
-                                        continue;
-                                    }
-                                    let Some(path) = item.path.as_ref() else {
-                                        continue;
-                                    };
-                                    let selected =
-                                        Some(path) == self.file_manager.tree_selected.as_ref();
-                                    let response = Self::retro_file_manager_button(
-                                        ui,
-                                        item.line.clone(),
-                                        egui::vec2(ui.available_width(), 26.0),
-                                        selected,
-                                        false,
-                                    );
-                                    let drop_hover = !save_picker_mode
-                                        && response
-                                            .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                                            .is_some_and(|payload| {
-                                                Self::file_manager_drop_allowed(
-                                                    &payload.paths,
-                                                    path,
-                                                )
-                                            });
-                                    if drop_hover {
-                                        ui.painter().rect_stroke(
-                                            response.rect,
-                                            0.0,
-                                            egui::Stroke::new(2.0, current_palette().fg),
-                                        );
-                                    }
-                                    if response.clicked() {
-                                        self.file_manager.open_selected_tree_path(path.clone());
-                                    }
-                                    if let Some(payload) = response
-                                        .dnd_release_payload::<NativeFileManagerDragPayload>()
-                                    {
-                                        if !save_picker_mode
-                                            && Self::file_manager_drop_allowed(&payload.paths, path)
-                                        {
-                                            self.file_manager_handle_drop_to_dir(
-                                                payload.paths.clone(),
-                                                path.clone(),
-                                            );
-                                        }
-                                    }
-                                }
-                            });
-                    });
-            }
-
-            // ── CENTRAL PANEL: file list ──────────────────────────────────────
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show_inside(ui, |ui| {
-                    if rows.is_empty() {
-                        ui.label("No files match the current search.");
-                        return;
-                    }
-                    match view_mode {
-                        FileManagerViewMode::List => {
-                            egui::ScrollArea::vertical()
-                                .id_salt(("native_file_manager_list", generation))
-                                .show(ui, |ui| {
-                                    for row in &rows {
-                                        let selected =
-                                            self.file_manager.is_path_selected(&row.path);
-                                        let preview = self.svg_preview_texture(row);
-                                        let response = Self::retro_file_manager_item(
-                                            ui,
-                                            preview.as_ref(),
-                                            row.icon(),
-                                            &row.label,
-                                            egui::vec2(ui.available_width(), 28.0),
-                                            selected,
-                                            false,
-                                            false,
-                                        );
-                                        self.handle_file_manager_row_interaction(
-                                            ctx,
-                                            ui,
-                                            &response,
-                                            row,
-                                            save_picker_mode,
-                                            &action_selection_paths,
-                                            has_editable_selection,
-                                            has_single_file_selection,
-                                            has_clipboard,
-                                        );
-                                    }
-                                    let background = ui.allocate_rect(
-                                        ui.available_rect_before_wrap(),
-                                        egui::Sense::click(),
-                                    );
-                                    if background.clicked() && !save_picker_mode {
-                                        self.file_manager.clear_multi_selection();
-                                    }
-                                    Self::attach_file_manager_context_menu(
-                                        &mut self.context_menu_action,
-                                        &background,
-                                        has_editable_selection,
-                                        has_single_file_selection,
-                                        has_clipboard,
-                                    );
-                                });
-                        }
-                        FileManagerViewMode::Grid => {
-                            let tile_width = 150.0;
-                            let available_w = ui.available_width();
-                            let cols = ((available_w / tile_width).floor() as usize).max(1);
-                            egui::ScrollArea::vertical()
-                                .id_salt(("native_file_manager_grid", generation))
-                                .show(ui, |ui| {
-                                    for chunk in rows.chunks(cols) {
-                                        ui.allocate_ui_with_layout(
-                                            egui::vec2(available_w, 64.0),
-                                            Layout::left_to_right(egui::Align::Min),
-                                            |ui| {
-                                                for row in chunk {
-                                                    let selected = self
-                                                        .file_manager
-                                                        .is_path_selected(&row.path);
-                                                    let label = Self::truncate_file_manager_label(
-                                                        &row.label, 16,
-                                                    );
-                                                    let preview = self.svg_preview_texture(row);
-                                                    let response = Self::retro_file_manager_item(
-                                                        ui,
-                                                        preview.as_ref(),
-                                                        row.icon(),
-                                                        &label,
-                                                        egui::vec2(tile_width - 8.0, 60.0),
-                                                        selected,
-                                                        true,
-                                                        true,
-                                                    );
-                                                    self.handle_file_manager_row_interaction(
-                                                        ctx,
-                                                        ui,
-                                                        &response,
-                                                        row,
-                                                        save_picker_mode,
-                                                        &action_selection_paths,
-                                                        has_editable_selection,
-                                                        has_single_file_selection,
-                                                        has_clipboard,
-                                                    );
-                                                }
-                                            },
-                                        );
-                                    }
-                                    let background = ui.allocate_rect(
-                                        ui.available_rect_before_wrap(),
-                                        egui::Sense::click(),
-                                    );
-                                    if background.clicked() && !save_picker_mode {
-                                        self.file_manager.clear_multi_selection();
-                                    }
-                                    Self::attach_file_manager_context_menu(
-                                        &mut self.context_menu_action,
-                                        &background,
-                                        has_editable_selection,
-                                        has_single_file_selection,
-                                        has_clipboard,
-                                    );
-                                });
-                        }
-                    }
-                });
+            self.draw_file_manager_top_panel(
+                ctx,
+                ui,
+                generation,
+                maximized,
+                save_picker_mode,
+                &desktop_model,
+                &search_id,
+                &mut header_action,
+            );
+            self.draw_file_manager_footer_panel(ui, generation, save_picker_mode, &footer_model);
+            self.draw_file_manager_tree_panel(ui, generation, save_picker_mode, &desktop_model);
+            self.draw_file_manager_content_panel(
+                ctx,
+                ui,
+                generation,
+                save_picker_mode,
+                &desktop_model,
+                &action_selection_paths,
+                has_editable_selection,
+                has_single_file_selection,
+                has_clipboard,
+            );
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
@@ -13500,25 +11657,25 @@ impl RobcoNativeApp {
             return;
         }
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::C)) {
-            self.run_file_manager_action(FileManagerActionRequest::Copy);
+            self.run_file_manager_command(FileManagerCommand::Copy);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::X)) {
-            self.run_file_manager_action(FileManagerActionRequest::Cut);
+            self.run_file_manager_command(FileManagerCommand::Cut);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::V)) {
-            self.run_file_manager_action(FileManagerActionRequest::Paste);
+            self.run_file_manager_command(FileManagerCommand::Paste);
         } else if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::N)) {
-            self.run_file_manager_action(FileManagerActionRequest::NewFolder);
+            self.run_file_manager_command(FileManagerCommand::NewFolder);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::D)) {
-            self.run_file_manager_action(FileManagerActionRequest::Duplicate);
+            self.run_file_manager_command(FileManagerCommand::Duplicate);
         } else if ctx.input(|i| i.key_pressed(Key::F2)) {
-            self.open_file_manager_rename_prompt();
+            self.run_file_manager_command(FileManagerCommand::Rename);
         } else if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::M)) {
-            self.open_file_manager_move_prompt();
+            self.run_file_manager_command(FileManagerCommand::Move);
         } else if ctx.input(|i| i.key_pressed(Key::Delete)) {
-            self.run_file_manager_action(FileManagerActionRequest::Delete);
+            self.run_file_manager_command(FileManagerCommand::Delete);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Z)) {
-            self.run_file_manager_action(FileManagerActionRequest::Undo);
+            self.run_file_manager_command(FileManagerCommand::Undo);
         } else if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Y)) {
-            self.run_file_manager_action(FileManagerActionRequest::Redo);
+            self.run_file_manager_command(FileManagerCommand::Redo);
         }
     }
 }
@@ -13800,6 +11957,25 @@ mod tests {
     impl Drop for TempDirGuard {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct SettingsRestore {
+        backup: Settings,
+    }
+
+    impl SettingsRestore {
+        fn capture() -> Self {
+            Self {
+                backup: crate::config::get_settings(),
+            }
+        }
+    }
+
+    impl Drop for SettingsRestore {
+        fn drop(&mut self) {
+            crate::config::update_settings(|settings| *settings = self.backup.clone());
+            crate::config::save_settings(&self.backup);
         }
     }
 
@@ -14232,6 +12408,101 @@ mod tests {
     }
 
     #[test]
+    fn file_manager_commands_update_navigation_and_clipboard_state() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("file_manager_commands");
+        let note = temp.path.join("note.txt");
+        let other = temp.path.join("other");
+        std::fs::write(&note, "note").expect("write note");
+        std::fs::create_dir_all(&other).expect("create other directory");
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager = NativeFileManagerState::new(temp.path.clone());
+        app.file_manager.tabs = vec![temp.path.clone(), other.clone()];
+        app.file_manager.active_tab = 0;
+        app.file_manager.cwd = temp.path.clone();
+        app.file_manager.tree_selected = Some(temp.path.clone());
+        app.file_manager.update_search_query("note".to_string());
+
+        app.run_file_manager_command(FileManagerCommand::ClearSearch);
+        assert!(app.file_manager.search_query.is_empty());
+
+        app.run_file_manager_command(FileManagerCommand::NextTab);
+        assert_eq!(app.file_manager.active_tab, 1);
+        assert_eq!(app.file_manager.cwd, other);
+
+        app.run_file_manager_command(FileManagerCommand::PreviousTab);
+        assert_eq!(app.file_manager.active_tab, 0);
+        assert_eq!(app.file_manager.cwd, temp.path);
+
+        app.file_manager.select(Some(note.clone()));
+        app.run_file_manager_command(FileManagerCommand::Copy);
+
+        let clipboard = app
+            .file_manager_runtime
+            .clipboard
+            .as_ref()
+            .expect("copy puts selection on clipboard");
+        assert_eq!(clipboard.paths, vec![note]);
+        assert!(matches!(clipboard.mode, FileManagerClipboardMode::Copy));
+        assert_eq!(app.shell_status, "Copied note.txt");
+    }
+
+    #[test]
+    fn file_manager_commands_open_prompts_and_update_view_settings() {
+        let _guard = session_test_guard();
+        let _settings = SettingsRestore::capture();
+        let temp = TempDirGuard::new("file_manager_command_settings");
+        let note = temp.path.join("note.txt");
+        std::fs::write(&note, "note").expect("write note");
+
+        crate::config::update_settings(|settings| {
+            settings.desktop_file_manager.show_tree_panel = false;
+            settings.desktop_file_manager.show_hidden_files = false;
+            settings.desktop_file_manager.view_mode = FileManagerViewMode::Grid;
+            settings.desktop_file_manager.sort_mode = FileManagerSortMode::Name;
+        });
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.cwd = temp.path.clone();
+        app.file_manager.select(Some(note.clone()));
+
+        app.run_file_manager_command(FileManagerCommand::Rename);
+        assert_eq!(
+            app.terminal_prompt
+                .as_ref()
+                .map(|prompt| prompt.title.as_str()),
+            Some("Rename")
+        );
+
+        app.terminal_prompt = None;
+        app.run_file_manager_command(FileManagerCommand::Move);
+        assert_eq!(
+            app.terminal_prompt
+                .as_ref()
+                .map(|prompt| prompt.title.as_str()),
+            Some("Move To")
+        );
+
+        app.run_file_manager_command(FileManagerCommand::ToggleTreePanel);
+        app.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
+        app.run_file_manager_command(FileManagerCommand::SetViewMode(FileManagerViewMode::List));
+        app.run_file_manager_command(FileManagerCommand::SetSortMode(FileManagerSortMode::Type));
+
+        let settings = crate::config::get_settings();
+        assert!(settings.desktop_file_manager.show_tree_panel);
+        assert!(settings.desktop_file_manager.show_hidden_files);
+        assert_eq!(
+            settings.desktop_file_manager.view_mode,
+            FileManagerViewMode::List
+        );
+        assert_eq!(
+            settings.desktop_file_manager.sort_mode,
+            FileManagerSortMode::Type
+        );
+    }
+
+    #[test]
     fn closing_desktop_editor_resets_document_for_next_launch() {
         let _guard = session_test_guard();
 
@@ -14312,13 +12583,11 @@ mod tests {
         let mut app = RobcoNativeApp::default();
         app.file_manager.cwd = temp.path.clone();
 
-        let message = app
-            .file_manager_create_new_folder()
-            .expect("create unique folder");
+        app.run_file_manager_command(FileManagerCommand::NewFolder);
 
         let created = temp.path.join("New Folder (1)");
         assert!(created.is_dir());
         assert_eq!(app.file_manager.selected, Some(created.clone()));
-        assert_eq!(message, "Created New Folder (1)");
+        assert_eq!(app.shell_status, "Created New Folder (1)");
     }
 }

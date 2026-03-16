@@ -1,4 +1,4 @@
-use crate::config::{get_settings, FileManagerSortMode};
+use crate::config::{get_settings, FileManagerSortMode, FileManagerViewMode};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -50,6 +50,32 @@ pub enum FileManagerAction {
     None,
     ChangedDir,
     OpenFile(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileManagerCommand {
+    OpenSelected,
+    ClearSearch,
+    NewFolder,
+    NewTab,
+    PreviousTab,
+    NextTab,
+    CloseTab,
+    OpenHome,
+    GoUp,
+    Copy,
+    Cut,
+    Paste,
+    Duplicate,
+    Rename,
+    Move,
+    Delete,
+    Undo,
+    Redo,
+    ToggleTreePanel,
+    ToggleHiddenFiles,
+    SetViewMode(FileManagerViewMode),
+    SetSortMode(FileManagerSortMode),
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +179,10 @@ impl NativeFileManagerState {
     pub fn update_search_query(&mut self, query: String) {
         self.search_query = query;
         self.ensure_selection_valid();
+    }
+
+    pub fn clear_search(&mut self) {
+        self.update_search_query(String::new());
     }
 
     pub fn rows(&self) -> Vec<FileEntryRow> {
@@ -270,6 +300,26 @@ impl NativeFileManagerState {
         self.selected_paths.clear();
         self.tree_selected = Some(self.cwd.clone());
         true
+    }
+
+    pub fn switch_to_previous_tab(&mut self) -> bool {
+        if self.tabs.len() <= 1 {
+            return false;
+        }
+        let idx = if self.active_tab == 0 {
+            self.tabs.len().saturating_sub(1)
+        } else {
+            self.active_tab - 1
+        };
+        self.switch_to_tab(idx)
+    }
+
+    pub fn switch_to_next_tab(&mut self) -> bool {
+        if self.tabs.len() <= 1 {
+            return false;
+        }
+        let idx = (self.active_tab + 1) % self.tabs.len();
+        self.switch_to_tab(idx)
     }
 
     pub fn tab_title(path: &Path) -> String {
@@ -522,5 +572,36 @@ mod tests {
         assert_eq!(items.first().map(|item| item.line.as_str()), Some("Drives"));
         assert!(items.iter().any(|item| item.line == "Folders"));
         assert!(items.iter().any(|item| item.path.is_some()));
+    }
+
+    #[test]
+    fn clear_search_resets_query() {
+        let mut fm = NativeFileManagerState::new(std::env::temp_dir());
+        fm.update_search_query("demo".to_string());
+
+        fm.clear_search();
+
+        assert!(fm.search_query.is_empty());
+    }
+
+    #[test]
+    fn previous_and_next_tab_cycle_between_tabs() {
+        let temp = TempDirGuard::new("tabs");
+        let other = temp.path.join("other");
+        std::fs::create_dir_all(&other).expect("create other tab dir");
+
+        let mut fm = NativeFileManagerState::new(temp.path.clone());
+        fm.tabs = vec![temp.path.clone(), other.clone()];
+        fm.active_tab = 0;
+        fm.cwd = temp.path.clone();
+        fm.tree_selected = Some(temp.path.clone());
+
+        assert!(fm.switch_to_next_tab());
+        assert_eq!(fm.active_tab, 1);
+        assert_eq!(fm.cwd, other);
+
+        assert!(fm.switch_to_previous_tab());
+        assert_eq!(fm.active_tab, 0);
+        assert_eq!(fm.cwd, temp.path);
     }
 }
