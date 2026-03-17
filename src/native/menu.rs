@@ -2,9 +2,9 @@ use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 pub use robcos_native_terminal_app::{
-    entry_for_selectable_idx, login_menu_rows_from_users, selectable_menu_count, LoginMenuRow,
-    MainMenuAction, SettingsChoiceKind, SettingsChoiceOverlay, TerminalScreen,
-    UserManagementMode, MAIN_MENU_ENTRIES,
+    entry_for_selectable_idx, login_menu_rows_from_users, selectable_menu_count,
+    terminal_runtime_defaults, LoginMenuRow, MainMenuAction, SettingsChoiceKind,
+    SettingsChoiceOverlay, TerminalScreen, UserManagementMode, MAIN_MENU_ENTRIES,
 };
 
 fn selectable_row_indices(items: &[String]) -> Vec<usize> {

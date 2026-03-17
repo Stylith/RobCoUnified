@@ -137,6 +137,26 @@ pub enum TerminalBackAction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRuntimeDefaults {
+    pub main_menu_idx: usize,
+    pub screen: TerminalScreen,
+    pub apps_idx: usize,
+    pub documents_idx: usize,
+    pub logs_idx: usize,
+    pub network_idx: usize,
+    pub games_idx: usize,
+    pub nuke_codes_return_screen: TerminalScreen,
+    pub settings_idx: usize,
+    pub default_apps_idx: usize,
+    pub default_app_choice_idx: usize,
+    pub browser_idx: usize,
+    pub browser_return_screen: TerminalScreen,
+    pub user_management_idx: usize,
+    pub user_management_mode: UserManagementMode,
+    pub suppress_next_menu_submit: bool,
+}
+
 pub fn selectable_menu_count() -> usize {
     MAIN_MENU_ENTRIES
         .iter()
@@ -158,6 +178,27 @@ pub fn login_menu_rows_from_users(usernames: Vec<String>) -> Vec<LoginMenuRow> {
     rows.push(LoginMenuRow::Separator);
     rows.push(LoginMenuRow::Exit);
     rows
+}
+
+pub fn terminal_runtime_defaults() -> TerminalRuntimeDefaults {
+    TerminalRuntimeDefaults {
+        main_menu_idx: 0,
+        screen: TerminalScreen::MainMenu,
+        apps_idx: 0,
+        documents_idx: 0,
+        logs_idx: 0,
+        network_idx: 0,
+        games_idx: 0,
+        nuke_codes_return_screen: TerminalScreen::Applications,
+        settings_idx: 0,
+        default_apps_idx: 0,
+        default_app_choice_idx: 0,
+        browser_idx: 0,
+        browser_return_screen: TerminalScreen::Documents,
+        user_management_idx: 0,
+        user_management_mode: UserManagementMode::Root,
+        suppress_next_menu_submit: false,
+    }
 }
 
 pub fn resolve_main_menu_action(action: MainMenuAction) -> MainMenuSelectionAction {
@@ -300,6 +341,16 @@ mod tests {
             resolve_main_menu_action(MainMenuAction::Settings),
             MainMenuSelectionAction::RefreshSettingsAndOpen
         );
+    }
+
+    #[test]
+    fn runtime_defaults_start_in_main_menu_and_root_user_management() {
+        let defaults = terminal_runtime_defaults();
+        assert_eq!(defaults.screen, TerminalScreen::MainMenu);
+        assert_eq!(defaults.nuke_codes_return_screen, TerminalScreen::Applications);
+        assert_eq!(defaults.browser_return_screen, TerminalScreen::Documents);
+        assert_eq!(defaults.user_management_mode, UserManagementMode::Root);
+        assert!(!defaults.suppress_next_menu_submit);
     }
 
     #[test]

@@ -124,8 +124,8 @@ use super::installer_screen::{
     TerminalInstallerState,
 };
 use super::menu::{
-    draw_terminal_menu_screen, login_menu_rows_from_users, SettingsChoiceOverlay, TerminalScreen,
-    UserManagementMode,
+    draw_terminal_menu_screen, login_menu_rows_from_users, terminal_runtime_defaults,
+    SettingsChoiceOverlay, TerminalScreen, UserManagementMode,
 };
 use super::nuke_codes_screen::{
     draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView,
@@ -713,6 +713,7 @@ impl Default for RobcoNativeApp {
         session::clear_sessions();
         session::take_switch_request();
         let settings_draft = load_settings_snapshot();
+        let terminal_defaults = terminal_runtime_defaults();
         Self {
             login: LoginState::default(),
             login_mode: LoginScreenMode::SelectUser,
@@ -762,30 +763,30 @@ impl Default for RobcoNativeApp {
             start_open_submenu: None,
             start_open_leaf: None,
             desktop_mode_open: false,
-            main_menu_idx: 0,
-            terminal_screen: TerminalScreen::MainMenu,
-            terminal_apps_idx: 0,
-            terminal_documents_idx: 0,
-            terminal_logs_idx: 0,
-            terminal_network_idx: 0,
-            terminal_games_idx: 0,
+            main_menu_idx: terminal_defaults.main_menu_idx,
+            terminal_screen: terminal_defaults.screen,
+            terminal_apps_idx: terminal_defaults.apps_idx,
+            terminal_documents_idx: terminal_defaults.documents_idx,
+            terminal_logs_idx: terminal_defaults.logs_idx,
+            terminal_network_idx: terminal_defaults.network_idx,
+            terminal_games_idx: terminal_defaults.games_idx,
             terminal_nuke_codes: NukeCodesView::default(),
-            terminal_nuke_codes_return: TerminalScreen::Applications,
+            terminal_nuke_codes_return: terminal_defaults.nuke_codes_return_screen,
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
-            terminal_settings_idx: 0,
+            terminal_settings_idx: terminal_defaults.settings_idx,
             terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
-            terminal_default_apps_idx: 0,
-            terminal_default_app_choice_idx: 0,
+            terminal_default_apps_idx: terminal_defaults.default_apps_idx,
+            terminal_default_app_choice_idx: terminal_defaults.default_app_choice_idx,
             terminal_default_app_slot: None,
-            terminal_browser_idx: 0,
-            terminal_browser_return: TerminalScreen::Documents,
-            terminal_user_management_idx: 0,
-            terminal_user_management_mode: UserManagementMode::Root,
+            terminal_browser_idx: terminal_defaults.browser_idx,
+            terminal_browser_return: terminal_defaults.browser_return_screen,
+            terminal_user_management_idx: terminal_defaults.user_management_idx,
+            terminal_user_management_mode: terminal_defaults.user_management_mode,
             terminal_settings_choice: None,
             terminal_prompt: None,
-            suppress_next_menu_submit: false,
+            suppress_next_menu_submit: terminal_defaults.suppress_next_menu_submit,
             terminal_flash: None,
             session_leader_until: None,
             session_runtime: HashMap::new(),
@@ -3423,6 +3424,7 @@ impl RobcoNativeApp {
     }
 
     fn reset_shell_runtime_for_session(&mut self, launch_default_desktop: bool) {
+        let terminal_defaults = terminal_runtime_defaults();
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
         self.start_open = !launch_default_desktop;
@@ -3432,30 +3434,30 @@ impl RobcoNativeApp {
         self.start_open_submenu = None;
         self.start_open_leaf = None;
         self.desktop_mode_open = launch_default_desktop;
-        self.main_menu_idx = 0;
-        self.terminal_screen = TerminalScreen::MainMenu;
-        self.terminal_apps_idx = 0;
-        self.terminal_documents_idx = 0;
-        self.terminal_logs_idx = 0;
-        self.terminal_network_idx = 0;
-        self.terminal_games_idx = 0;
+        self.main_menu_idx = terminal_defaults.main_menu_idx;
+        self.terminal_screen = terminal_defaults.screen;
+        self.terminal_apps_idx = terminal_defaults.apps_idx;
+        self.terminal_documents_idx = terminal_defaults.documents_idx;
+        self.terminal_logs_idx = terminal_defaults.logs_idx;
+        self.terminal_network_idx = terminal_defaults.network_idx;
+        self.terminal_games_idx = terminal_defaults.games_idx;
         self.terminal_nuke_codes = NukeCodesView::default();
-        self.terminal_nuke_codes_return = TerminalScreen::Applications;
+        self.terminal_nuke_codes_return = terminal_defaults.nuke_codes_return_screen;
         self.terminal_pty = None;
         self.terminal_installer.reset();
-        self.terminal_settings_idx = 0;
+        self.terminal_settings_idx = terminal_defaults.settings_idx;
         self.terminal_edit_menus.reset();
         self.terminal_connections.reset();
-        self.terminal_default_apps_idx = 0;
-        self.terminal_default_app_choice_idx = 0;
+        self.terminal_default_apps_idx = terminal_defaults.default_apps_idx;
+        self.terminal_default_app_choice_idx = terminal_defaults.default_app_choice_idx;
         self.terminal_default_app_slot = None;
-        self.terminal_browser_idx = 0;
-        self.terminal_browser_return = TerminalScreen::Documents;
-        self.terminal_user_management_idx = 0;
-        self.terminal_user_management_mode = UserManagementMode::Root;
+        self.terminal_browser_idx = terminal_defaults.browser_idx;
+        self.terminal_browser_return = terminal_defaults.browser_return_screen;
+        self.terminal_user_management_idx = terminal_defaults.user_management_idx;
+        self.terminal_user_management_mode = terminal_defaults.user_management_mode;
         self.terminal_settings_choice = None;
         self.terminal_prompt = None;
-        self.suppress_next_menu_submit = false;
+        self.suppress_next_menu_submit = terminal_defaults.suppress_next_menu_submit;
         self.terminal_flash = None;
         self.session_leader_until = None;
     }
