@@ -5,8 +5,8 @@ use super::editor_app::{
 use super::file_manager::FileManagerCommand;
 use super::file_manager::NativeFileManagerState;
 use super::file_manager_app::{FileManagerEditRuntime, FileManagerPromptRequest};
-use super::file_manager_menu::build_file_manager_menu_section;
 use super::file_manager_desktop::FILE_MANAGER_APP_TITLE;
+use super::file_manager_menu::build_file_manager_menu_section;
 pub use super::shared_types::DesktopWindow;
 use crate::config::DesktopFileManagerSettings;
 use std::path::PathBuf;

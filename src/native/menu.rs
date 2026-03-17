@@ -2,13 +2,22 @@ use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 pub use robcos_native_terminal_app::{
-    entry_for_selectable_idx, login_menu_rows_from_users, selectable_menu_count,
-    resolve_login_selection, resolve_main_menu_action, resolve_terminal_back_action,
+    entry_for_selectable_idx, handle_user_management_selection, login_menu_rows_from_users,
+    plan_user_management_action, resolve_create_username_prompt, resolve_desktop_pty_exit,
+    resolve_embedded_pty_exit, resolve_hacking_screen_event, resolve_login_password_submission,
+    resolve_login_selection_plan, resolve_main_menu_action, resolve_terminal_back_action,
+    resolve_terminal_flash_action, resolve_user_password_confirm_prompt,
+    resolve_user_password_first_prompt, selectable_menu_count, terminal_command_launch_plan,
     terminal_runtime_defaults, terminal_screen_open_plan, terminal_settings_refresh_plan,
-    LoginMenuRow, LoginSelectionAction, MainMenuAction, MainMenuSelectionAction,
-    SettingsChoiceKind, SettingsChoiceOverlay, TerminalBackAction, TerminalBackContext,
-    TerminalNavigationState, TerminalScreen, TerminalScreenOpenPlan,
-    TerminalSelectionIndexTarget, UserManagementMode, MAIN_MENU_ENTRIES,
+    terminal_shell_launch_plan, user_management_screen_for_mode, LoginMenuRow, MainMenuAction,
+    MainMenuSelectionAction, SettingsChoiceOverlay, TerminalBackAction, TerminalBackContext,
+    TerminalDesktopPtyExitPlan, TerminalEmbeddedPtyExitPlan, TerminalFlashActionPlan,
+    TerminalFlashPtyLaunchPlan, TerminalHackingPlan, TerminalHackingUiEvent,
+    TerminalLoginPasswordPlan, TerminalLoginScreenMode, TerminalLoginSelectionPlan,
+    TerminalLoginState, TerminalLoginSubmitAction, TerminalNavigationState, TerminalPtyLaunchPlan,
+    TerminalScreen, TerminalScreenOpenPlan, TerminalSelectionIndexTarget, TerminalShellSurface,
+    TerminalUserManagementPromptPlan, TerminalUserPasswordFlow, UserManagementExecutionPlan,
+    UserManagementMode, MAIN_MENU_ENTRIES,
 };
 
 fn selectable_row_indices(items: &[String]) -> Vec<usize> {

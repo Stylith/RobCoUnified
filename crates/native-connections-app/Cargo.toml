@@ -1,0 +1,9 @@
+[package]
+name = "robcos-native-connections-app"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+robcos-native-services = { path = "../native-services" }
+robcos-shared = { path = "../shared" }

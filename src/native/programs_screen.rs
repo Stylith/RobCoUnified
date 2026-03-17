@@ -1,11 +1,6 @@
 use super::menu::draw_terminal_menu_screen;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProgramMenuEvent {
-    None,
-    Back,
-    Launch(String),
-}
+pub use robcos_native_programs_app::ProgramMenuEvent;
+use robcos_native_programs_app::{build_program_menu_items, resolve_program_menu_event};
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_programs_menu(
@@ -26,9 +21,7 @@ pub fn draw_programs_menu(
     status_row: usize,
     content_col: usize,
 ) -> ProgramMenuEvent {
-    let mut items = entries.to_vec();
-    items.push("---".to_string());
-    items.push("Back".to_string());
+    let items = build_program_menu_items(entries);
     let activated = draw_terminal_menu_screen(
         ctx,
         title,
@@ -47,9 +40,5 @@ pub fn draw_programs_menu(
         content_col,
         shell_status,
     );
-    match activated {
-        Some(idx) if idx < entries.len() => ProgramMenuEvent::Launch(entries[idx].clone()),
-        Some(_) => ProgramMenuEvent::Back,
-        None => ProgramMenuEvent::None,
-    }
+    resolve_program_menu_event(entries, activated)
 }

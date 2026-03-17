@@ -1,7 +1,7 @@
-use super::desktop_user_service::sorted_usernames;
-use super::menu::UserManagementMode;
-use crate::config::{hacking_difficulty_label, HackingDifficulty};
-use crate::core::auth::AuthMethod;
+use crate::UserManagementMode;
+use robcos_native_services::desktop_user_service::sorted_usernames;
+use robcos_shared::config::{hacking_difficulty_label, HackingDifficulty};
+use robcos_shared::core::auth::AuthMethod;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementAction {
@@ -39,13 +39,49 @@ pub enum UserManagementAction {
     Status(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserManagementExecutionPlan {
+    None,
+    OpenCreateUserPrompt,
+    CycleHackingDifficulty,
+    SetMode {
+        mode: UserManagementMode,
+        selected_idx: usize,
+    },
+    BackToSettings,
+    OpenCreatePasswordPrompt {
+        username: String,
+    },
+    ApplyCreateUser {
+        username: String,
+        method: AuthMethod,
+    },
+    OpenConfirmDeleteUser {
+        username: String,
+    },
+    OpenResetPasswordPrompt {
+        username: String,
+    },
+    OpenChangeAuthPasswordPrompt {
+        username: String,
+    },
+    ApplyChangeAuthMethod {
+        username: String,
+        method: AuthMethod,
+    },
+    OpenConfirmToggleAdmin {
+        username: String,
+    },
+    Status(String),
+}
+
 pub struct UserManagementScreen {
     pub title: &'static str,
     pub subtitle: Option<String>,
     pub items: Vec<String>,
 }
 
-pub fn screen_for_mode(
+pub fn user_management_screen_for_mode(
     mode: &UserManagementMode,
     current_username: Option<&str>,
     hacking_difficulty: HackingDifficulty,
@@ -99,7 +135,7 @@ pub fn screen_for_mode(
     }
 }
 
-pub fn handle_selection(
+pub fn handle_user_management_selection(
     mode: &UserManagementMode,
     selected_label: &str,
     current_username: Option<&str>,
@@ -262,6 +298,60 @@ pub fn handle_selection(
     }
 }
 
+pub fn plan_user_management_action(action: UserManagementAction) -> UserManagementExecutionPlan {
+    match action {
+        UserManagementAction::None => UserManagementExecutionPlan::None,
+        UserManagementAction::OpenCreateUserPrompt => {
+            UserManagementExecutionPlan::OpenCreateUserPrompt
+        }
+        UserManagementAction::CycleHackingDifficulty => {
+            UserManagementExecutionPlan::CycleHackingDifficulty
+        }
+        UserManagementAction::SetMode { mode, selected_idx } => {
+            UserManagementExecutionPlan::SetMode { mode, selected_idx }
+        }
+        UserManagementAction::BackToSettings => UserManagementExecutionPlan::BackToSettings,
+        UserManagementAction::CreateWithMethod { username, method } => match method {
+            AuthMethod::Password => {
+                UserManagementExecutionPlan::OpenCreatePasswordPrompt { username }
+            }
+            AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
+                UserManagementExecutionPlan::ApplyCreateUser { username, method }
+            }
+        },
+        UserManagementAction::ApplyCreateHacking { username } => {
+            UserManagementExecutionPlan::ApplyCreateUser {
+                username,
+                method: AuthMethod::HackingMinigame,
+            }
+        }
+        UserManagementAction::ConfirmDeleteUser { username } => {
+            UserManagementExecutionPlan::OpenConfirmDeleteUser { username }
+        }
+        UserManagementAction::OpenResetPassword { username } => {
+            UserManagementExecutionPlan::OpenResetPasswordPrompt { username }
+        }
+        UserManagementAction::ChangeAuthWithMethod { username, method } => match method {
+            AuthMethod::Password => {
+                UserManagementExecutionPlan::OpenChangeAuthPasswordPrompt { username }
+            }
+            AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
+                UserManagementExecutionPlan::ApplyChangeAuthMethod { username, method }
+            }
+        },
+        UserManagementAction::ApplyChangeAuthHacking { username } => {
+            UserManagementExecutionPlan::ApplyChangeAuthMethod {
+                username,
+                method: AuthMethod::HackingMinigame,
+            }
+        }
+        UserManagementAction::ConfirmToggleAdmin { username } => {
+            UserManagementExecutionPlan::OpenConfirmToggleAdmin { username }
+        }
+        UserManagementAction::Status(status) => UserManagementExecutionPlan::Status(status),
+    }
+}
+
 fn root_items() -> Vec<String> {
     vec![
         "Create User".to_string(),
@@ -323,16 +413,14 @@ fn user_list_items(current_username: Option<&str>, include_current: bool) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::super::menu::UserManagementMode;
     use super::*;
-    use crate::config::HackingDifficulty;
 
     #[test]
     fn create_hacking_selection_routes_to_difficulty_mode() {
         let mode = UserManagementMode::CreateAuthMethod {
             username: "alice".to_string(),
         };
-        let action = handle_selection(
+        let action = handle_user_management_selection(
             &mode,
             "Hacking Minigame     — must hack in to log in",
             Some("admin"),
@@ -351,10 +439,11 @@ mod tests {
         let mode = UserManagementMode::CreateHackingDifficulty {
             username: "alice".to_string(),
         };
-        let cycle = handle_selection(&mode, "Difficulty: Normal [cycle]", Some("admin"));
+        let cycle =
+            handle_user_management_selection(&mode, "Difficulty: Normal [cycle]", Some("admin"));
         assert_eq!(cycle, UserManagementAction::CycleHackingDifficulty);
 
-        let apply = handle_selection(&mode, "Apply", Some("admin"));
+        let apply = handle_user_management_selection(&mode, "Apply", Some("admin"));
         assert!(matches!(
             apply,
             UserManagementAction::ApplyCreateHacking { username } if username == "alice"
@@ -366,11 +455,39 @@ mod tests {
         let mode = UserManagementMode::ChangeAuthHackingDifficulty {
             username: "bob".to_string(),
         };
-        let screen = screen_for_mode(&mode, Some("admin"), HackingDifficulty::Hard);
+        let screen = user_management_screen_for_mode(&mode, Some("admin"), HackingDifficulty::Hard);
         assert_eq!(screen.title, "Hacking Difficulty");
         assert!(screen
             .items
             .first()
             .is_some_and(|item| item.contains("Hard [cycle]")));
+    }
+
+    #[test]
+    fn password_auth_selection_plans_password_prompt() {
+        let plan = plan_user_management_action(UserManagementAction::CreateWithMethod {
+            username: "alice".to_string(),
+            method: AuthMethod::Password,
+        });
+        assert_eq!(
+            plan,
+            UserManagementExecutionPlan::OpenCreatePasswordPrompt {
+                username: "alice".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn hacking_apply_plans_auth_update() {
+        let plan = plan_user_management_action(UserManagementAction::ApplyChangeAuthHacking {
+            username: "bob".to_string(),
+        });
+        assert_eq!(
+            plan,
+            UserManagementExecutionPlan::ApplyChangeAuthMethod {
+                username: "bob".to_string(),
+                method: AuthMethod::HackingMinigame,
+            }
+        );
     }
 }

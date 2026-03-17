@@ -1,13 +1,13 @@
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
-use super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use super::prompt_flow::PromptOutcome;
+use super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use crate::default_apps::parse_custom_command_line;
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
 use robcos_native_file_manager_app::{
     prepare_open_with_launch, FileManagerEditRuntime, OpenWithLaunchRequest,
 };
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileManagerSelectionPromptKind {

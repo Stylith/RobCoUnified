@@ -10,9 +10,9 @@ mod edit_menus_screen;
 mod editor_app;
 mod file_manager;
 mod file_manager_app;
+mod file_manager_desktop;
 mod file_manager_menu;
 mod file_manager_prompt;
-mod file_manager_desktop;
 mod hacking_screen;
 mod installer_screen;
 mod menu;
@@ -24,7 +24,6 @@ mod pty_screen;
 mod retro_ui;
 mod settings_screen;
 mod shell_screen;
-mod user_management;
 
 pub use robcos_native_services::{
     desktop_connections_service, desktop_default_apps_service, desktop_documents_service,

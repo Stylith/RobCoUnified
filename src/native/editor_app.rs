@@ -1,8 +1,8 @@
 use super::desktop_app::{DesktopMenuAction, DesktopMenuItem, DesktopMenuSection};
-use std::path::PathBuf;
 pub use robcos_native_editor_app::{
     EditorCommand, EditorTextAlign, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
+use std::path::PathBuf;
 
 pub fn build_editor_menu_section(
     section: DesktopMenuSection,

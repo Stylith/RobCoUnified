@@ -1,22 +1,6 @@
+#[cfg(test)]
+use super::file_manager::FileEntryRow;
 use super::file_manager::{FileManagerCommand, NativeFileManagerState};
-pub use super::shared_file_manager_settings::{
-    FileManagerDisplaySettingsUpdate, FileManagerSettingsUpdate,
-};
-#[cfg(test)]
-pub use super::shared_file_manager_settings::{
-    open_with_default_for_extension, open_with_history_for_extension, push_open_with_history,
-    record_open_with_command_in_settings,
-    remove_open_with_command_in_settings, replace_open_with_command_in_settings,
-    set_open_with_default_in_settings, sync_open_with_settings_to_draft,
-};
-#[cfg(test)]
-use crate::config::{DesktopFileManagerSettings, FileManagerViewMode};
-use anyhow::Result;
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
-#[cfg(test)]
-use super::file_manager::{FileEntryRow, FileManagerAction};
 pub use super::file_manager_prompt::{
     apply_prompt_outcome, open_with_cleared_default_status, open_with_removed_saved_status,
     open_with_set_default_status, prompt_request_for_command, FileManagerPromptAction,
@@ -24,18 +8,34 @@ pub use super::file_manager_prompt::{
 };
 #[cfg(test)]
 pub use super::file_manager_prompt::{resolve_prompt_outcome, FileManagerPromptResolution};
+#[cfg(test)]
+pub use super::shared_file_manager_settings::{
+    open_with_default_for_extension, open_with_history_for_extension, push_open_with_history,
+    record_open_with_command_in_settings, remove_open_with_command_in_settings,
+    replace_open_with_command_in_settings, set_open_with_default_in_settings,
+    sync_open_with_settings_to_draft,
+};
+pub use super::shared_file_manager_settings::{
+    FileManagerDisplaySettingsUpdate, FileManagerSettingsUpdate,
+};
+#[cfg(test)]
+use crate::config::{DesktopFileManagerSettings, FileManagerViewMode};
+use anyhow::Result;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 pub use robcos_native_file_manager_app::{
     commit_picker_selection, open_target_for_file_manager_action, open_with_extension_key,
-    prepare_open_with_launch, selection_activation_for_selected_path, FileManagerClipboardMode,
-    FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode,
+    prepare_open_with_launch, selected_file, selection_activation_for_selected_path,
+    FileManagerClipboardMode, FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode,
     FileManagerPickerCommit, FileManagerSelectionActivation, NativeFileManagerDragPayload,
-    OpenWithLaunchRequest, selected_file,
+    OpenWithLaunchRequest,
 };
 #[cfg(test)]
-pub use robcos_native_file_manager_app::{
-    open_with_state_for_path, FileManagerClipboardItem,
-};
+pub use robcos_native_file_manager_app::{open_with_state_for_path, FileManagerClipboardItem};
+#[cfg(test)]
+use robcos_native_file_manager_app::FileManagerAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileManagerCommandRequest {

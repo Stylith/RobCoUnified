@@ -1,0 +1,12 @@
+[package]
+name = "robcos-native-programs-app"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+robcos-native-services = { path = "../native-services" }

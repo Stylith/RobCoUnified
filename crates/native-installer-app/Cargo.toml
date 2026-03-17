@@ -1,0 +1,9 @@
+[package]
+name = "robcos-native-installer-app"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+serde_json = "1"
+robcos-shared = { path = "../shared" }

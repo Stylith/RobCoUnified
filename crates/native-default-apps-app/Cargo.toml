@@ -1,0 +1,13 @@
+[package]
+name = "robcos-native-default-apps-app"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+robcos-native-services = { path = "../native-services" }
+robcos-shared = { path = "../shared" }

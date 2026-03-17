@@ -1,0 +1,5 @@
+[package]
+name = "robcos-native-edit-menus-app"
+version = "0.3.2"
+edition = "2021"
+license = "GPL-3.0-only"

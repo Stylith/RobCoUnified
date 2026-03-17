@@ -2,15 +2,15 @@ use crate::config::{
     cycle_hacking_difficulty, get_settings, hacking_difficulty_label,
     mark_default_apps_prompt_pending, persist_settings, update_settings, users_dir,
 };
+pub use crate::core::auth::{
+    clear_session, ensure_default_admin, hash_password, is_admin, load_users, save_users,
+    write_session, AuthMethod, UserRecord,
+};
 use crate::ui::{
     confirm, flash_message, input_prompt, is_back_menu_label, password_prompt, run_menu,
     MenuResult, Term,
 };
 use anyhow::Result;
-pub use crate::core::auth::{
-    clear_session, ensure_default_admin, hash_password, is_admin, load_users, save_users,
-    write_session, AuthMethod, UserRecord,
-};
 
 // ── Login screen ─────────────────────────────────────────────────────────────
 

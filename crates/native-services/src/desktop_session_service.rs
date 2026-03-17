@@ -1,5 +1,5 @@
-use super::shared_types::FlashAction;
 use super::desktop_user_service::{sorted_usernames, user_exists};
+use super::shared_types::FlashAction;
 use crate::config::{load_json, save_json, set_current_user, user_dir, OpenMode};
 use crate::core::auth::{
     ensure_default_admin, hash_password, load_users, read_session, write_session, AuthMethod,
