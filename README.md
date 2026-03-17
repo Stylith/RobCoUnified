@@ -7,7 +7,7 @@ RobCoOS is an application-layer shell experience, not a standalone operating sys
 ![RobCoOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
 ![RobCoOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
 
-**Version:** `0.4.3`
+**Version:** `0.4.4`
 
 ---
 

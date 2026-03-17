@@ -671,7 +671,17 @@ pub fn terminal_shell_launch_plan(
     requested_shell: Option<&str>,
     bash_exists: bool,
 ) -> TerminalPtyLaunchPlan {
-    let requested_shell = requested_shell.unwrap_or("/bin/bash");
+    let requested_shell = requested_shell
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh"
+            } else if bash_exists {
+                "/bin/bash"
+            } else {
+                "/bin/sh"
+            }
+        });
     let requested_shell_name = std::path::Path::new(requested_shell)
         .file_name()
         .and_then(|s| s.to_str())
@@ -690,15 +700,8 @@ pub fn terminal_shell_launch_plan(
         .and_then(|s| s.to_str())
         .unwrap_or("");
     let mut argv = vec![shell.clone()];
-    match shell_name {
-        "bash" => {
-            argv.push("--noprofile".to_string());
-            argv.push("--norc".to_string());
-        }
-        "zsh" => {
-            argv.push("-f".to_string());
-        }
-        _ => {}
+    if matches!(shell_name, "bash" | "zsh") {
+        argv.push("-l".to_string());
     }
 
     let title = match surface {
@@ -707,11 +710,6 @@ pub fn terminal_shell_launch_plan(
     };
     let mut plan =
         terminal_command_launch_plan(surface, title, &argv, TerminalScreen::MainMenu, Some(false));
-    plan.env = vec![
-        ("PS1".into(), "> ".into()),
-        ("PROMPT".into(), "> ".into()),
-        ("ZDOTDIR".into(), "/dev/null".into()),
-    ];
     plan.success_status = match surface {
         TerminalShellSurface::Embedded => "Opened terminal shell in PTY.".to_string(),
         TerminalShellSurface::Desktop => "Opened terminal shell in PTY window.".to_string(),
@@ -1263,7 +1261,8 @@ mod tests {
         let plan =
             terminal_shell_launch_plan(TerminalShellSurface::Embedded, Some("/bin/zsh"), true);
         assert_eq!(plan.title, "ROBCO MAINTENANCE TERMLINK");
-        assert_eq!(plan.argv, vec!["/bin/zsh".to_string(), "-f".to_string()]);
+        assert_eq!(plan.argv, vec!["/bin/zsh".to_string(), "-l".to_string()]);
+        assert!(plan.env.is_empty());
         assert!(plan.use_fixed_terminal_metrics);
         assert!(!plan.replace_existing_pty);
     }
@@ -1272,17 +1271,20 @@ mod tests {
     fn desktop_terminal_shell_plan_falls_back_from_fish_to_bash() {
         let plan =
             terminal_shell_launch_plan(TerminalShellSurface::Desktop, Some("/usr/bin/fish"), true);
-        assert_eq!(
-            plan.argv,
-            vec![
-                "/bin/bash".to_string(),
-                "--noprofile".to_string(),
-                "--norc".to_string()
-            ]
-        );
+        assert_eq!(plan.argv, vec!["/bin/bash".to_string(), "-l".to_string()]);
         assert_eq!(plan.title, "Terminal");
         assert!(plan.replace_existing_pty);
         assert!(!plan.use_fixed_terminal_metrics);
+    }
+
+    #[test]
+    fn terminal_shell_plan_uses_platform_default_when_shell_is_missing() {
+        let plan = terminal_shell_launch_plan(TerminalShellSurface::Desktop, None, true);
+        if cfg!(target_os = "macos") {
+            assert_eq!(plan.argv, vec!["/bin/zsh".to_string(), "-l".to_string()]);
+        } else {
+            assert_eq!(plan.argv, vec!["/bin/bash".to_string(), "-l".to_string()]);
+        }
     }
 
     #[test]

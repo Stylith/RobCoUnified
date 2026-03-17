@@ -4,9 +4,10 @@ use robcos::config::reload_settings;
 use robcos::core::auth::ensure_default_admin;
 use robcos::native::{configure_native_context, RobcoNativeApp};
 
+const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
+
 fn load_icon() -> Option<IconData> {
-    let bytes = std::fs::read("icon.png").ok()?;
-    let image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+    let image = image::load_from_memory(APP_ICON_BYTES).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
     Some(IconData {
         rgba: image.into_raw(),

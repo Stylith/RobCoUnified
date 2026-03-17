@@ -116,6 +116,8 @@ jobs:
             <key>CFBundleExecutable</key>
             <string>${{ matrix.package_bin_name }}</string>
             <key>CFBundleIconFile</key>
+            <string>RobCoOS.icns</string>
+            <key>CFBundleIconName</key>
             <string>RobCoOS</string>
             <key>CFBundleIdentifier</key>
             <string>com.stylith.robcoos</string>

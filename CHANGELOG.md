@@ -4,6 +4,14 @@ All notable changes to RobCoOS will be documented in this file.
 
 The format is based on Keep a Changelog, adapted to the way this project ships releases.
 
+## 0.4.4 - 2026-03-17
+
+### Fixed
+
+- Embedded the native app icon into the shell binary so the macOS `.app` no longer falls back to the default eframe icon when launched outside the repo root.
+- Fixed terminal shell startup so bundled macOS builds open a normal login shell instead of suppressing startup files, restoring Homebrew-installed commands in the PTY.
+- Added explicit macOS bundle icon metadata for the packaged `.app` resource icon in the release workflow.
+
 ## 0.4.3 - 2026-03-17
 
 ### Fixed
