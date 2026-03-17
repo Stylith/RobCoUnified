@@ -271,22 +271,22 @@ fn run_spawn(path: PathBuf) {
     #[cfg(target_os = "linux")]
     let child = Command::new("pw-play")
         .arg(&path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .or_else(|_| {
             Command::new("paplay")
                 .arg(&path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
         })
         .or_else(|_| {
             Command::new("aplay")
                 .arg("-q")
                 .arg(&path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
         });
 
