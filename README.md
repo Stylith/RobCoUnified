@@ -114,6 +114,8 @@ All runtime data is stored relative to the executable:
 
 See [`USER_MANUAL.md`](USER_MANUAL.md) for the full usage reference.
 
+See [`CHANGELOG.md`](CHANGELOG.md) for release history.
+
 See [`docs/NATIVE_ROADMAP.md`](docs/NATIVE_ROADMAP.md) for the current native architecture and workspace split.
 
 ---
