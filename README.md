@@ -184,6 +184,11 @@ RobCoOS/
 
 See `USER_MANUAL.md` for full usage details and control reference.
 
+## Native Architecture Notes
+
+See `docs/NATIVE_ROADMAP.md` for the current native rewrite status, parity scope, and next
+architecture steps.
+
 ## Credits and Attribution
 
 - UI framework: [ratatui](https://github.com/ratatui/ratatui)

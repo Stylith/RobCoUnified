@@ -45,7 +45,9 @@ mod prompt_flow;
 mod pty_screen;
 mod retro_ui;
 mod settings_screen;
+#[path = "../../crates/native-services/src/shared_file_manager_settings.rs"]
 mod shared_file_manager_settings;
+#[path = "../../crates/native-services/src/shared_types.rs"]
 mod shared_types;
 mod shell_actions;
 mod shell_screen;
