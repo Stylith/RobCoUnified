@@ -1,15 +1,37 @@
 use crate::config::{DefaultAppBinding, Settings};
 use crate::default_apps::{
-    binding_for_slot, binding_label, parse_custom_command_line, set_binding_for_slot,
-    DefaultAppSlot,
+    binding_for_slot, binding_label, default_app_choices, parse_custom_command_line,
+    set_binding_for_slot, slot_label, DefaultAppChoice,
 };
 
+pub use crate::default_apps::{DefaultAppChoiceAction, DefaultAppSlot};
+
+pub fn default_app_slot_label(slot: DefaultAppSlot) -> &'static str {
+    slot_label(slot)
+}
+
+pub fn default_app_choices_for_slot(slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
+    default_app_choices(slot)
+}
+
+pub fn default_app_binding(settings: &Settings, slot: DefaultAppSlot) -> DefaultAppBinding {
+    binding_for_slot(settings, slot)
+}
+
 pub fn binding_label_for_slot(settings: &Settings, slot: DefaultAppSlot) -> String {
-    binding_label(&binding_for_slot(settings, slot))
+    binding_label(&default_app_binding(settings, slot))
+}
+
+pub fn default_app_binding_matches(
+    settings: &Settings,
+    slot: DefaultAppSlot,
+    binding: &DefaultAppBinding,
+) -> bool {
+    default_app_binding(settings, slot) == *binding
 }
 
 pub fn custom_command_input_for_slot(settings: &Settings, slot: DefaultAppSlot) -> String {
-    match binding_for_slot(settings, slot) {
+    match default_app_binding(settings, slot) {
         DefaultAppBinding::CustomArgv { argv } => argv.join(" "),
         _ => String::new(),
     }

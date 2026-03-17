@@ -1,5 +1,6 @@
+use super::desktop_session_service::login_selection_auth_method;
 use super::menu::{MainMenuAction, TerminalScreen};
-use crate::core::auth::{load_users, AuthMethod};
+use crate::core::auth::AuthMethod;
 
 #[derive(Debug, Clone)]
 pub enum LoginSelectionAction {
@@ -31,16 +32,15 @@ pub fn resolve_login_selection(selected_idx: usize, usernames: &[String]) -> Log
     let Some(selected) = usernames.get(idx).cloned() else {
         return LoginSelectionAction::ShowError("Unknown user.".to_string());
     };
-    let db = load_users();
-    let Some(record) = db.get(&selected) else {
-        return LoginSelectionAction::ShowError("Unknown user.".to_string());
-    };
-    match record.auth_method {
-        AuthMethod::NoPassword => {
+    match login_selection_auth_method(&selected) {
+        Ok(AuthMethod::NoPassword) => {
             LoginSelectionAction::AuthenticateWithoutPassword { username: selected }
         }
-        AuthMethod::Password => LoginSelectionAction::PromptPassword { username: selected },
-        AuthMethod::HackingMinigame => LoginSelectionAction::StartHacking { username: selected },
+        Ok(AuthMethod::Password) => LoginSelectionAction::PromptPassword { username: selected },
+        Ok(AuthMethod::HackingMinigame) => {
+            LoginSelectionAction::StartHacking { username: selected }
+        }
+        Err(error) => LoginSelectionAction::ShowError(error),
     }
 }
 

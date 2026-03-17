@@ -1,4 +1,3 @@
-use super::data::read_text_file;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +13,7 @@ pub struct FileManagerLocation {
 }
 
 pub fn load_text_document(path: PathBuf) -> Result<LoadedTextDocument, String> {
-    read_text_file(&path)
+    std::fs::read_to_string(&path)
         .map(|text| LoadedTextDocument { path, text })
         .map_err(|err| err.to_string())
 }

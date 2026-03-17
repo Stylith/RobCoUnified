@@ -1,5 +1,5 @@
-use super::menu::UserManagementMode;
 use super::desktop_user_service::sorted_usernames;
+use super::menu::UserManagementMode;
 use crate::config::{hacking_difficulty_label, HackingDifficulty};
 use crate::core::auth::AuthMethod;
 

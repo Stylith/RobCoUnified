@@ -1,36 +1,14 @@
 use super::edit_menus_screen::EditMenuTarget;
-use super::menu::TerminalScreen;
 use super::retro_ui::{current_palette, RetroScreen};
+pub use super::shared_types::FlashAction;
 use crate::config::ConnectionKind;
 use crate::config::HEADER_LINES;
 use crate::connections::NetworkMenuGroup;
-use crate::core::auth::UserRecord;
 use crate::default_apps::DefaultAppSlot;
 use crate::native::installer_screen::{InstallerMenuTarget, InstallerPackageAction};
 use eframe::egui::{self, Align2, Context, Pos2};
 use std::path::PathBuf;
 use std::time::Instant;
-
-#[derive(Debug, Clone)]
-pub enum FlashAction {
-    Noop,
-    ExitApp,
-    FinishLogout,
-    FinishLogin {
-        username: String,
-        user: UserRecord,
-    },
-    StartHacking {
-        username: String,
-    },
-    LaunchPty {
-        title: String,
-        argv: Vec<String>,
-        return_screen: TerminalScreen,
-        status: String,
-        completion_message: Option<String>,
-    },
-}
 
 #[derive(Debug, Clone)]
 pub struct TerminalFlash {

@@ -1,8 +1,18 @@
-use super::programs_screen::resolve_program_command;
-use crate::config::{
-    load_apps, load_games, load_networks, save_apps, save_games, save_networks,
-};
+use crate::config::{load_apps, load_games, load_networks, save_apps, save_games, save_networks};
+use crate::default_apps::parse_custom_command_line;
+use crate::launcher::json_to_cmd;
 use serde_json::{Map, Value};
+
+fn resolve_program_command(name: &str, source: &Map<String, Value>) -> Result<Vec<String>, String> {
+    let Some(value) = source.get(name) else {
+        return Err(format!("Unknown program '{name}'."));
+    };
+    let argv = json_to_cmd(value);
+    if argv.is_empty() {
+        return Err("Error: empty command.".to_string());
+    }
+    Ok(argv)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramCatalog {
@@ -66,7 +76,21 @@ pub fn resolve_catalog_command_line(name: &str, catalog: ProgramCatalog) -> Opti
         .map(|launch| launch.argv.join(" "))
 }
 
-fn insert_catalog_entry_into_source(source: &mut Map<String, Value>, name: String, argv: Vec<String>) {
+pub fn parse_catalog_command_line(raw: &str) -> Result<Vec<String>, String> {
+    let Some(argv) = parse_custom_command_line(raw.trim()) else {
+        return Err("Error: invalid command line".to_string());
+    };
+    if argv.is_empty() {
+        return Err("Error: invalid command line".to_string());
+    }
+    Ok(argv)
+}
+
+fn insert_catalog_entry_into_source(
+    source: &mut Map<String, Value>,
+    name: String,
+    argv: Vec<String>,
+) {
     source.insert(
         name,
         Value::Array(argv.into_iter().map(Value::String).collect()),
@@ -121,7 +145,11 @@ mod tests {
         let mut source = Map::new();
         source.insert(
             name.to_string(),
-            Value::Array(argv.iter().map(|item| Value::String((*item).to_string())).collect()),
+            Value::Array(
+                argv.iter()
+                    .map(|item| Value::String((*item).to_string()))
+                    .collect(),
+            ),
         );
         source
     }
@@ -151,8 +179,7 @@ mod tests {
         let mut source = Map::new();
         source.insert("Broken".to_string(), Value::Array(Vec::new()));
 
-        let err =
-            resolve_program_launch_from_source("Broken", &source).expect_err("empty command");
+        let err = resolve_program_launch_from_source("Broken", &source).expect_err("empty command");
 
         assert_eq!(err, "Error: empty command.");
     }

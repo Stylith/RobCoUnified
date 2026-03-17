@@ -1,4 +1,5 @@
 use super::retro_ui::{current_palette, RetroScreen};
+pub use super::shared_types::TerminalScreen;
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 
@@ -32,27 +33,6 @@ pub enum LoginMenuRow {
     User(String),
     Separator,
     Exit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalScreen {
-    MainMenu,
-    Applications,
-    Documents,
-    Network,
-    Games,
-    DonkeyKong,
-    NukeCodes,
-    PtyApp,
-    ProgramInstaller,
-    Logs,
-    DocumentBrowser,
-    Settings,
-    EditMenus,
-    Connections,
-    DefaultApps,
-    About,
-    UserManagement,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -1,6 +1,4 @@
 use super::menu::draw_terminal_menu_screen;
-use crate::launcher::json_to_cmd;
-use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramMenuEvent {
@@ -54,18 +52,4 @@ pub fn draw_programs_menu(
         Some(_) => ProgramMenuEvent::Back,
         None => ProgramMenuEvent::None,
     }
-}
-
-pub fn resolve_program_command(
-    name: &str,
-    source: &Map<String, Value>,
-) -> Result<Vec<String>, String> {
-    let Some(value) = source.get(name) else {
-        return Err(format!("Unknown program '{name}'."));
-    };
-    let argv = json_to_cmd(value);
-    if argv.is_empty() {
-        return Err("Error: empty command.".to_string());
-    }
-    Ok(argv)
 }

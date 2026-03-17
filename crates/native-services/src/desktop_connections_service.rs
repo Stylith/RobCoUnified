@@ -1,14 +1,15 @@
-use super::desktop_settings_service::load_settings_snapshot;
-use crate::config::{ConnectionKind, SavedConnection, Settings};
+use crate::config::{get_settings, ConnectionKind, SavedConnection, Settings};
 use crate::connections::{
     bluetooth_installer_hint, connect_connection, disconnect_connection, discovered_row_label,
     filter_discovered_connections, filter_network_discovered_group, filter_network_saved_group,
-    forget_saved_connection, kind_plural_label, macos_blueutil_missing,
-    macos_connections_disabled, macos_connections_disabled_hint, network_group_label,
-    network_menu_groups, network_requires_password, refresh_discovered_connections,
-    saved_connections, saved_row_label, DiscoveredConnection, NetworkMenuGroup,
+    forget_saved_connection, kind_plural_label, macos_blueutil_missing, macos_connections_disabled,
+    macos_connections_disabled_hint, network_group_label, network_menu_groups,
+    network_requires_password, refresh_discovered_connections, saved_connections, saved_row_label,
+    NetworkMenuGroup,
 };
 use std::collections::HashSet;
+
+pub use crate::connections::DiscoveredConnection;
 
 pub fn bluetooth_installer_status_hint() -> &'static str {
     bluetooth_installer_hint()
@@ -131,8 +132,7 @@ pub fn forget_saved_connection_and_refresh_settings(
     kind: ConnectionKind,
     name: &str,
 ) -> Option<(Settings, String)> {
-    forget_saved_connection(kind, name)
-        .then(|| (load_settings_snapshot(), format!("Forgot '{}'.", name)))
+    forget_saved_connection(kind, name).then(|| (get_settings(), format!("Forgot '{}'.", name)))
 }
 
 pub fn connect_connection_and_refresh_settings(
@@ -142,5 +142,5 @@ pub fn connect_connection_and_refresh_settings(
 ) -> Result<(Settings, String), String> {
     let status = connect_connection(kind, &target.name, Some(target.detail.as_str()), password)
         .map_err(|err| err.to_string())?;
-    Ok((load_settings_snapshot(), status))
+    Ok((get_settings(), status))
 }

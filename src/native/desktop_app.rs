@@ -2,12 +2,13 @@ use super::donkey_kong::BUILTIN_DONKEY_KONG_GAME;
 use super::editor_app::{
     build_editor_menu_section, EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
-use super::file_manager::NativeFileManagerState;
 use super::file_manager::FileManagerCommand;
+use super::file_manager::NativeFileManagerState;
 use super::file_manager_app::{
     build_file_manager_menu_section, FileManagerEditRuntime, FileManagerPromptRequest,
 };
 use super::file_manager_desktop::FILE_MANAGER_APP_TITLE;
+pub use super::shared_types::DesktopWindow;
 use crate::config::DesktopFileManagerSettings;
 use std::path::PathBuf;
 
@@ -23,19 +24,6 @@ pub enum DesktopHostedApp {
     Terminal,
     Installer,
     PtyApp,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DesktopWindow {
-    FileManager,
-    Editor,
-    Settings,
-    Applications,
-    DonkeyKong,
-    NukeCodes,
-    TerminalMode,
-    PtyApp,
-    Installer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,9 +194,9 @@ pub fn build_shared_desktop_menu_section(section: DesktopMenuSection) -> Vec<Des
                 action: DesktopMenuAction::OpenSettings,
             },
         ],
-        DesktopMenuSection::Edit
-        | DesktopMenuSection::Format
-        | DesktopMenuSection::Window => Vec::new(),
+        DesktopMenuSection::Edit | DesktopMenuSection::Format | DesktopMenuSection::Window => {
+            Vec::new()
+        }
         DesktopMenuSection::Help => build_help_menu_section(),
     }
 }
@@ -269,7 +257,10 @@ pub fn build_window_menu_section(
                 "closed"
             };
             DesktopMenuItem::Action {
-                label: format!("{marker}: {}", desktop_window_title(entry.window, pty_title)),
+                label: format!(
+                    "{marker}: {}",
+                    desktop_window_title(entry.window, pty_title)
+                ),
                 action: DesktopMenuAction::ActivateDesktopWindow(entry.window),
             }
         })
@@ -364,7 +355,10 @@ pub fn desktop_window_title(window: DesktopWindow, pty_title: Option<&str>) -> S
     }
 }
 
-pub fn desktop_app_menu_name(active_window: Option<DesktopWindow>, pty_title: Option<&str>) -> String {
+pub fn desktop_app_menu_name(
+    active_window: Option<DesktopWindow>,
+    pty_title: Option<&str>,
+) -> String {
     active_window
         .map(|window| desktop_window_title(window, pty_title))
         .unwrap_or_else(|| "Desktop".to_string())

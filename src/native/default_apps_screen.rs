@@ -1,9 +1,9 @@
 use super::menu::draw_terminal_menu_screen;
-use crate::config::{DefaultAppBinding, Settings};
-use crate::default_apps::{
-    binding_for_slot, binding_label, default_app_choices, slot_label, DefaultAppChoiceAction,
-    DefaultAppSlot,
+use super::desktop_default_apps_service::{
+    binding_label_for_slot, default_app_choices_for_slot, default_app_slot_label,
+    DefaultAppChoiceAction, DefaultAppSlot,
 };
+use crate::config::{DefaultAppBinding, Settings};
 use eframe::egui::Context;
 
 #[derive(Debug, Clone)]
@@ -40,13 +40,13 @@ pub fn draw_default_apps_screen(
 ) -> DefaultAppsEvent {
     match active_slot {
         Some(slot) => {
-            let choices = default_app_choices(*slot);
+            let choices = default_app_choices_for_slot(*slot);
             let mut items: Vec<String> = choices.iter().map(|c| c.label.clone()).collect();
             items.push("---".to_string());
             items.push("Back".to_string());
             let activated = draw_terminal_menu_screen(
                 ctx,
-                &format!("Default App: {}", slot_label(*slot)),
+                &format!("Default App: {}", default_app_slot_label(*slot)),
                 None,
                 &items,
                 choice_idx,
@@ -85,11 +85,11 @@ pub fn draw_default_apps_screen(
             let items = vec![
                 format!(
                     "Text/Code Files: {} [choose]",
-                    binding_label(&binding_for_slot(draft, DefaultAppSlot::TextCode))
+                    binding_label_for_slot(draft, DefaultAppSlot::TextCode)
                 ),
                 format!(
                     "Ebook Files: {} [choose]",
-                    binding_label(&binding_for_slot(draft, DefaultAppSlot::Ebook))
+                    binding_label_for_slot(draft, DefaultAppSlot::Ebook)
                 ),
                 "---".to_string(),
                 "Back".to_string(),

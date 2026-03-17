@@ -1,36 +1,4 @@
-use crate::config::set_current_user;
-use crate::core::auth::{hash_password, load_users, write_session, AuthMethod, UserRecord};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-pub fn authenticate(username: &str, password: &str) -> Result<UserRecord, &'static str> {
-    let db = load_users();
-    let Some(record) = db.get(username) else {
-        return Err("Unknown user.");
-    };
-    match record.auth_method {
-        AuthMethod::NoPassword => {
-            set_current_user(Some(username));
-            write_session(username);
-            Ok(record.clone())
-        }
-        AuthMethod::HackingMinigame => Err("Use the hacking minigame flow from the login menu."),
-        AuthMethod::Password => {
-            if record.password_hash == hash_password(password) {
-                set_current_user(Some(username));
-                write_session(username);
-                Ok(record.clone())
-            } else {
-                Err("Wrong password.")
-            }
-        }
-    }
-}
-
-pub fn bind_login_session(username: &str) {
-    set_current_user(Some(username));
-    write_session(username);
-}
 
 pub fn home_dir_fallback() -> PathBuf {
     dirs::home_dir()
@@ -59,18 +27,4 @@ pub fn save_text_file(path: &PathBuf, text: &str) -> anyhow::Result<()> {
     }
     std::fs::write(path, text)?;
     Ok(())
-}
-
-pub fn read_text_file(path: &PathBuf) -> anyhow::Result<String> {
-    Ok(std::fs::read_to_string(path)?)
-}
-
-pub fn write_shell_snapshot<T: Serialize>(username: &str, value: &T) {
-    let path = crate::config::user_dir(username).join("native_shell.json");
-    let _ = crate::config::save_json(&path, value);
-}
-
-pub fn read_shell_snapshot<T: for<'de> Deserialize<'de> + Default>(username: &str) -> T {
-    let path = crate::config::user_dir(username).join("native_shell.json");
-    crate::config::load_json(&path)
 }

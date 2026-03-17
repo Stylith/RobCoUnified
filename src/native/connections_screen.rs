@@ -2,8 +2,8 @@ use super::desktop_connections_service::{
     bluetooth_disconnect_targets, bluetooth_installer_status_hint, connection_kind_plural_label,
     connection_network_group_label, connection_network_groups, connection_requires_password,
     connections_macos_blueutil_missing, connections_macos_disabled,
-    connections_macos_disabled_hint, discovered_connection_label, discovered_connections,
-    disconnect_connection_status, filter_discovered_connection_list,
+    connections_macos_disabled_hint, disconnect_connection_status, discovered_connection_label,
+    discovered_connections, filter_discovered_connection_list,
     filter_network_group_discovered_connections, filter_network_group_saved_connections,
     forget_saved_connection_and_refresh_settings, saved_connection_label,
     saved_connections_for_kind,
@@ -511,7 +511,11 @@ fn draw_saved_menu(
     }
     let mut items = Vec::new();
     for (idx, entry) in saved.iter().enumerate() {
-        items.push(format!("Connect [{}]: {}", idx + 1, saved_connection_label(entry)));
+        items.push(format!(
+            "Connect [{}]: {}",
+            idx + 1,
+            saved_connection_label(entry)
+        ));
         items.push(format!("Disconnect [{}]: {}", idx + 1, entry.name));
         items.push(format!("Forget  [{}]: {}", idx + 1, entry.name));
     }
@@ -634,11 +638,13 @@ fn draw_picker(
                     ConnectionsEvent::ConnectImmediate { kind, target }
                 }
             }
-            PickerMode::DisconnectBluetooth => ConnectionsEvent::Status(disconnect_connection_status(
-                kind,
-                Some(target.name.as_str()),
-                Some(target.detail.as_str()),
-            )),
+            PickerMode::DisconnectBluetooth => {
+                ConnectionsEvent::Status(disconnect_connection_status(
+                    kind,
+                    Some(target.name.as_str()),
+                    Some(target.detail.as_str()),
+                ))
+            }
         };
     }
     ConnectionsEvent::None

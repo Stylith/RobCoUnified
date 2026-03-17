@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/legacy-shell", "crates/native-shell"]
-default-members = [".", "crates/legacy-shell", "crates/native-shell"]
+members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell"]
+default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell"]
 resolver = "2"
 
 [package]

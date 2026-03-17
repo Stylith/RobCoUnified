@@ -41,7 +41,10 @@ pub fn create_user(
         return Err("User already exists.".to_string());
     }
 
-    db.insert(username.to_string(), build_user_record(auth_method, password)?);
+    db.insert(
+        username.to_string(),
+        build_user_record(auth_method, password)?,
+    );
     save_users(&db);
     mark_default_apps_prompt_pending(username);
     Ok(format!("User '{username}' created."))
@@ -79,7 +82,11 @@ pub fn toggle_user_admin(username: &str) -> Result<String, String> {
         return Err(format!("Unknown user '{username}'."));
     };
     record.is_admin = !record.is_admin;
-    let label = if record.is_admin { "granted" } else { "revoked" };
+    let label = if record.is_admin {
+        "granted"
+    } else {
+        "revoked"
+    };
     save_users(&db);
     Ok(format!("Admin {label} for '{username}'."))
 }
@@ -197,6 +204,8 @@ mod tests {
 
         let status = toggle_user_admin("alice").expect("toggle admin");
         assert_eq!(status, "Admin granted for 'alice'.");
-        assert!(load_users().get("alice").is_some_and(|record| record.is_admin));
+        assert!(load_users()
+            .get("alice")
+            .is_some_and(|record| record.is_admin));
     }
 }
