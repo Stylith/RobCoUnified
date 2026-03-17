@@ -486,7 +486,14 @@ fn retro_footer_height() -> f32 {
     31.0
 }
 
+const RETRO_FONT_BYTES: &[u8] =
+    include_bytes!("../../assets/fonts/FixedsysExcelsior301-Regular.ttf");
+
 fn try_load_font_bytes() -> Option<Vec<u8>> {
+    if !RETRO_FONT_BYTES.is_empty() {
+        return Some(RETRO_FONT_BYTES.to_vec());
+    }
+
     let mut candidates = vec![
         PathBuf::from("assets/fonts/FixedsysExcelsior301-Regular.ttf"),
         PathBuf::from("assets/fonts/Sysfixed.ttf"),

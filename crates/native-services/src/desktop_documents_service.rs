@@ -50,7 +50,11 @@ pub fn add_document_category(name: String, path_raw: &str) -> Result<String, Str
     Ok("Category added.".to_string())
 }
 
-pub fn rename_document_category(old_name: &str, new_name: &str) -> Result<String, String> {
+fn rename_document_category_in(
+    categories: &mut serde_json::Map<String, Value>,
+    old_name: &str,
+    new_name: &str,
+) -> Result<String, String> {
     let new_name = new_name.trim();
     if new_name.is_empty() {
         return Err("Name cannot be empty.".to_string());
@@ -58,17 +62,22 @@ pub fn rename_document_category(old_name: &str, new_name: &str) -> Result<String
     if new_name == old_name {
         return Err("Name unchanged.".to_string());
     }
-
-    let mut categories = load_categories();
     if categories.contains_key(new_name) {
         return Err(format!("{new_name} already exists."));
     }
+
     let Some(entry) = categories.remove(old_name) else {
         return Err(format!("{old_name} was not found."));
     };
     categories.insert(new_name.to_string(), entry);
-    save_categories(&categories);
     Ok(format!("{old_name} renamed to {new_name}."))
+}
+
+pub fn rename_document_category(old_name: &str, new_name: &str) -> Result<String, String> {
+    let mut categories = load_categories();
+    let message = rename_document_category_in(&mut categories, old_name, new_name)?;
+    save_categories(&categories);
+    Ok(message)
 }
 
 pub fn delete_document_category(name: &str) -> String {
@@ -132,9 +141,9 @@ mod tests {
         let mut categories = Map::new();
         categories.insert("Docs".to_string(), Value::String("/tmp/docs".to_string()));
         categories.insert("Logs".to_string(), Value::String("/tmp/logs".to_string()));
-        save_categories(&categories);
 
-        let err = rename_document_category("Docs", "Logs").expect_err("duplicate name");
+        let err = rename_document_category_in(&mut categories, "Docs", "Logs")
+            .expect_err("duplicate name");
         assert_eq!(err, "Logs already exists.");
     }
 }

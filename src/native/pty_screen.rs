@@ -1705,7 +1705,14 @@ fn load_plain_texture_font() -> Option<fontdue::Font> {
     fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).ok()
 }
 
+const RETRO_TEXTURE_FONT_BYTES: &[u8] =
+    include_bytes!("../../assets/fonts/FixedsysExcelsior301-Regular.ttf");
+
 fn try_load_retro_font_bytes() -> Option<Vec<u8>> {
+    if !RETRO_TEXTURE_FONT_BYTES.is_empty() {
+        return Some(RETRO_TEXTURE_FONT_BYTES.to_vec());
+    }
+
     let mut candidates = vec![
         std::path::PathBuf::from("assets/fonts/FixedsysExcelsior301-Regular.ttf"),
         std::path::PathBuf::from("assets/fonts/Sysfixed.ttf"),

@@ -1,6 +1,5 @@
-RobCoOS 0.4.1 highlights since 0.4.0:
+RobCoOS 0.4.2 highlights since 0.4.1:
 
-- fix the release workflow so tag builds use the updated checkout and artifact actions
-- switch Linux release jobs to current GitHub-hosted x86_64 and ARM runners with explicit native GUI build dependencies
-- package macOS as a real universal `RobCoOS.app` bundle with the app icon instead of a bare executable zip
-- fix the Linux shared sound build path so release builds no longer fail on the missing `Stdio` symbol
+- fix the macOS `.app` runtime data path so bundled builds create and read users/settings from Application Support instead of inside the app bundle
+- embed the retro font into the native UI and PTY renderer so standalone app bundles keep the intended typeface without needing repo assets
+- stabilize the native release gate by making document-category service tests independent of global user-scoped config state

@@ -7,7 +7,7 @@ RobCoOS is an application-layer shell experience, not a standalone operating sys
 ![RobCoOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
 ![RobCoOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
 
-**Version:** `0.4.1`
+**Version:** `0.4.2`
 
 ---
 
@@ -90,7 +90,11 @@ New users, including the first admin, are prompted once after login to configure
 
 ## Data Layout
 
-All runtime data is stored relative to the executable:
+Runtime data is stored in one of these locations:
+
+- macOS `.app` build: `~/Library/Application Support/RobCoOS/`
+- other builds: relative to the executable
+- any platform with `ROBCOS_BASE_DIR` set: that override directory
 
 ```text
 <base_dir>/

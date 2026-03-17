@@ -7,10 +7,115 @@ use std::sync::{OnceLock, RwLock};
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 pub fn base_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
+    static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+    BASE_DIR.get_or_init(detect_base_dir).clone()
+}
+
+fn detect_base_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("ROBCOS_BASE_DIR") {
+        let dir = PathBuf::from(path);
+        let _ = std::fs::create_dir_all(&dir);
+        return dir;
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(bundle_dir) = macos_app_bundle_dir(&exe_path) {
+            if let Some(app_support_dir) = macos_app_support_dir() {
+                let dir = app_support_dir.join("RobCoOS");
+                let _ = std::fs::create_dir_all(&dir);
+                migrate_bundle_runtime_data_if_needed(&dir, &bundle_dir);
+                return dir;
+            }
+        }
+
+        if let Some(parent) = exe_path.parent() {
+            return parent.to_path_buf();
+        }
+    }
+
+    PathBuf::from(".")
+}
+
+fn macos_app_bundle_dir(exe_path: &Path) -> Option<PathBuf> {
+    let macos_dir = exe_path.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name()? != "Contents" {
+        return None;
+    }
+
+    let app_dir = contents_dir.parent()?;
+    (app_dir.extension()? == "app").then(|| app_dir.to_path_buf())
+}
+
+fn macos_app_support_dir() -> Option<PathBuf> {
+    dirs::data_local_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Library").join("Application Support")))
+}
+
+fn has_runtime_state(dir: &Path) -> bool {
+    [
+        "settings.json",
+        "about.json",
+        ".session",
+        "installed_package_descriptions.json",
+    ]
+    .iter()
+    .any(|name| dir.join(name).exists())
+        || dir.join("users").join("users.json").exists()
+        || dir.join("journal_entries").exists()
+}
+
+fn migrate_bundle_runtime_data_if_needed(target_dir: &Path, bundle_dir: &Path) {
+    if has_runtime_state(target_dir) {
+        return;
+    }
+
+    let Some(legacy_dir) = bundle_dir.parent() else {
+        return;
+    };
+    if !has_runtime_state(legacy_dir) {
+        return;
+    }
+
+    for name in [
+        "settings.json",
+        "about.json",
+        ".session",
+        "installed_package_descriptions.json",
+    ] {
+        copy_path_if_missing(&legacy_dir.join(name), &target_dir.join(name));
+    }
+    copy_path_if_missing(&legacy_dir.join("users"), &target_dir.join("users"));
+    copy_path_if_missing(
+        &legacy_dir.join("journal_entries"),
+        &target_dir.join("journal_entries"),
+    );
+}
+
+fn copy_path_if_missing(from: &Path, to: &Path) {
+    if !from.exists() || to.exists() {
+        return;
+    }
+
+    if from.is_dir() {
+        let _ = std::fs::create_dir_all(to);
+        if let Ok(entries) = std::fs::read_dir(from) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                let dst = to.join(entry.file_name());
+                copy_path_if_missing(&src, &dst);
+            }
+        }
+    } else {
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(from, to);
+    }
 }
 
 pub fn users_dir() -> PathBuf {
@@ -754,6 +859,28 @@ pub fn persist_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_bundle_path_uses_app_support_dir() {
+        let exe = PathBuf::from("/Applications/RobCoOS.app/Contents/MacOS/robcos");
+        let bundle_dir = macos_app_bundle_dir(&exe).expect("bundle dir");
+        assert_eq!(bundle_dir, PathBuf::from("/Applications/RobCoOS.app"));
+
+        let resolved = macos_app_support_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("RobCoOS");
+        assert!(resolved.ends_with("RobCoOS"));
+    }
+
+    #[test]
+    fn non_bundle_path_uses_executable_parent() {
+        let exe = PathBuf::from("/tmp/robcos/bin/robcos");
+        assert!(macos_app_bundle_dir(&exe).is_none());
+        assert_eq!(
+            exe.parent().expect("exe parent"),
+            Path::new("/tmp/robcos/bin")
+        );
+    }
 
     #[test]
     fn legacy_hide_builtin_apps_flag_migrates_to_visibility() {

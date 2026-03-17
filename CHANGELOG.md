@@ -4,6 +4,14 @@ All notable changes to RobCoOS will be documented in this file.
 
 The format is based on Keep a Changelog, adapted to the way this project ships releases.
 
+## 0.4.2 - 2026-03-17
+
+### Fixed
+
+- Fixed the macOS `.app` runtime data path so bundled builds create and read users, settings, and related state from `~/Library/Application Support/RobCoOS` instead of inside the app bundle.
+- Embedded the retro font into the native UI and PTY renderer so standalone app bundles keep the intended typeface without relying on repo-relative `assets/fonts` paths.
+- Stabilized the native release gate by making document-category service tests independent of global user-scoped config state.
+
 ## 0.4.1 - 2026-03-17
 
 ### Fixed
