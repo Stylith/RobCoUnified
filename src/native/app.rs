@@ -1697,6 +1697,7 @@ impl RobcoNativeApp {
         self.desktop_active_window = Some(window);
         if self.desktop_mode_open {
             self.close_start_menu();
+            self.close_spotlight();
         }
     }
 
@@ -2553,7 +2554,7 @@ impl RobcoNativeApp {
     }
 
     fn spotlight_activate_result(&mut self, result: &NativeSpotlightResult) {
-        self.spotlight_open = false;
+        self.close_spotlight();
         self.spotlight_query.clear();
         if let Some(action) = self.spotlight_action_for_result(result) {
             self.execute_desktop_shell_action(action);
@@ -2567,7 +2568,7 @@ impl RobcoNativeApp {
 
         // Close on Escape
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.spotlight_open = false;
+            self.close_spotlight();
             return;
         }
 
@@ -2896,6 +2897,7 @@ impl RobcoNativeApp {
     }
 
     fn open_start_menu(&mut self) {
+        self.close_spotlight();
         self.start_open = true;
         self.start_selected_root = 0;
         self.start_system_selected = 0;
@@ -2908,6 +2910,20 @@ impl RobcoNativeApp {
         self.start_open = false;
         self.start_open_submenu = None;
         self.start_open_leaf = None;
+    }
+
+    fn open_spotlight(&mut self) {
+        self.close_start_menu();
+        self.spotlight_open = true;
+        self.spotlight_query.clear();
+        self.spotlight_selected = 0;
+        self.spotlight_results.clear();
+        self.spotlight_last_query.clear();
+        self.spotlight_last_tab = u8::MAX;
+    }
+
+    fn close_spotlight(&mut self) {
+        self.spotlight_open = false;
     }
 
     fn set_start_panel_for_root(&mut self, root_idx: usize) {
@@ -5115,12 +5131,10 @@ impl RobcoNativeApp {
                             .clicked()
                             || ctx.input(|i| i.key_pressed(Key::Space) && i.modifiers.command)
                         {
-                            self.spotlight_open = !self.spotlight_open;
                             if self.spotlight_open {
-                                self.spotlight_query.clear();
-                                self.spotlight_selected = 0;
-                                self.spotlight_results.clear();
-                                self.spotlight_last_query.clear();
+                                self.close_spotlight();
+                            } else {
+                                self.open_spotlight();
                             }
                         }
                     });
@@ -5430,7 +5444,7 @@ impl RobcoNativeApp {
                 );
                 if response.clicked() {
                     self.close_start_menu();
-                    self.spotlight_open = false;
+                    self.close_spotlight();
                 }
             });
     }
@@ -11502,6 +11516,34 @@ mod tests {
         assert!(app.file_manager.open);
         assert_eq!(app.file_manager.cwd, temp.path);
         assert_eq!(app.file_manager.selected, Some(file_path));
+    }
+
+    #[test]
+    fn opening_start_menu_closes_spotlight() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.spotlight_open = true;
+        app.spotlight_query = "demo".to_string();
+
+        app.open_start_menu();
+
+        assert!(app.start_open);
+        assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn opening_desktop_window_closes_spotlight_in_desktop_mode() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.spotlight_open = true;
+
+        app.open_desktop_window(DesktopWindow::Editor);
+
+        assert_eq!(app.desktop_active_window, Some(DesktopWindow::Editor));
+        assert!(!app.spotlight_open);
     }
 
     #[test]
