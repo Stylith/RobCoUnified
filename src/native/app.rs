@@ -5102,6 +5102,11 @@ impl RobcoNativeApp {
                         self.draw_top_bar_menu_section(ctx, ui, *section);
                     }
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        let batt = crate::status::battery_status_string();
+                        if !batt.is_empty() {
+                            ui.label(RichText::new(batt).color(Color32::BLACK));
+                            ui.add_space(10.0);
+                        }
                         let now = Local::now().format("%a %d %b %H:%M").to_string();
                         ui.label(RichText::new(now).color(Color32::BLACK));
                         ui.add_space(10.0);

@@ -221,4 +221,5 @@ jobs:
           files: release-assets/*.zip
           body_path: release-notes.md
           fail_on_unmatched_files: true
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-rc.') }}

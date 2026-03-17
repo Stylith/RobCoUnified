@@ -120,6 +120,8 @@ See [`USER_MANUAL.md`](USER_MANUAL.md) for the full usage reference.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for release history.
 
+See [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) for the release smoke-pass checklist.
+
 See [`docs/NATIVE_ROADMAP.md`](docs/NATIVE_ROADMAP.md) for the current native architecture and workspace split.
 
 ---
