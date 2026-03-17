@@ -1,8 +1,6 @@
-RobCoOS 0.4.0 highlights since 0.3.2:
+RobCoOS 0.4.1 highlights since 0.4.0:
 
-- promote the native shell to the release target and ship native-only release assets
-- switch macOS release packaging to a single universal binary zip
-- split the native codebase into shared, service, shell, and app-focused workspace crates
-- move editor, file manager, terminal, installer, settings, programs, default apps, connections, edit menus, document browser, about, and nuke codes behind cleaner app boundaries
-- centralize native desktop menu, taskbar, session, launcher, file, settings, and status behavior behind shared services
-- refresh the README and user manual to match the workspace-native architecture
+- fix the release workflow so tag builds use the updated checkout and artifact actions
+- switch Linux release jobs to current GitHub-hosted x86_64 and ARM runners with explicit native GUI build dependencies
+- package macOS as a real universal `RobCoOS.app` bundle with the app icon instead of a bare executable zip
+- fix the Linux shared sound build path so release builds no longer fail on the missing `Stdio` symbol

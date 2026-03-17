@@ -7,7 +7,7 @@ RobCoOS is an application-layer shell experience, not a standalone operating sys
 ![RobCoOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
 ![RobCoOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
 
-**Version:** `0.4.0`
+**Version:** `0.4.1`
 
 ---
 
@@ -65,7 +65,7 @@ make release-check
 
 Pre-built binaries are on the [GitHub Releases](../../releases) page:
 
-- **macOS**: universal native binary bundle in a zip
+- **macOS**: universal native `.app` bundle in a zip
 - **Linux**: x86_64 and aarch64 native bundles with `.desktop` entry and icon
 - **Windows**: `robcos.exe` native bundle
 
