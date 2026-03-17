@@ -1,4 +1,4 @@
-use super::about_screen::draw_about_screen;
+use super::about_screen::{draw_about_screen, TerminalAboutRequest};
 use super::connections_screen::{
     apply_search_query as apply_connection_search_query, draw_terminal_connections_screen,
     resolve_terminal_connections_request, TerminalConnectionsRequest,
@@ -6040,7 +6040,7 @@ impl RobcoNativeApp {
 
     fn draw_terminal_about(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        if draw_about_screen(
+        match draw_about_screen(
             ctx,
             layout.cols,
             layout.rows,
@@ -6053,7 +6053,10 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         ) {
-            self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+            TerminalAboutRequest::None => {}
+            TerminalAboutRequest::Back => {
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+            }
         }
     }
 
@@ -11211,14 +11214,13 @@ mod tests {
         assert!(app.sync_active_session_identity());
         app.terminal_nav.screen = TerminalScreen::NukeCodes;
         app.terminal_nav.nuke_codes_return_screen = TerminalScreen::Applications;
-        app.terminal_nuke_codes =
-            NukeCodesView::Data(crate::native::nuke_codes_screen::NukeCodesData {
-                alpha: "11111111".to_string(),
-                bravo: "22222222".to_string(),
-                charlie: "33333333".to_string(),
-                source: "Test Source".to_string(),
-                fetched_at: "2026-03-01 06:00 PM".to_string(),
-            });
+        app.terminal_nuke_codes = NukeCodesView::Data(robcos_native_nuke_codes_app::NukeCodesData {
+            alpha: "11111111".to_string(),
+            bravo: "22222222".to_string(),
+            charlie: "33333333".to_string(),
+            source: "Test Source".to_string(),
+            fetched_at: "2026-03-01 06:00 PM".to_string(),
+        });
         app.park_active_session_runtime();
 
         session::set_active(s2);

@@ -21,14 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            bin_name: robcos
-            asset_name: macos-x86_64
           - os: macos-14
-            target: aarch64-apple-darwin
+            target: universal-apple-darwin
             bin_name: robcos
-            asset_name: macos-aarch64
+            asset_name: macos-universal
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: robcos
@@ -49,7 +45,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
 
       - name: Install Linux ARM cross-linker
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -59,9 +55,17 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build release binary
+        if: matrix.target != 'universal-apple-darwin'
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release binary (macOS universal)
+        if: matrix.target == 'universal-apple-darwin'
+        shell: bash
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -69,7 +73,10 @@ jobs:
         run: |
           dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
           mkdir -p "$dist_dir"
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$dist_dir/robcos"
+          lipo -create \
+            "target/aarch64-apple-darwin/release/${{ matrix.bin_name }}" \
+            "target/x86_64-apple-darwin/release/${{ matrix.bin_name }}" \
+            -output "$dist_dir/robcos"
           chmod +x "$dist_dir/robcos"
           cp README.md LICENSE icon.png "$dist_dir/"
           (
