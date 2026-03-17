@@ -23,19 +23,23 @@ jobs:
         include:
           - os: macos-14
             target: universal-apple-darwin
-            bin_name: robcos
+            source_bin_name: robcos-native
+            package_bin_name: robcos
             asset_name: macos-universal
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin_name: robcos
+            source_bin_name: robcos-native
+            package_bin_name: robcos
             asset_name: linux-x86_64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            bin_name: robcos
+            source_bin_name: robcos-native
+            package_bin_name: robcos
             asset_name: linux-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin_name: robcos.exe
+            source_bin_name: robcos-native.exe
+            package_bin_name: robcos.exe
             asset_name: windows-x86_64
 
     steps:
@@ -58,14 +62,14 @@ jobs:
         if: matrix.target != 'universal-apple-darwin'
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} -p robcos-native-shell --bin robcos-native
 
       - name: Build release binary (macOS universal)
         if: matrix.target == 'universal-apple-darwin'
         shell: bash
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin -p robcos-native-shell --bin robcos-native
+          cargo build --release --target x86_64-apple-darwin -p robcos-native-shell --bin robcos-native
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -74,10 +78,10 @@ jobs:
           dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
           mkdir -p "$dist_dir"
           lipo -create \
-            "target/aarch64-apple-darwin/release/${{ matrix.bin_name }}" \
-            "target/x86_64-apple-darwin/release/${{ matrix.bin_name }}" \
-            -output "$dist_dir/robcos"
-          chmod +x "$dist_dir/robcos"
+            "target/aarch64-apple-darwin/release/${{ matrix.source_bin_name }}" \
+            "target/x86_64-apple-darwin/release/${{ matrix.source_bin_name }}" \
+            -output "$dist_dir/${{ matrix.package_bin_name }}"
+          chmod +x "$dist_dir/${{ matrix.package_bin_name }}"
           cp README.md LICENSE icon.png "$dist_dir/"
           (
             cd dist
@@ -91,8 +95,8 @@ jobs:
           version="$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = \"([^\"]+)\"/\1/')"
           dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
           mkdir -p "$dist_dir"
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$dist_dir/robcos"
-          chmod +x "$dist_dir/robcos"
+          cp "target/${{ matrix.target }}/release/${{ matrix.source_bin_name }}" "$dist_dir/${{ matrix.package_bin_name }}"
+          chmod +x "$dist_dir/${{ matrix.package_bin_name }}"
           cp README.md LICENSE icon.png "$dist_dir/"
           sed "s/__VERSION__/$version/g" packaging/linux/robcos.desktop > "$dist_dir/robcos.desktop"
           (
@@ -106,7 +110,7 @@ jobs:
         run: |
           $distDir = "dist/RobCoOS-${{ matrix.asset_name }}"
           New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "$distDir/"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.source_bin_name }}" "$distDir/${{ matrix.package_bin_name }}"
           Copy-Item "README.md" "$distDir/"
           Copy-Item "LICENSE" "$distDir/"
           Copy-Item "icon.png" "$distDir/"
