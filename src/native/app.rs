@@ -5014,7 +5014,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_top_bar_app_menu(&mut self, ui: &mut egui::Ui, ctx: &Context, app_menu_name: &str) {
-        ui.menu_button(
+        let menu = ui.menu_button(
             RichText::new(app_menu_name).strong().color(Color32::BLACK),
             |ui| {
                 Self::apply_top_dropdown_menu_style(ui);
@@ -5022,6 +5022,9 @@ impl RobcoNativeApp {
                 self.draw_desktop_menu_items(ui, ctx, &items);
             },
         );
+        if menu.response.clicked() {
+            self.close_desktop_overlays();
+        }
     }
 
     fn active_editor_text_edit_id(&self) -> Id {
@@ -5180,7 +5183,7 @@ impl RobcoNativeApp {
         ctx: &Context,
         section: DesktopMenuSection,
     ) {
-        ui.menu_button(section.label(), |ui| {
+        let menu = ui.menu_button(section.label(), |ui| {
             Self::apply_top_dropdown_menu_style(ui);
             if section == DesktopMenuSection::Format {
                 ui.set_min_width(160.0);
@@ -5204,10 +5207,13 @@ impl RobcoNativeApp {
                 self.draw_desktop_menu_items(ui, ctx, &shared_items);
             }
         });
+        if menu.response.clicked() {
+            self.close_desktop_overlays();
+        }
     }
 
     fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
-        ui.menu_button("Window", |ui| {
+        let menu = ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
             let entries: Vec<DesktopWindowMenuEntry> = [
                 DesktopWindow::FileManager,
@@ -5231,14 +5237,20 @@ impl RobcoNativeApp {
             );
             self.draw_desktop_menu_items(ui, ctx, &items);
         });
+        if menu.response.clicked() {
+            self.close_desktop_overlays();
+        }
     }
 
     fn draw_top_bar_help_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
-        ui.menu_button("Help", |ui| {
+        let menu = ui.menu_button("Help", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
             let items = build_shared_desktop_menu_section(DesktopMenuSection::Help);
             self.draw_desktop_menu_items(ui, ctx, &items);
         });
+        if menu.response.clicked() {
+            self.close_desktop_overlays();
+        }
     }
 
     fn draw_top_bar_menu_section(
