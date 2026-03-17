@@ -4974,6 +4974,9 @@ impl RobcoNativeApp {
                 } else if self.desktop_window_is_minimized(*window) {
                     self.set_desktop_window_minimized(*window, false);
                     self.close_desktop_overlays();
+                } else if self.desktop_active_window == Some(*window) {
+                    self.set_desktop_window_minimized(*window, true);
+                    self.close_desktop_overlays();
                 } else {
                     self.desktop_active_window = Some(*window);
                     self.close_desktop_overlays();
@@ -5502,12 +5505,14 @@ impl RobcoNativeApp {
                                 ctx,
                                 &DesktopMenuAction::ActivateTaskbarWindow(entry.window),
                             );
-                            // Bring the window to the top of the egui layer stack.
-                            let layer_id = egui::LayerId::new(
-                                egui::Order::Middle,
-                                self.desktop_window_egui_id(entry.window),
-                            );
-                            ctx.move_to_top(layer_id);
+                            if !self.desktop_window_is_minimized(entry.window) {
+                                // Bring the window to the top of the egui layer stack.
+                                let layer_id = egui::LayerId::new(
+                                    egui::Order::Middle,
+                                    self.desktop_window_egui_id(entry.window),
+                                );
+                                ctx.move_to_top(layer_id);
+                            }
                         }
                     }
                 });
@@ -11588,6 +11593,43 @@ mod tests {
             &DesktopMenuAction::ActivateDesktopWindow(DesktopWindow::FileManager),
         );
 
+        assert_eq!(app.desktop_active_window, Some(DesktopWindow::FileManager));
+        assert!(!app.start_open);
+        assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn activating_taskbar_for_active_window_minimizes_it() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.open = true;
+        app.desktop_active_window = Some(DesktopWindow::FileManager);
+
+        app.apply_desktop_menu_action(
+            &Context::default(),
+            &DesktopMenuAction::ActivateTaskbarWindow(DesktopWindow::FileManager),
+        );
+
+        assert!(app.desktop_window_is_minimized(DesktopWindow::FileManager));
+    }
+
+    #[test]
+    fn activating_taskbar_for_minimized_window_restores_it() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.open = true;
+        app.start_open = true;
+        app.spotlight_open = true;
+        app.set_desktop_window_minimized(DesktopWindow::FileManager, true);
+
+        app.apply_desktop_menu_action(
+            &Context::default(),
+            &DesktopMenuAction::ActivateTaskbarWindow(DesktopWindow::FileManager),
+        );
+
+        assert!(!app.desktop_window_is_minimized(DesktopWindow::FileManager));
         assert_eq!(app.desktop_active_window, Some(DesktopWindow::FileManager));
         assert!(!app.start_open);
         assert!(!app.spotlight_open);
