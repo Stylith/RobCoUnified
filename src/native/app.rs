@@ -59,8 +59,7 @@ use super::desktop_session_service::{
 use super::desktop_settings_service::{
     apply_file_manager_display_settings_update as apply_desktop_file_manager_display_settings_update,
     apply_file_manager_settings_update as apply_desktop_file_manager_settings_update,
-    cycle_hacking_difficulty_in_settings, load_desktop_file_manager_settings,
-    load_hacking_difficulty, load_settings_snapshot, persist_settings_draft,
+    cycle_hacking_difficulty_in_settings, load_settings_snapshot, persist_settings_draft,
     pty_force_render_mode as desktop_pty_force_render_mode,
     pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
 };
@@ -162,8 +161,9 @@ use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use crate::config::ConnectionKind;
 use crate::config::{
-    CliAcsMode, CliColorMode, DesktopIconSortMode, DesktopIconStyle, OpenMode, Settings,
-    WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
+    CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode,
+    DesktopIconStyle, HackingDifficulty, OpenMode, Settings, WallpaperSizeMode,
+    CUSTOM_THEME_NAME, THEMES,
 };
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
@@ -190,8 +190,9 @@ use robcos_native_settings_app::{
     gui_cli_profile_slot_label, gui_cli_profile_slots, settings_panel_title, GuiCliProfileSlot,
     NativeSettingsPanel, SettingsHomeTileAction,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod file_manager_desktop_presenter;
@@ -275,6 +276,11 @@ struct AssetCache {
     icon_gaming: TextureHandle,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
+}
+
+struct DesktopIconLayoutCache {
+    layout: DesktopIconGridLayout,
+    positions: Arc<HashMap<String, [f32; 2]>>,
 }
 
 #[derive(Debug, Clone)]
@@ -605,6 +611,10 @@ pub struct RobcoNativeApp {
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
+    shortcut_icon_missing: HashSet<String>,
+    desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
+    live_desktop_file_manager_settings: DesktopFileManagerSettings,
+    live_hacking_difficulty: HackingDifficulty,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
     // Spotlight search
     spotlight_open: bool,
@@ -657,6 +667,8 @@ impl Default for RobcoNativeApp {
         session::clear_sessions();
         session::take_switch_request();
         let settings_draft = load_settings_snapshot();
+        let live_desktop_file_manager_settings = settings_draft.desktop_file_manager.clone();
+        let live_hacking_difficulty = settings_draft.hacking_difficulty;
         let settings_ui_defaults = build_desktop_settings_ui_defaults(&settings_draft, None);
         let terminal_defaults = terminal_runtime_defaults();
         Self {
@@ -726,6 +738,10 @@ impl Default for RobcoNativeApp {
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
+            shortcut_icon_missing: HashSet::new(),
+            desktop_icon_layout_cache: None,
+            live_desktop_file_manager_settings,
+            live_hacking_difficulty,
             appearance_tab: 0,
             spotlight_open: false,
             spotlight_query: String::new(),
@@ -739,6 +755,45 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn sync_runtime_settings_cache(&mut self) {
+        self.live_desktop_file_manager_settings = self.settings.draft.desktop_file_manager.clone();
+        self.live_hacking_difficulty = self.settings.draft.hacking_difficulty;
+    }
+
+    fn invalidate_desktop_icon_layout_cache(&mut self) {
+        self.desktop_icon_layout_cache = None;
+    }
+
+    fn replace_settings_draft(&mut self, draft: Settings) {
+        self.settings.draft = draft;
+        self.sync_runtime_settings_cache();
+        self.invalidate_desktop_icon_layout_cache();
+    }
+
+    fn default_desktop_icon_positions(
+        &mut self,
+        layout: DesktopIconGridLayout,
+    ) -> Arc<HashMap<String, [f32; 2]>> {
+        let needs_rebuild = self
+            .desktop_icon_layout_cache
+            .as_ref()
+            .is_none_or(|cache| cache.layout != layout);
+        if needs_rebuild {
+            let positions = Arc::new(build_default_desktop_icon_positions(
+                layout,
+                self.settings.draft.desktop_icon_sort,
+                &self.settings.draft.desktop_hidden_builtin_icons,
+                &self.settings.draft.desktop_shortcuts,
+            ));
+            self.desktop_icon_layout_cache = Some(DesktopIconLayoutCache { layout, positions });
+        }
+        self.desktop_icon_layout_cache
+            .as_ref()
+            .expect("desktop icon layout cache initialized")
+            .positions
+            .clone()
+    }
+
     fn apply_status_update(&mut self, update: NativeStatusUpdate) {
         if let Some(shell) = update.shell {
             match shell {
@@ -972,11 +1027,12 @@ impl RobcoNativeApp {
     }
 
     fn sync_wallpaper(&mut self, ctx: &Context) {
-        let wallpaper_path = self.settings.draft.desktop_wallpaper.clone();
+        let wallpaper_path = self.settings.draft.desktop_wallpaper.as_str();
         if let Some(cache) = &mut self.asset_cache {
             if cache.wallpaper_loaded_for != wallpaper_path {
-                cache.wallpaper = Self::load_wallpaper_texture(ctx, &wallpaper_path);
-                cache.wallpaper_loaded_for = wallpaper_path;
+                cache.wallpaper = Self::load_wallpaper_texture(ctx, wallpaper_path);
+                cache.wallpaper_loaded_for.clear();
+                cache.wallpaper_loaded_for.push_str(wallpaper_path);
             }
         }
     }
@@ -1054,7 +1110,7 @@ impl RobcoNativeApp {
                 .as_ref()
                 .map(|session| session.username.as_str()),
         );
-        self.settings.draft = draft;
+        self.replace_settings_draft(draft);
         self.apply_status_update(clear_settings_status());
         self.settings.panel = defaults.panel;
         self.settings.default_app_custom_text_code = defaults.default_app_custom_text_code;
@@ -1777,6 +1833,7 @@ impl RobcoNativeApp {
         update: FileManagerDisplaySettingsUpdate,
     ) {
         apply_desktop_file_manager_display_settings_update(&mut self.settings.draft, update);
+        self.sync_runtime_settings_cache();
         self.file_manager.ensure_selection_valid();
     }
 
@@ -1876,6 +1933,32 @@ impl RobcoNativeApp {
         self.file_manager_texture_for_row(row).cloned()
     }
 
+    fn load_cached_shortcut_icon(
+        &mut self,
+        ctx: &Context,
+        cache_key: &str,
+        path: &Path,
+        size_px: u32,
+    ) -> Option<TextureHandle> {
+        if let Some(tex) = self.shortcut_icon_cache.get(cache_key) {
+            return Some(tex.clone());
+        }
+        if self.shortcut_icon_missing.contains(cache_key) {
+            return None;
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                self.shortcut_icon_missing.insert(cache_key.to_string());
+                return None;
+            }
+        };
+        let tex = Self::load_svg_icon(ctx, cache_key, &bytes, Some(size_px));
+        self.shortcut_icon_cache
+            .insert(cache_key.to_string(), tex.clone());
+        Some(tex)
+    }
+
     fn split_file_name(name: &str) -> (&str, &str) {
         if let Some((stem, _ext)) = name.rsplit_once('.') {
             if !stem.is_empty() {
@@ -1887,6 +1970,7 @@ impl RobcoNativeApp {
 
     fn apply_file_manager_settings_update(&mut self, update: FileManagerSettingsUpdate) {
         apply_desktop_file_manager_settings_update(&mut self.settings.draft, update);
+        self.sync_runtime_settings_cache();
     }
 
     fn launch_open_with_command(&mut self, path: &Path, command_line: &str) -> Result<String> {
@@ -2258,7 +2342,6 @@ impl RobcoNativeApp {
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
         let snap = self.settings.draft.desktop_snap_to_grid;
-        let sort_mode = self.settings.draft.desktop_icon_sort;
         let workspace = Self::desktop_workspace_rect(ui.ctx());
         let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) = match style
         {
@@ -2276,18 +2359,13 @@ impl RobcoNativeApp {
         let hidden_icons = self.settings.draft.desktop_hidden_builtin_icons.clone();
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         let builtin_entries = desktop_builtin_icons();
-        let default_positions = build_default_desktop_icon_positions(
-            DesktopIconGridLayout {
-                left: workspace.left(),
-                top: workspace.top(),
-                height: workspace.height(),
-                item_height,
-                column_width,
-            },
-            sort_mode,
-            &hidden_icons,
-            &shortcuts,
-        );
+        let default_positions = self.default_desktop_icon_positions(DesktopIconGridLayout {
+            left: workspace.left(),
+            top: workspace.top(),
+            height: workspace.height(),
+            item_height,
+            column_width,
+        });
         let mut open_window: Option<DesktopWindow> = None;
         let mut open_terminal = false;
         let mut shortcut_action: Option<ContextMenuAction> = None;
@@ -2428,15 +2506,7 @@ impl RobcoNativeApp {
                     let icon_path_clone = shortcut.icon_path.clone();
                     let icon_tex: Option<egui::TextureHandle> =
                         if let Some(ref path) = icon_path_clone {
-                            if let Some(tex) = self.shortcut_icon_cache.get(path) {
-                                Some(tex.clone())
-                            } else if let Ok(bytes) = std::fs::read(path) {
-                                let tex = Self::load_svg_icon(ui.ctx(), path, &bytes, Some(48));
-                                self.shortcut_icon_cache.insert(path.clone(), tex.clone());
-                                Some(tex)
-                            } else {
-                                None
-                            }
+                            self.load_cached_shortcut_icon(ui.ctx(), path, Path::new(path), 48)
                         } else {
                             None
                         };
@@ -2809,11 +2879,7 @@ impl RobcoNativeApp {
                     // Draw current icon
                     let icon_tex: Option<egui::TextureHandle> =
                         icon_path_draft.as_ref().and_then(|p| {
-                            self.shortcut_icon_cache.get(p).cloned().or_else(|| {
-                                std::fs::read(p)
-                                    .ok()
-                                    .map(|bytes| Self::load_svg_icon(ctx, p, &bytes, Some(48)))
-                            })
+                            self.load_cached_shortcut_icon(ctx, p, Path::new(p), 48)
                         });
                     if let Some(tex) = icon_tex {
                         Self::paint_tinted_texture(ui.painter(), &tex, rect, palette.fg);
@@ -3468,7 +3534,7 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.file_manager.selected = None;
         self.editor = EditorWindow::default();
-        self.settings.draft = settings;
+        self.replace_settings_draft(settings);
         self.apply_status_update(clear_settings_status());
         self.settings.panel = desktop_settings_default_panel();
         self.donkey_kong_window.open = false;
@@ -4373,7 +4439,8 @@ impl RobcoNativeApp {
     }
 
     fn persist_native_settings(&mut self) {
-        self.settings.draft = persist_settings_draft(&self.settings.draft);
+        let settings = persist_settings_draft(&self.settings.draft);
+        self.replace_settings_draft(settings);
         self.apply_status_update(saved_shell_status());
     }
 
@@ -4491,7 +4558,8 @@ impl RobcoNativeApp {
                 self.shell_status = "Entered Desktop Mode.".to_string();
             }
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
-                self.settings.draft = reload_settings_snapshot();
+                let settings = reload_settings_snapshot();
+                self.replace_settings_draft(settings);
                 self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
             }
             MainMenuSelectionAction::BeginLogout => self.begin_logout(),
@@ -4923,7 +4991,7 @@ impl RobcoNativeApp {
     ) {
         match connect_connection_and_refresh_settings(kind, &target, password.as_deref()) {
             Ok((settings, status)) => {
-                self.settings.draft = settings;
+                self.replace_settings_draft(settings);
                 self.shell_status = status;
             }
             Err(err) => self.shell_status = err.to_string(),
@@ -5199,13 +5267,12 @@ impl RobcoNativeApp {
                 ui.set_max_width(220.0);
             }
             let active_app = self.active_desktop_app();
-            let file_manager_settings = load_desktop_file_manager_settings();
             let menu_context = DesktopMenuBuildContext {
                 editor: &self.editor,
                 editor_recent_files: &self.settings.draft.editor_recent_files,
                 file_manager: &self.file_manager,
                 file_manager_runtime: &self.file_manager_runtime,
-                file_manager_settings: &file_manager_settings,
+                file_manager_settings: &self.live_desktop_file_manager_settings,
             };
             let items = build_active_desktop_menu_section(active_app, section, &menu_context);
             if !items.is_empty() {
@@ -6518,7 +6585,7 @@ impl RobcoNativeApp {
         let screen = user_management_screen_for_mode(
             &mode,
             self.session.as_ref().map(|s| s.username.as_str()),
-            load_hacking_difficulty(),
+            self.live_hacking_difficulty,
         );
         let mut selected = self.terminal_nav.user_management_idx.min(
             screen
@@ -6564,6 +6631,7 @@ impl RobcoNativeApp {
                 ),
                 UserManagementExecutionPlan::CycleHackingDifficulty => {
                     cycle_hacking_difficulty_in_settings(&mut self.settings.draft);
+                    self.sync_runtime_settings_cache();
                     self.apply_status_update(saved_shell_status());
                 }
                 UserManagementExecutionPlan::SetMode { mode, selected_idx } => {
@@ -7219,6 +7287,7 @@ impl RobcoNativeApp {
                     set_desktop_shortcut_icon(&mut self.settings.draft, shortcut_idx, &path)
                 {
                     self.shortcut_icon_cache.remove(&path_str);
+                    self.shortcut_icon_missing.remove(&path_str);
                     if let Some(props) = &mut self.shortcut_properties {
                         if props.shortcut_idx == shortcut_idx {
                             props.icon_path_draft = Some(path_str);
@@ -7332,10 +7401,9 @@ impl RobcoNativeApp {
         let has_single_file_selection =
             action_selection_paths.len() == 1 && action_selection_paths[0].is_file();
         let has_clipboard = self.file_manager_runtime.has_clipboard();
-        let file_manager_settings = load_desktop_file_manager_settings();
         let desktop_model = file_manager_desktop::build_desktop_view_model(
             &self.file_manager,
-            &file_manager_settings,
+            &self.live_desktop_file_manager_settings,
             &rows,
             self.file_manager_selection_count(),
             has_editable_selection,
@@ -8299,7 +8367,8 @@ impl RobcoNativeApp {
             }
             ui.separator();
             if changed {
-                self.settings.draft = persist_settings_draft(&self.settings.draft);
+                let settings = persist_settings_draft(&self.settings.draft);
+                self.replace_settings_draft(settings);
                 self.apply_status_update(saved_settings_status());
             }
             if !self.settings.status.is_empty() {
@@ -8472,6 +8541,8 @@ impl RobcoNativeApp {
             ui.small("Used only when connecting to secured networks.");
         }
         ui.add_space(8.0);
+        let mut pending_settings: Option<Settings> = None;
+        let mut pending_status: Option<String> = None;
         Self::settings_two_columns(ui, |left, right| {
             Self::settings_section(left, saved_title, |left| {
                 let saved = saved_connections_for_kind(kind);
@@ -8491,8 +8562,8 @@ impl RobcoNativeApp {
                                                 &entry.name,
                                             )
                                         {
-                                            self.settings.draft = settings;
-                                            self.settings.status = status;
+                                            pending_settings = Some(settings);
+                                            pending_status = Some(status);
                                         }
                                     }
                                 });
@@ -8526,8 +8597,8 @@ impl RobcoNativeApp {
                                             password.as_deref(),
                                         ) {
                                             Ok((settings, status)) => {
-                                                self.settings.status = status;
-                                                self.settings.draft = settings;
+                                                pending_settings = Some(settings);
+                                                pending_status = Some(status);
                                             }
                                             Err(err) => {
                                                 self.settings.status =
@@ -8541,6 +8612,12 @@ impl RobcoNativeApp {
                 }
             });
         });
+        if let Some(settings) = pending_settings {
+            self.replace_settings_draft(settings);
+        }
+        if let Some(status) = pending_status {
+            self.settings.status = status;
+        }
     }
 
     fn draw_settings_cli_profiles_panel(&mut self, ui: &mut egui::Ui) -> bool {
@@ -10840,7 +10917,7 @@ impl eframe::App for RobcoNativeApp {
                     }
                     _ => {
                         if let Some(plan) =
-                            resolve_terminal_flash_action(&action, load_hacking_difficulty())
+                            resolve_terminal_flash_action(&action, self.live_hacking_difficulty)
                         {
                             self.apply_terminal_flash_action_plan(plan);
                         }

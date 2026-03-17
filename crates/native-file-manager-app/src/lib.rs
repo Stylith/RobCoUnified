@@ -7,6 +7,7 @@ use robcos_shared::config::{
 };
 use robcos_shared::default_apps::parse_custom_command_line;
 use robcos_shared::launcher::command_exists;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,34 @@ pub struct FileTreeItem {
     pub path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileManagerRowsCacheKey {
+    show_hidden_files: bool,
+    directories_first: bool,
+    sort_mode: FileManagerSortMode,
+}
+
+#[derive(Debug, Clone)]
+struct FileManagerRowsCache {
+    cwd: PathBuf,
+    query: String,
+    key: FileManagerRowsCacheKey,
+    rows: Vec<FileEntryRow>,
+}
+
+#[derive(Debug, Clone)]
+struct FileManagerTreeCache {
+    cwd: PathBuf,
+    show_hidden_files: bool,
+    items: Vec<FileTreeItem>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FileManagerViewCache {
+    rows: Option<FileManagerRowsCache>,
+    tree: Option<FileManagerTreeCache>,
+}
+
 #[derive(Debug, Clone)]
 pub enum FileManagerAction {
     None,
@@ -98,6 +127,7 @@ pub struct NativeFileManagerState {
     pub active_tab: usize,
     pub tree_selected: Option<PathBuf>,
     pub search_query: String,
+    view_cache: RefCell<FileManagerViewCache>,
 }
 
 impl NativeFileManagerState {
@@ -111,7 +141,12 @@ impl NativeFileManagerState {
             active_tab: 0,
             tree_selected: Some(cwd),
             search_query: String::new(),
+            view_cache: RefCell::new(FileManagerViewCache::default()),
         }
+    }
+
+    fn invalidate_view_cache(&mut self) {
+        *self.view_cache.get_mut() = FileManagerViewCache::default();
     }
 
     fn sync_active_tab_path(&mut self) {
@@ -132,6 +167,7 @@ impl NativeFileManagerState {
 
     pub fn set_cwd(&mut self, path: PathBuf) {
         self.cwd = path.clone();
+        self.invalidate_view_cache();
         self.selected = None;
         self.selected_paths.clear();
         self.tree_selected = Some(path);
@@ -196,19 +232,49 @@ impl NativeFileManagerState {
     }
 
     pub fn rows(&self) -> Vec<FileEntryRow> {
+        let settings = get_settings().desktop_file_manager;
         let q = self.search_query.trim().to_ascii_lowercase();
-        let rows = Self::read_rows(&self.cwd);
+        let key = FileManagerRowsCacheKey {
+            show_hidden_files: settings.show_hidden_files,
+            directories_first: settings.directories_first,
+            sort_mode: settings.sort_mode,
+        };
+        if let Some(cache) = self.view_cache.borrow().rows.as_ref() {
+            if cache.cwd == self.cwd && cache.query == q && cache.key == key {
+                return cache.rows.clone();
+            }
+        }
+        let rows = Self::read_rows(&self.cwd, &settings);
         if q.is_empty() {
+            self.view_cache.borrow_mut().rows = Some(FileManagerRowsCache {
+                cwd: self.cwd.clone(),
+                query: q,
+                key,
+                rows: rows.clone(),
+            });
             rows
         } else {
-            rows.into_iter()
+            let filtered: Vec<FileEntryRow> = rows
+                .into_iter()
                 .filter(|row| row.label.to_ascii_lowercase().contains(&q))
-                .collect()
+                .collect();
+            self.view_cache.borrow_mut().rows = Some(FileManagerRowsCache {
+                cwd: self.cwd.clone(),
+                query: q,
+                key,
+                rows: filtered.clone(),
+            });
+            filtered
         }
     }
 
     pub fn tree_items(&self) -> Vec<FileTreeItem> {
         let show_hidden = get_settings().desktop_file_manager.show_hidden_files;
+        if let Some(cache) = self.view_cache.borrow().tree.as_ref() {
+            if cache.cwd == self.cwd && cache.show_hidden_files == show_hidden {
+                return cache.items.clone();
+            }
+        }
         let mut items = vec![FileTreeItem {
             line: "Drives".to_string(),
             path: None,
@@ -273,6 +339,12 @@ impl NativeFileManagerState {
             });
         }
 
+        self.view_cache.borrow_mut().tree = Some(FileManagerTreeCache {
+            cwd: self.cwd.clone(),
+            show_hidden_files: show_hidden,
+            items: items.clone(),
+        });
+
         items
     }
 
@@ -295,6 +367,7 @@ impl NativeFileManagerState {
             self.active_tab = self.tabs.len().saturating_sub(1);
         }
         self.cwd = self.tabs[self.active_tab].clone();
+        self.invalidate_view_cache();
         self.selected = None;
         self.tree_selected = Some(self.cwd.clone());
         true
@@ -306,6 +379,7 @@ impl NativeFileManagerState {
         }
         self.active_tab = idx;
         self.cwd = self.tabs[idx].clone();
+        self.invalidate_view_cache();
         self.selected = None;
         self.selected_paths.clear();
         self.tree_selected = Some(self.cwd.clone());
@@ -379,8 +453,7 @@ impl NativeFileManagerState {
         }
     }
 
-    fn read_rows(path: &Path) -> Vec<FileEntryRow> {
-        let settings = get_settings().desktop_file_manager;
+    fn read_rows(path: &Path, settings: &DesktopFileManagerSettings) -> Vec<FileEntryRow> {
         let mut rows = Vec::new();
         if let Some(parent) = path.parent() {
             rows.push(FileEntryRow {
@@ -799,6 +872,7 @@ impl FileManagerEditRuntime {
         let dst = unique_path_in_dir(&file_manager.cwd, "New Folder");
         std::fs::create_dir_all(&dst)
             .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
+        file_manager.invalidate_view_cache();
         file_manager.select(Some(dst.clone()));
         Ok(format!("Created {}", path_display_name(&dst)))
     }
@@ -828,6 +902,7 @@ impl FileManagerEditRuntime {
         let Some(last) = created.last().cloned() else {
             return Err(anyhow!("Cannot duplicate this selection."));
         };
+        file_manager.invalidate_view_cache();
         file_manager.select(Some(last.clone()));
         if created.len() == 1 {
             Ok(format!("Duplicated as {}", path_display_name(&last)))
@@ -864,6 +939,7 @@ impl FileManagerEditRuntime {
             from: entry.path,
             to: dst.clone(),
         });
+        file_manager.invalidate_view_cache();
         file_manager.select(Some(dst.clone()));
         Ok(format!("Renamed to {}", path_display_name(&dst)))
     }
@@ -892,6 +968,7 @@ impl FileManagerEditRuntime {
             from: entry.path.clone(),
             to: dst.clone(),
         });
+        file_manager.invalidate_view_cache();
         if let Some(parent) = dst.parent() {
             file_manager.set_cwd(parent.to_path_buf());
         }
@@ -936,6 +1013,7 @@ impl FileManagerEditRuntime {
         if moved.is_empty() {
             return Err(anyhow!("Nothing to move."));
         }
+        file_manager.invalidate_view_cache();
         if target_dir == file_manager.cwd {
             if let Some(last) = moved.last().cloned() {
                 file_manager.select(Some(last));
@@ -1013,6 +1091,7 @@ impl FileManagerEditRuntime {
         if changed == 0 {
             return Err(anyhow!("Clipboard source no longer exists."));
         }
+        file_manager.invalidate_view_cache();
         if let Some(dst) = last_dst {
             file_manager.select(Some(dst.clone()));
             if changed == 1 {
@@ -1047,6 +1126,7 @@ impl FileManagerEditRuntime {
             });
             moved += 1;
         }
+        file_manager.invalidate_view_cache();
         file_manager.ensure_selection_valid();
         if moved == 1 {
             Ok("Moved item to trash".to_string())
@@ -1061,6 +1141,7 @@ impl FileManagerEditRuntime {
         };
         apply_edit_op(&op, true)?;
         self.redo_stack.push(op);
+        file_manager.invalidate_view_cache();
         file_manager.ensure_selection_valid();
         Ok("Undo complete".to_string())
     }
@@ -1071,6 +1152,7 @@ impl FileManagerEditRuntime {
         };
         apply_edit_op(&op, false)?;
         self.undo_stack.push(op);
+        file_manager.invalidate_view_cache();
         file_manager.ensure_selection_valid();
         Ok("Redo complete".to_string())
     }
@@ -1292,6 +1374,29 @@ mod tests {
 
         assert_eq!(status, "Created New Folder (1)");
         assert_eq!(fm.selected, Some(temp.path.join("New Folder (1)")));
+    }
+
+    #[test]
+    fn create_new_folder_invalidates_cached_rows() {
+        let temp = TempDirGuard::new("cache_invalidate");
+        let mut fm = NativeFileManagerState::new(temp.path.clone());
+        let mut runtime = FileManagerEditRuntime::default();
+
+        let initial_labels: Vec<String> = fm.rows().into_iter().map(|row| row.label).collect();
+        assert!(
+            !initial_labels.iter().any(|label| label == "New Folder"),
+            "new folder should not exist before creation"
+        );
+
+        runtime
+            .create_new_folder(&mut fm)
+            .expect("new folder should be created");
+
+        let labels: Vec<String> = fm.rows().into_iter().map(|row| row.label).collect();
+        assert!(
+            labels.iter().any(|label| label == "New Folder"),
+            "cached rows should refresh after filesystem mutation"
+        );
     }
 
     #[test]

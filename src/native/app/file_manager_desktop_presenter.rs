@@ -133,11 +133,10 @@ impl RobcoNativeApp {
             .collect();
         for path in svg_paths {
             let key = path.to_string_lossy().to_string();
-            if !self.shortcut_icon_cache.contains_key(&key) {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    let tex = Self::load_svg_icon(ctx, &key, &bytes, Some(32));
-                    self.shortcut_icon_cache.insert(key, tex);
-                }
+            if !self.shortcut_icon_cache.contains_key(&key)
+                && !self.shortcut_icon_missing.contains(&key)
+            {
+                let _ = self.load_cached_shortcut_icon(ctx, &key, &path, 32);
             }
         }
     }
