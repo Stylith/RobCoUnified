@@ -1,5 +1,8 @@
 use super::desktop_session_service::login_selection_auth_method;
-use super::menu::{MainMenuAction, TerminalScreen};
+pub use robcos_native_terminal_app::{
+    resolve_main_menu_action, resolve_terminal_back_action, MainMenuSelectionAction,
+    TerminalBackAction, TerminalBackContext,
+};
 use crate::core::auth::AuthMethod;
 
 #[derive(Debug, Clone)]
@@ -9,19 +12,6 @@ pub enum LoginSelectionAction {
     AuthenticateWithoutPassword { username: String },
     StartHacking { username: String },
     ShowError(String),
-}
-
-#[derive(Debug, Clone)]
-pub enum MainMenuSelectionAction {
-    OpenScreen {
-        screen: TerminalScreen,
-        selected_idx: usize,
-        clear_status: bool,
-    },
-    OpenTerminalMode,
-    EnterDesktopMode,
-    RefreshSettingsAndOpen,
-    BeginLogout,
 }
 
 pub fn resolve_login_selection(selected_idx: usize, usernames: &[String]) -> LoginSelectionAction {
@@ -41,39 +31,5 @@ pub fn resolve_login_selection(selected_idx: usize, usernames: &[String]) -> Log
             LoginSelectionAction::StartHacking { username: selected }
         }
         Err(error) => LoginSelectionAction::ShowError(error),
-    }
-}
-
-pub fn resolve_main_menu_action(action: MainMenuAction) -> MainMenuSelectionAction {
-    match action {
-        MainMenuAction::Applications => MainMenuSelectionAction::OpenScreen {
-            screen: TerminalScreen::Applications,
-            selected_idx: 0,
-            clear_status: true,
-        },
-        MainMenuAction::Documents => MainMenuSelectionAction::OpenScreen {
-            screen: TerminalScreen::Documents,
-            selected_idx: 0,
-            clear_status: true,
-        },
-        MainMenuAction::Network => MainMenuSelectionAction::OpenScreen {
-            screen: TerminalScreen::Network,
-            selected_idx: 0,
-            clear_status: true,
-        },
-        MainMenuAction::Games => MainMenuSelectionAction::OpenScreen {
-            screen: TerminalScreen::Games,
-            selected_idx: 0,
-            clear_status: true,
-        },
-        MainMenuAction::ProgramInstaller => MainMenuSelectionAction::OpenScreen {
-            screen: TerminalScreen::ProgramInstaller,
-            selected_idx: 0,
-            clear_status: true,
-        },
-        MainMenuAction::Terminal => MainMenuSelectionAction::OpenTerminalMode,
-        MainMenuAction::DesktopMode => MainMenuSelectionAction::EnterDesktopMode,
-        MainMenuAction::Settings => MainMenuSelectionAction::RefreshSettingsAndOpen,
-        MainMenuAction::Logout => MainMenuSelectionAction::BeginLogout,
     }
 }

@@ -617,6 +617,10 @@ fn is_admin(username: String) -> bool {
 }
 
 impl TerminalInstallerState {
+    pub fn is_at_root(&self) -> bool {
+        matches!(self.view, InstallerView::Root)
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }

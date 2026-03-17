@@ -1,108 +1,11 @@
 use super::retro_ui::{current_palette, RetroScreen};
-pub use super::shared_types::TerminalScreen;
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsChoiceKind {
-    Theme,
-    DefaultOpenMode,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SettingsChoiceOverlay {
-    pub kind: SettingsChoiceKind,
-    pub selected: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UserManagementMode {
-    Root,
-    CreateAuthMethod { username: String },
-    CreateHackingDifficulty { username: String },
-    DeleteUser,
-    ResetPassword,
-    ChangeAuthSelectUser,
-    ChangeAuthChoose { username: String },
-    ChangeAuthHackingDifficulty { username: String },
-    ToggleAdmin,
-}
-
-#[derive(Debug, Clone)]
-pub enum LoginMenuRow {
-    User(String),
-    Separator,
-    Exit,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MainMenuAction {
-    Applications,
-    Documents,
-    Network,
-    Games,
-    ProgramInstaller,
-    Terminal,
-    DesktopMode,
-    Settings,
-    Logout,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct MainMenuEntry {
-    pub label: &'static str,
-    pub action: Option<MainMenuAction>,
-}
-
-pub const MAIN_MENU_ENTRIES: &[MainMenuEntry] = &[
-    MainMenuEntry {
-        label: "Applications",
-        action: Some(MainMenuAction::Applications),
-    },
-    MainMenuEntry {
-        label: "Documents",
-        action: Some(MainMenuAction::Documents),
-    },
-    MainMenuEntry {
-        label: "Network",
-        action: Some(MainMenuAction::Network),
-    },
-    MainMenuEntry {
-        label: "Games",
-        action: Some(MainMenuAction::Games),
-    },
-    MainMenuEntry {
-        label: "Program Installer",
-        action: Some(MainMenuAction::ProgramInstaller),
-    },
-    MainMenuEntry {
-        label: "Terminal",
-        action: Some(MainMenuAction::Terminal),
-    },
-    MainMenuEntry {
-        label: "Desktop Mode",
-        action: Some(MainMenuAction::DesktopMode),
-    },
-    MainMenuEntry {
-        label: "---",
-        action: None,
-    },
-    MainMenuEntry {
-        label: "Settings",
-        action: Some(MainMenuAction::Settings),
-    },
-    MainMenuEntry {
-        label: "Logout",
-        action: Some(MainMenuAction::Logout),
-    },
-];
-
-pub fn selectable_menu_count() -> usize {
-    MAIN_MENU_ENTRIES
-        .iter()
-        .filter(|entry| entry.action.is_some())
-        .count()
-}
+pub use robcos_native_terminal_app::{
+    entry_for_selectable_idx, login_menu_rows_from_users, selectable_menu_count, LoginMenuRow,
+    MainMenuAction, SettingsChoiceKind, SettingsChoiceOverlay, TerminalScreen,
+    UserManagementMode, MAIN_MENU_ENTRIES,
+};
 
 fn selectable_row_indices(items: &[String]) -> Vec<usize> {
     items
@@ -110,22 +13,6 @@ fn selectable_row_indices(items: &[String]) -> Vec<usize> {
         .enumerate()
         .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
         .collect()
-}
-
-pub fn entry_for_selectable_idx(idx: usize) -> MainMenuEntry {
-    MAIN_MENU_ENTRIES
-        .iter()
-        .copied()
-        .filter(|entry| entry.action.is_some())
-        .nth(idx)
-        .unwrap_or(MAIN_MENU_ENTRIES[0])
-}
-
-pub fn login_menu_rows_from_users(usernames: Vec<String>) -> Vec<LoginMenuRow> {
-    let mut rows: Vec<LoginMenuRow> = usernames.into_iter().map(LoginMenuRow::User).collect();
-    rows.push(LoginMenuRow::Separator);
-    rows.push(LoginMenuRow::Exit);
-    rows
 }
 
 #[allow(clippy::too_many_arguments)]

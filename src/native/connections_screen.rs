@@ -89,6 +89,10 @@ impl TerminalConnectionsState {
         *self = Self::default();
     }
 
+    pub fn is_at_root(&self) -> bool {
+        matches!(self.view, ConnectionsView::Root)
+    }
+
     pub fn back(&mut self) -> bool {
         match &self.view {
             ConnectionsView::Root => true,

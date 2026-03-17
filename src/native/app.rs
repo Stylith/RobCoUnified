@@ -146,8 +146,8 @@ use super::retro_ui::{
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_actions::{
-    resolve_login_selection, resolve_main_menu_action, LoginSelectionAction,
-    MainMenuSelectionAction,
+    resolve_login_selection, resolve_main_menu_action, resolve_terminal_back_action,
+    LoginSelectionAction, MainMenuSelectionAction, TerminalBackAction, TerminalBackContext,
 };
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use super::user_management::{
@@ -4505,78 +4505,63 @@ impl RobcoNativeApp {
     }
 
     fn handle_terminal_back(&mut self) {
-        if self.terminal_settings_choice.is_some() {
-            crate::sound::play_navigate();
-            self.terminal_settings_choice = None;
-            return;
-        }
-        if self.terminal_default_app_slot.is_some() {
-            crate::sound::play_navigate();
-            self.terminal_default_app_slot = None;
-            return;
-        }
-        if matches!(self.terminal_screen, TerminalScreen::Connections)
-            && !self.terminal_connections.back()
-        {
-            crate::sound::play_navigate();
-            self.apply_status_update(clear_shell_status());
-            return;
-        }
-        if matches!(self.terminal_screen, TerminalScreen::ProgramInstaller)
-            && !self.terminal_installer.back()
-        {
-            crate::sound::play_navigate();
-            self.apply_status_update(clear_shell_status());
-            return;
-        }
-        match self.terminal_screen {
-            TerminalScreen::MainMenu => {}
-            TerminalScreen::Applications
-            | TerminalScreen::Documents
-            | TerminalScreen::Network
-            | TerminalScreen::Games
-            | TerminalScreen::Settings
-            | TerminalScreen::UserManagement => {
-                self.navigate_to_screen(TerminalScreen::MainMenu);
+        let action = resolve_terminal_back_action(TerminalBackContext {
+            screen: self.terminal_screen,
+            has_settings_choice: self.terminal_settings_choice.is_some(),
+            has_default_app_slot: self.terminal_default_app_slot.is_some(),
+            connections_at_root: self.terminal_connections.is_at_root(),
+            installer_at_root: self.terminal_installer.is_at_root(),
+            has_embedded_pty: self.terminal_pty.is_some(),
+            pty_return_screen: self
+                .terminal_pty
+                .as_ref()
+                .map(|pty| pty.return_screen)
+                .unwrap_or(TerminalScreen::MainMenu),
+            nuke_codes_return_screen: self.terminal_nuke_codes_return,
+            browser_return_screen: self.terminal_browser_return,
+        });
+        match action {
+            TerminalBackAction::NoOp => {}
+            TerminalBackAction::ClearSettingsChoice => {
+                crate::sound::play_navigate();
+                self.terminal_settings_choice = None;
+            }
+            TerminalBackAction::ClearDefaultAppSlot => {
+                crate::sound::play_navigate();
+                self.terminal_default_app_slot = None;
+            }
+            TerminalBackAction::UseConnectionsInnerBack => {
+                crate::sound::play_navigate();
+                let _ = self.terminal_connections.back();
                 self.apply_status_update(clear_shell_status());
             }
-            TerminalScreen::DonkeyKong => {
-                self.navigate_to_screen(TerminalScreen::Games);
+            TerminalBackAction::UseInstallerInnerBack => {
+                crate::sound::play_navigate();
+                let _ = self.terminal_installer.back();
                 self.apply_status_update(clear_shell_status());
             }
-            TerminalScreen::Logs => {
-                self.navigate_to_screen(TerminalScreen::Documents);
-                self.apply_status_update(clear_shell_status());
+            TerminalBackAction::NavigateTo {
+                screen,
+                clear_status,
+                reset_installer,
+            } => {
+                self.navigate_to_screen(screen);
+                if reset_installer {
+                    self.terminal_installer.reset();
+                }
+                if clear_status {
+                    self.apply_status_update(clear_shell_status());
+                }
             }
-            TerminalScreen::PtyApp => {
+            TerminalBackAction::ClosePtyAndReturn { return_screen } => {
                 if let Some(mut pty) = self.terminal_pty.take() {
                     pty.session.terminate();
-                    self.navigate_to_screen(pty.return_screen);
+                    self.navigate_to_screen(return_screen);
                     self.shell_status = format!("Closed {}.", pty.title);
                 } else {
                     self.navigate_to_screen(TerminalScreen::MainMenu);
                     self.apply_status_update(clear_shell_status());
                 }
-            }
-            TerminalScreen::ProgramInstaller => {
-                self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.apply_status_update(clear_shell_status());
-                self.terminal_installer.reset();
-            }
-            TerminalScreen::Connections
-            | TerminalScreen::DefaultApps
-            | TerminalScreen::About
-            | TerminalScreen::EditMenus => {
-                self.navigate_to_screen(TerminalScreen::Settings);
-                self.apply_status_update(clear_shell_status());
-            }
-            TerminalScreen::NukeCodes => {
-                self.navigate_to_screen(self.terminal_nuke_codes_return);
-                self.apply_status_update(clear_shell_status());
-            }
-            TerminalScreen::DocumentBrowser => {
-                self.navigate_to_screen(self.terminal_browser_return);
-                self.apply_status_update(clear_shell_status());
             }
         }
     }
