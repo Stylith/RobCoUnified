@@ -3,8 +3,12 @@ use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 pub use robcos_native_terminal_app::{
     entry_for_selectable_idx, login_menu_rows_from_users, selectable_menu_count,
-    terminal_runtime_defaults, LoginMenuRow, MainMenuAction, SettingsChoiceKind,
-    SettingsChoiceOverlay, TerminalScreen, UserManagementMode, MAIN_MENU_ENTRIES,
+    resolve_login_selection, resolve_main_menu_action, resolve_terminal_back_action,
+    terminal_runtime_defaults, terminal_screen_open_plan, terminal_settings_refresh_plan,
+    LoginMenuRow, LoginSelectionAction, MainMenuAction, MainMenuSelectionAction,
+    SettingsChoiceKind, SettingsChoiceOverlay, TerminalBackAction, TerminalBackContext,
+    TerminalNavigationState, TerminalScreen, TerminalScreenOpenPlan,
+    TerminalSelectionIndexTarget, UserManagementMode, MAIN_MENU_ENTRIES,
 };
 
 fn selectable_row_indices(items: &[String]) -> Vec<usize> {

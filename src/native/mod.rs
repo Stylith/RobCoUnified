@@ -23,7 +23,6 @@ mod prompt_flow;
 mod pty_screen;
 mod retro_ui;
 mod settings_screen;
-mod shell_actions;
 mod shell_screen;
 mod user_management;
 

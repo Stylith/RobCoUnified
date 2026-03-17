@@ -10,3 +10,4 @@ path = "src/lib.rs"
 
 [dependencies]
 robcos-native-services = { path = "../native-services" }
+robcos-shared = { path = "../shared" }

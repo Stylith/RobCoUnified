@@ -49,7 +49,7 @@ use super::desktop_session_service::{
     close_active_session as close_native_session,
     ensure_login_session_entry as ensure_native_login_session_entry, hacking_start_flash_plan,
     has_pending_session_switch as has_native_pending_session_switch, login_flash_plan,
-    login_usernames as load_login_usernames, logout_flash_plan,
+    login_selection_auth_method, login_usernames as load_login_usernames, logout_flash_plan,
     persist_shell_snapshot as persist_native_shell_snapshot,
     request_session_switch as request_native_session_switch,
     restore_current_user_from_last_session,
@@ -124,8 +124,12 @@ use super::installer_screen::{
     TerminalInstallerState,
 };
 use super::menu::{
-    draw_terminal_menu_screen, login_menu_rows_from_users, terminal_runtime_defaults,
-    SettingsChoiceOverlay, TerminalScreen, UserManagementMode,
+    draw_terminal_menu_screen, login_menu_rows_from_users, resolve_login_selection,
+    resolve_main_menu_action, resolve_terminal_back_action, terminal_runtime_defaults,
+    terminal_screen_open_plan, terminal_settings_refresh_plan, LoginSelectionAction,
+    MainMenuSelectionAction, TerminalBackAction, TerminalBackContext,
+    TerminalNavigationState, TerminalScreen, TerminalScreenOpenPlan,
+    TerminalSelectionIndexTarget, UserManagementMode,
 };
 use super::nuke_codes_screen::{
     draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView,
@@ -145,10 +149,6 @@ use super::retro_ui::{
     configure_visuals, current_palette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
-use super::shell_actions::{
-    resolve_login_selection, resolve_main_menu_action, resolve_terminal_back_action,
-    LoginSelectionAction, MainMenuSelectionAction, TerminalBackAction, TerminalBackContext,
-};
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use super::user_management::{
     handle_selection as handle_user_management_selection,
@@ -607,30 +607,13 @@ pub struct RobcoNativeApp {
     start_open_submenu: Option<StartSubmenu>,
     start_open_leaf: Option<StartLeaf>,
     desktop_mode_open: bool,
-    main_menu_idx: usize,
-    terminal_screen: TerminalScreen,
-    terminal_apps_idx: usize,
-    terminal_documents_idx: usize,
-    terminal_logs_idx: usize,
-    terminal_network_idx: usize,
-    terminal_games_idx: usize,
+    terminal_nav: TerminalNavigationState,
     terminal_nuke_codes: NukeCodesView,
-    terminal_nuke_codes_return: TerminalScreen,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
-    terminal_settings_idx: usize,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
-    terminal_default_apps_idx: usize,
-    terminal_default_app_choice_idx: usize,
-    terminal_default_app_slot: Option<DefaultAppSlot>,
-    terminal_browser_idx: usize,
-    terminal_browser_return: TerminalScreen,
-    terminal_user_management_idx: usize,
-    terminal_user_management_mode: UserManagementMode,
-    terminal_settings_choice: Option<SettingsChoiceOverlay>,
     terminal_prompt: Option<TerminalPrompt>,
-    suppress_next_menu_submit: bool,
     terminal_flash: Option<TerminalFlash>,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
@@ -675,32 +658,15 @@ struct ParkedSessionState {
     start_leaf_selected: usize,
     start_open_submenu: Option<StartSubmenu>,
     start_open_leaf: Option<StartLeaf>,
-    main_menu_idx: usize,
-    terminal_screen: TerminalScreen,
-    terminal_apps_idx: usize,
-    terminal_documents_idx: usize,
-    terminal_logs_idx: usize,
-    terminal_network_idx: usize,
-    terminal_games_idx: usize,
+    terminal_nav: TerminalNavigationState,
     terminal_nuke_codes: NukeCodesView,
-    terminal_nuke_codes_return: TerminalScreen,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
-    terminal_settings_idx: usize,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
-    terminal_default_apps_idx: usize,
-    terminal_default_app_choice_idx: usize,
-    terminal_default_app_slot: Option<DefaultAppSlot>,
-    terminal_browser_idx: usize,
-    terminal_browser_return: TerminalScreen,
-    terminal_user_management_idx: usize,
-    terminal_user_management_mode: UserManagementMode,
-    terminal_settings_choice: Option<SettingsChoiceOverlay>,
     terminal_prompt: Option<TerminalPrompt>,
     terminal_flash: Option<TerminalFlash>,
     session_leader_until: Option<Instant>,
-    suppress_next_menu_submit: bool,
     desktop_window_generation_seed: u64,
     file_manager_runtime: FileManagerEditRuntime,
     shell_status: String,
@@ -763,30 +729,13 @@ impl Default for RobcoNativeApp {
             start_open_submenu: None,
             start_open_leaf: None,
             desktop_mode_open: false,
-            main_menu_idx: terminal_defaults.main_menu_idx,
-            terminal_screen: terminal_defaults.screen,
-            terminal_apps_idx: terminal_defaults.apps_idx,
-            terminal_documents_idx: terminal_defaults.documents_idx,
-            terminal_logs_idx: terminal_defaults.logs_idx,
-            terminal_network_idx: terminal_defaults.network_idx,
-            terminal_games_idx: terminal_defaults.games_idx,
+            terminal_nav: terminal_defaults,
             terminal_nuke_codes: NukeCodesView::default(),
-            terminal_nuke_codes_return: terminal_defaults.nuke_codes_return_screen,
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
-            terminal_settings_idx: terminal_defaults.settings_idx,
             terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
-            terminal_default_apps_idx: terminal_defaults.default_apps_idx,
-            terminal_default_app_choice_idx: terminal_defaults.default_app_choice_idx,
-            terminal_default_app_slot: None,
-            terminal_browser_idx: terminal_defaults.browser_idx,
-            terminal_browser_return: terminal_defaults.browser_return_screen,
-            terminal_user_management_idx: terminal_defaults.user_management_idx,
-            terminal_user_management_mode: terminal_defaults.user_management_mode,
-            terminal_settings_choice: None,
             terminal_prompt: None,
-            suppress_next_menu_submit: terminal_defaults.suppress_next_menu_submit,
             terminal_flash: None,
             session_leader_until: None,
             session_runtime: HashMap::new(),
@@ -1249,32 +1198,15 @@ impl RobcoNativeApp {
             start_leaf_selected: self.start_leaf_selected,
             start_open_submenu: self.start_open_submenu,
             start_open_leaf: self.start_open_leaf,
-            main_menu_idx: self.main_menu_idx,
-            terminal_screen: self.terminal_screen,
-            terminal_apps_idx: self.terminal_apps_idx,
-            terminal_documents_idx: self.terminal_documents_idx,
-            terminal_logs_idx: self.terminal_logs_idx,
-            terminal_network_idx: self.terminal_network_idx,
-            terminal_games_idx: self.terminal_games_idx,
+            terminal_nav: self.current_terminal_navigation_state(),
             terminal_nuke_codes: self.terminal_nuke_codes.clone(),
-            terminal_nuke_codes_return: self.terminal_nuke_codes_return,
             terminal_pty: self.terminal_pty.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
-            terminal_settings_idx: self.terminal_settings_idx,
             terminal_edit_menus: std::mem::take(&mut self.terminal_edit_menus),
             terminal_connections: std::mem::take(&mut self.terminal_connections),
-            terminal_default_apps_idx: self.terminal_default_apps_idx,
-            terminal_default_app_choice_idx: self.terminal_default_app_choice_idx,
-            terminal_default_app_slot: self.terminal_default_app_slot.take(),
-            terminal_browser_idx: self.terminal_browser_idx,
-            terminal_browser_return: self.terminal_browser_return,
-            terminal_user_management_idx: self.terminal_user_management_idx,
-            terminal_user_management_mode: self.terminal_user_management_mode.clone(),
-            terminal_settings_choice: self.terminal_settings_choice.take(),
             terminal_prompt: self.terminal_prompt.take(),
             terminal_flash: self.terminal_flash.take(),
             session_leader_until: self.session_leader_until.take(),
-            suppress_next_menu_submit: self.suppress_next_menu_submit,
             desktop_window_generation_seed: self.desktop_window_generation_seed,
             file_manager_runtime: self.file_manager_runtime.clone(),
             shell_status: std::mem::take(&mut self.shell_status),
@@ -1331,32 +1263,15 @@ impl RobcoNativeApp {
         self.start_leaf_selected = parked.start_leaf_selected;
         self.start_open_submenu = parked.start_open_submenu;
         self.start_open_leaf = parked.start_open_leaf;
-        self.main_menu_idx = parked.main_menu_idx;
-        self.terminal_screen = parked.terminal_screen;
-        self.terminal_apps_idx = parked.terminal_apps_idx;
-        self.terminal_documents_idx = parked.terminal_documents_idx;
-        self.terminal_logs_idx = parked.terminal_logs_idx;
-        self.terminal_network_idx = parked.terminal_network_idx;
-        self.terminal_games_idx = parked.terminal_games_idx;
+        self.apply_terminal_navigation_state(parked.terminal_nav);
         self.terminal_nuke_codes = parked.terminal_nuke_codes;
-        self.terminal_nuke_codes_return = parked.terminal_nuke_codes_return;
         self.terminal_pty = parked.terminal_pty;
         self.terminal_installer = parked.terminal_installer;
-        self.terminal_settings_idx = parked.terminal_settings_idx;
         self.terminal_edit_menus = parked.terminal_edit_menus;
         self.terminal_connections = parked.terminal_connections;
-        self.terminal_default_apps_idx = parked.terminal_default_apps_idx;
-        self.terminal_default_app_choice_idx = parked.terminal_default_app_choice_idx;
-        self.terminal_default_app_slot = parked.terminal_default_app_slot;
-        self.terminal_browser_idx = parked.terminal_browser_idx;
-        self.terminal_browser_return = parked.terminal_browser_return;
-        self.terminal_user_management_idx = parked.terminal_user_management_idx;
-        self.terminal_user_management_mode = parked.terminal_user_management_mode;
-        self.terminal_settings_choice = parked.terminal_settings_choice;
         self.terminal_prompt = parked.terminal_prompt;
         self.terminal_flash = parked.terminal_flash;
         self.session_leader_until = parked.session_leader_until;
-        self.suppress_next_menu_submit = parked.suppress_next_menu_submit;
         self.desktop_window_generation_seed = parked.desktop_window_generation_seed;
         self.file_manager_runtime = parked.file_manager_runtime;
         self.context_menu_action = None;
@@ -3434,32 +3349,23 @@ impl RobcoNativeApp {
         self.start_open_submenu = None;
         self.start_open_leaf = None;
         self.desktop_mode_open = launch_default_desktop;
-        self.main_menu_idx = terminal_defaults.main_menu_idx;
-        self.terminal_screen = terminal_defaults.screen;
-        self.terminal_apps_idx = terminal_defaults.apps_idx;
-        self.terminal_documents_idx = terminal_defaults.documents_idx;
-        self.terminal_logs_idx = terminal_defaults.logs_idx;
-        self.terminal_network_idx = terminal_defaults.network_idx;
-        self.terminal_games_idx = terminal_defaults.games_idx;
+        self.apply_terminal_navigation_state(terminal_defaults);
         self.terminal_nuke_codes = NukeCodesView::default();
-        self.terminal_nuke_codes_return = terminal_defaults.nuke_codes_return_screen;
         self.terminal_pty = None;
         self.terminal_installer.reset();
-        self.terminal_settings_idx = terminal_defaults.settings_idx;
         self.terminal_edit_menus.reset();
         self.terminal_connections.reset();
-        self.terminal_default_apps_idx = terminal_defaults.default_apps_idx;
-        self.terminal_default_app_choice_idx = terminal_defaults.default_app_choice_idx;
-        self.terminal_default_app_slot = None;
-        self.terminal_browser_idx = terminal_defaults.browser_idx;
-        self.terminal_browser_return = terminal_defaults.browser_return_screen;
-        self.terminal_user_management_idx = terminal_defaults.user_management_idx;
-        self.terminal_user_management_mode = terminal_defaults.user_management_mode;
-        self.terminal_settings_choice = None;
         self.terminal_prompt = None;
-        self.suppress_next_menu_submit = terminal_defaults.suppress_next_menu_submit;
         self.terminal_flash = None;
         self.session_leader_until = None;
+    }
+
+    fn current_terminal_navigation_state(&self) -> TerminalNavigationState {
+        self.terminal_nav.clone()
+    }
+
+    fn apply_terminal_navigation_state(&mut self, state: TerminalNavigationState) {
+        self.terminal_nav = state;
     }
 
     fn persist_snapshot(&self) {
@@ -3473,20 +3379,20 @@ impl RobcoNativeApp {
     }
 
     fn navigate_to_screen(&mut self, screen: TerminalScreen) {
-        if self.terminal_screen != screen {
+        if self.terminal_nav.screen != screen {
             crate::sound::play_navigate();
         }
-        self.terminal_screen = screen;
+        self.terminal_nav.screen = screen;
     }
 
     fn set_user_management_mode(&mut self, mode: UserManagementMode, selected_idx: usize) {
-        let changed = self.terminal_user_management_mode != mode
-            || self.terminal_user_management_idx != selected_idx;
+        let changed = self.terminal_nav.user_management_mode != mode
+            || self.terminal_nav.user_management_idx != selected_idx;
         if changed {
             crate::sound::play_navigate();
         }
-        self.terminal_user_management_mode = mode;
-        self.terminal_user_management_idx = selected_idx;
+        self.terminal_nav.user_management_mode = mode;
+        self.terminal_nav.user_management_idx = selected_idx;
     }
 
     fn do_login(&mut self) {
@@ -3561,7 +3467,7 @@ impl RobcoNativeApp {
         self.persist_snapshot();
         self.terminate_all_native_pty_children();
         self.terminal_prompt = None;
-        self.terminal_screen = TerminalScreen::MainMenu;
+        self.terminal_nav.screen = TerminalScreen::MainMenu;
         self.close_start_menu();
         self.desktop_mode_open = false;
         self.desktop_nuke_codes_open = false;
@@ -4331,8 +4237,8 @@ impl RobcoNativeApp {
         }
         self.file_manager.set_cwd(dir);
         self.file_manager.selected = None;
-        self.terminal_browser_idx = 0;
-        self.terminal_browser_return = return_screen;
+        self.terminal_nav.browser_idx = 0;
+        self.terminal_nav.browser_return_screen = return_screen;
         self.navigate_to_screen(TerminalScreen::DocumentBrowser);
     }
 
@@ -4447,43 +4353,11 @@ impl RobcoNativeApp {
                 screen,
                 selected_idx,
                 clear_status,
-            } => {
-                self.navigate_to_screen(screen);
-                match screen {
-                    TerminalScreen::Applications => self.terminal_apps_idx = selected_idx,
-                    TerminalScreen::Documents => self.terminal_documents_idx = selected_idx,
-                    TerminalScreen::Logs => self.terminal_logs_idx = selected_idx,
-                    TerminalScreen::Network => self.terminal_network_idx = selected_idx,
-                    TerminalScreen::Games => self.terminal_games_idx = selected_idx,
-                    TerminalScreen::DonkeyKong => {}
-                    TerminalScreen::NukeCodes => {}
-                    TerminalScreen::ProgramInstaller => {
-                        self.terminal_installer.reset();
-                        self.terminal_installer.root_idx = selected_idx;
-                    }
-                    TerminalScreen::Settings => {
-                        self.terminal_settings_idx = selected_idx;
-                        self.terminal_settings_choice = None;
-                    }
-                    TerminalScreen::EditMenus => {}
-                    TerminalScreen::Connections => {
-                        self.terminal_connections.reset();
-                        self.terminal_connections.root_idx = selected_idx;
-                    }
-                    TerminalScreen::DefaultApps => self.terminal_default_apps_idx = selected_idx,
-                    TerminalScreen::About => {}
-                    TerminalScreen::UserManagement => {
-                        self.terminal_user_management_mode = UserManagementMode::Root;
-                        self.terminal_user_management_idx = selected_idx;
-                    }
-                    TerminalScreen::DocumentBrowser => self.terminal_browser_idx = selected_idx,
-                    TerminalScreen::MainMenu => self.main_menu_idx = selected_idx,
-                    TerminalScreen::PtyApp => {}
-                }
-                if clear_status {
-                    self.apply_status_update(clear_shell_status());
-                }
-            }
+            } => self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                screen,
+                selected_idx,
+                clear_status,
+            )),
             MainMenuSelectionAction::OpenTerminalMode => {
                 self.open_embedded_terminal_shell();
             }
@@ -4496,21 +4370,70 @@ impl RobcoNativeApp {
             }
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
                 self.settings.draft = reload_settings_snapshot();
-                self.navigate_to_screen(TerminalScreen::Settings);
-                self.terminal_settings_idx = 0;
-                self.terminal_connections.reset();
-                self.terminal_default_app_slot = None;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
             }
             MainMenuSelectionAction::BeginLogout => self.begin_logout(),
         }
     }
 
+    fn apply_terminal_screen_open_plan(&mut self, plan: TerminalScreenOpenPlan) {
+        self.navigate_to_screen(plan.screen);
+        if plan.reset_installer {
+            self.terminal_installer.reset();
+        }
+        if plan.reset_connections {
+            self.terminal_connections.reset();
+        }
+        if plan.clear_settings_choice {
+            self.terminal_nav.settings_choice = None;
+        }
+        if plan.clear_default_app_slot {
+            self.terminal_nav.default_app_slot = None;
+        }
+        if plan.reset_user_management_to_root {
+            self.terminal_nav.user_management_mode = UserManagementMode::Root;
+        }
+        match plan.index_target {
+            TerminalSelectionIndexTarget::None => {}
+            TerminalSelectionIndexTarget::MainMenu => self.terminal_nav.main_menu_idx = plan.selected_idx,
+            TerminalSelectionIndexTarget::Applications => {
+                self.terminal_nav.apps_idx = plan.selected_idx
+            }
+            TerminalSelectionIndexTarget::Documents => {
+                self.terminal_nav.documents_idx = plan.selected_idx
+            }
+            TerminalSelectionIndexTarget::Logs => self.terminal_nav.logs_idx = plan.selected_idx,
+            TerminalSelectionIndexTarget::Network => self.terminal_nav.network_idx = plan.selected_idx,
+            TerminalSelectionIndexTarget::Games => self.terminal_nav.games_idx = plan.selected_idx,
+            TerminalSelectionIndexTarget::ProgramInstallerRoot => {
+                self.terminal_installer.root_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Settings => {
+                self.terminal_nav.settings_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::ConnectionsRoot => {
+                self.terminal_connections.root_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::DefaultApps => {
+                self.terminal_nav.default_apps_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::UserManagement => {
+                self.terminal_nav.user_management_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::DocumentBrowser => {
+                self.terminal_nav.browser_idx = plan.selected_idx;
+            }
+        }
+        if plan.clear_status {
+            self.apply_status_update(clear_shell_status());
+        }
+    }
+
     fn handle_terminal_back(&mut self) {
         let action = resolve_terminal_back_action(TerminalBackContext {
-            screen: self.terminal_screen,
-            has_settings_choice: self.terminal_settings_choice.is_some(),
-            has_default_app_slot: self.terminal_default_app_slot.is_some(),
+            screen: self.terminal_nav.screen,
+            has_settings_choice: self.terminal_nav.settings_choice.is_some(),
+            has_default_app_slot: self.terminal_nav.default_app_slot.is_some(),
             connections_at_root: self.terminal_connections.is_at_root(),
             installer_at_root: self.terminal_installer.is_at_root(),
             has_embedded_pty: self.terminal_pty.is_some(),
@@ -4519,18 +4442,18 @@ impl RobcoNativeApp {
                 .as_ref()
                 .map(|pty| pty.return_screen)
                 .unwrap_or(TerminalScreen::MainMenu),
-            nuke_codes_return_screen: self.terminal_nuke_codes_return,
-            browser_return_screen: self.terminal_browser_return,
+            nuke_codes_return_screen: self.terminal_nav.nuke_codes_return_screen,
+            browser_return_screen: self.terminal_nav.browser_return_screen,
         });
         match action {
             TerminalBackAction::NoOp => {}
             TerminalBackAction::ClearSettingsChoice => {
                 crate::sound::play_navigate();
-                self.terminal_settings_choice = None;
+                self.terminal_nav.settings_choice = None;
             }
             TerminalBackAction::ClearDefaultAppSlot => {
                 crate::sound::play_navigate();
-                self.terminal_default_app_slot = None;
+                self.terminal_nav.default_app_slot = None;
             }
             TerminalBackAction::UseConnectionsInnerBack => {
                 crate::sound::play_navigate();
@@ -4612,7 +4535,7 @@ impl RobcoNativeApp {
                     return;
                 }
                 self.set_user_management_mode(UserManagementMode::CreateAuthMethod { username }, 0);
-                self.suppress_next_menu_submit = true;
+                self.terminal_nav.suppress_next_menu_submit = true;
             }
             PromptOutcome::CreatePasswordFirst { username, password } => {
                 self.terminal_prompt = None;
@@ -4936,7 +4859,11 @@ impl RobcoNativeApp {
                 );
                 if activated {
                     let usernames = self.login_usernames();
-                    let action = resolve_login_selection(self.login.selected_idx, &usernames);
+                    let action = resolve_login_selection(
+                        self.login.selected_idx,
+                        &usernames,
+                        login_selection_auth_method,
+                    );
                     self.apply_login_selection_action(action);
                 }
             }
@@ -5653,7 +5580,7 @@ impl RobcoNativeApp {
         let layout = self.terminal_layout();
         let activated = draw_main_menu_screen(
             ctx,
-            &mut self.main_menu_idx,
+            &mut self.terminal_nav.main_menu_idx,
             &self.shell_status,
             &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
             layout.cols,
@@ -5676,7 +5603,7 @@ impl RobcoNativeApp {
     fn draw_terminal_applications(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let items = self.terminal_app_items();
-        let mut selected = self.terminal_apps_idx.min(items.len().saturating_sub(1));
+        let mut selected = self.terminal_nav.apps_idx.min(items.len().saturating_sub(1));
         let activated = draw_terminal_menu_screen(
             ctx,
             "Applications",
@@ -5695,7 +5622,7 @@ impl RobcoNativeApp {
             layout.content_col,
             &self.shell_status,
         );
-        self.terminal_apps_idx = selected;
+        self.terminal_nav.apps_idx = selected;
         if let Some(idx) = activated {
             let label = &items[idx];
             if label == BUILTIN_TEXT_EDITOR_APP {
@@ -5726,7 +5653,7 @@ impl RobcoNativeApp {
 
     fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
         self.terminal_nuke_codes = fetch_nuke_codes();
-        self.terminal_nuke_codes_return = return_screen;
+        self.terminal_nav.nuke_codes_return_screen = return_screen;
         self.navigate_to_screen(TerminalScreen::NukeCodes);
         self.apply_status_update(clear_shell_status());
     }
@@ -5738,7 +5665,7 @@ impl RobcoNativeApp {
         items.push("---".to_string());
         items.push("Back".to_string());
         let mut selected = self
-            .terminal_documents_idx
+            .terminal_nav.documents_idx
             .min(items.len().saturating_sub(1));
         let activated = draw_terminal_menu_screen(
             ctx,
@@ -5758,13 +5685,13 @@ impl RobcoNativeApp {
             layout.content_col,
             &self.shell_status,
         );
-        self.terminal_documents_idx = selected;
+        self.terminal_nav.documents_idx = selected;
         if let Some(idx) = activated {
             let selected = items[idx].as_str();
             match selected {
                 "Logs" => {
                     self.navigate_to_screen(TerminalScreen::Logs);
-                    self.terminal_logs_idx = 0;
+                    self.terminal_nav.logs_idx = 0;
                     self.apply_status_update(clear_shell_status());
                 }
                 "Back" => {
@@ -5791,7 +5718,7 @@ impl RobcoNativeApp {
             "---".to_string(),
             "Back".to_string(),
         ];
-        let mut selected = self.terminal_logs_idx.min(items.len().saturating_sub(1));
+        let mut selected = self.terminal_nav.logs_idx.min(items.len().saturating_sub(1));
         let activated = draw_terminal_menu_screen(
             ctx,
             "Logs",
@@ -5810,7 +5737,7 @@ impl RobcoNativeApp {
             layout.content_col,
             &self.shell_status,
         );
-        self.terminal_logs_idx = selected;
+        self.terminal_nav.logs_idx = selected;
         if let Some(idx) = activated {
             match items[idx].as_str() {
                 "New Log" => {
@@ -5836,7 +5763,7 @@ impl RobcoNativeApp {
         let activated = draw_terminal_document_browser(
             ctx,
             &self.file_manager,
-            &mut self.terminal_browser_idx,
+            &mut self.terminal_nav.browser_idx,
             &self.shell_status,
             layout.cols,
             layout.rows,
@@ -5851,10 +5778,10 @@ impl RobcoNativeApp {
             layout.content_col,
         );
         if activated.is_some() {
-            match activate_browser_selection(&mut self.file_manager, self.terminal_browser_idx) {
+            match activate_browser_selection(&mut self.file_manager, self.terminal_nav.browser_idx) {
                 FileManagerAction::None => {}
                 FileManagerAction::ChangedDir => {
-                    self.terminal_browser_idx = 0;
+                    self.terminal_nav.browser_idx = 0;
                 }
                 FileManagerAction::OpenFile(path) => {
                     self.file_manager.select(Some(path));
@@ -5869,8 +5796,8 @@ impl RobcoNativeApp {
         let event = run_terminal_settings_screen(
             ctx,
             &mut self.settings.draft,
-            &mut self.terminal_settings_idx,
-            &mut self.terminal_settings_choice,
+            &mut self.terminal_nav.settings_idx,
+            &mut self.terminal_nav.settings_choice,
             self.session.as_ref().is_some_and(|s| s.is_admin),
             &self.shell_status,
             layout.cols,
@@ -5888,13 +5815,18 @@ impl RobcoNativeApp {
             TerminalSettingsEvent::None => {}
             TerminalSettingsEvent::Persist => self.persist_native_settings(),
             TerminalSettingsEvent::Back => {
-                self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::MainMenu,
+                    0,
+                    true,
+                ));
             }
             TerminalSettingsEvent::OpenConnections => {
-                self.navigate_to_screen(TerminalScreen::Connections);
-                self.terminal_connections.reset();
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::Connections,
+                    0,
+                    true,
+                ));
             }
             TerminalSettingsEvent::OpenEditMenus => {
                 self.navigate_to_screen(TerminalScreen::EditMenus);
@@ -5902,21 +5834,25 @@ impl RobcoNativeApp {
                 self.apply_status_update(clear_shell_status());
             }
             TerminalSettingsEvent::OpenDefaultApps => {
-                self.navigate_to_screen(TerminalScreen::DefaultApps);
-                self.terminal_default_apps_idx = 0;
-                self.terminal_default_app_choice_idx = 0;
-                self.terminal_default_app_slot = None;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::DefaultApps,
+                    0,
+                    true,
+                ));
             }
             TerminalSettingsEvent::OpenAbout => {
-                self.navigate_to_screen(TerminalScreen::About);
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::About,
+                    0,
+                    true,
+                ));
             }
             TerminalSettingsEvent::EnterUserManagement => {
-                self.navigate_to_screen(TerminalScreen::UserManagement);
-                self.terminal_user_management_mode = UserManagementMode::Root;
-                self.terminal_user_management_idx = 0;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::UserManagement,
+                    0,
+                    true,
+                ));
             }
         }
     }
@@ -5953,9 +5889,7 @@ impl RobcoNativeApp {
         match event {
             EditMenusEvent::None => {}
             EditMenusEvent::BackToSettings => {
-                self.navigate_to_screen(TerminalScreen::Settings);
-                self.terminal_settings_idx = 0;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
             }
             EditMenusEvent::ToggleBuiltinNukeCodes => {
                 self.settings.draft.builtin_menu_visibility.nuke_codes =
@@ -6008,9 +5942,7 @@ impl RobcoNativeApp {
         match event {
             ConnectionsEvent::None => {}
             ConnectionsEvent::BackToSettings => {
-                self.navigate_to_screen(TerminalScreen::Settings);
-                self.terminal_settings_idx = 0;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
             }
             ConnectionsEvent::OpenNetworkGroups => {
                 crate::sound::play_navigate();
@@ -6051,7 +5983,7 @@ impl RobcoNativeApp {
             ConnectionsEvent::Status(status) => {
                 if status == connections_macos_disabled_hint() {
                     self.shell_status = status;
-                    self.navigate_to_screen(TerminalScreen::Settings);
+                    self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
                 } else {
                     self.shell_status = status;
                 }
@@ -6100,9 +6032,9 @@ impl RobcoNativeApp {
         let event = draw_default_apps_screen(
             ctx,
             &self.settings.draft,
-            &mut self.terminal_default_apps_idx,
-            &mut self.terminal_default_app_choice_idx,
-            &mut self.terminal_default_app_slot,
+            &mut self.terminal_nav.default_apps_idx,
+            &mut self.terminal_nav.default_app_choice_idx,
+            &mut self.terminal_nav.default_app_slot,
             &self.shell_status,
             layout.cols,
             layout.rows,
@@ -6118,23 +6050,21 @@ impl RobcoNativeApp {
         match event {
             DefaultAppsEvent::None => {}
             DefaultAppsEvent::Back => {
-                self.navigate_to_screen(TerminalScreen::Settings);
-                self.terminal_settings_idx = 0;
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
             }
             DefaultAppsEvent::OpenSlot(slot) => {
                 crate::sound::play_navigate();
-                self.terminal_default_app_slot = Some(slot);
-                self.terminal_default_app_choice_idx = 0;
+                self.terminal_nav.default_app_slot = Some(slot);
+                self.terminal_nav.default_app_choice_idx = 0;
             }
             DefaultAppsEvent::CloseSlotPicker => {
                 crate::sound::play_navigate();
-                self.terminal_default_app_slot = None;
+                self.terminal_nav.default_app_slot = None;
             }
             DefaultAppsEvent::SetBinding { slot, binding } => {
                 apply_default_app_binding(&mut self.settings.draft, slot, binding);
                 self.persist_native_settings();
-                self.terminal_default_app_slot = None;
+                self.terminal_nav.default_app_slot = None;
             }
             DefaultAppsEvent::PromptCustom(slot) => {
                 self.open_input_prompt(
@@ -6164,9 +6094,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         ) {
-            self.navigate_to_screen(TerminalScreen::Settings);
-            self.terminal_settings_idx = 0;
-            self.apply_status_update(clear_shell_status());
+            self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
         }
     }
 
@@ -6178,7 +6106,7 @@ impl RobcoNativeApp {
             "Network",
             Some("Select Network Program"),
             &entries,
-            &mut self.terminal_network_idx,
+            &mut self.terminal_nav.network_idx,
             &self.shell_status,
             layout.cols,
             layout.rows,
@@ -6215,7 +6143,7 @@ impl RobcoNativeApp {
             "Games",
             Some("Select Game"),
             &entries,
-            &mut self.terminal_games_idx,
+            &mut self.terminal_nav.games_idx,
             &self.shell_status,
             layout.cols,
             layout.rows,
@@ -6300,7 +6228,7 @@ impl RobcoNativeApp {
                 self.terminal_nuke_codes = fetch_nuke_codes();
             }
             NukeCodesEvent::Back => {
-                self.navigate_to_screen(self.terminal_nuke_codes_return);
+                self.navigate_to_screen(self.terminal_nav.nuke_codes_return_screen);
                 self.apply_status_update(clear_shell_status());
             }
         }
@@ -6356,9 +6284,11 @@ impl RobcoNativeApp {
         match event {
             InstallerEvent::None => {}
             InstallerEvent::BackToMainMenu => {
-                self.terminal_installer.reset();
-                self.navigate_to_screen(TerminalScreen::MainMenu);
-                self.apply_status_update(clear_shell_status());
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::MainMenu,
+                    0,
+                    true,
+                ));
             }
             InstallerEvent::OpenSearchPrompt => {
                 self.open_input_prompt(
@@ -6442,13 +6372,13 @@ impl RobcoNativeApp {
 
     fn draw_terminal_user_management(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let mode = self.terminal_user_management_mode.clone();
+        let mode = self.terminal_nav.user_management_mode.clone();
         let screen = user_management_screen_for_mode(
             &mode,
             self.session.as_ref().map(|s| s.username.as_str()),
             load_hacking_difficulty(),
         );
-        let mut selected = self.terminal_user_management_idx.min(
+        let mut selected = self.terminal_nav.user_management_idx.min(
             screen
                 .items
                 .iter()
@@ -6475,7 +6405,7 @@ impl RobcoNativeApp {
             layout.content_col,
             &self.shell_status,
         );
-        self.terminal_user_management_idx = selected;
+        self.terminal_nav.user_management_idx = selected;
         if let Some(idx) = activated {
             let selected_label = refs[idx].clone();
             match handle_user_management_selection(
@@ -6497,9 +6427,8 @@ impl RobcoNativeApp {
                     self.set_user_management_mode(mode, selected_idx);
                 }
                 UserManagementAction::BackToSettings => {
-                    self.navigate_to_screen(TerminalScreen::Settings);
-                    self.terminal_settings_idx = 0;
-                    self.terminal_user_management_idx = 0;
+                    self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+                    self.terminal_nav.user_management_idx = 0;
                 }
                 UserManagementAction::CreateWithMethod { username, method } => match method {
                     crate::core::auth::AuthMethod::Password => {
@@ -11021,7 +10950,7 @@ impl eframe::App for RobcoNativeApp {
         self.dispatch_context_menu_action(ctx);
 
         if !self.desktop_mode_open
-            && !matches!(self.terminal_screen, TerminalScreen::PtyApp)
+            && !matches!(self.terminal_nav.screen, TerminalScreen::PtyApp)
             && !self.editor.open
             && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
         {
@@ -11040,14 +10969,14 @@ impl eframe::App for RobcoNativeApp {
             self.draw_desktop(ctx);
         } else {
             self.draw_terminal_status_bar(ctx);
-            if self.suppress_next_menu_submit {
+            if self.terminal_nav.suppress_next_menu_submit {
                 ctx.input_mut(|i| {
                     i.consume_key(egui::Modifiers::NONE, Key::Enter);
                     i.consume_key(egui::Modifiers::NONE, Key::Space);
                 });
-                self.suppress_next_menu_submit = false;
+                self.terminal_nav.suppress_next_menu_submit = false;
             }
-            match self.terminal_screen {
+            match self.terminal_nav.screen {
                 TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
                 TerminalScreen::Applications => self.draw_terminal_applications(ctx),
                 TerminalScreen::Documents => self.draw_terminal_documents(ctx),
@@ -11201,10 +11130,10 @@ mod tests {
         } else {
             None
         };
-        app.main_menu_idx = idx;
-        app.terminal_screen = screen;
-        app.terminal_settings_idx = idx;
-        app.terminal_user_management_idx = idx;
+        app.terminal_nav.main_menu_idx = idx;
+        app.terminal_nav.screen = screen;
+        app.terminal_nav.settings_idx = idx;
+        app.terminal_nav.user_management_idx = idx;
         app.file_manager.open = true;
         app.file_manager.cwd = PathBuf::from(format!("/tmp/{tag}"));
         app.file_manager.selected = Some(PathBuf::from(format!("/tmp/{tag}/selected.txt")));
@@ -11269,10 +11198,10 @@ mod tests {
         app.start_leaf_selected = 2;
         app.start_open_submenu = None;
         app.start_open_leaf = Some(StartLeaf::Games);
-        app.main_menu_idx = 3;
-        app.terminal_screen = TerminalScreen::Connections;
-        app.terminal_settings_idx = 2;
-        app.terminal_user_management_idx = 4;
+        app.terminal_nav.main_menu_idx = 3;
+        app.terminal_nav.screen = TerminalScreen::Connections;
+        app.terminal_nav.settings_idx = 2;
+        app.terminal_nav.user_management_idx = 4;
         app.session_leader_until = Some(Instant::now() + Duration::from_millis(500));
         app.shell_status = "status".to_string();
         app.terminal_prompt = Some(TerminalPrompt {
@@ -11315,10 +11244,10 @@ mod tests {
         app.start_leaf_selected = 0;
         app.start_open_submenu = None;
         app.start_open_leaf = None;
-        app.main_menu_idx = 0;
-        app.terminal_screen = TerminalScreen::MainMenu;
-        app.terminal_settings_idx = 0;
-        app.terminal_user_management_idx = 0;
+        app.terminal_nav.main_menu_idx = 0;
+        app.terminal_nav.screen = TerminalScreen::MainMenu;
+        app.terminal_nav.settings_idx = 0;
+        app.terminal_nav.user_management_idx = 0;
         app.session_leader_until = None;
         app.shell_status.clear();
         app.terminal_prompt = None;
@@ -11358,10 +11287,10 @@ mod tests {
         assert_eq!(app.start_leaf_selected, 2);
         assert_eq!(app.start_open_submenu, None);
         assert_eq!(app.start_open_leaf, Some(StartLeaf::Games));
-        assert_eq!(app.main_menu_idx, 3);
-        assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
-        assert_eq!(app.terminal_settings_idx, 2);
-        assert_eq!(app.terminal_user_management_idx, 4);
+        assert_eq!(app.terminal_nav.main_menu_idx, 3);
+        assert!(matches!(app.terminal_nav.screen, TerminalScreen::Connections));
+        assert_eq!(app.terminal_nav.settings_idx, 2);
+        assert_eq!(app.terminal_nav.user_management_idx, 4);
         assert!(app.session_leader_until.is_some());
         assert_eq!(app.shell_status, "status");
         assert!(app.terminal_prompt.is_some());
@@ -11393,24 +11322,24 @@ mod tests {
         session::set_active(s1);
         assert!(app.sync_active_session_identity());
         assert!(app.restore_active_session_runtime_if_any());
-        assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
-        assert_eq!(app.main_menu_idx, 2);
+        assert!(matches!(app.terminal_nav.screen, TerminalScreen::Settings));
+        assert_eq!(app.terminal_nav.main_menu_idx, 2);
         assert_eq!(app.editor.text, "u1-a");
         assert_eq!(app.editor.ui.find_query, "find-u1-a");
 
         session::request_switch(s2);
         app.apply_pending_session_switch();
         assert_eq!(session::active_idx(), s2);
-        assert!(matches!(app.terminal_screen, TerminalScreen::Connections));
-        assert_eq!(app.main_menu_idx, 7);
+        assert!(matches!(app.terminal_nav.screen, TerminalScreen::Connections));
+        assert_eq!(app.terminal_nav.main_menu_idx, 7);
         assert_eq!(app.editor.text, "u2-b");
         assert_eq!(app.editor.ui.find_query, "find-u2-b");
 
         session::request_switch(s1);
         app.apply_pending_session_switch();
         assert_eq!(session::active_idx(), s1);
-        assert!(matches!(app.terminal_screen, TerminalScreen::Settings));
-        assert_eq!(app.main_menu_idx, 2);
+        assert!(matches!(app.terminal_nav.screen, TerminalScreen::Settings));
+        assert_eq!(app.terminal_nav.main_menu_idx, 2);
         assert_eq!(app.editor.text, "u1-a");
         assert_eq!(app.editor.ui.find_query, "find-u1-a");
     }
@@ -11447,10 +11376,10 @@ mod tests {
         assert_eq!(session::active_idx(), 1);
         assert_eq!(session::active_username().as_deref(), Some("u2"));
         assert!(matches!(
-            app.terminal_screen,
+            app.terminal_nav.screen,
             TerminalScreen::ProgramInstaller
         ));
-        assert_eq!(app.main_menu_idx, 5);
+        assert_eq!(app.terminal_nav.main_menu_idx, 5);
         assert_eq!(app.editor.text, "u2");
         assert_eq!(app.editor.ui.find_query, "find-u2");
         assert_eq!(app.shell_status, "Closed session 3.");
@@ -11505,21 +11434,21 @@ mod tests {
             session::set_active(s1);
             assert!(app.sync_active_session_identity());
             assert!(app.restore_active_session_runtime_if_any());
-            assert_eq!(app.terminal_screen, screen);
+            assert_eq!(app.terminal_nav.screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
             assert_eq!(app.editor.ui.find_query, format!("find-u1-{idx}"));
 
             session::request_switch(s2);
             app.apply_pending_session_switch();
             assert_eq!(session::active_idx(), s2);
-            assert!(matches!(app.terminal_screen, TerminalScreen::MainMenu));
+            assert!(matches!(app.terminal_nav.screen, TerminalScreen::MainMenu));
             assert_eq!(app.editor.text, format!("u2-{idx}"));
             assert_eq!(app.editor.ui.find_query, format!("find-u2-{idx}"));
 
             session::request_switch(s1);
             app.apply_pending_session_switch();
             assert_eq!(session::active_idx(), s1);
-            assert_eq!(app.terminal_screen, screen);
+            assert_eq!(app.terminal_nav.screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
             assert_eq!(app.editor.ui.find_query, format!("find-u1-{idx}"));
         }
@@ -11538,8 +11467,8 @@ mod tests {
 
         session::set_active(s1);
         assert!(app.sync_active_session_identity());
-        app.terminal_screen = TerminalScreen::NukeCodes;
-        app.terminal_nuke_codes_return = TerminalScreen::Applications;
+        app.terminal_nav.screen = TerminalScreen::NukeCodes;
+        app.terminal_nav.nuke_codes_return_screen = TerminalScreen::Applications;
         app.terminal_nuke_codes =
             NukeCodesView::Data(crate::native::nuke_codes_screen::NukeCodesData {
                 alpha: "11111111".to_string(),
@@ -11552,16 +11481,19 @@ mod tests {
 
         session::set_active(s2);
         assert!(app.sync_active_session_identity());
-        app.terminal_screen = TerminalScreen::MainMenu;
-        app.terminal_nuke_codes_return = TerminalScreen::MainMenu;
+        app.terminal_nav.screen = TerminalScreen::MainMenu;
+        app.terminal_nav.nuke_codes_return_screen = TerminalScreen::MainMenu;
         app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
         app.park_active_session_runtime();
 
         session::request_switch(s1);
         app.apply_pending_session_switch();
         assert_eq!(session::active_idx(), s1);
-        assert_eq!(app.terminal_screen, TerminalScreen::NukeCodes);
-        assert_eq!(app.terminal_nuke_codes_return, TerminalScreen::Applications);
+        assert_eq!(app.terminal_nav.screen, TerminalScreen::NukeCodes);
+        assert_eq!(
+            app.terminal_nav.nuke_codes_return_screen,
+            TerminalScreen::Applications
+        );
         match &app.terminal_nuke_codes {
             NukeCodesView::Data(data) => {
                 assert_eq!(data.alpha, "11111111");
