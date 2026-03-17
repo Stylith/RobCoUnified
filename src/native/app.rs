@@ -155,7 +155,8 @@ use super::pty_screen::{
     TERMINAL_MODE_PTY_CELL_W,
 };
 use super::retro_ui::{
-    configure_visuals, current_palette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_settings, current_palette, RetroScreen,
+    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
@@ -245,6 +246,12 @@ struct TerminalModeWindow {
 #[derive(Debug, Default, Clone)]
 struct DonkeyKongWindow {
     open: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeAppearanceKey {
+    theme: String,
+    custom_theme_rgb: [u8; 3],
 }
 
 struct AssetCache {
@@ -550,6 +557,15 @@ fn configure_native_fonts(ctx: &Context) {
 
 pub fn apply_native_appearance(ctx: &Context) {
     configure_visuals(ctx);
+    apply_native_text_style(ctx);
+}
+
+fn apply_native_appearance_for_settings(ctx: &Context, settings: &Settings) {
+    configure_visuals_for_settings(ctx, settings);
+    apply_native_text_style(ctx);
+}
+
+fn apply_native_text_style(ctx: &Context) {
     let mut style = (*ctx.style()).clone();
     // Keep global egui zoom fixed. Terminal-mode sizing is handled in RetroScreen
     // to avoid feedback loops between zoom and cell/grid calculations.
@@ -615,6 +631,7 @@ pub struct RobcoNativeApp {
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
     live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
+    last_native_appearance: Option<NativeAppearanceKey>,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
     // Spotlight search
     spotlight_open: bool,
@@ -742,6 +759,7 @@ impl Default for RobcoNativeApp {
             desktop_icon_layout_cache: None,
             live_desktop_file_manager_settings,
             live_hacking_difficulty,
+            last_native_appearance: None,
             appearance_tab: 0,
             spotlight_open: false,
             spotlight_query: String::new(),
@@ -768,6 +786,18 @@ impl RobcoNativeApp {
         self.settings.draft = draft;
         self.sync_runtime_settings_cache();
         self.invalidate_desktop_icon_layout_cache();
+    }
+
+    fn sync_native_appearance(&mut self, ctx: &Context) {
+        let key = NativeAppearanceKey {
+            theme: self.settings.draft.theme.clone(),
+            custom_theme_rgb: self.settings.draft.custom_theme_rgb,
+        };
+        if self.last_native_appearance.as_ref() == Some(&key) {
+            return;
+        }
+        apply_native_appearance_for_settings(ctx, &self.settings.draft);
+        self.last_native_appearance = Some(key);
     }
 
     fn default_desktop_icon_positions(
@@ -10899,7 +10929,7 @@ impl eframe::App for RobcoNativeApp {
             }
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
         }
-        apply_native_appearance(ctx);
+        self.sync_native_appearance(ctx);
 
         if let Some(flash) = &self.terminal_flash {
             if Instant::now() >= flash.until {

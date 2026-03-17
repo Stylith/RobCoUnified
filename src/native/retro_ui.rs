@@ -1,4 +1,4 @@
-use crate::config::current_theme_color;
+use crate::config::{current_theme_color, theme_color_for_settings, Settings};
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
@@ -47,8 +47,8 @@ fn scale(color: Color32, factor: f32) -> Color32 {
     )
 }
 
-pub fn current_palette() -> RetroPalette {
-    let fg = color32_from_theme(current_theme_color());
+fn palette_for_theme_color(color: Color) -> RetroPalette {
+    let fg = color32_from_theme(color);
     let brightness = (fg.r() as u16 + fg.g() as u16 + fg.b() as u16) / 3;
     let selected_fg = if brightness > 96 {
         Color32::BLACK
@@ -66,6 +66,14 @@ pub fn current_palette() -> RetroPalette {
         active_bg: scale(fg, 0.26),
         selection_bg: scale(fg, 0.26),
     }
+}
+
+pub fn current_palette() -> RetroPalette {
+    palette_for_theme_color(current_theme_color())
+}
+
+pub fn palette_for_settings(settings: &Settings) -> RetroPalette {
+    palette_for_theme_color(theme_color_for_settings(settings))
 }
 
 pub struct RetroScreen {
@@ -376,8 +384,7 @@ impl RetroScreen {
     }
 }
 
-pub fn configure_visuals(ctx: &Context) {
-    let palette = current_palette();
+fn apply_visuals_with_palette(ctx: &Context, palette: RetroPalette) {
     let mut visuals = egui::Visuals::dark();
     visuals.override_text_color = Some(palette.fg);
     visuals.window_fill = palette.bg;
@@ -395,4 +402,12 @@ pub fn configure_visuals(ctx: &Context) {
     visuals.extreme_bg_color = palette.bg;
     visuals.faint_bg_color = palette.panel;
     ctx.set_visuals(visuals);
+}
+
+pub fn configure_visuals(ctx: &Context) {
+    apply_visuals_with_palette(ctx, current_palette());
+}
+
+pub fn configure_visuals_for_settings(ctx: &Context, settings: &Settings) {
+    apply_visuals_with_palette(ctx, palette_for_settings(settings));
 }
