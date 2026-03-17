@@ -5430,6 +5430,7 @@ impl RobcoNativeApp {
                 );
                 if response.clicked() {
                     self.close_start_menu();
+                    self.spotlight_open = false;
                 }
             });
     }
