@@ -193,6 +193,13 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -200,10 +207,16 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Build release notes from changelog
+        shell: bash
+        run: |
+          chmod +x scripts/release-notes-from-changelog.sh
+          scripts/release-notes-from-changelog.sh "${GITHUB_REF_NAME}" > release-notes.md
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*.zip
-          body_path: RELEASE_NOTES.md
+          body_path: release-notes.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-rc.') }}
