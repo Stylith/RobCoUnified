@@ -1663,9 +1663,18 @@ impl RobcoNativeApp {
             DesktopWindow::TerminalMode,
             DesktopWindow::PtyApp,
         ];
-        ORDER.into_iter().find(|window| {
+        ORDER.into_iter().rev().find(|window| {
             self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
         })
+    }
+
+    fn focus_desktop_window(&mut self, ctx: Option<&Context>, window: DesktopWindow) {
+        self.desktop_active_window = Some(window);
+        if let Some(ctx) = ctx {
+            let layer_id =
+                egui::LayerId::new(egui::Order::Middle, self.desktop_window_egui_id(window));
+            ctx.move_to_top(layer_id);
+        }
     }
 
     fn sync_desktop_active_window(&mut self) {
@@ -1710,7 +1719,7 @@ impl RobcoNativeApp {
             (i.pointer.primary_clicked() || i.pointer.secondary_clicked()) && contains_pointer
         });
         if clicked_inside {
-            self.desktop_active_window = Some(window);
+            self.focus_desktop_window(Some(ctx), window);
         }
     }
 
@@ -5122,7 +5131,7 @@ impl RobcoNativeApp {
                 } else if !self.desktop_window_is_open(*window) {
                     self.open_desktop_window(*window);
                 } else {
-                    self.desktop_active_window = Some(*window);
+                    self.focus_desktop_window(Some(ctx), *window);
                     self.close_desktop_overlays();
                 }
             }
@@ -5136,7 +5145,7 @@ impl RobcoNativeApp {
                     self.set_desktop_window_minimized(*window, true);
                     self.close_desktop_overlays();
                 } else {
-                    self.desktop_active_window = Some(*window);
+                    self.focus_desktop_window(Some(ctx), *window);
                     self.close_desktop_overlays();
                 }
             }
@@ -11801,6 +11810,36 @@ mod tests {
         assert_eq!(app.desktop_active_window, Some(DesktopWindow::FileManager));
         assert!(!app.start_open);
         assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn next_active_window_prefers_topmost_visible_window() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.open = true;
+        app.settings.open = true;
+        app.applications.open = true;
+
+        assert_eq!(
+            app.first_open_desktop_window(),
+            Some(DesktopWindow::Applications)
+        );
+    }
+
+    #[test]
+    fn minimizing_active_window_activates_next_topmost_window() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.open = true;
+        app.settings.open = true;
+        app.applications.open = true;
+        app.desktop_active_window = Some(DesktopWindow::Applications);
+
+        app.set_desktop_window_minimized(DesktopWindow::Applications, true);
+
+        assert_eq!(app.desktop_active_window, Some(DesktopWindow::Settings));
     }
 
     #[test]
