@@ -70,12 +70,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-S".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -110,12 +107,9 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec![
-                "yay".into(),
-                "-R".into(),
-                "--noconfirm".into(),
-                pkg.into(),
-            ],
+            PackageManager::Yay => {
+                vec!["yay".into(), "-R".into(), "--noconfirm".into(), pkg.into()]
+            }
             PackageManager::Pacman => vec![
                 "sudo".into(),
                 "pacman".into(),
@@ -150,8 +144,19 @@ impl PackageManager {
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => vec!["yay".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
-            PackageManager::Pacman => vec!["sudo".into(), "pacman".into(), "-Syu".into(), "--noconfirm".into(), pkg.into()],
+            PackageManager::Yay => vec![
+                "yay".into(),
+                "-Syu".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
+            PackageManager::Pacman => vec![
+                "sudo".into(),
+                "pacman".into(),
+                "-Syu".into(),
+                "--noconfirm".into(),
+                pkg.into(),
+            ],
             PackageManager::Zypper => vec![
                 "sudo".into(),
                 "zypper".into(),

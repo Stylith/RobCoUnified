@@ -29,7 +29,13 @@ use super::desktop_settings_service::{
 use super::desktop_status_service::{
     cancelled_shell_status, clear_settings_status, clear_shell_status,
     invalid_input_settings_status, invalid_input_shell_status, mirror_shell_to_settings,
-    saved_settings_status, saved_shell_status, NativeStatusUpdate, NativeStatusValue,
+    saved_settings_status, saved_shell_status, settings_status, shell_status,
+    NativeStatusUpdate, NativeStatusValue,
+};
+use super::desktop_user_service::{
+    create_user as create_desktop_user, delete_user as delete_desktop_user,
+    sorted_user_records, sorted_usernames, toggle_user_admin as toggle_desktop_user_admin,
+    update_user_auth_method, user_auth_method_label, user_exists,
 };
 use super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
@@ -112,7 +118,7 @@ use crate::connections::{
     DiscoveredConnection,
 };
 use crate::core::auth::{
-    ensure_default_admin, load_users, read_session, save_users, AuthMethod, UserRecord,
+    ensure_default_admin, load_users, read_session, AuthMethod, UserRecord,
 };
 use crate::core::hacking::HackingGame;
 use crate::default_apps::{
@@ -4118,28 +4124,9 @@ impl RobcoNativeApp {
         self.terminal_prompt = Some(request.to_terminal_prompt());
     }
 
-    fn save_user_and_status(&mut self, username: &str, user: UserRecord, status: String) {
-        let mut db = load_users();
-        db.insert(username.to_string(), user);
-        save_users(&db);
-        let _ = std::fs::create_dir_all(crate::config::users_dir().join(username));
-        crate::config::mark_default_apps_prompt_pending(username);
-        self.shell_status = status;
-    }
-
-    fn update_user_record<F: FnOnce(&mut UserRecord)>(
-        &mut self,
-        username: &str,
-        f: F,
-        status: String,
-    ) {
-        let mut db = load_users();
-        if let Some(record) = db.get_mut(username) {
-            f(record);
-            save_users(&db);
-            self.shell_status = status;
-        } else {
-            self.shell_status = format!("Unknown user '{username}'.");
+    fn apply_shell_status_result(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(status) | Err(status) => self.apply_status_update(shell_status(status)),
         }
     }
 
@@ -5119,12 +5106,11 @@ impl RobcoNativeApp {
                 let username = raw_username.trim().to_string();
                 self.terminal_prompt = None;
                 if username.is_empty() {
-                    self.shell_status = "Username cannot be empty.".to_string();
+                    self.apply_status_update(shell_status("Username cannot be empty."));
                     return;
                 }
-                let db = load_users();
-                if db.contains_key(&username) {
-                    self.shell_status = "User already exists.".to_string();
+                if user_exists(&username) {
+                    self.apply_status_update(shell_status("User already exists."));
                     return;
                 }
                 self.set_user_management_mode(UserManagementMode::CreateAuthMethod { username }, 0);
@@ -5133,7 +5119,7 @@ impl RobcoNativeApp {
             PromptOutcome::CreatePasswordFirst { username, password } => {
                 self.terminal_prompt = None;
                 if password.is_empty() {
-                    self.shell_status = "Password cannot be empty.".to_string();
+                    self.apply_status_update(shell_status("Password cannot be empty."));
                     return;
                 }
                 self.open_password_prompt_with_action(
@@ -5152,24 +5138,20 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmation != first_password {
-                    self.shell_status = "Passwords do not match.".to_string();
+                    self.apply_status_update(shell_status("Passwords do not match."));
                     return;
                 }
-                self.save_user_and_status(
+                self.apply_shell_status_result(create_desktop_user(
                     &username,
-                    UserRecord {
-                        password_hash: crate::core::auth::hash_password(&first_password),
-                        is_admin: false,
-                        auth_method: crate::core::auth::AuthMethod::Password,
-                    },
-                    format!("User '{username}' created."),
-                );
+                    AuthMethod::Password,
+                    Some(&first_password),
+                ));
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ResetPasswordFirst { username, password } => {
                 self.terminal_prompt = None;
                 if password.is_empty() {
-                    self.shell_status = "Password cannot be empty.".to_string();
+                    self.apply_status_update(shell_status("Password cannot be empty."));
                     return;
                 }
                 self.open_password_prompt_with_action(
@@ -5188,23 +5170,19 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmation != first_password {
-                    self.shell_status = "Passwords do not match.".to_string();
+                    self.apply_status_update(shell_status("Passwords do not match."));
                     return;
                 }
-                self.update_user_record(
-                    &username,
-                    |record| {
-                        record.password_hash = crate::core::auth::hash_password(&first_password);
-                        record.auth_method = crate::core::auth::AuthMethod::Password;
-                    },
-                    "Password updated.".to_string(),
+                self.apply_shell_status_result(
+                    update_user_auth_method(&username, AuthMethod::Password, Some(&first_password))
+                        .map(|_| "Password updated.".to_string()),
                 );
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ChangeAuthPasswordFirst { username, password } => {
                 self.terminal_prompt = None;
                 if password.is_empty() {
-                    self.shell_status = "Password cannot be empty.".to_string();
+                    self.apply_status_update(shell_status("Password cannot be empty."));
                     return;
                 }
                 self.open_password_prompt_with_action(
@@ -5223,17 +5201,14 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmation != first_password {
-                    self.shell_status = "Passwords do not match.".to_string();
+                    self.apply_status_update(shell_status("Passwords do not match."));
                     return;
                 }
-                self.update_user_record(
+                self.apply_shell_status_result(update_user_auth_method(
                     &username,
-                    |record| {
-                        record.password_hash = crate::core::auth::hash_password(&first_password);
-                        record.auth_method = crate::core::auth::AuthMethod::Password;
-                    },
-                    format!("Auth method updated for '{username}'."),
-                );
+                    AuthMethod::Password,
+                    Some(&first_password),
+                ));
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
             PromptOutcome::ConfirmDeleteUser {
@@ -5242,10 +5217,7 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmed {
-                    let mut db = load_users();
-                    db.remove(&username);
-                    save_users(&db);
-                    self.shell_status = format!("User '{username}' deleted.");
+                    self.apply_shell_status_result(delete_desktop_user(&username));
                 }
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
@@ -5255,17 +5227,7 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmed {
-                    let mut db = load_users();
-                    if let Some(record) = db.get_mut(&username) {
-                        record.is_admin = !record.is_admin;
-                        let label = if record.is_admin {
-                            "granted"
-                        } else {
-                            "revoked"
-                        };
-                        save_users(&db);
-                        self.shell_status = format!("Admin {label} for '{username}'.");
-                    }
+                    self.apply_shell_status_result(toggle_desktop_user_admin(&username));
                 }
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
@@ -7052,40 +7014,28 @@ impl RobcoNativeApp {
                         );
                     }
                     crate::core::auth::AuthMethod::NoPassword => {
-                        self.save_user_and_status(
+                        self.apply_shell_status_result(create_desktop_user(
                             &username,
-                            UserRecord {
-                                password_hash: String::new(),
-                                is_admin: false,
-                                auth_method: method,
-                            },
-                            format!("User '{username}' created."),
-                        );
+                            method,
+                            None,
+                        ));
                         self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
-                        self.save_user_and_status(
+                        self.apply_shell_status_result(create_desktop_user(
                             &username,
-                            UserRecord {
-                                password_hash: String::new(),
-                                is_admin: false,
-                                auth_method: crate::core::auth::AuthMethod::HackingMinigame,
-                            },
-                            format!("User '{username}' created."),
-                        );
+                            crate::core::auth::AuthMethod::HackingMinigame,
+                            None,
+                        ));
                         self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                 },
                 UserManagementAction::ApplyCreateHacking { username } => {
-                    self.save_user_and_status(
+                    self.apply_shell_status_result(create_desktop_user(
                         &username,
-                        UserRecord {
-                            password_hash: String::new(),
-                            is_admin: false,
-                            auth_method: crate::core::auth::AuthMethod::HackingMinigame,
-                        },
-                        format!("User '{username}' created."),
-                    );
+                        crate::core::auth::AuthMethod::HackingMinigame,
+                        None,
+                    ));
                     self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementAction::ConfirmDeleteUser { username } => {
@@ -7111,37 +7061,28 @@ impl RobcoNativeApp {
                         );
                     }
                     crate::core::auth::AuthMethod::NoPassword => {
-                        self.update_user_record(
+                        self.apply_shell_status_result(update_user_auth_method(
                             &username,
-                            |record| {
-                                record.auth_method = crate::core::auth::AuthMethod::NoPassword;
-                                record.password_hash.clear();
-                            },
-                            format!("Auth method updated for '{username}'."),
-                        );
+                            crate::core::auth::AuthMethod::NoPassword,
+                            None,
+                        ));
                         self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                     crate::core::auth::AuthMethod::HackingMinigame => {
-                        self.update_user_record(
+                        self.apply_shell_status_result(update_user_auth_method(
                             &username,
-                            |record| {
-                                record.auth_method = crate::core::auth::AuthMethod::HackingMinigame;
-                                record.password_hash.clear();
-                            },
-                            format!("Auth method updated for '{username}'."),
-                        );
+                            crate::core::auth::AuthMethod::HackingMinigame,
+                            None,
+                        ));
                         self.set_user_management_mode(UserManagementMode::Root, 0);
                     }
                 },
                 UserManagementAction::ApplyChangeAuthHacking { username } => {
-                    self.update_user_record(
+                    self.apply_shell_status_result(update_user_auth_method(
                         &username,
-                        |record| {
-                            record.auth_method = crate::core::auth::AuthMethod::HackingMinigame;
-                            record.password_hash.clear();
-                        },
-                        format!("Auth method updated for '{username}'."),
-                    );
+                        crate::core::auth::AuthMethod::HackingMinigame,
+                        None,
+                    ));
                     self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementAction::ConfirmToggleAdmin { username } => {
@@ -9430,18 +9371,13 @@ impl RobcoNativeApp {
     }
 
     fn draw_settings_user_view_panel(&mut self, ui: &mut egui::Ui) {
-        let mut users: Vec<(String, UserRecord)> = load_users().into_iter().collect();
-        users.sort_by(|a, b| a.0.cmp(&b.0));
+        let users = sorted_user_records();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (name, record) in users {
                 ui.label(format!(
                     "{} | auth: {} | admin: {}",
                     name,
-                    match record.auth_method {
-                        AuthMethod::Password => "Password",
-                        AuthMethod::NoPassword => "No Password",
-                        AuthMethod::HackingMinigame => "Hacking Minigame",
-                    },
+                    user_auth_method_label(&record.auth_method),
                     if record.is_admin { "yes" } else { "no" }
                 ));
             }
@@ -9449,8 +9385,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_settings_user_create_panel(&mut self, ui: &mut egui::Ui) {
-        let mut users: Vec<String> = load_users().keys().cloned().collect();
-        users.sort();
+        let users = sorted_usernames();
         ui.group(|ui| {
             Self::settings_two_columns(ui, |left, right| {
                 let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
@@ -9464,28 +9399,19 @@ impl RobcoNativeApp {
                     left.label("Authentication");
                     egui::ComboBox::from_id_salt("native_settings_user_create_auth")
                         .selected_text(
-                            RichText::new(match self.settings.user_create_auth {
-                                AuthMethod::Password => "Password",
-                                AuthMethod::NoPassword => "No Password",
-                                AuthMethod::HackingMinigame => "Hacking Minigame",
-                            })
+                            RichText::new(user_auth_method_label(&self.settings.user_create_auth))
                             .color(current_palette().fg),
                         )
                         .show_ui(left, |ui| {
                             Self::apply_settings_control_style(ui);
                             for auth in [
-                                AuthMethod::Password,
-                                AuthMethod::NoPassword,
-                                AuthMethod::HackingMinigame,
-                            ] {
-                                let label = match auth {
-                                    AuthMethod::Password => "Password",
-                                    AuthMethod::NoPassword => "No Password",
-                                    AuthMethod::HackingMinigame => "Hacking Minigame",
-                                };
+                                    AuthMethod::Password,
+                                    AuthMethod::NoPassword,
+                                    AuthMethod::HackingMinigame,
+                                ] {
                                 if Self::retro_choice_button(
                                     ui,
-                                    label,
+                                    user_auth_method_label(&auth),
                                     self.settings.user_create_auth == auth,
                                 )
                                 .clicked()
@@ -9524,56 +9450,54 @@ impl RobcoNativeApp {
                 }
                 let username = self.settings.user_create_username.trim().to_string();
                 if username.is_empty() {
-                    self.settings.status = "Username cannot be empty.".to_string();
+                    self.apply_status_update(settings_status("Username cannot be empty."));
                 } else if users.iter().any(|name| name == &username) {
-                    self.settings.status = "User already exists.".to_string();
+                    self.apply_status_update(settings_status("User already exists."));
                 } else {
                     match self.settings.user_create_auth {
                         AuthMethod::Password => {
                             if self.settings.user_create_password.is_empty() {
-                                self.settings.status = "Password cannot be empty.".to_string();
+                                self.apply_status_update(settings_status("Password cannot be empty."));
                             } else if self.settings.user_create_password
                                 != self.settings.user_create_password_confirm
                             {
-                                self.settings.status = "Passwords do not match.".to_string();
+                                self.apply_status_update(settings_status("Passwords do not match."));
                             } else {
-                                self.save_user_and_status(
+                                match create_desktop_user(
                                     &username,
-                                    UserRecord {
-                                        password_hash: crate::core::auth::hash_password(
-                                            &self.settings.user_create_password,
-                                        ),
-                                        is_admin: false,
-                                        auth_method: AuthMethod::Password,
-                                    },
-                                    format!("User '{username}' created."),
-                                );
-                                self.apply_status_update(mirror_shell_to_settings(
-                                    &self.shell_status,
-                                ));
-                                self.settings.user_create_username.clear();
-                                self.settings.user_create_password.clear();
-                                self.settings.user_create_password_confirm.clear();
-                                self.settings.user_selected = username;
-                                self.settings.user_selected_loaded_for.clear();
+                                    AuthMethod::Password,
+                                    Some(&self.settings.user_create_password),
+                                ) {
+                                    Ok(status) => {
+                                        self.apply_status_update(settings_status(status));
+                                        self.settings.user_create_username.clear();
+                                        self.settings.user_create_password.clear();
+                                        self.settings.user_create_password_confirm.clear();
+                                        self.settings.user_selected = username;
+                                        self.settings.user_selected_loaded_for.clear();
+                                    }
+                                    Err(status) => {
+                                        self.apply_status_update(settings_status(status));
+                                    }
+                                }
                             }
                         }
                         AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
-                            self.save_user_and_status(
+                            match create_desktop_user(
                                 &username,
-                                UserRecord {
-                                    password_hash: String::new(),
-                                    is_admin: false,
-                                    auth_method: self.settings.user_create_auth.clone(),
-                                },
-                                format!("User '{username}' created."),
-                            );
-                            self.apply_status_update(mirror_shell_to_settings(
-                                &self.shell_status,
-                            ));
-                            self.settings.user_create_username.clear();
-                            self.settings.user_selected = username;
-                            self.settings.user_selected_loaded_for.clear();
+                                self.settings.user_create_auth.clone(),
+                                None,
+                            ) {
+                                Ok(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                    self.settings.user_create_username.clear();
+                                    self.settings.user_selected = username;
+                                    self.settings.user_selected_loaded_for.clear();
+                                }
+                                Err(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                }
+                            }
                         }
                     }
                 }
@@ -9583,8 +9507,7 @@ impl RobcoNativeApp {
 
     fn draw_settings_user_edit_panel(&mut self, ui: &mut egui::Ui, current_only: bool) {
         let current_username = self.session.as_ref().map(|s| s.username.clone());
-        let mut users: Vec<(String, UserRecord)> = load_users().into_iter().collect();
-        users.sort_by(|a, b| a.0.cmp(&b.0));
+        let users = sorted_user_records();
         let names: Vec<String> = users.iter().map(|(name, _)| name.clone()).collect();
         if names.is_empty() {
             ui.small("No users found.");
@@ -9652,11 +9575,7 @@ impl RobcoNativeApp {
                         {
                             left.small(format!(
                                 "Current auth: {} | Admin: {}",
-                                match record.auth_method {
-                                    AuthMethod::Password => "Password",
-                                    AuthMethod::NoPassword => "No Password",
-                                    AuthMethod::HackingMinigame => "Hacking Minigame",
-                                },
+                                user_auth_method_label(&record.auth_method),
                                 if record.is_admin { "yes" } else { "no" }
                             ));
                         }
@@ -9664,11 +9583,7 @@ impl RobcoNativeApp {
                         left.label("New Auth");
                         egui::ComboBox::from_id_salt("native_settings_user_edit_auth")
                             .selected_text(
-                                RichText::new(match self.settings.user_edit_auth {
-                                    AuthMethod::Password => "Password",
-                                    AuthMethod::NoPassword => "No Password",
-                                    AuthMethod::HackingMinigame => "Hacking Minigame",
-                                })
+                                RichText::new(user_auth_method_label(&self.settings.user_edit_auth))
                                 .color(current_palette().fg),
                             )
                             .show_ui(left, |ui| {
@@ -9678,14 +9593,9 @@ impl RobcoNativeApp {
                                     AuthMethod::NoPassword,
                                     AuthMethod::HackingMinigame,
                                 ] {
-                                    let label = match auth {
-                                        AuthMethod::Password => "Password",
-                                        AuthMethod::NoPassword => "No Password",
-                                        AuthMethod::HackingMinigame => "Hacking Minigame",
-                                    };
                                     if Self::retro_choice_button(
                                         ui,
-                                        label,
+                                        user_auth_method_label(&auth),
                                         self.settings.user_edit_auth == auth,
                                     )
                                     .clicked()
@@ -9722,45 +9632,43 @@ impl RobcoNativeApp {
                     match self.settings.user_edit_auth {
                         AuthMethod::Password => {
                             if self.settings.user_edit_password.is_empty() {
-                                self.settings.status = "Password cannot be empty.".to_string();
+                                self.apply_status_update(settings_status("Password cannot be empty."));
                             } else if self.settings.user_edit_password
                                 != self.settings.user_edit_password_confirm
                             {
-                                self.settings.status = "Passwords do not match.".to_string();
+                                self.apply_status_update(settings_status("Passwords do not match."));
                             } else {
-                                let password_hash = crate::core::auth::hash_password(
-                                    &self.settings.user_edit_password,
-                                );
-                                self.update_user_record(
+                                match update_user_auth_method(
                                     &username,
-                                    |record| {
-                                        record.password_hash = password_hash;
-                                        record.auth_method = AuthMethod::Password;
-                                    },
-                                    format!("Auth method updated for '{username}'."),
-                                );
-                                self.apply_status_update(mirror_shell_to_settings(
-                                    &self.shell_status,
-                                ));
-                                self.settings.user_edit_password.clear();
-                                self.settings.user_edit_password_confirm.clear();
-                                self.settings.user_selected_loaded_for.clear();
+                                    AuthMethod::Password,
+                                    Some(&self.settings.user_edit_password),
+                                ) {
+                                    Ok(status) => {
+                                        self.apply_status_update(settings_status(status));
+                                        self.settings.user_edit_password.clear();
+                                        self.settings.user_edit_password_confirm.clear();
+                                        self.settings.user_selected_loaded_for.clear();
+                                    }
+                                    Err(status) => {
+                                        self.apply_status_update(settings_status(status));
+                                    }
+                                }
                             }
                         }
                         AuthMethod::NoPassword | AuthMethod::HackingMinigame => {
-                            let new_method = self.settings.user_edit_auth.clone();
-                            self.update_user_record(
+                            match update_user_auth_method(
                                 &username,
-                                |record| {
-                                    record.password_hash.clear();
-                                    record.auth_method = new_method;
-                                },
-                                format!("Auth method updated for '{username}'."),
-                            );
-                            self.apply_status_update(mirror_shell_to_settings(
-                                &self.shell_status,
-                            ));
-                            self.settings.user_selected_loaded_for.clear();
+                                self.settings.user_edit_auth.clone(),
+                                None,
+                            ) {
+                                Ok(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                    self.settings.user_selected_loaded_for.clear();
+                                }
+                                Err(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                }
+                            }
                         }
                     }
                 }
@@ -9768,17 +9676,14 @@ impl RobcoNativeApp {
                 if Self::retro_full_width_button(right, "Toggle Admin").clicked() {
                     if !current_only {
                         let username = self.settings.user_selected.clone();
-                        let mut db = load_users();
-                        if let Some(record) = db.get_mut(&username) {
-                            record.is_admin = !record.is_admin;
-                            let label = if record.is_admin {
-                                "granted"
-                            } else {
-                                "revoked"
-                            };
-                            save_users(&db);
-                            self.settings.status = format!("Admin {label} for '{username}'.");
-                            self.settings.user_selected_loaded_for.clear();
+                        match toggle_desktop_user_admin(&username) {
+                            Ok(status) => {
+                                self.apply_status_update(settings_status(status));
+                                self.settings.user_selected_loaded_for.clear();
+                            }
+                            Err(status) => {
+                                self.apply_status_update(settings_status(status));
+                            }
                         }
                     }
                 }
@@ -9796,16 +9701,21 @@ impl RobcoNativeApp {
                     if delete_user.clicked() {
                         if self.settings.user_delete_confirm == self.settings.user_selected {
                             let username = self.settings.user_selected.clone();
-                            let mut db = load_users();
-                            db.remove(&username);
-                            save_users(&db);
-                            self.settings.status = format!("User '{username}' deleted.");
-                            self.settings.user_delete_confirm.clear();
-                            self.settings.user_selected_loaded_for.clear();
+                            match delete_desktop_user(&username) {
+                                Ok(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                    self.settings.user_delete_confirm.clear();
+                                    self.settings.user_selected_loaded_for.clear();
+                                }
+                                Err(status) => {
+                                    self.apply_status_update(settings_status(status));
+                                }
+                            }
                         } else {
                             self.settings.user_delete_confirm = self.settings.user_selected.clone();
-                            self.settings.status =
-                                "Click Delete User again to confirm.".to_string();
+                            self.apply_status_update(settings_status(
+                                "Click Delete User again to confirm.",
+                            ));
                         }
                     }
                     if current_username

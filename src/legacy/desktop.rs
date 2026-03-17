@@ -5495,7 +5495,9 @@ fn spawn_desktop_pty_with_fallback(
         if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
             let shell_program = &shell_cmd[0];
             let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            if let Ok(session) = crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options) {
+            if let Ok(session) =
+                crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options)
+            {
                 return Ok(session);
             }
         }
@@ -5511,12 +5513,20 @@ fn spawn_desktop_pty_with_fallback(
                 if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(cmd) {
                     let shell_program = &shell_cmd[0];
                     let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-                    return crate::pty::PtySession::spawn(shell_program, &shell_args, cols, rows, options)
-                        .map(|session| {
-                            crate::launcher::remember_shell_preferred(cmd);
-                            session
-                        })
-                        .map_err(|shell_err| anyhow!("launch exited quickly; shell retry failed: {shell_err}"));
+                    return crate::pty::PtySession::spawn(
+                        shell_program,
+                        &shell_args,
+                        cols,
+                        rows,
+                        options,
+                    )
+                    .map(|session| {
+                        crate::launcher::remember_shell_preferred(cmd);
+                        session
+                    })
+                    .map_err(|shell_err| {
+                        anyhow!("launch exited quickly; shell retry failed: {shell_err}")
+                    });
                 }
             }
             Ok(session)

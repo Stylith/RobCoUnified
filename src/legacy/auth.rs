@@ -7,7 +7,7 @@ use crate::ui::{
     MenuResult, Term,
 };
 use anyhow::Result;
-pub use robcos::core::auth::{
+pub use crate::core::auth::{
     clear_session, ensure_default_admin, hash_password, is_admin, load_users, save_users,
     write_session, AuthMethod, UserRecord,
 };

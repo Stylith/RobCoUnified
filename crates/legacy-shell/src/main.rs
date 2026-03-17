@@ -5,36 +5,16 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::backend::CrosstermBackend;
+use robcos::auth::{clear_session, ensure_default_admin, login_screen};
+use robcos::checks::{print_preflight, run_preflight};
+use robcos::config::{get_settings, set_current_user, OpenMode};
+use robcos::ui::{flash_message, run_menu_with_index, MenuResult, Term};
+use robcos::{
+    apps, boot, config, desktop, documents, installer, nuke_codes, pty, session, settings,
+    shell_terminal, sound,
+};
 use std::collections::HashMap;
 use std::io::stdout;
-
-mod apps;
-mod auth;
-mod boot;
-mod checks;
-mod config;
-mod connections;
-mod default_apps;
-mod desktop;
-mod diag;
-mod docedit;
-mod documents;
-mod hacking;
-mod installer;
-mod launcher;
-mod nuke_codes;
-mod pty;
-mod session;
-mod settings;
-mod shell_terminal;
-mod sound;
-mod status;
-mod ui;
-
-use auth::{clear_session, ensure_default_admin, login_screen};
-use checks::{print_preflight, run_preflight};
-use config::{get_settings, set_current_user, OpenMode};
-use ui::{flash_message, run_menu_with_index, MenuResult, Term};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopToolMode {
@@ -401,7 +381,10 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                 Some("RobcOS v0.2.1"),
                 &mut menu_idx,
             )?;
-            terminal_runtime.entry(active_idx).or_default().main_menu_idx = menu_idx;
+            terminal_runtime
+                .entry(active_idx)
+                .or_default()
+                .main_menu_idx = menu_idx;
 
             match result {
                 MenuResult::Back => {

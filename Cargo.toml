@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "crates/legacy-shell", "crates/native-shell"]
+default-members = [".", "crates/legacy-shell", "crates/native-shell"]
+resolver = "2"
+
 [package]
 name = "robcos"
 version = "0.3.2"
@@ -5,15 +10,8 @@ edition = "2021"
 description = "RobCoOS — Fallout-style terminal OS in Rust"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/Stylith/RustCoOS"
-
-[[bin]]
-name = "robcos"
-path = "src/main.rs"
-
-[[bin]]
-name = "robcos-native"
-path = "src/bin/robcos_native.rs"
+repository = "https://github.com/Stylith/RobCoUnified"
+autobins = false
 
 [dependencies]
 ratatui       = "0.29"

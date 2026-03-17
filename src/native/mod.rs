@@ -29,6 +29,7 @@ mod retro_ui;
 mod settings_screen;
 mod shell_actions;
 mod shell_screen;
+mod desktop_user_service;
 mod user_management;
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};

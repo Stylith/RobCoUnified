@@ -1,6 +1,7 @@
 use super::menu::UserManagementMode;
+use super::desktop_user_service::sorted_usernames;
 use crate::config::{hacking_difficulty_label, HackingDifficulty};
-use crate::core::auth::{load_users, AuthMethod};
+use crate::core::auth::AuthMethod;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementAction {
@@ -312,12 +313,10 @@ fn is_hacking_difficulty_label(label: &str) -> bool {
 }
 
 fn user_list_items(current_username: Option<&str>, include_current: bool) -> Vec<String> {
-    let mut users: Vec<String> = load_users()
-        .keys()
-        .filter(|u| include_current || Some(u.as_str()) != current_username)
-        .cloned()
+    let mut users: Vec<String> = sorted_usernames()
+        .into_iter()
+        .filter(|user| include_current || Some(user.as_str()) != current_username)
         .collect();
-    users.sort();
     users.push("Back".to_string());
     users
 }
