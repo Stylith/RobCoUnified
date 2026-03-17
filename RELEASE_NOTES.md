@@ -1,5 +1,6 @@
-RobCoOS 0.4.2 highlights since 0.4.1:
+RobCoOS 0.4.3 highlights since 0.4.2:
 
-- fix the macOS `.app` runtime data path so bundled builds create and read users/settings from Application Support instead of inside the app bundle
-- embed the retro font into the native UI and PTY renderer so standalone app bundles keep the intended typeface without needing repo assets
-- stabilize the native release gate by making document-category service tests independent of global user-scoped config state
+- migrate old macOS app-bundle runtime data from `RobCoOS.app/Contents/MacOS` into Application Support instead of leaving installed apps and users behind
+- merge legacy `users.json` into the new writable runtime directory so a temporary bootstrap admin does not hide existing accounts
+- resolve package manager and runtime tool binaries by absolute path on macOS app launches, so Finder-launched builds can detect Homebrew, Python, and blueutil without depending on shell PATH
+- keep the new changelog-backed release workflow in place for future tags

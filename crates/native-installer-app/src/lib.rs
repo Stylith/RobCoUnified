@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -316,36 +317,39 @@ impl PackageManager {
         }
     }
 
+    fn executable(self) -> String {
+        command_name_or_path(self.name())
+    }
+
     pub fn install_cmd(self, pkg: &str) -> Vec<String> {
+        let exe = self.executable();
         match self {
-            PackageManager::Brew => vec!["brew".into(), "install".into(), pkg.into()],
+            PackageManager::Brew => vec![exe, "install".into(), pkg.into()],
             PackageManager::Apt => vec![
                 "sudo".into(),
-                "apt".into(),
+                exe,
                 "install".into(),
                 "-y".into(),
                 pkg.into(),
             ],
             PackageManager::Dnf => vec![
                 "sudo".into(),
-                "dnf".into(),
+                exe,
                 "install".into(),
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => {
-                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
-            }
+            PackageManager::Yay => vec![exe, "-S".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Pacman => vec![
                 "sudo".into(),
-                "pacman".into(),
+                exe,
                 "-S".into(),
                 "--noconfirm".into(),
                 pkg.into(),
             ],
             PackageManager::Zypper => vec![
                 "sudo".into(),
-                "zypper".into(),
+                exe,
                 "-n".into(),
                 "install".into(),
                 pkg.into(),
@@ -354,85 +358,68 @@ impl PackageManager {
     }
 
     pub fn remove_cmd(self, pkg: &str) -> Vec<String> {
+        let exe = self.executable();
         match self {
-            PackageManager::Brew => vec!["brew".into(), "uninstall".into(), pkg.into()],
-            PackageManager::Apt => vec![
-                "sudo".into(),
-                "apt".into(),
-                "remove".into(),
-                "-y".into(),
-                pkg.into(),
-            ],
-            PackageManager::Dnf => vec![
-                "sudo".into(),
-                "dnf".into(),
-                "remove".into(),
-                "-y".into(),
-                pkg.into(),
-            ],
-            PackageManager::Yay => {
-                vec!["yay".into(), "-R".into(), "--noconfirm".into(), pkg.into()]
+            PackageManager::Brew => vec![exe, "uninstall".into(), pkg.into()],
+            PackageManager::Apt => {
+                vec!["sudo".into(), exe, "remove".into(), "-y".into(), pkg.into()]
             }
+            PackageManager::Dnf => {
+                vec!["sudo".into(), exe, "remove".into(), "-y".into(), pkg.into()]
+            }
+            PackageManager::Yay => vec![exe, "-R".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Pacman => vec![
                 "sudo".into(),
-                "pacman".into(),
+                exe,
                 "-R".into(),
                 "--noconfirm".into(),
                 pkg.into(),
             ],
-            PackageManager::Zypper => vec![
-                "sudo".into(),
-                "zypper".into(),
-                "-n".into(),
-                "remove".into(),
-                pkg.into(),
-            ],
+            PackageManager::Zypper => {
+                vec!["sudo".into(), exe, "-n".into(), "remove".into(), pkg.into()]
+            }
         }
     }
 
     pub fn update_cmd(self, pkg: &str) -> Vec<String> {
+        let exe = self.executable();
         match self {
-            PackageManager::Brew => vec!["brew".into(), "upgrade".into(), pkg.into()],
+            PackageManager::Brew => vec![exe, "upgrade".into(), pkg.into()],
             PackageManager::Apt => vec![
                 "sudo".into(),
-                "apt".into(),
+                exe,
                 "upgrade".into(),
                 "-y".into(),
                 pkg.into(),
             ],
             PackageManager::Dnf => vec![
                 "sudo".into(),
-                "dnf".into(),
+                exe,
                 "upgrade".into(),
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => {
-                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
-            }
+            PackageManager::Yay => vec![exe, "-S".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Pacman => vec![
                 "sudo".into(),
-                "pacman".into(),
+                exe,
                 "-S".into(),
                 "--noconfirm".into(),
                 pkg.into(),
             ],
-            PackageManager::Zypper => vec![
-                "sudo".into(),
-                "zypper".into(),
-                "-n".into(),
-                "update".into(),
-                pkg.into(),
-            ],
+            PackageManager::Zypper => {
+                vec!["sudo".into(), exe, "-n".into(), "update".into(), pkg.into()]
+            }
         }
     }
 
     pub fn reinstall_cmd(self, pkg: &str) -> Vec<String> {
+        let exe = self.executable();
         match self {
-            PackageManager::Brew => vec!["brew".into(), "reinstall".into(), pkg.into()],
+            PackageManager::Brew => vec![exe, "reinstall".into(), pkg.into()],
             PackageManager::Apt => vec![
                 "sudo".into(),
-                "apt".into(),
+                exe,
                 "install".into(),
                 "--reinstall".into(),
                 "-y".into(),
@@ -440,24 +427,22 @@ impl PackageManager {
             ],
             PackageManager::Dnf => vec![
                 "sudo".into(),
-                "dnf".into(),
+                exe,
                 "reinstall".into(),
                 "-y".into(),
                 pkg.into(),
             ],
-            PackageManager::Yay => {
-                vec!["yay".into(), "-S".into(), "--noconfirm".into(), pkg.into()]
-            }
+            PackageManager::Yay => vec![exe, "-S".into(), "--noconfirm".into(), pkg.into()],
             PackageManager::Pacman => vec![
                 "sudo".into(),
-                "pacman".into(),
+                exe,
                 "-S".into(),
                 "--noconfirm".into(),
                 pkg.into(),
             ],
             PackageManager::Zypper => vec![
                 "sudo".into(),
-                "zypper".into(),
+                exe,
                 "-n".into(),
                 "install".into(),
                 "--force".into(),
@@ -467,16 +452,17 @@ impl PackageManager {
     }
 
     pub fn search(self, query: &str) -> Vec<SearchResult> {
+        let exe = self.executable();
         let out = match self {
-            PackageManager::Brew => Command::new("brew").args(["search", query]).output().ok(),
-            PackageManager::Apt => Command::new("apt-cache")
+            PackageManager::Brew => Command::new(&exe).args(["search", query]).output().ok(),
+            PackageManager::Apt => Command::new(command_name_or_path("apt-cache"))
                 .args(["search", query])
                 .output()
                 .ok(),
-            PackageManager::Dnf => Command::new("dnf").args(["search", query]).output().ok(),
-            PackageManager::Yay => Command::new("yay").args(["-Ss", query]).output().ok(),
-            PackageManager::Pacman => Command::new("pacman").args(["-Ss", query]).output().ok(),
-            PackageManager::Zypper => Command::new("zypper").args(["se", query]).output().ok(),
+            PackageManager::Dnf => Command::new(&exe).args(["search", query]).output().ok(),
+            PackageManager::Yay => Command::new(&exe).args(["-Ss", query]).output().ok(),
+            PackageManager::Pacman => Command::new(&exe).args(["-Ss", query]).output().ok(),
+            PackageManager::Zypper => Command::new(&exe).args(["se", query]).output().ok(),
         }
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
@@ -530,15 +516,16 @@ impl PackageManager {
     }
 
     pub fn list_installed(self) -> Vec<String> {
-        let (bin, args): (&str, &[&str]) = match self {
-            PackageManager::Brew => ("brew", &["list"]),
-            PackageManager::Apt => ("apt", &["list", "--installed"]),
-            PackageManager::Dnf => ("dnf", &["list", "installed"]),
-            PackageManager::Yay => ("yay", &["-Q"]),
-            PackageManager::Pacman => ("pacman", &["-Q"]),
-            PackageManager::Zypper => ("zypper", &["se", "--installed-only"]),
+        let args: &[&str] = match self {
+            PackageManager::Brew => &["list"],
+            PackageManager::Apt => &["list", "--installed"],
+            PackageManager::Dnf => &["list", "installed"],
+            PackageManager::Yay => &["-Q"],
+            PackageManager::Pacman => &["-Q"],
+            PackageManager::Zypper => &["se", "--installed-only"],
         };
-        Command::new(bin)
+        let exe = self.executable();
+        Command::new(&exe)
             .args(args)
             .output()
             .ok()
@@ -572,8 +559,9 @@ impl PackageManager {
                 .filter(|v| !v.is_empty())
         }
 
+        let exe = self.executable();
         let output = match self {
-            PackageManager::Brew => Command::new("brew")
+            PackageManager::Brew => Command::new(&exe)
                 .args(["info", "--json=v2", pkg])
                 .output()
                 .ok()
@@ -590,27 +578,27 @@ impl PackageManager {
                         })
                         .unwrap_or_default()
                 }),
-            PackageManager::Apt => Command::new("apt-cache")
+            PackageManager::Apt => Command::new(command_name_or_path("apt-cache"))
                 .args(["show", pkg])
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
-            PackageManager::Dnf => Command::new("dnf")
+            PackageManager::Dnf => Command::new(&exe)
                 .args(["info", pkg])
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
-            PackageManager::Yay => Command::new("yay")
+            PackageManager::Yay => Command::new(&exe)
                 .args(["-Si", pkg])
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
-            PackageManager::Pacman => Command::new("pacman")
+            PackageManager::Pacman => Command::new(&exe)
                 .args(["-Si", pkg])
                 .output()
                 .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string()),
-            PackageManager::Zypper => Command::new("zypper")
+            PackageManager::Zypper => Command::new(&exe)
                 .args(["info", pkg])
                 .output()
                 .ok()
@@ -663,16 +651,69 @@ impl PackageManager {
     }
 }
 
+fn command_search_dirs(path_var: Option<&OsStr>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut push_unique = |dir: PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+
+    if let Some(path_var) = path_var {
+        for dir in std::env::split_paths(path_var) {
+            push_unique(dir);
+        }
+    }
+
+    for extra in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/opt/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        push_unique(PathBuf::from(extra));
+    }
+
+    dirs
+}
+
+fn resolve_command_path_from_search_dirs(bin: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    if bin.contains(std::path::MAIN_SEPARATOR) {
+        let path = PathBuf::from(bin);
+        return path.is_file().then_some(path);
+    }
+
+    for dir in search_dirs {
+        let candidate = dir.join(bin);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn resolve_command_path(bin: &str) -> Option<PathBuf> {
+    let search_dirs = command_search_dirs(std::env::var_os("PATH").as_deref());
+    resolve_command_path_from_search_dirs(bin, &search_dirs)
+}
+
+fn command_name_or_path(bin: &str) -> String {
+    resolve_command_path(bin)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| bin.to_string())
+}
+
 pub fn which(bin: &str) -> bool {
-    Command::new("which")
-        .arg(bin)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    resolve_command_path(bin).is_some()
 }
 
 pub fn has_internet() -> bool {
-    Command::new("curl")
+    let curl = command_name_or_path("curl");
+    Command::new(curl)
         .args(["-s", "--max-time", "3", "https://www.google.com"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -686,7 +727,8 @@ pub fn has_python_module(module: &str) -> bool {
         return false;
     }
     let code = format!("import {module}");
-    Command::new("python3")
+    let python = command_name_or_path("python3");
+    Command::new(python)
         .args(["-c", code.as_str()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1136,27 +1178,14 @@ pub fn build_package_command(
                             "yay not found. Install yay first.".to_string(),
                         );
                     }
-                    vec![
-                        "yay".to_string(),
-                        "-S".to_string(),
-                        "--noconfirm".to_string(),
-                        "python-playsound".to_string(),
-                    ]
+                    playsound_install_cmd()
                 } else {
                     if !which("python3") {
                         return InstallerEvent::Status(
                             "python3 not found. Install Python first.".to_string(),
                         );
                     }
-                    vec![
-                        "python3".to_string(),
-                        "-m".to_string(),
-                        "pip".to_string(),
-                        "install".to_string(),
-                        "--user".to_string(),
-                        "--upgrade".to_string(),
-                        "playsound".to_string(),
-                    ]
+                    playsound_install_cmd()
                 }
             } else {
                 pm.install_cmd(pkg)
@@ -1170,28 +1199,14 @@ pub fn build_package_command(
                             "yay not found. Install yay first.".to_string(),
                         );
                     }
-                    vec![
-                        "yay".to_string(),
-                        "-S".to_string(),
-                        "--noconfirm".to_string(),
-                        "python-playsound".to_string(),
-                    ]
+                    playsound_reinstall_cmd()
                 } else {
                     if !which("python3") {
                         return InstallerEvent::Status(
                             "python3 not found. Install Python first.".to_string(),
                         );
                     }
-                    vec![
-                        "python3".to_string(),
-                        "-m".to_string(),
-                        "pip".to_string(),
-                        "install".to_string(),
-                        "--user".to_string(),
-                        "--upgrade".to_string(),
-                        "--force-reinstall".to_string(),
-                        "playsound".to_string(),
-                    ]
+                    playsound_reinstall_cmd()
                 }
             } else {
                 pm.reinstall_cmd(pkg)
@@ -1205,27 +1220,14 @@ pub fn build_package_command(
                             "yay not found. Install yay first.".to_string(),
                         );
                     }
-                    vec![
-                        "yay".to_string(),
-                        "-S".to_string(),
-                        "--noconfirm".to_string(),
-                        "python-playsound".to_string(),
-                    ]
+                    playsound_update_cmd()
                 } else {
                     if !which("python3") {
                         return InstallerEvent::Status(
                             "python3 not found. Install Python first.".to_string(),
                         );
                     }
-                    vec![
-                        "python3".to_string(),
-                        "-m".to_string(),
-                        "pip".to_string(),
-                        "install".to_string(),
-                        "--user".to_string(),
-                        "--upgrade".to_string(),
-                        "playsound".to_string(),
-                    ]
+                    playsound_update_cmd()
                 }
             } else {
                 pm.update_cmd(pkg)
@@ -1239,26 +1241,14 @@ pub fn build_package_command(
                             "yay not found. Install yay first.".to_string(),
                         );
                     }
-                    vec![
-                        "yay".to_string(),
-                        "-R".to_string(),
-                        "--noconfirm".to_string(),
-                        "python-playsound".to_string(),
-                    ]
+                    playsound_uninstall_cmd()
                 } else {
                     if !which("python3") {
                         return InstallerEvent::Status(
                             "python3 not found. Install Python first.".to_string(),
                         );
                     }
-                    vec![
-                        "python3".to_string(),
-                        "-m".to_string(),
-                        "pip".to_string(),
-                        "uninstall".to_string(),
-                        "-y".to_string(),
-                        "playsound".to_string(),
-                    ]
+                    playsound_uninstall_cmd()
                 }
             } else {
                 pm.remove_cmd(pkg)
@@ -1486,14 +1476,14 @@ fn search_description(pm: PackageManager, line: &str) -> Option<String> {
 fn playsound_install_cmd() -> Vec<String> {
     if is_arch_based_linux() {
         vec![
-            "yay".into(),
+            command_name_or_path("yay"),
             "-S".into(),
             "--noconfirm".into(),
             "python-playsound".into(),
         ]
     } else {
         vec![
-            "python3".into(),
+            command_name_or_path("python3"),
             "-m".into(),
             "pip".into(),
             "install".into(),
@@ -1509,7 +1499,7 @@ fn playsound_reinstall_cmd() -> Vec<String> {
         playsound_install_cmd()
     } else {
         vec![
-            "python3".into(),
+            command_name_or_path("python3"),
             "-m".into(),
             "pip".into(),
             "install".into(),
@@ -1528,14 +1518,14 @@ fn playsound_update_cmd() -> Vec<String> {
 fn playsound_uninstall_cmd() -> Vec<String> {
     if is_arch_based_linux() {
         vec![
-            "yay".into(),
+            command_name_or_path("yay"),
             "-R".into(),
             "--noconfirm".into(),
             "python-playsound".into(),
         ]
     } else {
         vec![
-            "python3".into(),
+            command_name_or_path("python3"),
             "-m".into(),
             "pip".into(),
             "uninstall".into(),
@@ -1548,6 +1538,19 @@ fn playsound_uninstall_cmd() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos-installer-{label}-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
 
     #[test]
     fn back_from_search_actions_returns_to_results() {
@@ -1609,11 +1612,24 @@ mod tests {
                 status,
                 completion_message,
             } => {
-                assert_eq!(argv, vec!["brew", "install", "fd"]);
+                assert!(argv.first().is_some_and(|cmd| cmd.ends_with("brew")));
+                assert_eq!(&argv[1..], ["install", "fd"]);
                 assert_eq!(status, "Installing fd...");
                 assert_eq!(completion_message, Some("fd installed.".to_string()));
             }
             DesktopInstallerEvent::None => panic!("unexpected none event"),
         }
+    }
+
+    #[test]
+    fn resolve_command_path_from_search_dirs_finds_binary_outside_path() {
+        let dir = unique_temp_dir("brew-path");
+        let brew = dir.join("brew");
+        fs::write(&brew, b"#!/bin/sh\n").expect("write fake brew");
+
+        let resolved = resolve_command_path_from_search_dirs("brew", &[dir.clone()]);
+        assert_eq!(resolved.as_deref(), Some(brew.as_path()));
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

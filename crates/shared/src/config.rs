@@ -23,7 +23,7 @@ fn detect_base_dir() -> PathBuf {
             if let Some(app_support_dir) = macos_app_support_dir() {
                 let dir = app_support_dir.join("RobCoOS");
                 let _ = std::fs::create_dir_all(&dir);
-                migrate_bundle_runtime_data_if_needed(&dir, &bundle_dir);
+                migrate_bundle_runtime_data_if_needed(&dir, &exe_path, &bundle_dir);
                 return dir;
             }
         }
@@ -69,35 +69,88 @@ fn has_runtime_state(dir: &Path) -> bool {
         || dir.join("journal_entries").exists()
 }
 
-fn migrate_bundle_runtime_data_if_needed(target_dir: &Path, bundle_dir: &Path) {
-    if has_runtime_state(target_dir) {
-        return;
+fn legacy_runtime_dirs(exe_path: &Path, bundle_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(macos_dir) = exe_path.parent() {
+        dirs.push(macos_dir.to_path_buf());
     }
+    if let Some(bundle_parent) = bundle_dir.parent() {
+        let bundle_parent = bundle_parent.to_path_buf();
+        if !dirs.contains(&bundle_parent) {
+            dirs.push(bundle_parent);
+        }
+    }
+    dirs
+}
 
-    let Some(legacy_dir) = bundle_dir.parent() else {
-        return;
-    };
+fn migrate_bundle_runtime_data_if_needed(target_dir: &Path, exe_path: &Path, bundle_dir: &Path) {
+    for legacy_dir in legacy_runtime_dirs(exe_path, bundle_dir) {
+        merge_runtime_state_from(target_dir, &legacy_dir);
+    }
+}
+
+fn merge_runtime_state_from(target_dir: &Path, legacy_dir: &Path) {
     if !has_runtime_state(legacy_dir) {
         return;
     }
-
     for name in [
         "settings.json",
         "about.json",
         ".session",
         "installed_package_descriptions.json",
     ] {
-        copy_path_if_missing(&legacy_dir.join(name), &target_dir.join(name));
+        merge_path_if_missing(&legacy_dir.join(name), &target_dir.join(name));
     }
-    copy_path_if_missing(&legacy_dir.join("users"), &target_dir.join("users"));
-    copy_path_if_missing(
+    merge_path_if_missing(&legacy_dir.join("users"), &target_dir.join("users"));
+    merge_path_if_missing(
         &legacy_dir.join("journal_entries"),
         &target_dir.join("journal_entries"),
     );
 }
 
-fn copy_path_if_missing(from: &Path, to: &Path) {
-    if !from.exists() || to.exists() {
+fn merge_users_db_if_needed(from: &Path, to: &Path) {
+    let Ok(source_raw) = std::fs::read_to_string(from) else {
+        return;
+    };
+    let Ok(source) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&source_raw)
+    else {
+        return;
+    };
+    if source.is_empty() {
+        return;
+    }
+
+    if !to.exists() {
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(from, to);
+        return;
+    }
+
+    let Ok(target_raw) = std::fs::read_to_string(to) else {
+        return;
+    };
+    let Ok(mut target) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&target_raw)
+    else {
+        return;
+    };
+
+    let target_is_bootstrap_admin = target.len() == 1 && target.contains_key("admin");
+    for (username, record) in source {
+        if target_is_bootstrap_admin || !target.contains_key(&username) {
+            target.insert(username, record);
+        }
+    }
+    if let Ok(raw) = serde_json::to_string_pretty(&target) {
+        let _ = std::fs::write(to, raw);
+    }
+}
+
+fn merge_path_if_missing(from: &Path, to: &Path) {
+    if !from.exists() {
         return;
     }
 
@@ -107,10 +160,17 @@ fn copy_path_if_missing(from: &Path, to: &Path) {
             for entry in entries.flatten() {
                 let src = entry.path();
                 let dst = to.join(entry.file_name());
-                copy_path_if_missing(&src, &dst);
+                merge_path_if_missing(&src, &dst);
             }
         }
     } else {
+        if from.file_name().and_then(|name| name.to_str()) == Some("users.json") {
+            merge_users_db_if_needed(from, to);
+            return;
+        }
+        if to.exists() {
+            return;
+        }
         if let Some(parent) = to.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -859,6 +919,20 @@ pub fn persist_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos-{label}-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
 
     #[test]
     fn app_bundle_path_uses_app_support_dir() {
@@ -880,6 +954,99 @@ mod tests {
             exe.parent().expect("exe parent"),
             Path::new("/tmp/robcos/bin")
         );
+    }
+
+    #[test]
+    fn merge_users_db_prefers_legacy_over_bootstrap_admin() {
+        let dir = unique_temp_dir("users-merge");
+        let source = dir.join("source-users.json");
+        let target = dir.join("target-users.json");
+
+        fs::write(
+            &source,
+            serde_json::to_string_pretty(&json!({
+                "admin": { "password_hash": "legacy", "is_admin": true, "auth_method": "password" },
+                "adi": { "password_hash": "user", "is_admin": false, "auth_method": "password" }
+            }))
+            .expect("source json"),
+        )
+        .expect("write source");
+        fs::write(
+            &target,
+            serde_json::to_string_pretty(&json!({
+                "admin": { "password_hash": "bootstrap", "is_admin": true, "auth_method": "password" }
+            }))
+            .expect("target json"),
+        )
+        .expect("write target");
+
+        merge_users_db_if_needed(&source, &target);
+
+        let merged: serde_json::Map<String, Value> =
+            serde_json::from_str(&fs::read_to_string(&target).expect("read merged"))
+                .expect("decode merged");
+        assert_eq!(merged["admin"]["password_hash"].as_str(), Some("legacy"));
+        assert!(merged.contains_key("adi"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bundle_migration_merges_old_macos_runtime_state_into_target_dir() {
+        let dir = unique_temp_dir("bundle-migrate");
+        let bundle_dir = dir.join("RobCoOS.app");
+        let macos_dir = bundle_dir.join("Contents").join("MacOS");
+        let exe = macos_dir.join("robcos");
+        let target = dir.join("Application Support").join("RobCoOS");
+
+        fs::create_dir_all(macos_dir.join("users").join("admin")).expect("create legacy dirs");
+        fs::create_dir_all(target.join("users")).expect("create target dirs");
+        fs::write(&exe, b"").expect("write exe placeholder");
+        fs::write(
+            macos_dir.join("users").join("users.json"),
+            serde_json::to_string_pretty(&json!({
+                "admin": { "password_hash": "legacy", "is_admin": true, "auth_method": "password" },
+                "adi": { "password_hash": "user", "is_admin": false, "auth_method": "password" }
+            }))
+            .expect("legacy users json"),
+        )
+        .expect("write legacy users");
+        fs::write(
+            macos_dir.join("users").join("admin").join("apps.json"),
+            serde_json::to_string_pretty(&json!({
+                "Firefox": ["open", "-a", "Firefox"]
+            }))
+            .expect("legacy apps json"),
+        )
+        .expect("write legacy apps");
+        fs::write(
+            target.join("users").join("users.json"),
+            serde_json::to_string_pretty(&json!({
+                "admin": { "password_hash": "bootstrap", "is_admin": true, "auth_method": "password" }
+            }))
+            .expect("target users json"),
+        )
+        .expect("write target users");
+
+        migrate_bundle_runtime_data_if_needed(&target, &exe, &bundle_dir);
+
+        let merged_users: serde_json::Map<String, Value> = serde_json::from_str(
+            &fs::read_to_string(target.join("users").join("users.json"))
+                .expect("read merged users"),
+        )
+        .expect("decode merged users");
+        assert_eq!(
+            merged_users["admin"]["password_hash"].as_str(),
+            Some("legacy")
+        );
+        assert!(merged_users.contains_key("adi"));
+        assert!(target
+            .join("users")
+            .join("admin")
+            .join("apps.json")
+            .exists());
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

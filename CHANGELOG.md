@@ -4,6 +4,15 @@ All notable changes to RobCoOS will be documented in this file.
 
 The format is based on Keep a Changelog, adapted to the way this project ships releases.
 
+## 0.4.3 - 2026-03-17
+
+### Fixed
+
+- Fixed macOS app-bundle data migration by importing legacy runtime state from `RobCoOS.app/Contents/MacOS` into `~/Library/Application Support/RobCoOS`.
+- Fixed user migration so existing `users.json` entries replace the temporary bootstrap admin record instead of leaving prior accounts hidden.
+- Fixed installer and runtime-tool detection for Finder-launched macOS builds by resolving `brew`, `python3`, `blueutil`, and related commands from absolute fallback paths instead of relying on inherited shell `PATH`.
+- Added direct regression coverage for the macOS runtime-data migration and command-path resolution failures that escaped the `0.4.2` release.
+
 ## 0.4.2 - 2026-03-17
 
 ### Fixed
