@@ -62,7 +62,8 @@ fn game_program_names(builtin_game_name: &str) -> Vec<String> {
     names
 }
 
-pub fn start_application_entries(
+fn start_application_entries_from_names(
+    application_names: Vec<String>,
     show_nuke_codes: bool,
     show_text_editor: bool,
     text_editor_name: &str,
@@ -81,7 +82,7 @@ pub fn start_application_entries(
             action: NativeStartLeafAction::OpenTextEditor,
         });
     }
-    for name in catalog_names(ProgramCatalog::Applications) {
+    for name in application_names {
         if name == nuke_codes_name || name == text_editor_name {
             continue;
         }
@@ -97,6 +98,21 @@ pub fn start_application_entries(
         });
     }
     items
+}
+
+pub fn start_application_entries(
+    show_nuke_codes: bool,
+    show_text_editor: bool,
+    text_editor_name: &str,
+    nuke_codes_name: &str,
+) -> Vec<NativeStartLeafEntry> {
+    start_application_entries_from_names(
+        catalog_names(ProgramCatalog::Applications),
+        show_nuke_codes,
+        show_text_editor,
+        text_editor_name,
+        nuke_codes_name,
+    )
 }
 
 pub fn start_document_entries(username: Option<&str>) -> Vec<NativeStartLeafEntry> {
@@ -175,6 +191,28 @@ pub fn gather_spotlight_results(
     nuke_codes_name: &str,
     builtin_game_name: &str,
 ) -> Vec<NativeSpotlightResult> {
+    gather_spotlight_results_with_names(
+        query,
+        tab,
+        active_username,
+        text_editor_name,
+        nuke_codes_name,
+        catalog_names(ProgramCatalog::Applications),
+        game_program_names(builtin_game_name),
+        catalog_names(ProgramCatalog::Network),
+    )
+}
+
+fn gather_spotlight_results_with_names(
+    query: &str,
+    tab: u8,
+    active_username: Option<&str>,
+    text_editor_name: &str,
+    nuke_codes_name: &str,
+    application_names: Vec<String>,
+    game_names: Vec<String>,
+    network_names: Vec<String>,
+) -> Vec<NativeSpotlightResult> {
     let query = query.to_lowercase();
     let matches_query =
         |name: &str| -> bool { query.is_empty() || name.to_lowercase().contains(&query) };
@@ -196,7 +234,7 @@ pub fn gather_spotlight_results(
                 });
             }
         }
-        for name in catalog_names(ProgramCatalog::Applications) {
+        for name in application_names {
             if name != nuke_codes_name && name != text_editor_name && matches_query(&name) {
                 results.push(NativeSpotlightResult {
                     name,
@@ -205,7 +243,7 @@ pub fn gather_spotlight_results(
                 });
             }
         }
-        for name in game_program_names(builtin_game_name) {
+        for name in game_names {
             if matches_query(&name) {
                 results.push(NativeSpotlightResult {
                     name,
@@ -214,7 +252,7 @@ pub fn gather_spotlight_results(
                 });
             }
         }
-        for name in catalog_names(ProgramCatalog::Network) {
+        for name in network_names {
             if matches_query(&name) {
                 results.push(NativeSpotlightResult {
                     name,
@@ -280,57 +318,16 @@ pub fn gather_spotlight_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{save_apps, save_games, save_networks};
-    use serde_json::{Map, Value};
-    use std::sync::{Mutex, OnceLock};
-
-    fn search_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("desktop search service test lock")
-    }
-
-    struct CatalogRestore {
-        apps: Map<String, Value>,
-        games: Map<String, Value>,
-        networks: Map<String, Value>,
-    }
-
-    impl CatalogRestore {
-        fn capture() -> Self {
-            Self {
-                apps: crate::config::load_apps(),
-                games: crate::config::load_games(),
-                networks: crate::config::load_networks(),
-            }
-        }
-    }
-
-    impl Drop for CatalogRestore {
-        fn drop(&mut self) {
-            save_apps(&self.apps);
-            save_games(&self.games);
-            save_networks(&self.networks);
-        }
-    }
 
     #[test]
     fn start_application_entries_hide_duplicate_builtins() {
-        let _guard = search_test_guard();
-        let _restore = CatalogRestore::capture();
-        let mut apps = Map::new();
-        apps.insert(
-            "ROBCO Word Processor".to_string(),
-            Value::Array(vec![Value::String("fake".to_string())]),
+        let items = start_application_entries_from_names(
+            vec!["ROBCO Word Processor".to_string(), "Hex".to_string()],
+            true,
+            true,
+            "ROBCO Word Processor",
+            "Nuke Codes",
         );
-        apps.insert(
-            "Hex".to_string(),
-            Value::Array(vec![Value::String("hx".to_string())]),
-        );
-        save_apps(&apps);
-
-        let items = start_application_entries(true, true, "ROBCO Word Processor", "Nuke Codes");
 
         assert_eq!(items[0].label, "Nuke Codes");
         assert_eq!(items[1].label, "ROBCO Word Processor");
@@ -339,24 +336,15 @@ mod tests {
 
     #[test]
     fn gather_spotlight_results_includes_system_and_catalog_hits() {
-        let _guard = search_test_guard();
-        let _restore = CatalogRestore::capture();
-        let mut apps = Map::new();
-        apps.insert(
-            "Helix".to_string(),
-            Value::Array(vec![Value::String("hx".to_string())]),
-        );
-        save_apps(&apps);
-        save_games(&Map::new());
-        save_networks(&Map::new());
-
-        let results = gather_spotlight_results(
+        let results = gather_spotlight_results_with_names(
             "hel",
             1,
             None,
             "ROBCO Word Processor",
             "Nuke Codes",
-            "Donkey Kong",
+            vec!["Helix".to_string()],
+            vec!["Donkey Kong".to_string()],
+            Vec::new(),
         );
 
         assert_eq!(

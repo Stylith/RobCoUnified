@@ -25,6 +25,8 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
+#[cfg(test)]
+use robcos_native_file_manager_app::FileManagerAction;
 pub use robcos_native_file_manager_app::{
     commit_picker_selection, open_target_for_file_manager_action, open_with_extension_key,
     prepare_open_with_launch, selected_file, selection_activation_for_selected_path,
@@ -34,8 +36,6 @@ pub use robcos_native_file_manager_app::{
 };
 #[cfg(test)]
 pub use robcos_native_file_manager_app::{open_with_state_for_path, FileManagerClipboardItem};
-#[cfg(test)]
-use robcos_native_file_manager_app::FileManagerAction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileManagerCommandRequest {

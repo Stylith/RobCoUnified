@@ -10,7 +10,9 @@ const DEFAULT_ASCII: &[&str] = &[
     "╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝ ",
 ];
 
-const DEFAULT_FIELDS: &[&str] = &["OS", "Hostname", "CPU", "RAM", "Uptime", "Battery", "Theme", "Shell"];
+const DEFAULT_FIELDS: &[&str] = &[
+    "OS", "Hostname", "CPU", "RAM", "Uptime", "Battery", "Theme", "Shell",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalAboutRequest {

@@ -1,8 +1,7 @@
 use super::about_screen::{draw_about_screen, TerminalAboutRequest};
 use super::connections_screen::{
     apply_search_query as apply_connection_search_query, draw_terminal_connections_screen,
-    resolve_terminal_connections_request, TerminalConnectionsRequest,
-    TerminalConnectionsState,
+    resolve_terminal_connections_request, TerminalConnectionsRequest, TerminalConnectionsState,
 };
 use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
 use super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
@@ -92,7 +91,7 @@ use super::desktop_user_service::{
     user_auth_method_label, user_exists,
 };
 use super::document_browser::{
-    draw_terminal_document_browser, activate_browser_selection, TerminalDocumentBrowserRequest,
+    activate_browser_selection, draw_terminal_document_browser, TerminalDocumentBrowserRequest,
 };
 use super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, DonkeyKongConfig, DonkeyKongGame,
@@ -174,15 +173,15 @@ use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     Modifiers, RichText, TextEdit, TextStyle, TextureHandle, TopBottomPanel,
 };
+use robcos_native_default_apps_app::{
+    build_default_app_settings_choices, default_app_slot_description,
+};
 use robcos_native_programs_app::{
     build_desktop_applications_sections, build_terminal_application_entries,
     build_terminal_game_entries, resolve_desktop_applications_request,
     resolve_desktop_games_request, resolve_terminal_applications_request,
     resolve_terminal_catalog_request, resolve_terminal_games_request, DesktopProgramRequest,
     TerminalProgramRequest,
-};
-use robcos_native_default_apps_app::{
-    build_default_app_settings_choices, default_app_slot_description,
 };
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_back_target,
@@ -8166,9 +8165,10 @@ impl RobcoNativeApp {
                                 )
                                 .show_ui(ui, |ui| {
                                     Self::apply_settings_control_style(ui);
-                                    for choice in
-                                        build_default_app_settings_choices(&self.settings.draft, slot)
-                                    {
+                                    for choice in build_default_app_settings_choices(
+                                        &self.settings.draft,
+                                        slot,
+                                    ) {
                                         if Self::retro_choice_button(
                                             ui,
                                             choice.label,
@@ -11214,13 +11214,14 @@ mod tests {
         assert!(app.sync_active_session_identity());
         app.terminal_nav.screen = TerminalScreen::NukeCodes;
         app.terminal_nav.nuke_codes_return_screen = TerminalScreen::Applications;
-        app.terminal_nuke_codes = NukeCodesView::Data(robcos_native_nuke_codes_app::NukeCodesData {
-            alpha: "11111111".to_string(),
-            bravo: "22222222".to_string(),
-            charlie: "33333333".to_string(),
-            source: "Test Source".to_string(),
-            fetched_at: "2026-03-01 06:00 PM".to_string(),
-        });
+        app.terminal_nuke_codes =
+            NukeCodesView::Data(robcos_native_nuke_codes_app::NukeCodesData {
+                alpha: "11111111".to_string(),
+                bravo: "22222222".to_string(),
+                charlie: "33333333".to_string(),
+                source: "Test Source".to_string(),
+                fetched_at: "2026-03-01 06:00 PM".to_string(),
+            });
         app.park_active_session_runtime();
 
         session::set_active(s2);

@@ -142,7 +142,11 @@ pub fn build_edit_menus_view_model(
             items: vec![
                 format!(
                     "Nuke Codes in Applications: {} [toggle]",
-                    if nuke_codes_visible { "VISIBLE" } else { "HIDDEN" }
+                    if nuke_codes_visible {
+                        "VISIBLE"
+                    } else {
+                        "HIDDEN"
+                    }
                 ),
                 format!(
                     "ROBCO Word Processor in Applications: {} [toggle]",

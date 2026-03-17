@@ -1,11 +1,11 @@
 use robcos_native_services::desktop_connections_service::{
-    bluetooth_disconnect_targets, bluetooth_installer_status_hint,
-    connection_kind_plural_label, connection_network_group_label, connection_network_groups,
-    connection_requires_password, connections_macos_blueutil_missing,
-    disconnect_connection_status, discovered_connection_label, discovered_connections,
-    filter_discovered_connection_list, filter_network_group_discovered_connections,
-    filter_network_group_saved_connections, forget_saved_connection_and_refresh_settings,
-    saved_connection_label, saved_connections_for_kind,
+    bluetooth_disconnect_targets, bluetooth_installer_status_hint, connection_kind_plural_label,
+    connection_network_group_label, connection_network_groups, connection_requires_password,
+    connections_macos_blueutil_missing, disconnect_connection_status, discovered_connection_label,
+    discovered_connections, filter_discovered_connection_list,
+    filter_network_group_discovered_connections, filter_network_group_saved_connections,
+    forget_saved_connection_and_refresh_settings, saved_connection_label,
+    saved_connections_for_kind,
 };
 use robcos_shared::config::{ConnectionKind, SavedConnection};
 use robcos_shared::connections::{DiscoveredConnection, NetworkMenuGroup};
@@ -260,7 +260,10 @@ pub fn apply_network_groups_activation(
     ConnectionsEvent::None
 }
 
-pub fn build_kind_menu_model(kind: ConnectionKind, group: Option<NetworkMenuGroup>) -> KindMenuModel {
+pub fn build_kind_menu_model(
+    kind: ConnectionKind,
+    group: Option<NetworkMenuGroup>,
+) -> KindMenuModel {
     let discovered = discovered_connections(kind);
     let discovered_view = if matches!(kind, ConnectionKind::Network) {
         filter_network_group_discovered_connections(
@@ -502,13 +505,13 @@ pub fn apply_picker_activation(
                     ConnectionsEvent::ConnectImmediate { kind, target }
                 }
             }
-            PickerMode::DisconnectBluetooth => ConnectionsEvent::Status(
-                disconnect_connection_status(
+            PickerMode::DisconnectBluetooth => {
+                ConnectionsEvent::Status(disconnect_connection_status(
                     kind,
                     Some(target.name.as_str()),
                     Some(target.detail.as_str()),
-                ),
-            ),
+                ))
+            }
         };
     }
     ConnectionsEvent::None

@@ -24,7 +24,8 @@ pub fn draw_edit_menus_screen(
     status_row: usize,
     content_col: usize,
 ) -> TerminalEditMenusRequest {
-    let model = build_edit_menus_view_model(state, entries, nuke_codes_visible, text_editor_visible);
+    let model =
+        build_edit_menus_view_model(state, entries, nuke_codes_visible, text_editor_visible);
     let mut selected_idx = model.selected_idx;
     let activated = draw_terminal_menu_screen(
         ctx,

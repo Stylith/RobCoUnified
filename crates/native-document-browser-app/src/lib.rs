@@ -69,9 +69,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "robcos_native_document_browser_app_test_{unique}"
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("robcos_native_document_browser_app_test_{unique}"));
         fs::create_dir_all(&dir).expect("create empty temp dir");
         let state = NativeFileManagerState::new(dir);
         let rows = browser_rows(&state);

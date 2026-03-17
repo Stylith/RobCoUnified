@@ -1,171 +1,99 @@
-# RobCoOS (Rust)
+# RobCoOS
 
-Fallout-style terminal environment built with Rust, ratatui, and crossterm.
+A Fallout-inspired terminal environment built with Rust, [ratatui](https://github.com/ratatui/ratatui), and [egui](https://github.com/emilk/egui).
 
-RobCoOS is an application-layer shell experience, not a full standalone operating system.
+RobCoOS is an application-layer shell experience, not a standalone operating system. It wraps your real terminal in a retro-computing interface with multi-user support, a full desktop mode, and a built-in app ecosystem.
 
-![RobCoOS screenshot 1](assets/readme/desktop-screenshot-1.png)
-![RobCoOS screenshot 2](assets/readme/desktop-screenshot-2.png)
+![RobCoOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
+![RobCoOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
 
-## Version
+**Version:** `0.4.0`
 
-`0.3.2`
+---
 
-## Highlights
+## Features at a Glance
 
-- Multi-user login with per-user settings and per-user app/menu data.
-- Up to 9 sessions with hot-switching (menu and PTY-aware switching).
-- Terminal-mode main menu: Applications, Documents, Network, Games, Program Installer, Terminal, Desktop Mode, Settings.
-- Desktop Mode with:
-  - top status bar + spotlight icon
-  - taskbar + Start menu
-  - draggable/resizable windows
-  - minimize/maximize/close controls
-  - draggable desktop icons (`My Computer`, `Trash`) with persisted positions
-- Built-in app: `Nuke Codes` (visibility toggle in Edit Applications).
-- Default Apps system (terminal + desktop settings):
-  - separate defaults for Text/Code and Ebook files
-  - supports built-in ROBCO Terminal Writer, menu entries, and custom argv JSON
-  - per-user settings
-  - first-login prompt for new users
-- Document routing with explicit error when no app is configured:
-  - `Error: No App for filetype`
+| Category | Highlights |
+|---|---|
+| **UI Modes** | Terminal and Desktop, switchable at any time |
+| **Sessions** | Up to 9 concurrent sessions with instant hot-key switching |
+| **Users** | Multi-user login, per-user settings, per-user menus and documents |
+| **Desktop** | Draggable windows, taskbar, Start menu, spotlight search, file manager |
+| **Apps** | Text editor, file manager, document browser, installer, nuke codes viewer |
+| **Auth** | Password, No Password, or Hacking Minigame login per user |
+| **Theming** | Green, White, Amber, Blue, Light Blue, or custom RGB |
+
+---
 
 ## Requirements
 
+**Required:**
 - Rust stable toolchain (`cargo`, `rustc`)
-- `curl` (required preflight dependency)
-- Optional external tools:
-  - `epy`
-  - `vim`
-  - other CLI apps you add to menus
-- Optional audio backend:
-  - `python3`
-  - Python module `playsound`
+- `curl`
 
-Platform audio fallbacks:
+**Optional:**
+- `epy` for EPUB/MOBI reading
+- `vim` as an external editor
+- `python3` plus `playsound` for enhanced audio
+- `blueutil` on macOS for Bluetooth support
 
+Audio works out of the box via platform fallbacks:
 - macOS: `afplay`
 - Linux: `aplay` or `paplay`
 - Windows: PowerShell `Media.SoundPlayer`
 
-## Build
+---
+
+## Build & Run
 
 ```bash
-cargo build
-```
+# Run the native shell in development mode
+cargo run -p robcos-native-shell --bin robcos-native
 
-Release build:
+# Build the native shell
+cargo build --release -p robcos-native-shell --bin robcos-native
 
-```bash
-cargo build --release
-```
+# Run the release build
+cargo run --release -p robcos-native-shell --bin robcos-native
 
-Tagged GitHub releases package platform-specific artifacts:
+# Skip startup preflight checks
+cargo run --release -p robcos-native-shell --bin robcos-native -- --no-preflight
 
-- macOS: CLI binary bundle inside the release zip
-- Linux: x86_64 and aarch64 binaries + `.desktop` entry + icon inside the release zip
-- Windows: `robcos.exe` with embedded application icon inside the release zip
-
-## Run
-
-```bash
-cargo run
-```
-
-Release run:
-
-```bash
-cargo run --release
-```
-
-Release validation:
-
-```bash
+# Validate the release workflow locally
 make release-check
 ```
 
-Direct script:
+Pre-built binaries are on the [GitHub Releases](../../releases) page:
 
-```bash
-./scripts/release-check.sh
-```
+- **macOS**: universal native binary bundle in a zip
+- **Linux**: x86_64 and aarch64 native bundles with `.desktop` entry and icon
+- **Windows**: `robcos.exe` native bundle
 
-Skip preflight checks:
+Release assets ship the native shell only.
 
-```bash
-cargo run --release -- --no-preflight
-```
+---
 
 ## First Login
 
-If no users exist, RobCoOS creates default admin:
+If no users exist, a default admin account is created automatically:
 
-- Username: `admin`
-- Password: `admin`
+| Field | Value |
+|---|---|
+| Username | `admin` |
+| Password | `admin` |
 
-New users (including the first admin) are prompted once after login to set Default Apps.
+> Change the default password immediately via **Settings -> User Management**.
 
-## Settings Summary
+New users, including the first admin, are prompted once after login to configure their **Default Apps**.
 
-Terminal Settings includes:
-
-- About
-- General
-  - Sound
-  - Bootup
-  - Default Open Mode
-- Appearance
-  - Theme
-  - CLI Display
-- Default Apps
-- Edit Menus
-- Connections
-  - hidden on platforms where connections are disabled
-  - Bluetooth is hidden when required platform tooling is missing
-- User Management (admin)
-- About
-
-Desktop Settings includes panels for:
-
-- General
-- Appearance
-  - Theme
-  - Desktop Cursor
-  - Desktop Icons
-  - CLI Display
-  - Wallpapers
-- Default Apps
-- CLI Profiles
-- Edit Menus
-- Connections
-  - hidden on platforms where connections are disabled
-  - Bluetooth is hidden when required platform tooling is missing
-- User Management (admin)
-- About
-
-Desktop file manager state persists lightly between sessions:
-
-- the last open file manager tab set is restored on next desktop launch
-- recent folders are saved and shown in the desktop File menu
-
-## Platform Notes
-
-- macOS:
-  - Connections features may be disabled entirely when the current implementation is unsupported.
-  - Bluetooth menus require `blueutil`; when it is missing, Bluetooth entries are hidden.
-- Linux:
-  - Connections features use platform shell tools where available.
-- Windows:
-  - Core app behavior works, but some shell/tool integrations may differ from Unix-like systems.
+---
 
 ## Data Layout
 
-Runtime data is stored relative to the executable directory.
+All runtime data is stored relative to the executable:
 
 ```text
-RobCoOS/
-  robcos
+<base_dir>/
   settings.json
   users/
     users.json
@@ -180,31 +108,30 @@ RobCoOS/
       YYYY-MM-DD.txt
 ```
 
-## Manual
+---
 
-See `USER_MANUAL.md` for full usage details and control reference.
+## Documentation
 
-## Native Architecture Notes
+See [`USER_MANUAL.md`](USER_MANUAL.md) for the full usage reference.
 
-See `docs/NATIVE_ROADMAP.md` for the current native rewrite status, parity scope, and next
-architecture steps.
+See [`docs/NATIVE_ROADMAP.md`](docs/NATIVE_ROADMAP.md) for the current native architecture and workspace split.
 
-## Credits and Attribution
+---
+
+## Credits
 
 - UI framework: [ratatui](https://github.com/ratatui/ratatui)
 - Terminal/input backend: [crossterm](https://github.com/crossterm-rs/crossterm)
+- GUI framework: [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe)
 - PTY support: [portable-pty](https://github.com/wez/wezterm/tree/main/pty)
-- Terminal emulation parser: [vt100](https://crates.io/crates/vt100)
-- System/time utilities: [sysinfo](https://github.com/GuillaumeGomez/sysinfo), [chrono](https://github.com/chronotope/chrono)
+- Terminal emulation: [vt100](https://crates.io/crates/vt100)
+- Utilities: [sysinfo](https://github.com/GuillaumeGomez/sysinfo), [chrono](https://github.com/chronotope/chrono)
 
-Nuclear launch code data in the built-in Nuke Codes app is fetched from community-maintained sources:
-
+Nuclear launch code data is sourced from community-maintained sources:
 - [NukaCrypt](https://nukacrypt.com/)
 - [NukaPD](https://www.nukapd.com/)
 - [NukaTrader](https://nukatrader.com/)
 
-This project is an unofficial fan-made work. Fallout and related names, characters, settings, and marks are property of their respective owners (including Bethesda Softworks LLC/ZeniMax Media Inc./Microsoft). This project is not endorsed by or affiliated with those entities.
-
-## AI Assistance Disclaimer
+This is an unofficial fan-made project. Fallout and all related names are property of their respective owners. This project is not affiliated with or endorsed by those entities.
 
 This project was created with the help of AI-assisted development tools.

@@ -1,8 +1,8 @@
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context, Rect};
-pub use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesEvent, NukeCodesView};
 use robcos_native_nuke_codes_app::resolve_nuke_codes_event;
+pub use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesEvent, NukeCodesView};
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_nuke_codes_screen(

@@ -64,12 +64,12 @@ The shell no longer owns most business logic directly. Shared native services no
 
 ## Next Steps
 
-1. Finish the native-services boundary so native UI imports the crate cleanly.
-2. Split native shell-facing shared models into a stable app/API layer.
-3. Move editor into its own native app crate boundary.
-4. Move file manager into its own native app crate boundary.
-5. Revisit other built-ins after those two patterns are stable.
+1. Stabilize the current native shell and app-crate boundaries with focused release testing.
+2. Keep shrinking shell-owned prompt and presenter logic where it still adds friction.
+3. Continue moving remaining built-ins toward the same app-crate pattern where it pays off.
+4. Use the new boundaries to profile startup, idle memory, and desktop-mode hot paths.
+5. Decide which pieces should stay embedded and which should eventually become standalone apps or services.
 
 ## Release Target
 
-The next sensible release after the current native/workspace/service work is `0.4.0`, not a patch release.
+`0.4.0` is the baseline release for the native/workspace/service rewrite. The next work should target stabilization, performance, and any remaining boundary cleanup on top of that baseline.

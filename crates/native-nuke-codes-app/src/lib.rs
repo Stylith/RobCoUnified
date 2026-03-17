@@ -27,7 +27,10 @@ pub enum NukeCodesEvent {
 
 const PROVIDERS: &[(&str, &str)] = &[
     ("NukaCrypt", "https://nukacrypt.com/"),
-    ("NukaCrypt Legacy", "https://nukacrypt.com/php/home.php?hm=1"),
+    (
+        "NukaCrypt Legacy",
+        "https://nukacrypt.com/php/home.php?hm=1",
+    ),
     ("NukaPD Mirror", "https://www.nukapd.com/silo-codes"),
     ("NukaTrader Mirror", "https://nukatrader.com/launchcodes/"),
 ];
@@ -133,7 +136,10 @@ mod tests {
 
     #[test]
     fn resolve_nuke_codes_event_prefers_refresh() {
-        assert_eq!(resolve_nuke_codes_event(true, true), NukeCodesEvent::Refresh);
+        assert_eq!(
+            resolve_nuke_codes_event(true, true),
+            NukeCodesEvent::Refresh
+        );
         assert_eq!(resolve_nuke_codes_event(false, true), NukeCodesEvent::Back);
         assert_eq!(resolve_nuke_codes_event(false, false), NukeCodesEvent::None);
     }
