@@ -2589,6 +2589,34 @@ impl RobcoNativeApp {
                 scroll_selected_into_view = true;
             }
         }
+        if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
+            self.move_spotlight_tab(1);
+            scroll_selected_into_view = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
+            self.move_spotlight_tab(-1);
+            scroll_selected_into_view = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift) {
+            self.move_spotlight_tab(1);
+            scroll_selected_into_view = true;
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::Tab);
+            });
+        }
+        if ctx.input(|i| i.key_pressed(Key::Tab) && i.modifiers.shift) {
+            self.move_spotlight_tab(-1);
+            scroll_selected_into_view = true;
+            ctx.input_mut(|i| {
+                i.consume_key(
+                    egui::Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    Key::Tab,
+                );
+            });
+        }
 
         // Enter to activate
         let mut activate_idx: Option<usize> = None;
@@ -2682,9 +2710,7 @@ impl RobcoNativeApp {
                             btn.fill(palette.panel)
                         };
                         if ui.add(btn).clicked() {
-                            self.spotlight_tab = i as u8;
-                            // Force re-search
-                            self.spotlight_last_tab = u8::MAX;
+                            self.set_spotlight_tab(i as u8);
                         }
                     }
                 });
@@ -2921,6 +2947,7 @@ impl RobcoNativeApp {
     fn open_spotlight(&mut self) {
         self.close_start_menu();
         self.spotlight_open = true;
+        self.spotlight_tab = 0;
         self.spotlight_query.clear();
         self.spotlight_selected = 0;
         self.spotlight_results.clear();
@@ -2930,6 +2957,22 @@ impl RobcoNativeApp {
 
     fn close_spotlight(&mut self) {
         self.spotlight_open = false;
+    }
+
+    fn set_spotlight_tab(&mut self, tab: u8) {
+        let next = tab.min(3);
+        if self.spotlight_tab == next {
+            return;
+        }
+        self.spotlight_tab = next;
+        self.spotlight_selected = 0;
+        self.spotlight_last_tab = u8::MAX;
+    }
+
+    fn move_spotlight_tab(&mut self, delta: i8) {
+        let current = self.spotlight_tab as i8;
+        let next = (current + delta).clamp(0, 3) as u8;
+        self.set_spotlight_tab(next);
     }
 
     fn close_desktop_overlays(&mut self) {
@@ -11789,6 +11832,39 @@ mod tests {
 
         app.start_menu_move_root_selection(99);
         assert_eq!(app.start_selected_root, START_ROOT_ITEMS.len() - 1);
+    }
+
+    #[test]
+    fn opening_spotlight_resets_to_all_tab() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.spotlight_tab = 3;
+        app.spotlight_query = "demo".to_string();
+
+        app.open_spotlight();
+
+        assert!(app.spotlight_open);
+        assert_eq!(app.spotlight_tab, 0);
+        assert!(app.spotlight_query.is_empty());
+    }
+
+    #[test]
+    fn spotlight_tab_navigation_clamps_between_bounds() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.set_spotlight_tab(2);
+        assert_eq!(app.spotlight_tab, 2);
+
+        app.move_spotlight_tab(1);
+        assert_eq!(app.spotlight_tab, 3);
+
+        app.move_spotlight_tab(1);
+        assert_eq!(app.spotlight_tab, 3);
+
+        app.move_spotlight_tab(-9);
+        assert_eq!(app.spotlight_tab, 0);
     }
 
     #[test]
