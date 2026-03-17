@@ -11313,7 +11313,7 @@ mod tests {
         app.editor.text.clear();
         app.editor.dirty = false;
         app.editor.status.clear();
-        app.editor.ui = crate::native::editor_app::EditorUiState::default();
+        app.editor.ui = robcos_native_editor_app::EditorUiState::default();
         app.settings.open = false;
         app.settings.status.clear();
         app.settings.draft.theme = "Green (Default)".to_string();

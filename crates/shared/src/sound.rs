@@ -196,29 +196,29 @@ fn get_paths() -> &'static SoundPaths {
     PATHS.get_or_init(|| SoundPaths {
         login: SoundClip {
             name: "login",
-            bytes: include_bytes!("sounds/ui_hacking_passgood.wav").to_vec(),
+            bytes: include_bytes!("../../../src/sounds/ui_hacking_passgood.wav").to_vec(),
         },
         logout: SoundClip {
             name: "logout",
-            bytes: include_bytes!("sounds/ui_hacking_passbad.wav").to_vec(),
+            bytes: include_bytes!("../../../src/sounds/ui_hacking_passbad.wav").to_vec(),
         },
         error: SoundClip {
             name: "error",
-            bytes: include_bytes!("sounds/ui_hacking_passbad.wav").to_vec(),
+            bytes: include_bytes!("../../../src/sounds/ui_hacking_passbad.wav").to_vec(),
         },
         navigate: SoundClip {
             name: "navigate",
-            bytes: include_bytes!("sounds/ui_hacking_charenter_01.wav").to_vec(),
+            bytes: include_bytes!("../../../src/sounds/ui_hacking_charenter_01.wav").to_vec(),
         },
         keypress: SoundClip {
             name: "keypress",
-            bytes: include_bytes!("sounds/ui_hacking_charscroll.wav").to_vec(),
+            bytes: include_bytes!("../../../src/sounds/ui_hacking_charscroll.wav").to_vec(),
         },
         boot_keys: vec![
             SoundClip {
                 name: "boot0",
                 bytes: extract_boot_click_window_pcm16_mono(
-                    include_bytes!("sounds/ui_hacking_charsingle_01.wav"),
+                    include_bytes!("../../../src/sounds/ui_hacking_charsingle_01.wav"),
                     550,
                     28,
                     2100,
@@ -227,7 +227,7 @@ fn get_paths() -> &'static SoundPaths {
             SoundClip {
                 name: "boot1",
                 bytes: extract_boot_click_window_pcm16_mono(
-                    include_bytes!("sounds/ui_hacking_charsingle_02.wav"),
+                    include_bytes!("../../../src/sounds/ui_hacking_charsingle_02.wav"),
                     550,
                     28,
                     2100,
@@ -236,7 +236,7 @@ fn get_paths() -> &'static SoundPaths {
             SoundClip {
                 name: "boot2",
                 bytes: extract_boot_click_window_pcm16_mono(
-                    include_bytes!("sounds/ui_hacking_charsingle_03.wav"),
+                    include_bytes!("../../../src/sounds/ui_hacking_charsingle_03.wav"),
                     550,
                     28,
                     2100,
@@ -245,7 +245,7 @@ fn get_paths() -> &'static SoundPaths {
             SoundClip {
                 name: "boot3",
                 bytes: extract_boot_click_window_pcm16_mono(
-                    include_bytes!("sounds/ui_hacking_charsingle_04.wav"),
+                    include_bytes!("../../../src/sounds/ui_hacking_charsingle_04.wav"),
                     550,
                     28,
                     2100,
@@ -254,7 +254,7 @@ fn get_paths() -> &'static SoundPaths {
             SoundClip {
                 name: "boot4",
                 bytes: extract_boot_click_window_pcm16_mono(
-                    include_bytes!("sounds/ui_hacking_charsingle_05.wav"),
+                    include_bytes!("../../../src/sounds/ui_hacking_charsingle_05.wav"),
                     550,
                     28,
                     2100,
