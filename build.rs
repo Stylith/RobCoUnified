@@ -9,7 +9,11 @@ fn render_svg_to_png(svg_path: &Path, png_path: &Path) {
     let size = tree.size().to_int_size();
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
         .unwrap_or_else(|| panic!("failed allocating pixmap for {}", svg_path.display()));
-    resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
 
     let mut out = image::RgbaImage::new(size.width(), size.height());
     for (idx, pixel) in pixmap.pixels().iter().enumerate() {
@@ -37,8 +41,8 @@ fn build_donkey_kong_assets() {
         return;
     }
 
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing"))
-        .join("donkey_kong");
+    let out_dir =
+        PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR missing")).join("donkey_kong");
     fs::create_dir_all(&out_dir)
         .unwrap_or_else(|err| panic!("failed creating {}: {err}", out_dir.display()));
 

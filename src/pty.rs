@@ -805,9 +805,7 @@ impl PtySession {
                                     // 1ms timeout gives ncurses apps time to
                                     // flush their full clear+redraw sequence
                                     // before we finalize the batch.
-                                    let ready = unsafe {
-                                        libc::poll(&mut pfd as *mut _, 1, 1)
-                                    };
+                                    let ready = unsafe { libc::poll(&mut pfd as *mut _, 1, 1) };
                                     if ready > 0 && (pfd.revents & libc::POLLIN) != 0 {
                                         match std::io::Read::read(&mut reader, &mut buf) {
                                             Ok(0) | Err(_) => break,
@@ -939,7 +937,12 @@ impl PtySession {
     pub fn mouse_mode_enabled(&self) -> bool {
         self.parser
             .lock()
-            .map(|p| !matches!(p.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None))
+            .map(|p| {
+                !matches!(
+                    p.screen().mouse_protocol_mode(),
+                    vt100::MouseProtocolMode::None
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -1029,7 +1032,10 @@ impl PtySession {
     /// so it's guaranteed to be in a consistent (non-mid-update) state.
     #[allow(dead_code)]
     pub fn committed_frame(&self) -> CommittedFrame {
-        self.display.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.display
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Snapshot the current screen as plain text for non-ratatui renderers.
