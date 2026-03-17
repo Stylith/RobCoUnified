@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell"]
-default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell"]
+members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared"]
+default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared"]
 resolver = "2"
 
 [package]
@@ -8,7 +8,7 @@ name = "robcos"
 version = "0.3.2"
 edition = "2021"
 description = "RobCoOS — Fallout-style terminal OS in Rust"
-license = "MIT"
+license = "GPL-3.0-only"
 readme = "README.md"
 repository = "https://github.com/Stylith/RobCoUnified"
 autobins = false
@@ -33,6 +33,8 @@ fontdue       = "0.8"
 libc          = "0.2"
 resvg         = "0.44"
 usvg          = "0.44"
+robcos-native-services = { path = "crates/native-services" }
+robcos-shared = { path = "crates/shared" }
 
 [build-dependencies]
 winres        = "0.1"

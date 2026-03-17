@@ -64,7 +64,6 @@ pub fn set_open_with_default_in_settings(
     }
 }
 
-#[cfg(test)]
 pub fn sync_open_with_settings_to_draft(
     live: &DesktopFileManagerSettings,
     draft: &mut DesktopFileManagerSettings,

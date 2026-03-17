@@ -1,4 +1,4 @@
-pub use robcos::{config, connections, core, default_apps, launcher, session};
+pub use robcos_shared::{config, connections, core, default_apps, launcher, session};
 
 pub mod desktop_connections_service;
 pub mod desktop_default_apps_service;

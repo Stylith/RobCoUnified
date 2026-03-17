@@ -2,7 +2,7 @@
 name = "robcos-legacy-shell"
 version = "0.3.2"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]
