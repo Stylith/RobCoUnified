@@ -3,6 +3,7 @@ use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
 use ratatui::style::Color;
+use std::sync::Mutex;
 
 pub const FIXED_PTY_CELL_W: f32 = 11.0;
 pub const FIXED_PTY_CELL_H: f32 = 22.0;
@@ -19,6 +20,14 @@ pub struct RetroPalette {
     pub active_bg: Color32,
     pub selection_bg: Color32,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct PaletteCache {
+    color: Color,
+    palette: RetroPalette,
+}
+
+static PALETTE_CACHE: Mutex<Option<PaletteCache>> = Mutex::new(None);
 
 fn color32_from_theme(color: Color) -> Color32 {
     match color {
@@ -69,7 +78,18 @@ fn palette_for_theme_color(color: Color) -> RetroPalette {
 }
 
 pub fn current_palette() -> RetroPalette {
-    palette_for_theme_color(current_theme_color())
+    let color = current_theme_color();
+    if let Ok(mut guard) = PALETTE_CACHE.lock() {
+        if let Some(cache) = *guard {
+            if cache.color == color {
+                return cache.palette;
+            }
+        }
+        let palette = palette_for_theme_color(color);
+        *guard = Some(PaletteCache { color, palette });
+        return palette;
+    }
+    palette_for_theme_color(color)
 }
 
 pub fn palette_for_settings(settings: &Settings) -> RetroPalette {

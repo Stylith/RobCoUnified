@@ -898,6 +898,14 @@ pub fn get_settings() -> Settings {
         .unwrap_or_default()
 }
 
+pub fn with_settings<R>(f: impl FnOnce(&Settings) -> R) -> R {
+    if let Ok(guard) = settings_lock().read() {
+        return f(&guard);
+    }
+    let default = Settings::default();
+    f(&default)
+}
+
 pub fn reload_settings() {
     let s = load_settings();
     if let Ok(mut guard) = settings_lock().write() {
@@ -1168,8 +1176,7 @@ pub fn theme_color_for_settings(settings: &Settings) -> Color {
 }
 
 pub fn current_theme_color() -> Color {
-    let settings = get_settings();
-    theme_color_for_settings(&settings)
+    with_settings(theme_color_for_settings)
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────

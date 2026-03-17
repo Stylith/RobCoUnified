@@ -311,7 +311,7 @@ pub fn draw_embedded_pty_in_ui_sized(
         return PtyScreenEvent::ProcessExited;
     }
     let smooth_borders = matches!(
-        crate::config::get_settings().cli_acs_mode,
+        crate::config::with_settings(|settings| settings.cli_acs_mode),
         crate::config::CliAcsMode::Unicode
     );
     let mut snapshot_ms = 0.0f32;

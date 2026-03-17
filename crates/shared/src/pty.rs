@@ -231,7 +231,7 @@ fn pty_color_mode() -> PtyColorMode {
         Some("theme") | Some("theme-lock") | Some("themelock") | Some("lock") => {
             PtyColorMode::ThemeLock
         }
-        _ => match crate::config::get_settings().cli_color_mode {
+        _ => match crate::config::with_settings(|settings| settings.cli_color_mode) {
             crate::config::CliColorMode::ThemeLock => PtyColorMode::ThemeLock,
             crate::config::CliColorMode::PaletteMap => PtyColorMode::PaletteMap,
             crate::config::CliColorMode::Color => PtyColorMode::Ansi,
@@ -248,7 +248,7 @@ enum AcsGlyphMode {
 
 impl AcsGlyphMode {
     fn from_config() -> Self {
-        match crate::config::get_settings().cli_acs_mode {
+        match crate::config::with_settings(|settings| settings.cli_acs_mode) {
             crate::config::CliAcsMode::Ascii => Self::Ascii,
             crate::config::CliAcsMode::Unicode => Self::Unicode,
         }
