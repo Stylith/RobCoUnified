@@ -1696,8 +1696,7 @@ impl RobcoNativeApp {
         self.set_desktop_window_minimized(window, false);
         self.desktop_active_window = Some(window);
         if self.desktop_mode_open {
-            self.close_start_menu();
-            self.close_spotlight();
+            self.close_desktop_overlays();
         }
     }
 
@@ -2924,6 +2923,11 @@ impl RobcoNativeApp {
 
     fn close_spotlight(&mut self) {
         self.spotlight_open = false;
+    }
+
+    fn close_desktop_overlays(&mut self) {
+        self.close_start_menu();
+        self.close_spotlight();
     }
 
     fn set_start_panel_for_root(&mut self, root_idx: usize) {
@@ -4961,7 +4965,7 @@ impl RobcoNativeApp {
                     self.open_desktop_window(*window);
                 } else {
                     self.desktop_active_window = Some(*window);
-                    self.close_start_menu();
+                    self.close_desktop_overlays();
                 }
             }
             DesktopMenuAction::ActivateTaskbarWindow(window) => {
@@ -4969,10 +4973,10 @@ impl RobcoNativeApp {
                     self.open_desktop_window(*window);
                 } else if self.desktop_window_is_minimized(*window) {
                     self.set_desktop_window_minimized(*window, false);
-                    self.close_start_menu();
+                    self.close_desktop_overlays();
                 } else {
                     self.desktop_active_window = Some(*window);
-                    self.close_start_menu();
+                    self.close_desktop_overlays();
                 }
             }
             DesktopMenuAction::OpenManual { path, status_label } => {
@@ -5443,8 +5447,7 @@ impl RobcoNativeApp {
                     self.settings.draft.desktop_icon_sort,
                 );
                 if response.clicked() {
-                    self.close_start_menu();
-                    self.close_spotlight();
+                    self.close_desktop_overlays();
                 }
             });
     }
@@ -10729,6 +10732,12 @@ impl eframe::App for RobcoNativeApp {
         }
 
         if self.desktop_mode_open {
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                let had_overlay = self.start_open || self.spotlight_open;
+                if had_overlay {
+                    self.close_desktop_overlays();
+                }
+            }
             self.handle_desktop_file_manager_shortcuts(ctx);
             self.draw_top_bar(ctx);
             self.draw_desktop_taskbar(ctx);
@@ -11543,6 +11552,44 @@ mod tests {
         app.open_desktop_window(DesktopWindow::Editor);
 
         assert_eq!(app.desktop_active_window, Some(DesktopWindow::Editor));
+        assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn closing_desktop_overlays_clears_start_and_spotlight() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.start_open = true;
+        app.start_open_submenu = Some(StartSubmenu::System);
+        app.start_open_leaf = Some(StartLeaf::Applications);
+        app.spotlight_open = true;
+
+        app.close_desktop_overlays();
+
+        assert!(!app.start_open);
+        assert_eq!(app.start_open_submenu, None);
+        assert_eq!(app.start_open_leaf, None);
+        assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn activating_open_window_closes_desktop_overlays() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.start_open = true;
+        app.spotlight_open = true;
+        app.desktop_active_window = Some(DesktopWindow::FileManager);
+        app.file_manager.open = true;
+
+        app.apply_desktop_menu_action(
+            &Context::default(),
+            &DesktopMenuAction::ActivateDesktopWindow(DesktopWindow::FileManager),
+        );
+
+        assert_eq!(app.desktop_active_window, Some(DesktopWindow::FileManager));
+        assert!(!app.start_open);
         assert!(!app.spotlight_open);
     }
 
