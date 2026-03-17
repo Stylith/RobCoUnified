@@ -2911,6 +2911,13 @@ impl RobcoNativeApp {
         self.start_open_leaf = None;
     }
 
+    fn close_start_menu_panel(&mut self) {
+        self.start_open_submenu = None;
+        self.start_open_leaf = None;
+        self.start_system_selected = 0;
+        self.start_leaf_selected = 0;
+    }
+
     fn open_spotlight(&mut self) {
         self.close_start_menu();
         self.spotlight_open = true;
@@ -2928,6 +2935,111 @@ impl RobcoNativeApp {
     fn close_desktop_overlays(&mut self) {
         self.close_start_menu();
         self.close_spotlight();
+    }
+
+    fn start_menu_open_current_panel(&mut self) {
+        let idx = self.start_selected_root;
+        if start_root_leaf_for_idx(idx).is_some() || start_root_submenu_for_idx(idx).is_some() {
+            self.set_start_panel_for_root(idx);
+        }
+    }
+
+    fn start_menu_move_root_selection(&mut self, delta: isize) {
+        let max_idx = START_ROOT_ITEMS.len().saturating_sub(1) as isize;
+        let next = (self.start_selected_root as isize + delta).clamp(0, max_idx) as usize;
+        if next == self.start_selected_root {
+            return;
+        }
+        if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
+            self.set_start_panel_for_root(next);
+        } else {
+            self.start_selected_root = next;
+        }
+    }
+
+    fn start_menu_move_panel_selection(&mut self, delta: isize) {
+        if let Some(StartSubmenu::System) = self.start_open_submenu {
+            let items_len = self.start_system_items().len();
+            if items_len > 0 {
+                let max_idx = items_len.saturating_sub(1) as isize;
+                self.start_system_selected =
+                    (self.start_system_selected as isize + delta).clamp(0, max_idx) as usize;
+            }
+        } else if let Some(leaf) = self.start_open_leaf {
+            let items_len = self.start_leaf_items(leaf).len();
+            if items_len > 0 {
+                let max_idx = items_len.saturating_sub(1) as isize;
+                self.start_leaf_selected =
+                    (self.start_leaf_selected as isize + delta).clamp(0, max_idx) as usize;
+            }
+        } else {
+            self.start_menu_move_root_selection(delta);
+        }
+    }
+
+    fn activate_start_menu_selection(&mut self) {
+        if let Some(StartSubmenu::System) = self.start_open_submenu {
+            let items = self.start_system_items();
+            if let Some((_, action)) = items.get(self.start_system_selected) {
+                self.run_start_system_action(*action);
+            }
+            return;
+        }
+
+        if let Some(leaf) = self.start_open_leaf {
+            let items = self.start_leaf_items(leaf);
+            if let Some(item) = items.get(self.start_leaf_selected) {
+                self.run_start_leaf_action(item.action.clone());
+            }
+            return;
+        }
+
+        if let Some(action) = start_root_action_for_idx(self.start_selected_root) {
+            self.run_start_root_action(action);
+        } else {
+            self.start_menu_open_current_panel();
+        }
+    }
+
+    fn handle_start_menu_keyboard(&mut self, ctx: &Context) {
+        if !self.start_open {
+            return;
+        }
+
+        let mut handled = false;
+        ctx.input_mut(|i| {
+            if i.key_pressed(Key::ArrowUp) {
+                self.start_menu_move_panel_selection(-1);
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                handled = true;
+            } else if i.key_pressed(Key::ArrowDown) {
+                self.start_menu_move_panel_selection(1);
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+                handled = true;
+            } else if i.key_pressed(Key::ArrowRight) {
+                if self.start_open_leaf.is_none() && self.start_open_submenu.is_none() {
+                    self.start_menu_open_current_panel();
+                }
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
+                handled = true;
+            } else if i.key_pressed(Key::ArrowLeft) {
+                if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
+                    self.close_start_menu_panel();
+                } else {
+                    self.close_start_menu();
+                }
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft);
+                handled = true;
+            } else if i.key_pressed(Key::Enter) {
+                self.activate_start_menu_selection();
+                i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                handled = true;
+            }
+        });
+
+        if handled {
+            self.close_spotlight();
+        }
     }
 
     fn set_start_panel_for_root(&mut self, root_idx: usize) {
@@ -10743,6 +10855,7 @@ impl eframe::App for RobcoNativeApp {
                     self.close_desktop_overlays();
                 }
             }
+            self.handle_start_menu_keyboard(ctx);
             self.handle_desktop_file_manager_shortcuts(ctx);
             self.draw_top_bar(ctx);
             self.draw_desktop_taskbar(ctx);
@@ -11633,6 +11746,49 @@ mod tests {
         assert_eq!(app.desktop_active_window, Some(DesktopWindow::FileManager));
         assert!(!app.start_open);
         assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn activating_start_root_selection_opens_current_panel() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.open_start_menu();
+        app.start_selected_root = 0;
+
+        app.activate_start_menu_selection();
+
+        assert_eq!(app.start_open_leaf, Some(StartLeaf::Applications));
+        assert_eq!(app.start_open_submenu, None);
+    }
+
+    #[test]
+    fn start_menu_left_closes_open_panel_without_closing_menu() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.open_start_menu();
+        app.set_start_panel_for_root(4);
+
+        app.close_start_menu_panel();
+
+        assert!(app.start_open);
+        assert_eq!(app.start_open_submenu, None);
+        assert_eq!(app.start_open_leaf, None);
+    }
+
+    #[test]
+    fn start_menu_root_navigation_clamps_to_valid_bounds() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.open_start_menu();
+
+        app.start_menu_move_root_selection(-1);
+        assert_eq!(app.start_selected_root, 0);
+
+        app.start_menu_move_root_selection(99);
+        assert_eq!(app.start_selected_root, START_ROOT_ITEMS.len() - 1);
     }
 
     #[test]
