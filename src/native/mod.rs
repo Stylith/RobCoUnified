@@ -10,6 +10,8 @@ mod edit_menus_screen;
 mod editor_app;
 mod file_manager;
 mod file_manager_app;
+mod file_manager_menu;
+mod file_manager_prompt;
 mod file_manager_desktop;
 mod hacking_screen;
 mod installer_screen;

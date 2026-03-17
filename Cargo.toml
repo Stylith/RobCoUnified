@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app"]
-default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app"]
+members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app"]
+default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app"]
 resolver = "2"
 
 [package]
@@ -36,6 +36,7 @@ usvg          = "0.44"
 robcos-native-services = { path = "crates/native-services" }
 robcos-shared = { path = "crates/shared" }
 robcos-native-editor-app = { path = "crates/native-editor-app" }
+robcos-native-file-manager-app = { path = "crates/native-file-manager-app" }
 
 [build-dependencies]
 winres        = "0.1"
