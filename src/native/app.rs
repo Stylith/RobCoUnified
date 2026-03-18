@@ -8,9 +8,9 @@ use super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRe
 use super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
     build_taskbar_entries, build_window_menu_section, desktop_app_menu_name,
-    desktop_component_binding, desktop_component_spec, desktop_component_specs,
-    hosted_app_for_window, DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext,
-    DesktopMenuItem, DesktopMenuSection, DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
+    desktop_component_binding, desktop_component_spec, desktop_components, hosted_app_for_window,
+    DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem,
+    DesktopMenuSection, DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
 };
 use super::desktop_connections_service::{
     connect_connection_and_refresh_settings, connection_requires_password,
@@ -1842,6 +1842,11 @@ impl RobcoNativeApp {
         self.draw_settings(ctx);
     }
 
+    pub(crate) fn desktop_component_settings_on_open(&mut self, _was_open: bool) {
+        self.reset_desktop_settings_window();
+        self.prime_desktop_window_defaults(DesktopWindow::Settings);
+    }
+
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
         self.applications.open
     }
@@ -1890,6 +1895,12 @@ impl RobcoNativeApp {
         self.draw_installer(ctx);
     }
 
+    pub(crate) fn desktop_component_installer_on_open(&mut self, was_open: bool) {
+        if !was_open {
+            self.prime_desktop_window_defaults(DesktopWindow::Installer);
+        }
+    }
+
     pub(crate) fn desktop_component_terminal_mode_is_open(&self) -> bool {
         self.terminal_mode.open
     }
@@ -1900,6 +1911,12 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_terminal_mode_draw(&mut self, ctx: &Context) {
         self.draw_terminal_mode(ctx);
+    }
+
+    pub(crate) fn desktop_component_terminal_mode_on_open(&mut self, was_open: bool) {
+        if !was_open {
+            self.prime_desktop_window_defaults(DesktopWindow::TerminalMode);
+        }
     }
 
     pub(crate) fn desktop_component_pty_is_open(&self) -> bool {
@@ -1916,6 +1933,12 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_pty_draw(&mut self, ctx: &Context) {
         self.draw_desktop_pty_window(ctx);
+    }
+
+    pub(crate) fn desktop_component_pty_on_open(&mut self, was_open: bool) {
+        if !was_open {
+            self.prime_desktop_window_defaults(DesktopWindow::PtyApp);
+        }
     }
 
     fn desktop_window_is_open(&self, window: DesktopWindow) -> bool {
@@ -2106,10 +2129,10 @@ impl RobcoNativeApp {
     }
 
     fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        desktop_component_specs()
+        desktop_components()
             .iter()
             .rev()
-            .map(|spec| spec.window)
+            .map(|component| component.spec.window)
             .find(|window| {
                 self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
             })
@@ -2137,16 +2160,9 @@ impl RobcoNativeApp {
     }
 
     fn open_desktop_window(&mut self, window: DesktopWindow) {
-        if matches!(window, DesktopWindow::Settings) {
-            self.reset_desktop_settings_window();
-            self.prime_desktop_window_defaults(window);
-        } else if !self.desktop_window_is_open(window)
-            && matches!(
-                window,
-                DesktopWindow::TerminalMode | DesktopWindow::PtyApp | DesktopWindow::Installer
-            )
-        {
-            self.prime_desktop_window_defaults(window);
+        let was_open = self.desktop_window_is_open(window);
+        if let Some(on_open) = desktop_component_binding(window).on_open {
+            on_open(self, was_open);
         }
         self.set_desktop_window_open(window, true);
         self.set_desktop_window_minimized(window, false);
@@ -4564,7 +4580,10 @@ impl RobcoNativeApp {
     fn draw_desktop_windows(&mut self, ctx: &Context) {
         self.sync_desktop_active_window();
         let active = self.desktop_active_window;
-        for window in desktop_component_specs().iter().map(|spec| spec.window) {
+        for window in desktop_components()
+            .iter()
+            .map(|component| component.spec.window)
+        {
             if Some(window) == active {
                 continue;
             }
@@ -6409,13 +6428,13 @@ impl RobcoNativeApp {
     fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         let menu = ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
-            let entries: Vec<DesktopWindowMenuEntry> = desktop_component_specs()
+            let entries: Vec<DesktopWindowMenuEntry> = desktop_components()
                 .iter()
-                .filter(|spec| spec.show_in_window_menu)
-                .map(|spec| DesktopWindowMenuEntry {
-                    window: spec.window,
-                    open: self.desktop_window_is_open(spec.window),
-                    active: self.desktop_active_window == Some(spec.window),
+                .filter(|component| component.spec.show_in_window_menu)
+                .map(|component| DesktopWindowMenuEntry {
+                    window: component.spec.window,
+                    open: self.desktop_window_is_open(component.spec.window),
+                    active: self.desktop_active_window == Some(component.spec.window),
                 })
                 .collect();
             let items = build_window_menu_section(
@@ -6877,10 +6896,10 @@ impl RobcoNativeApp {
                     }
                     ui.label(RichText::new("|").monospace().color(Color32::BLACK));
                     ui.add_space(8.0);
-                    let open_windows: Vec<DesktopWindow> = desktop_component_specs()
+                    let open_windows: Vec<DesktopWindow> = desktop_components()
                         .iter()
-                        .filter(|spec| spec.show_in_taskbar)
-                        .map(|spec| spec.window)
+                        .filter(|component| component.spec.show_in_taskbar)
+                        .map(|component| component.spec.window)
                         .filter(|window| self.desktop_window_is_open(*window))
                         .collect();
                     let entries = build_taskbar_entries(
@@ -13088,6 +13107,57 @@ mod tests {
 
         assert_eq!(app.desktop_active_window, Some(DesktopWindow::Editor));
         assert!(!app.spotlight_open);
+    }
+
+    #[test]
+    fn reopening_settings_window_reprimes_component_state() {
+        let mut app = RobcoNativeApp::default();
+        app.settings.open = true;
+        let state = app.desktop_window_state_mut(DesktopWindow::Settings);
+        state.restore_pos = Some([24.0, 48.0]);
+        state.restore_size = Some([640.0, 360.0]);
+        state.apply_restore = true;
+        state.maximized = true;
+        state.minimized = true;
+        state.user_resized = true;
+        state.generation = 7;
+
+        app.open_desktop_window(DesktopWindow::Settings);
+
+        let state = app.desktop_window_state(DesktopWindow::Settings);
+        assert!(app.settings.open);
+        assert_eq!(state.restore_pos, None);
+        assert_eq!(state.restore_size, None);
+        assert!(!state.apply_restore);
+        assert!(!state.maximized);
+        assert!(!state.minimized);
+        assert!(!state.user_resized);
+        assert_ne!(state.generation, 7);
+    }
+
+    #[test]
+    fn opening_closed_installer_window_clears_stale_restore_state() {
+        let mut app = RobcoNativeApp::default();
+        let state = app.desktop_window_state_mut(DesktopWindow::Installer);
+        state.restore_pos = Some([12.0, 36.0]);
+        state.restore_size = Some([800.0, 520.0]);
+        state.apply_restore = true;
+        state.maximized = true;
+        state.minimized = true;
+        state.user_resized = true;
+        state.generation = 5;
+
+        app.open_desktop_window(DesktopWindow::Installer);
+
+        let state = app.desktop_window_state(DesktopWindow::Installer);
+        assert!(app.desktop_installer.open);
+        assert_eq!(state.restore_pos, None);
+        assert_eq!(state.restore_size, None);
+        assert!(!state.apply_restore);
+        assert!(!state.maximized);
+        assert!(!state.minimized);
+        assert!(!state.user_resized);
+        assert_ne!(state.generation, 5);
     }
 
     #[test]

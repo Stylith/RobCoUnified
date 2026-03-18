@@ -137,6 +137,7 @@ pub struct DesktopComponentBinding {
     pub is_open: fn(&RobcoNativeApp) -> bool,
     pub set_open: fn(&mut RobcoNativeApp, bool),
     pub draw: fn(&mut RobcoNativeApp, &Context),
+    pub on_open: Option<fn(&mut RobcoNativeApp, bool)>,
     pub on_closed: Option<fn(&mut RobcoNativeApp)>,
 }
 
@@ -151,152 +152,149 @@ pub struct DesktopComponentSpec {
     title_kind: DesktopTitleKind,
 }
 
-const DESKTOP_COMPONENT_SPECS: [DesktopComponentSpec; 9] = [
-    DesktopComponentSpec {
-        window: DesktopWindow::FileManager,
-        hosted_app: DesktopHostedApp::FileManager,
-        id_salt: "native_file_manager",
-        default_size: [860.0, 560.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static(FILE_MANAGER_APP_TITLE),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::Editor,
-        hosted_app: DesktopHostedApp::Editor,
-        id_salt: "native_word_processor",
-        default_size: [820.0, 560.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static(EDITOR_APP_TITLE),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::Settings,
-        hosted_app: DesktopHostedApp::Settings,
-        id_salt: "native_settings",
-        default_size: [760.0, 500.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static("Settings"),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::Applications,
-        hosted_app: DesktopHostedApp::Applications,
-        id_salt: "native_applications",
-        default_size: [700.0, 480.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static("Applications"),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::DonkeyKong,
-        hosted_app: DesktopHostedApp::Game,
-        id_salt: "native_donkey_kong",
-        default_size: [820.0, 720.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static(BUILTIN_DONKEY_KONG_GAME),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::NukeCodes,
-        hosted_app: DesktopHostedApp::Utility,
-        id_salt: "native_nuke_codes",
-        default_size: [640.0, 420.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::Static("Nuke Codes"),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::Installer,
-        hosted_app: DesktopHostedApp::Installer,
-        id_salt: "native_installer",
-        default_size: [800.0, 600.0],
-        show_in_taskbar: true,
-        show_in_window_menu: false,
-        title_kind: DesktopTitleKind::Static("Program Installer"),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::TerminalMode,
-        hosted_app: DesktopHostedApp::Terminal,
-        id_salt: "native_terminal_mode",
-        default_size: [720.0, 500.0],
-        show_in_taskbar: false,
-        show_in_window_menu: false,
-        title_kind: DesktopTitleKind::Static("Terminal"),
-    },
-    DesktopComponentSpec {
-        window: DesktopWindow::PtyApp,
-        hosted_app: DesktopHostedApp::PtyApp,
-        id_salt: "native_desktop_pty",
-        default_size: [960.0, 600.0],
-        show_in_taskbar: true,
-        show_in_window_menu: true,
-        title_kind: DesktopTitleKind::PtyFallback("PTY App"),
-    },
-];
-
 const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 9] = [
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[0],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::FileManager,
+            hosted_app: DesktopHostedApp::FileManager,
+            id_salt: "native_file_manager",
+            default_size: [860.0, 560.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static(FILE_MANAGER_APP_TITLE),
+        },
         is_open: RobcoNativeApp::desktop_component_file_manager_is_open,
         set_open: RobcoNativeApp::desktop_component_file_manager_set_open,
         draw: RobcoNativeApp::desktop_component_file_manager_draw,
+        on_open: None,
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[1],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Editor,
+            hosted_app: DesktopHostedApp::Editor,
+            id_salt: "native_word_processor",
+            default_size: [820.0, 560.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static(EDITOR_APP_TITLE),
+        },
         is_open: RobcoNativeApp::desktop_component_editor_is_open,
         set_open: RobcoNativeApp::desktop_component_editor_set_open,
         draw: RobcoNativeApp::desktop_component_editor_draw,
+        on_open: None,
         on_closed: Some(RobcoNativeApp::desktop_component_editor_on_closed),
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[2],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Settings,
+            hosted_app: DesktopHostedApp::Settings,
+            id_salt: "native_settings",
+            default_size: [760.0, 500.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static("Settings"),
+        },
         is_open: RobcoNativeApp::desktop_component_settings_is_open,
         set_open: RobcoNativeApp::desktop_component_settings_set_open,
         draw: RobcoNativeApp::desktop_component_settings_draw,
+        on_open: Some(RobcoNativeApp::desktop_component_settings_on_open),
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[3],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Applications,
+            hosted_app: DesktopHostedApp::Applications,
+            id_salt: "native_applications",
+            default_size: [700.0, 480.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static("Applications"),
+        },
         is_open: RobcoNativeApp::desktop_component_applications_is_open,
         set_open: RobcoNativeApp::desktop_component_applications_set_open,
         draw: RobcoNativeApp::desktop_component_applications_draw,
+        on_open: None,
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[4],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::DonkeyKong,
+            hosted_app: DesktopHostedApp::Game,
+            id_salt: "native_donkey_kong",
+            default_size: [820.0, 720.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static(BUILTIN_DONKEY_KONG_GAME),
+        },
         is_open: RobcoNativeApp::desktop_component_donkey_kong_is_open,
         set_open: RobcoNativeApp::desktop_component_donkey_kong_set_open,
         draw: RobcoNativeApp::desktop_component_donkey_kong_draw,
+        on_open: None,
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[5],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::NukeCodes,
+            hosted_app: DesktopHostedApp::Utility,
+            id_salt: "native_nuke_codes",
+            default_size: [640.0, 420.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static("Nuke Codes"),
+        },
         is_open: RobcoNativeApp::desktop_component_nuke_codes_is_open,
         set_open: RobcoNativeApp::desktop_component_nuke_codes_set_open,
         draw: RobcoNativeApp::desktop_component_nuke_codes_draw,
+        on_open: None,
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[6],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Installer,
+            hosted_app: DesktopHostedApp::Installer,
+            id_salt: "native_installer",
+            default_size: [800.0, 600.0],
+            show_in_taskbar: true,
+            show_in_window_menu: false,
+            title_kind: DesktopTitleKind::Static("Program Installer"),
+        },
         is_open: RobcoNativeApp::desktop_component_installer_is_open,
         set_open: RobcoNativeApp::desktop_component_installer_set_open,
         draw: RobcoNativeApp::desktop_component_installer_draw,
+        on_open: Some(RobcoNativeApp::desktop_component_installer_on_open),
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[7],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::TerminalMode,
+            hosted_app: DesktopHostedApp::Terminal,
+            id_salt: "native_terminal_mode",
+            default_size: [720.0, 500.0],
+            show_in_taskbar: false,
+            show_in_window_menu: false,
+            title_kind: DesktopTitleKind::Static("Terminal"),
+        },
         is_open: RobcoNativeApp::desktop_component_terminal_mode_is_open,
         set_open: RobcoNativeApp::desktop_component_terminal_mode_set_open,
         draw: RobcoNativeApp::desktop_component_terminal_mode_draw,
+        on_open: Some(RobcoNativeApp::desktop_component_terminal_mode_on_open),
         on_closed: None,
     },
     DesktopComponentBinding {
-        spec: DESKTOP_COMPONENT_SPECS[8],
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::PtyApp,
+            hosted_app: DesktopHostedApp::PtyApp,
+            id_salt: "native_desktop_pty",
+            default_size: [960.0, 600.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::PtyFallback("PTY App"),
+        },
         is_open: RobcoNativeApp::desktop_component_pty_is_open,
         set_open: RobcoNativeApp::desktop_component_pty_set_open,
         draw: RobcoNativeApp::desktop_component_pty_draw,
+        on_open: Some(RobcoNativeApp::desktop_component_pty_on_open),
         on_closed: None,
     },
 ];
@@ -345,15 +343,12 @@ impl DesktopMenuSection {
     }
 }
 
-pub fn desktop_component_specs() -> &'static [DesktopComponentSpec] {
-    &DESKTOP_COMPONENT_SPECS
+pub fn desktop_component_spec(window: DesktopWindow) -> &'static DesktopComponentSpec {
+    &desktop_component_binding(window).spec
 }
 
-pub fn desktop_component_spec(window: DesktopWindow) -> &'static DesktopComponentSpec {
-    DESKTOP_COMPONENT_SPECS
-        .iter()
-        .find(|spec| spec.window == window)
-        .expect("desktop component spec")
+pub fn desktop_components() -> &'static [DesktopComponentBinding] {
+    &DESKTOP_COMPONENT_BINDINGS
 }
 
 pub fn desktop_component_binding(window: DesktopWindow) -> &'static DesktopComponentBinding {
@@ -476,14 +471,16 @@ pub fn build_taskbar_entries(
     active_window: Option<DesktopWindow>,
     pty_title: Option<&str>,
 ) -> Vec<DesktopTaskbarEntry> {
-    desktop_component_specs()
+    desktop_components()
         .iter()
-        .filter(|spec| spec.show_in_taskbar && open_windows.contains(&spec.window))
-        .map(|spec| DesktopTaskbarEntry {
-            window: spec.window,
-            label: spec.title(pty_title),
+        .filter(|component| {
+            component.spec.show_in_taskbar && open_windows.contains(&component.spec.window)
+        })
+        .map(|component| DesktopTaskbarEntry {
+            window: component.spec.window,
+            label: component.spec.title(pty_title),
             // Taskbar chrome renders the "active" look in the inverse branch.
-            inactive: active_window != Some(spec.window),
+            inactive: active_window != Some(component.spec.window),
         })
         .collect()
 }
@@ -641,12 +638,12 @@ mod tests {
 
     #[test]
     fn desktop_component_registry_is_single_source_of_truth() {
-        let specs = desktop_component_specs();
-        assert_eq!(specs[0].window, DesktopWindow::FileManager);
-        assert_eq!(specs[6].window, DesktopWindow::Installer);
-        assert_eq!(specs[7].window, DesktopWindow::TerminalMode);
-        assert!(!specs[7].show_in_taskbar);
-        assert!(!specs[6].show_in_window_menu);
+        let components = desktop_components();
+        assert_eq!(components[0].spec.window, DesktopWindow::FileManager);
+        assert_eq!(components[6].spec.window, DesktopWindow::Installer);
+        assert_eq!(components[7].spec.window, DesktopWindow::TerminalMode);
+        assert!(!components[7].spec.show_in_taskbar);
+        assert!(!components[6].spec.show_in_window_menu);
         assert_eq!(
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"
@@ -655,12 +652,18 @@ mod tests {
 
     #[test]
     fn desktop_component_bindings_align_with_registry_entries() {
-        let specs = desktop_component_specs();
+        let components = desktop_components();
 
-        for spec in specs {
-            let binding = desktop_component_binding(spec.window);
-            assert_eq!(binding.spec.window, spec.window);
+        for component in components {
+            let binding = desktop_component_binding(component.spec.window);
+            assert_eq!(binding.spec.window, component.spec.window);
         }
+        assert!(desktop_component_binding(DesktopWindow::Editor)
+            .on_open
+            .is_none());
+        assert!(desktop_component_binding(DesktopWindow::Settings)
+            .on_open
+            .is_some());
         assert!(desktop_component_binding(DesktopWindow::Editor)
             .on_closed
             .is_some());
