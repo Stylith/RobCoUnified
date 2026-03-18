@@ -1,3 +1,4 @@
+use super::app::RobcoNativeApp;
 use super::donkey_kong::BUILTIN_DONKEY_KONG_GAME;
 use super::editor_app::{
     build_editor_menu_section, EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
@@ -9,6 +10,7 @@ use super::file_manager_desktop::FILE_MANAGER_APP_TITLE;
 use super::file_manager_menu::build_file_manager_menu_section;
 pub use super::shared_types::DesktopWindow;
 use crate::config::DesktopFileManagerSettings;
+use eframe::egui::Context;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +131,15 @@ pub struct DesktopTaskbarEntry {
     pub inactive: bool,
 }
 
+#[derive(Clone, Copy)]
+pub struct DesktopComponentBinding {
+    pub spec: DesktopComponentSpec,
+    pub is_open: fn(&RobcoNativeApp) -> bool,
+    pub set_open: fn(&mut RobcoNativeApp, bool),
+    pub draw: fn(&mut RobcoNativeApp, &Context),
+    pub on_closed: Option<fn(&mut RobcoNativeApp)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DesktopComponentSpec {
     pub window: DesktopWindow,
@@ -224,6 +235,72 @@ const DESKTOP_COMPONENT_SPECS: [DesktopComponentSpec; 9] = [
     },
 ];
 
+const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 9] = [
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[0],
+        is_open: RobcoNativeApp::desktop_component_file_manager_is_open,
+        set_open: RobcoNativeApp::desktop_component_file_manager_set_open,
+        draw: RobcoNativeApp::desktop_component_file_manager_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[1],
+        is_open: RobcoNativeApp::desktop_component_editor_is_open,
+        set_open: RobcoNativeApp::desktop_component_editor_set_open,
+        draw: RobcoNativeApp::desktop_component_editor_draw,
+        on_closed: Some(RobcoNativeApp::desktop_component_editor_on_closed),
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[2],
+        is_open: RobcoNativeApp::desktop_component_settings_is_open,
+        set_open: RobcoNativeApp::desktop_component_settings_set_open,
+        draw: RobcoNativeApp::desktop_component_settings_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[3],
+        is_open: RobcoNativeApp::desktop_component_applications_is_open,
+        set_open: RobcoNativeApp::desktop_component_applications_set_open,
+        draw: RobcoNativeApp::desktop_component_applications_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[4],
+        is_open: RobcoNativeApp::desktop_component_donkey_kong_is_open,
+        set_open: RobcoNativeApp::desktop_component_donkey_kong_set_open,
+        draw: RobcoNativeApp::desktop_component_donkey_kong_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[5],
+        is_open: RobcoNativeApp::desktop_component_nuke_codes_is_open,
+        set_open: RobcoNativeApp::desktop_component_nuke_codes_set_open,
+        draw: RobcoNativeApp::desktop_component_nuke_codes_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[6],
+        is_open: RobcoNativeApp::desktop_component_installer_is_open,
+        set_open: RobcoNativeApp::desktop_component_installer_set_open,
+        draw: RobcoNativeApp::desktop_component_installer_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[7],
+        is_open: RobcoNativeApp::desktop_component_terminal_mode_is_open,
+        set_open: RobcoNativeApp::desktop_component_terminal_mode_set_open,
+        draw: RobcoNativeApp::desktop_component_terminal_mode_draw,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DESKTOP_COMPONENT_SPECS[8],
+        is_open: RobcoNativeApp::desktop_component_pty_is_open,
+        set_open: RobcoNativeApp::desktop_component_pty_set_open,
+        draw: RobcoNativeApp::desktop_component_pty_draw,
+        on_closed: None,
+    },
+];
+
 impl DesktopComponentSpec {
     pub fn title(self, pty_title: Option<&str>) -> String {
         match self.title_kind {
@@ -277,6 +354,13 @@ pub fn desktop_component_spec(window: DesktopWindow) -> &'static DesktopComponen
         .iter()
         .find(|spec| spec.window == window)
         .expect("desktop component spec")
+}
+
+pub fn desktop_component_binding(window: DesktopWindow) -> &'static DesktopComponentBinding {
+    DESKTOP_COMPONENT_BINDINGS
+        .iter()
+        .find(|binding| binding.spec.window == window)
+        .expect("desktop component binding")
 }
 
 pub fn build_shared_desktop_menu_section(section: DesktopMenuSection) -> Vec<DesktopMenuItem> {
@@ -567,6 +651,22 @@ mod tests {
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"
         );
+    }
+
+    #[test]
+    fn desktop_component_bindings_align_with_registry_entries() {
+        let specs = desktop_component_specs();
+
+        for spec in specs {
+            let binding = desktop_component_binding(spec.window);
+            assert_eq!(binding.spec.window, spec.window);
+        }
+        assert!(desktop_component_binding(DesktopWindow::Editor)
+            .on_closed
+            .is_some());
+        assert!(desktop_component_binding(DesktopWindow::Installer)
+            .on_closed
+            .is_none());
     }
 
     #[test]

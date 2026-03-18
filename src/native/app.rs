@@ -8,9 +8,9 @@ use super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRe
 use super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
     build_taskbar_entries, build_window_menu_section, desktop_app_menu_name,
-    desktop_component_spec, desktop_component_specs, hosted_app_for_window, DesktopHostedApp,
-    DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection,
-    DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
+    desktop_component_binding, desktop_component_spec, desktop_component_specs,
+    hosted_app_for_window, DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext,
+    DesktopMenuItem, DesktopMenuSection, DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
 };
 use super::desktop_connections_service::{
     connect_connection_and_refresh_settings, connection_requires_password,
@@ -1799,18 +1799,127 @@ impl RobcoNativeApp {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
     }
 
-    fn desktop_window_is_open(&self, window: DesktopWindow) -> bool {
-        match window {
-            DesktopWindow::FileManager => self.file_manager.open,
-            DesktopWindow::Editor => self.editor.open,
-            DesktopWindow::Settings => self.settings.open,
-            DesktopWindow::Applications => self.applications.open,
-            DesktopWindow::DonkeyKong => self.donkey_kong_window.open,
-            DesktopWindow::NukeCodes => self.desktop_nuke_codes_open,
-            DesktopWindow::Installer => self.desktop_installer.open,
-            DesktopWindow::TerminalMode => self.terminal_mode.open,
-            DesktopWindow::PtyApp => self.terminal_pty.is_some(),
+    pub(crate) fn desktop_component_file_manager_is_open(&self) -> bool {
+        self.file_manager.open
+    }
+
+    pub(crate) fn desktop_component_file_manager_set_open(&mut self, open: bool) {
+        self.file_manager.open = open;
+    }
+
+    pub(crate) fn desktop_component_file_manager_draw(&mut self, ctx: &Context) {
+        self.draw_file_manager(ctx);
+    }
+
+    pub(crate) fn desktop_component_editor_is_open(&self) -> bool {
+        self.editor.open
+    }
+
+    pub(crate) fn desktop_component_editor_set_open(&mut self, open: bool) {
+        self.editor.open = open;
+    }
+
+    pub(crate) fn desktop_component_editor_draw(&mut self, ctx: &Context) {
+        self.draw_editor(ctx);
+    }
+
+    pub(crate) fn desktop_component_editor_on_closed(&mut self) {
+        if self.desktop_mode_open {
+            self.editor.reset_for_desktop_new_document();
+            self.editor.ui.reset_search();
         }
+    }
+
+    pub(crate) fn desktop_component_settings_is_open(&self) -> bool {
+        self.settings.open
+    }
+
+    pub(crate) fn desktop_component_settings_set_open(&mut self, open: bool) {
+        self.settings.open = open;
+    }
+
+    pub(crate) fn desktop_component_settings_draw(&mut self, ctx: &Context) {
+        self.draw_settings(ctx);
+    }
+
+    pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
+        self.applications.open
+    }
+
+    pub(crate) fn desktop_component_applications_set_open(&mut self, open: bool) {
+        self.applications.open = open;
+    }
+
+    pub(crate) fn desktop_component_applications_draw(&mut self, ctx: &Context) {
+        self.draw_applications(ctx);
+    }
+
+    pub(crate) fn desktop_component_donkey_kong_is_open(&self) -> bool {
+        self.donkey_kong_window.open
+    }
+
+    pub(crate) fn desktop_component_donkey_kong_set_open(&mut self, open: bool) {
+        self.donkey_kong_window.open = open;
+    }
+
+    pub(crate) fn desktop_component_donkey_kong_draw(&mut self, ctx: &Context) {
+        self.draw_desktop_donkey_kong(ctx);
+    }
+
+    pub(crate) fn desktop_component_nuke_codes_is_open(&self) -> bool {
+        self.desktop_nuke_codes_open
+    }
+
+    pub(crate) fn desktop_component_nuke_codes_set_open(&mut self, open: bool) {
+        self.desktop_nuke_codes_open = open;
+    }
+
+    pub(crate) fn desktop_component_nuke_codes_draw(&mut self, ctx: &Context) {
+        self.draw_nuke_codes_window(ctx);
+    }
+
+    pub(crate) fn desktop_component_installer_is_open(&self) -> bool {
+        self.desktop_installer.open
+    }
+
+    pub(crate) fn desktop_component_installer_set_open(&mut self, open: bool) {
+        self.desktop_installer.open = open;
+    }
+
+    pub(crate) fn desktop_component_installer_draw(&mut self, ctx: &Context) {
+        self.draw_installer(ctx);
+    }
+
+    pub(crate) fn desktop_component_terminal_mode_is_open(&self) -> bool {
+        self.terminal_mode.open
+    }
+
+    pub(crate) fn desktop_component_terminal_mode_set_open(&mut self, open: bool) {
+        self.terminal_mode.open = open;
+    }
+
+    pub(crate) fn desktop_component_terminal_mode_draw(&mut self, ctx: &Context) {
+        self.draw_terminal_mode(ctx);
+    }
+
+    pub(crate) fn desktop_component_pty_is_open(&self) -> bool {
+        self.terminal_pty.is_some()
+    }
+
+    pub(crate) fn desktop_component_pty_set_open(&mut self, open: bool) {
+        if !open {
+            if let Some(mut pty) = self.terminal_pty.take() {
+                pty.session.terminate();
+            }
+        }
+    }
+
+    pub(crate) fn desktop_component_pty_draw(&mut self, ctx: &Context) {
+        self.draw_desktop_pty_window(ctx);
+    }
+
+    fn desktop_window_is_open(&self, window: DesktopWindow) -> bool {
+        (desktop_component_binding(window).is_open)(self)
     }
 
     fn desktop_window_state(&self, window: DesktopWindow) -> DesktopWindowState {
@@ -1981,23 +2090,7 @@ impl RobcoNativeApp {
 
     fn set_desktop_window_open(&mut self, window: DesktopWindow, open: bool) {
         let was_open = self.desktop_window_is_open(window);
-        match window {
-            DesktopWindow::FileManager => self.file_manager.open = open,
-            DesktopWindow::Editor => self.editor.open = open,
-            DesktopWindow::Settings => self.settings.open = open,
-            DesktopWindow::Applications => self.applications.open = open,
-            DesktopWindow::DonkeyKong => self.donkey_kong_window.open = open,
-            DesktopWindow::NukeCodes => self.desktop_nuke_codes_open = open,
-            DesktopWindow::Installer => self.desktop_installer.open = open,
-            DesktopWindow::TerminalMode => self.terminal_mode.open = open,
-            DesktopWindow::PtyApp => {
-                if !open {
-                    if let Some(mut pty) = self.terminal_pty.take() {
-                        pty.session.terminate();
-                    }
-                }
-            }
-        }
+        (desktop_component_binding(window).set_open)(self, open);
         if !open {
             self.desktop_window_states.remove(&window);
         } else if !was_open && self.desktop_window_is_open(window) {
@@ -2078,9 +2171,8 @@ impl RobcoNativeApp {
     }
 
     fn handle_closed_desktop_window(&mut self, window: DesktopWindow) {
-        if self.desktop_mode_open && matches!(window, DesktopWindow::Editor) {
-            self.editor.reset_for_desktop_new_document();
-            self.editor.ui.reset_search();
+        if let Some(on_closed) = desktop_component_binding(window).on_closed {
+            on_closed(self);
         }
     }
 
@@ -4466,17 +4558,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_window_by_kind(&mut self, ctx: &Context, window: DesktopWindow) {
-        match window {
-            DesktopWindow::FileManager => self.draw_file_manager(ctx),
-            DesktopWindow::Editor => self.draw_editor(ctx),
-            DesktopWindow::Settings => self.draw_settings(ctx),
-            DesktopWindow::Applications => self.draw_applications(ctx),
-            DesktopWindow::DonkeyKong => self.draw_desktop_donkey_kong(ctx),
-            DesktopWindow::NukeCodes => self.draw_nuke_codes_window(ctx),
-            DesktopWindow::Installer => self.draw_installer(ctx),
-            DesktopWindow::TerminalMode => self.draw_terminal_mode(ctx),
-            DesktopWindow::PtyApp => self.draw_desktop_pty_window(ctx),
-        }
+        (desktop_component_binding(window).draw)(self, ctx);
     }
 
     fn draw_desktop_windows(&mut self, ctx: &Context) {
