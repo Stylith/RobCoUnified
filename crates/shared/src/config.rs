@@ -351,8 +351,8 @@ pub enum OpenMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeStartupWindowMode {
-    Windowed,
     #[default]
+    Windowed,
     Maximized,
     Fullscreen,
 }
@@ -859,7 +859,7 @@ impl Default for Settings {
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
-            native_startup_window_mode: NativeStartupWindowMode::Maximized,
+            native_startup_window_mode: NativeStartupWindowMode::Windowed,
             show_navigation_hints: default_navigation_hints(),
             hacking_difficulty: default_hacking_difficulty(),
             hide_builtin_apps_in_menus: false,
@@ -1144,7 +1144,7 @@ mod tests {
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert_eq!(
             decoded.native_startup_window_mode,
-            NativeStartupWindowMode::Maximized
+            NativeStartupWindowMode::Windowed
         );
     }
 

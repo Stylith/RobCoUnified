@@ -117,13 +117,14 @@ use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScre
 use super::installer_screen::{
     add_package_to_menu, apply_filter as apply_installer_filter,
     apply_search_query as apply_installer_search_query, available_runtime_tools,
-    build_package_command, draw_installer_screen, runtime_tool_action_for_selection,
-    runtime_tool_actions, runtime_tool_description, runtime_tool_pkg, runtime_tool_title,
-    settle_view_after_package_command, cached_package_description as installer_cached_package_description,
-    runtime_tool_installed_cached as installer_runtime_tool_installed_cached,
-    DesktopInstallerConfirm, DesktopInstallerEvent, DesktopInstallerNotice, DesktopInstallerState,
-    DesktopInstallerView, InstallerCategory, InstallerEvent, InstallerMenuTarget,
-    InstallerPackageAction, TerminalInstallerState,
+    build_package_command, cached_package_description as installer_cached_package_description,
+    draw_installer_screen, runtime_tool_action_for_selection, runtime_tool_actions,
+    runtime_tool_description,
+    runtime_tool_installed_cached as installer_runtime_tool_installed_cached, runtime_tool_pkg,
+    runtime_tool_title, settle_view_after_package_command, DesktopInstallerConfirm,
+    DesktopInstallerEvent, DesktopInstallerNotice, DesktopInstallerState, DesktopInstallerView,
+    InstallerCategory, InstallerEvent, InstallerMenuTarget, InstallerPackageAction,
+    TerminalInstallerState,
 };
 use super::menu::{
     draw_terminal_menu_screen, handle_user_management_selection, login_menu_rows_from_users,
@@ -157,17 +158,17 @@ use super::pty_screen::{
     TERMINAL_MODE_PTY_CELL_W,
 };
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_settings, current_palette, RetroScreen,
-    RetroPalette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_settings, current_palette, RetroPalette, RetroScreen,
+    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
-use crate::config::{ConnectionKind, SavedConnection};
 use crate::config::{
-    desktop_dir as robco_desktop_dir, CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode,
-    DesktopIconStyle, HackingDifficulty, NativeStartupWindowMode, OpenMode, Settings, WallpaperSizeMode,
-    CUSTOM_THEME_NAME, THEMES,
+    desktop_dir as robco_desktop_dir, CliAcsMode, CliColorMode, DesktopFileManagerSettings,
+    DesktopIconSortMode, DesktopIconStyle, HackingDifficulty, NativeStartupWindowMode, OpenMode,
+    Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
+use crate::config::{ConnectionKind, SavedConnection};
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
 use anyhow::Result;
@@ -184,8 +185,8 @@ use robcos_native_programs_app::{
     build_desktop_applications_sections, build_terminal_application_entries,
     build_terminal_game_entries, resolve_desktop_applications_request,
     resolve_desktop_games_request, resolve_terminal_applications_request,
-    resolve_terminal_catalog_request, resolve_terminal_games_request,
-    DesktopApplicationsSections, DesktopProgramRequest, TerminalProgramRequest,
+    resolve_terminal_catalog_request, resolve_terminal_games_request, DesktopApplicationsSections,
+    DesktopProgramRequest, TerminalProgramRequest,
 };
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_back_target,
@@ -1024,7 +1025,10 @@ impl RobcoNativeApp {
         if cache.is_none() {
             *cache = Some(Arc::new(saved_connections_for_kind(kind)));
         }
-        cache.as_ref().expect("saved connections cache initialized").clone()
+        cache
+            .as_ref()
+            .expect("saved connections cache initialized")
+            .clone()
     }
 
     fn sync_native_appearance(&mut self, ctx: &Context) {
@@ -1050,12 +1054,10 @@ impl RobcoNativeApp {
                 .map(|entry| entry.key.clone())
                 .collect::<Vec<_>>(),
         );
-        let needs_rebuild = self
-            .desktop_icon_layout_cache
-            .as_ref()
-            .is_none_or(|cache| {
-                cache.layout != layout || cache.desktop_entry_keys.as_ref() != desktop_entry_keys.as_ref()
-            });
+        let needs_rebuild = self.desktop_icon_layout_cache.as_ref().is_none_or(|cache| {
+            cache.layout != layout
+                || cache.desktop_entry_keys.as_ref() != desktop_entry_keys.as_ref()
+        });
         if needs_rebuild {
             let positions = Arc::new(build_default_desktop_icon_positions(
                 layout,
@@ -1079,7 +1081,9 @@ impl RobcoNativeApp {
 
     fn desktop_surface_entries(&mut self) -> Arc<Vec<DesktopSurfaceEntry>> {
         let dir = robco_desktop_dir();
-        let modified = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let modified = std::fs::metadata(&dir)
+            .and_then(|meta| meta.modified())
+            .ok();
         let needs_reload = self
             .desktop_surface_entries_cache
             .as_ref()
@@ -1100,7 +1104,10 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    fn settings_home_rows_for_session(&mut self, is_admin: bool) -> Arc<Vec<Vec<SettingsHomeTile>>> {
+    fn settings_home_rows_for_session(
+        &mut self,
+        is_admin: bool,
+    ) -> Arc<Vec<Vec<SettingsHomeTile>>> {
         let cache = if is_admin {
             &mut self.settings_home_rows_cache_admin
         } else {
@@ -2197,16 +2204,14 @@ impl RobcoNativeApp {
                     Some(64),
                 )
             }),
-            NativeSettingsPanel::DefaultApps => {
-                cache.icon_default_apps.get_or_insert_with(|| {
-                    Self::load_svg_icon(
-                        ctx,
-                        "icon_default_apps",
-                        include_bytes!("../Icons/pixel--external-link-solid.svg"),
-                        Some(64),
-                    )
-                })
-            }
+            NativeSettingsPanel::DefaultApps => cache.icon_default_apps.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_default_apps",
+                    include_bytes!("../Icons/pixel--external-link-solid.svg"),
+                    Some(64),
+                )
+            }),
             NativeSettingsPanel::Connections => &mut cache.icon_connections,
             NativeSettingsPanel::CliProfiles => cache.icon_cli_profiles.get_or_insert_with(|| {
                 Self::load_svg_icon(
@@ -2327,15 +2332,13 @@ impl RobcoNativeApp {
                 include_bytes!("../Icons/pixel--media.svg"),
                 Some(64),
             ),
-            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => {
-                Self::ensure_cached_svg_icon(
-                    &mut cache.icon_archive,
-                    ctx,
-                    "icon_archive",
-                    include_bytes!("../Icons/pixel--save-solid.svg"),
-                    Some(64),
-                )
-            }
+            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => Self::ensure_cached_svg_icon(
+                &mut cache.icon_archive,
+                ctx,
+                "icon_archive",
+                include_bytes!("../Icons/pixel--save-solid.svg"),
+                Some(64),
+            ),
             "exe" | "bin" | "appimage" | "dmg" | "deb" | "rpm" | "app" | "bat" | "cmd" => {
                 Self::ensure_cached_svg_icon(
                     &mut cache.icon_app,
@@ -2612,8 +2615,9 @@ impl RobcoNativeApp {
             .and_then(|name| name.to_str())
             .unwrap_or("item")
             .to_string();
-        self.desktop_selected_icon =
-            Some(DesktopIconSelection::Surface(format!("desktop_item:{name_draft}")));
+        self.desktop_selected_icon = Some(DesktopIconSelection::Surface(format!(
+            "desktop_item:{name_draft}"
+        )));
         self.desktop_item_properties = Some(DesktopItemPropertiesState {
             is_dir: path.is_dir(),
             path,
@@ -3060,13 +3064,16 @@ impl RobcoNativeApp {
         let desktop_entries = self.desktop_surface_entries();
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         let builtin_entries = desktop_builtin_icons();
-        let default_positions = self.default_desktop_icon_positions(DesktopIconGridLayout {
-            left: workspace.left(),
-            top: workspace.top(),
-            height: workspace.height(),
-            item_height,
-            column_width,
-        }, &desktop_entries);
+        let default_positions = self.default_desktop_icon_positions(
+            DesktopIconGridLayout {
+                left: workspace.left(),
+                top: workspace.top(),
+                height: workspace.height(),
+                item_height,
+                column_width,
+            },
+            &desktop_entries,
+        );
         let mut open_window: Option<DesktopWindow> = None;
         let mut open_terminal = false;
         let mut open_desktop_path: Option<PathBuf> = None;
@@ -3116,8 +3123,8 @@ impl RobcoNativeApp {
             };
 
             let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
-            let selected = self.desktop_selected_icon
-                == Some(DesktopIconSelection::Builtin(entry.key));
+            let selected =
+                self.desktop_selected_icon == Some(DesktopIconSelection::Builtin(entry.key));
             Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
             let icon_fg = Self::desktop_icon_foreground(palette, selected);
 
@@ -3263,8 +3270,7 @@ impl RobcoNativeApp {
             }
 
             if response.clicked() || response.secondary_clicked() {
-                self.desktop_selected_icon =
-                    Some(DesktopIconSelection::Surface(entry_key.clone()));
+                self.desktop_selected_icon = Some(DesktopIconSelection::Surface(entry_key.clone()));
             }
 
             response.context_menu(|ui| {
@@ -3288,8 +3294,9 @@ impl RobcoNativeApp {
                     ui.close_menu();
                 }
                 if ui.button("Properties").clicked() {
-                    desktop_action =
-                        Some(ContextMenuAction::OpenDesktopItemProperties(entry_path.clone()));
+                    desktop_action = Some(ContextMenuAction::OpenDesktopItemProperties(
+                        entry_path.clone(),
+                    ));
                     ui.close_menu();
                 }
                 Self::retro_separator(ui);
@@ -3300,10 +3307,14 @@ impl RobcoNativeApp {
             });
 
             if entry_is_dir {
-                if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>()
+                if let Some(payload) =
+                    response.dnd_release_payload::<NativeFileManagerDragPayload>()
                 {
                     if Self::file_manager_drop_allowed(&payload.paths, &entry_path) {
-                        self.file_manager_handle_drop_to_dir(payload.paths.clone(), entry_path.clone());
+                        self.file_manager_handle_drop_to_dir(
+                            payload.paths.clone(),
+                            entry_path.clone(),
+                        );
                     }
                 }
             }
@@ -3385,7 +3396,11 @@ impl RobcoNativeApp {
                         icon_rect.min + egui::vec2(0.0, icon_size - badge_size),
                         egui::vec2(badge_size, badge_size),
                     );
-                    let badge_bg = if selected { palette.panel } else { Color32::BLACK };
+                    let badge_bg = if selected {
+                        palette.panel
+                    } else {
+                        Color32::BLACK
+                    };
                     ui.painter().rect_filled(badge_rect, 0.0, badge_bg);
                     Self::paint_tinted_texture(
                         ui.painter(),
@@ -3441,8 +3456,7 @@ impl RobcoNativeApp {
             });
 
             if response.double_clicked() {
-                desktop_action =
-                    Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
+                desktop_action = Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
             }
         }
 
@@ -3746,10 +3760,9 @@ impl RobcoNativeApp {
                         egui::Sense::hover(),
                     );
                     // Draw current icon
-                    let icon_tex: Option<egui::TextureHandle> =
-                        icon_path_draft.as_ref().and_then(|p| {
-                            self.load_cached_shortcut_icon(ctx, p, Path::new(p), 48)
-                        });
+                    let icon_tex: Option<egui::TextureHandle> = icon_path_draft
+                        .as_ref()
+                        .and_then(|p| self.load_cached_shortcut_icon(ctx, p, Path::new(p), 48));
                     if let Some(tex) = icon_tex {
                         Self::paint_tinted_texture(ui.painter(), &tex, rect, palette.fg);
                     } else if let Some(cache) = &self.asset_cache {
@@ -3972,7 +3985,8 @@ impl RobcoNativeApp {
                     label: item_name,
                     is_dir: props.is_dir,
                 };
-                self.shell_status = match self.file_manager_runtime.rename_entry(entry, name_draft) {
+                self.shell_status = match self.file_manager_runtime.rename_entry(entry, name_draft)
+                {
                     Ok(new_path) => {
                         self.desktop_selected_icon = Some(DesktopIconSelection::Surface(format!(
                             "desktop_item:{}",
@@ -5461,6 +5475,26 @@ impl RobcoNativeApp {
         self.apply_status_update(saved_shell_status());
     }
 
+    fn apply_native_window_mode(&self, ctx: &Context) {
+        match self.settings.draft.native_startup_window_mode {
+            NativeStartupWindowMode::Windowed => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+            }
+            NativeStartupWindowMode::Maximized => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+            NativeStartupWindowMode::Fullscreen => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+            }
+        }
+    }
+
     fn apply_terminal_login_selection_plan(
         &mut self,
         plan: TerminalLoginSelectionPlan<UserRecord>,
@@ -6703,11 +6737,7 @@ impl RobcoNativeApp {
         self.sync_wallpaper(ctx);
         let palette = current_palette();
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.bg)
-                    .inner_margin(0.0),
-            )
+            .frame(egui::Frame::none().fill(palette.bg).inner_margin(0.0))
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let response = ui.allocate_rect(rect, egui::Sense::click());
@@ -6733,7 +6763,8 @@ impl RobcoNativeApp {
                 ) {
                     self.draw_desktop_icons(ui);
                 }
-                if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>()
+                if let Some(payload) =
+                    response.dnd_release_payload::<NativeFileManagerDragPayload>()
                 {
                     if Self::file_manager_drop_allowed(&payload.paths, &desktop_dir) {
                         self.file_manager_handle_drop_to_dir(payload.paths.clone(), desktop_dir);
@@ -7091,6 +7122,7 @@ impl RobcoNativeApp {
 
     fn draw_terminal_settings(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let previous_window_mode = self.settings.draft.native_startup_window_mode;
         let event = run_terminal_settings_screen(
             ctx,
             &mut self.settings.draft,
@@ -7112,7 +7144,12 @@ impl RobcoNativeApp {
         );
         match event {
             TerminalSettingsEvent::None => {}
-            TerminalSettingsEvent::Persist => self.persist_native_settings(),
+            TerminalSettingsEvent::Persist => {
+                self.persist_native_settings();
+                if self.settings.draft.native_startup_window_mode != previous_window_mode {
+                    self.apply_native_window_mode(ctx);
+                }
+            }
             TerminalSettingsEvent::OpenPanel(panel) => {
                 self.terminal_settings_panel = panel;
                 self.terminal_nav.settings_idx = 0;
@@ -8851,6 +8888,7 @@ impl RobcoNativeApp {
             let is_admin = self.session.as_ref().is_some_and(|s| s.is_admin);
             let panel = self.settings.panel;
             let mut changed = false;
+            let mut window_mode_changed = false;
             let mut next_panel = None;
 
             let panel_title = settings_panel_title(panel);
@@ -8971,34 +9009,6 @@ impl RobcoNativeApp {
                                         left.small(
                                             "Choose which interface opens first after login.",
                                         );
-                                        left.add_space(12.0);
-                                        left.label("Startup Window Mode");
-                                        left.horizontal_wrapped(|ui| {
-                                            for mode in [
-                                                NativeStartupWindowMode::Maximized,
-                                                NativeStartupWindowMode::Windowed,
-                                                NativeStartupWindowMode::Fullscreen,
-                                            ] {
-                                                if Self::retro_choice_button(
-                                                    ui,
-                                                    mode.label(),
-                                                    self.settings.draft.native_startup_window_mode
-                                                        == mode,
-                                                )
-                                                .clicked()
-                                                    && self.settings.draft.native_startup_window_mode
-                                                        != mode
-                                                {
-                                                    self.settings.draft.native_startup_window_mode =
-                                                        mode;
-                                                    changed = true;
-                                                }
-                                            }
-                                        });
-                                        left.add_space(8.0);
-                                        left.small(
-                                            "Maximized is the default. Windowed is safest on older GPUs. Restart applies changes.",
-                                        );
                                     });
 
                                     Self::settings_section(right, "Options", |right| {
@@ -9079,6 +9089,39 @@ impl RobcoNativeApp {
                                 match self.appearance_tab {
                                     // ── Background ─────────────────────────────────────────────
                                     0 => {
+                                        Self::settings_section(ui, "Window", |ui| {
+                                            ui.label("Window Mode");
+                                            ui.horizontal_wrapped(|ui| {
+                                                for mode in [
+                                                    NativeStartupWindowMode::Windowed,
+                                                    NativeStartupWindowMode::Maximized,
+                                                    NativeStartupWindowMode::Fullscreen,
+                                                ] {
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        mode.label(),
+                                                        self.settings.draft
+                                                            .native_startup_window_mode
+                                                            == mode,
+                                                    )
+                                                    .clicked()
+                                                        && self.settings.draft
+                                                            .native_startup_window_mode
+                                                            != mode
+                                                    {
+                                                        self.settings.draft
+                                                            .native_startup_window_mode = mode;
+                                                        changed = true;
+                                                        window_mode_changed = true;
+                                                    }
+                                                }
+                                            });
+                                            ui.add_space(8.0);
+                                            ui.small(
+                                                "Applies immediately and persists across launches. Windowed is the safest mode on older GPUs.",
+                                            );
+                                        });
+                                        ui.add_space(10.0);
                                         Self::settings_section(ui, "Wallpaper", |ui| {
                                             ui.label("Wallpaper Path");
                                             ui.horizontal(|ui| {
@@ -9483,7 +9526,7 @@ impl RobcoNativeApp {
                                     }
                                 ));
                                 ui.label(format!(
-                                    "Startup Window Mode: {}",
+                                    "Window Mode: {}",
                                     self.settings.draft.native_startup_window_mode.label()
                                 ));
                             }
@@ -9500,6 +9543,9 @@ impl RobcoNativeApp {
             if changed {
                 let settings = persist_settings_draft(&self.settings.draft);
                 self.replace_settings_draft(settings);
+                if window_mode_changed {
+                    self.apply_native_window_mode(ctx);
+                }
                 self.apply_status_update(saved_settings_status());
             }
             if !self.settings.status.is_empty() {

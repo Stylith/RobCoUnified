@@ -68,7 +68,8 @@ pub fn run_terminal_settings_screen(
             event = TerminalSettingsEvent::Persist;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
-            event = handle_settings_activation(*panel, draft, *selected_idx, choice_overlay, is_admin);
+            event =
+                handle_settings_activation(*panel, draft, *selected_idx, choice_overlay, is_admin);
         }
     }
 
@@ -199,10 +200,6 @@ fn terminal_settings_rows_for_panel(
                     crate::config::OpenMode::Desktop => "Desktop",
                 }
             ),
-            format!(
-                "Startup Window Mode: {} [choose]",
-                draft.native_startup_window_mode.label()
-            ),
             format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
             format!(
                 "System Sound Volume: {}% [adjust]",
@@ -223,7 +220,13 @@ fn terminal_settings_rows_for_panel(
             "Back".to_string(),
         ],
         TerminalSettingsPanel::Appearance => {
-            let mut items = vec![format!("Theme: {} [choose]", draft.theme)];
+            let mut items = vec![
+                format!(
+                    "Window Mode: {} [choose]",
+                    draft.native_startup_window_mode.label()
+                ),
+                format!("Theme: {} [choose]", draft.theme),
+            ];
             if draft.theme == crate::config::CUSTOM_THEME_NAME {
                 let [r, g, b] = draft.custom_theme_rgb;
                 items.push(format!("Custom Theme Red: {r} [adjust]"));

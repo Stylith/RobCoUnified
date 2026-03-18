@@ -44,7 +44,7 @@ fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
         .with_min_inner_size([960.0, 600.0])
         .with_title("RobCoOS Native");
     match mode {
-        // Default path: keeps the desktop feel without forcing exclusive fullscreen.
+        // Borderless maximized keeps the desktop feel without forcing exclusive fullscreen.
         NativeStartupWindowMode::Maximized => viewport
             .with_decorations(false)
             .with_fullscreen(false)
@@ -97,10 +97,7 @@ mod tests {
 
     #[test]
     fn parse_native_startup_window_mode_override_returns_none_for_missing_or_unknown() {
-        assert_eq!(
-            parse_native_startup_window_mode_override(None),
-            None
-        );
+        assert_eq!(parse_native_startup_window_mode_override(None), None);
         assert_eq!(
             parse_native_startup_window_mode_override(Some("unknown")),
             None
@@ -140,10 +137,7 @@ mod tests {
             NativeStartupWindowMode::Fullscreen
         );
         assert_eq!(
-            resolve_native_startup_window_mode(
-                NativeStartupWindowMode::Windowed,
-                None,
-            ),
+            resolve_native_startup_window_mode(NativeStartupWindowMode::Windowed, None,),
             NativeStartupWindowMode::Windowed
         );
     }
