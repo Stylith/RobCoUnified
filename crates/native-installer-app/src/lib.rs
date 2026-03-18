@@ -242,7 +242,7 @@ pub struct DesktopInstallerState {
     pub available_pms: Vec<PackageManager>,
     pub selected_pm_idx: usize,
     package_descriptions: HashMap<String, Option<String>>,
-    installed_description_cache: HashMap<String, HashMap<String, String>>,
+    installed_description_cache: Option<HashMap<String, HashMap<String, String>>>,
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
     search_receiver: Option<Receiver<DesktopSearchResponse>>,
@@ -266,7 +266,7 @@ impl Default for DesktopInstallerState {
             available_pms: Vec::new(),
             selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
-            installed_description_cache: load_installed_description_cache(),
+            installed_description_cache: None,
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
             search_receiver: None,
@@ -767,19 +767,28 @@ impl DesktopInstallerState {
         pm.name().to_string()
     }
 
+    fn ensure_installed_description_cache(
+        &mut self,
+    ) -> &mut HashMap<String, HashMap<String, String>> {
+        self.installed_description_cache
+            .get_or_insert_with(load_installed_description_cache)
+    }
+
     fn installed_description_cached_for_pm(&self, pm: PackageManager, pkg: &str) -> Option<String> {
         self.installed_description_cache
-            .get(&Self::installed_cache_key(pm))
+            .as_ref()
+            .and_then(|cache| cache.get(&Self::installed_cache_key(pm)))
             .and_then(|pkgs| pkgs.get(pkg))
             .cloned()
     }
 
     fn persist_installed_description(&mut self, pm: PackageManager, pkg: &str, desc: &str) {
-        self.installed_description_cache
+        let cache = self.ensure_installed_description_cache();
+        cache
             .entry(Self::installed_cache_key(pm))
             .or_default()
             .insert(pkg.to_string(), desc.to_string());
-        save_installed_description_cache(&self.installed_description_cache);
+        save_installed_description_cache(cache);
     }
 
     pub fn selected_pm(&mut self) -> Option<PackageManager> {
