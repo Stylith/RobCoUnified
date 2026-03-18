@@ -134,12 +134,7 @@ pub fn build_desktop_view_model(
 ) -> FileManagerDesktopViewModel {
     let action_mode =
         desktop_action_mode(save_as_input, picking_icon_for_shortcut, picking_wallpaper);
-    let path_label = match &action_mode {
-        FileManagerDesktopActionMode::SavePicker { .. } => {
-            format!("Save Folder: {}", file_manager.cwd.display())
-        }
-        _ => format!("Path: {}", file_manager.cwd.display()),
-    };
+    let path_label = file_manager.cwd.display().to_string();
     let current_drive = file_manager.current_drive_root();
     FileManagerDesktopViewModel {
         tabs: file_manager
@@ -394,7 +389,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(model.path_label, format!("Path: {}", cwd.display()));
+        assert_eq!(model.path_label, cwd.display().to_string());
         assert_eq!(model.search_query, "");
         assert_eq!(model.status.view_label, "Grid View");
         assert_eq!(model.status.tree_label, "Tree On");

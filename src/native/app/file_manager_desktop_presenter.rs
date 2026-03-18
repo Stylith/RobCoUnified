@@ -121,8 +121,12 @@ impl RobcoNativeApp {
         ctx: &Context,
         rows: &[super::super::file_manager::FileEntryRow],
     ) {
+        const FILE_MANAGER_PREVIEW_SCAN_LIMIT: usize = 64;
+        const FILE_MANAGER_PREVIEW_PRELOAD_LIMIT: usize = 16;
+
         let svg_paths: Vec<PathBuf> = rows
             .iter()
+            .take(FILE_MANAGER_PREVIEW_SCAN_LIMIT)
             .filter(|row| {
                 row.path
                     .extension()
@@ -130,6 +134,7 @@ impl RobcoNativeApp {
                     .map(|e| e.eq_ignore_ascii_case("svg"))
                     .unwrap_or(false)
             })
+            .take(FILE_MANAGER_PREVIEW_PRELOAD_LIMIT)
             .map(|row| row.path.clone())
             .collect();
         for path in svg_paths {
@@ -354,14 +359,16 @@ impl RobcoNativeApp {
         header_action: &mut DesktopHeaderAction,
     ) {
         let palette = current_palette();
+        let banner = desktop_model.action_mode.banner();
+        let top_panel_height = if banner.is_some() { 192.0 } else { 160.0 };
         egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
             .frame(egui::Frame::none())
-            .exact_height(118.0)
+            .exact_height(top_panel_height)
             .show_inside(ui, |ui| {
                 *header_action =
                     Self::draw_desktop_window_header(ui, FILE_MANAGER_APP_TITLE, maximized);
 
-                if let Some(banner) = desktop_model.action_mode.banner() {
+                if let Some(banner) = banner {
                     egui::Frame::none()
                         .stroke(egui::Stroke::new(1.0, palette.fg))
                         .inner_margin(egui::Margin::symmetric(8.0, 4.0))
@@ -375,9 +382,19 @@ impl RobcoNativeApp {
                     .stroke(egui::Stroke::new(1.0, palette.fg))
                     .inner_margin(egui::Margin::symmetric(6.0, 4.0))
                     .show(ui, |ui| {
+                        let mut switch_to_tab = None;
+                        let mut close_tab = None;
+                        let tab_width = if desktop_model.close_tab_enabled() {
+                            112.0
+                        } else {
+                            126.0
+                        };
                         ui.horizontal_wrapped(|ui| {
                             for (idx, tab) in desktop_model.tabs.iter().enumerate() {
-                                let title = Self::truncate_file_manager_label(&tab.title, 12);
+                                let title = Self::truncate_file_manager_label(
+                                    &tab.title,
+                                    if desktop_model.close_tab_enabled() { 10 } else { 12 },
+                                );
                                 let response = Self::retro_file_manager_button(
                                     ui,
                                     &palette,
@@ -387,12 +404,25 @@ impl RobcoNativeApp {
                                         title,
                                         if tab.active { "*" } else { "" }
                                     ),
-                                    egui::vec2(126.0, 28.0),
+                                    egui::vec2(tab_width, 28.0),
                                     tab.active,
                                     true,
                                 );
                                 if response.clicked() {
-                                    let _ = self.file_manager.switch_to_tab(idx);
+                                    switch_to_tab = Some(idx);
+                                }
+                                if desktop_model.close_tab_enabled() {
+                                    let close = Self::retro_file_manager_button(
+                                        ui,
+                                        &palette,
+                                        "x",
+                                        egui::vec2(30.0, 28.0),
+                                        false,
+                                        true,
+                                    );
+                                    if close.clicked() {
+                                        close_tab = Some(idx);
+                                    }
                                 }
                             }
                             let new_tab = Self::retro_file_manager_button(
@@ -406,22 +436,12 @@ impl RobcoNativeApp {
                             if new_tab.clicked() {
                                 self.run_file_manager_command(FileManagerCommand::NewTab);
                             }
-                            let close_tab = if desktop_model.close_tab_enabled() {
-                                Self::retro_file_manager_button(
-                                    ui,
-                                    &palette,
-                                    "x",
-                                    egui::vec2(30.0, 28.0),
-                                    false,
-                                    true,
-                                )
-                            } else {
-                                Self::retro_disabled_button(ui, "x")
-                            };
-                            if close_tab.clicked() {
-                                self.run_file_manager_command(FileManagerCommand::CloseTab);
-                            }
                         });
+                        if let Some(idx) = close_tab {
+                            self.file_manager.close_tab(idx);
+                        } else if let Some(idx) = switch_to_tab {
+                            let _ = self.file_manager.switch_to_tab(idx);
+                        }
                     });
 
                 ui.add_space(4.0);
@@ -526,7 +546,29 @@ impl RobcoNativeApp {
                     .stroke(egui::Stroke::new(1.0, palette.fg))
                     .inner_margin(egui::Margin::symmetric(8.0, 3.0))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(&desktop_model.path_label).strong());
+                        let location_label = match desktop_model.action_mode {
+                            file_manager_desktop::FileManagerDesktopActionMode::SavePicker { .. } => {
+                                "Save Folder"
+                            }
+                            _ => "Location",
+                        };
+                        ui.set_min_height(28.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{location_label}:"))
+                                    .strong()
+                                    .color(palette.fg),
+                            );
+                            ui.add_sized(
+                                [ui.available_width().max(80.0), 0.0],
+                                egui::Label::new(
+                                    RichText::new(&desktop_model.path_label)
+                                        .monospace()
+                                        .color(palette.fg),
+                                )
+                                .truncate(),
+                            );
+                        });
                     });
             });
     }
@@ -632,14 +674,18 @@ impl RobcoNativeApp {
             .width_range(140.0..=280.0)
             .default_width(200.0)
             .show_inside(ui, |ui| {
-                ui.label(RichText::new("Locations").strong());
+                ui.label(RichText::new("Locations").strong().color(palette.fg));
                 egui::ScrollArea::vertical()
                     .id_salt(("native_file_manager_tree", generation))
                     .show(ui, |ui| {
                         for item in &desktop_model.tree_items {
                             if item.path.is_none() {
+                                let line = item.line.trim();
+                                if line.is_empty() {
+                                    continue;
+                                }
                                 ui.add_space(4.0);
-                                ui.label(RichText::new(&item.line).strong());
+                                ui.label(RichText::new(line).strong().color(palette.fg));
                                 continue;
                             }
                             let Some(path) = item.path.as_ref() else {

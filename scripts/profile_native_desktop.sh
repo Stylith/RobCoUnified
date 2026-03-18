@@ -11,7 +11,14 @@ mkdir -p "$PROFILE_DIR/users"
 mkdir -p "$PROFILE_DIR/users/profile"
 printf '{"profile":{"password_hash":"","is_admin":true,"auth_method":"no_password"}}\n' \
   > "$PROFILE_DIR/users/users.json"
-printf '{"default_open_mode":"desktop"}\n' > "$PROFILE_DIR/users/profile/settings.json"
+cat <<'JSON' > "$PROFILE_DIR/users/profile/settings.json"
+{
+  "sound": true,
+  "bootup": false,
+  "theme": "Green (Default)",
+  "default_open_mode": "desktop"
+}
+JSON
 
 START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
 

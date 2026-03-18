@@ -363,19 +363,26 @@ impl NativeFileManagerState {
         self.active_tab = self.tabs.len().saturating_sub(1);
     }
 
-    pub fn close_active_tab(&mut self) -> bool {
-        if self.tabs.len() <= 1 {
+    pub fn close_tab(&mut self, idx: usize) -> bool {
+        if self.tabs.len() <= 1 || idx >= self.tabs.len() {
             return false;
         }
-        self.tabs.remove(self.active_tab);
-        if self.active_tab >= self.tabs.len() {
+        self.tabs.remove(idx);
+        if idx < self.active_tab {
+            self.active_tab = self.active_tab.saturating_sub(1);
+        } else if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len().saturating_sub(1);
         }
         self.cwd = self.tabs[self.active_tab].clone();
         self.invalidate_view_cache();
         self.selected = None;
+        self.selected_paths.clear();
         self.tree_selected = Some(self.cwd.clone());
         true
+    }
+
+    pub fn close_active_tab(&mut self) -> bool {
+        self.close_tab(self.active_tab)
     }
 
     pub fn switch_to_tab(&mut self, idx: usize) -> bool {
@@ -1593,5 +1600,36 @@ mod tests {
                 "/tmp/wallpaper.png"
             )))
         );
+    }
+
+    #[test]
+    fn close_tab_keeps_current_path_when_removing_earlier_tab() {
+        let root = PathBuf::from("/");
+        let applications = PathBuf::from("/Applications");
+        let users = PathBuf::from("/Users");
+        let mut fm = NativeFileManagerState::new(root.clone());
+        fm.tabs = vec![root, applications.clone(), users.clone()];
+        fm.active_tab = 2;
+        fm.cwd = users.clone();
+
+        assert!(fm.close_tab(1));
+        assert_eq!(fm.tabs, vec![PathBuf::from("/"), users.clone()]);
+        assert_eq!(fm.active_tab, 1);
+        assert_eq!(fm.cwd, users);
+    }
+
+    #[test]
+    fn close_tab_selects_successor_when_active_tab_is_removed() {
+        let root = PathBuf::from("/");
+        let applications = PathBuf::from("/Applications");
+        let users = PathBuf::from("/Users");
+        let mut fm = NativeFileManagerState::new(root.clone());
+        fm.tabs = vec![root, applications, users.clone()];
+        fm.active_tab = 1;
+
+        assert!(fm.close_tab(1));
+        assert_eq!(fm.tabs, vec![PathBuf::from("/"), users.clone()]);
+        assert_eq!(fm.active_tab, 1);
+        assert_eq!(fm.cwd, users);
     }
 }

@@ -171,7 +171,7 @@ use crate::config::{
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
 use anyhow::Result;
-use chrono::Local;
+use chrono::{Local, Timelike};
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     Modifiers, RichText, TextEdit, TextStyle, TextureHandle, TopBottomPanel,
@@ -855,6 +855,14 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn apply_autologin_open_mode(&mut self) {
+        if matches!(self.settings.draft.default_open_mode, OpenMode::Desktop) {
+            self.desktop_mode_open = true;
+            self.close_start_menu();
+            self.sync_desktop_active_window();
+        }
+    }
+
     fn maybe_apply_profile_autologin(&mut self) {
         if self.session.is_some() {
             return;
@@ -875,6 +883,7 @@ impl RobcoNativeApp {
         bind_login_identity(&username);
         self.ensure_login_session_entry(&username);
         self.restore_for_user(&username, &user);
+        self.apply_autologin_open_mode();
     }
 
     fn append_startup_profile_marker(marker: &str) {
@@ -1920,7 +1929,7 @@ impl RobcoNativeApp {
 
     fn desktop_default_window_size(window: DesktopWindow) -> egui::Vec2 {
         match window {
-            DesktopWindow::FileManager => egui::vec2(700.0, 480.0),
+            DesktopWindow::FileManager => egui::vec2(860.0, 560.0),
             DesktopWindow::Editor => egui::vec2(820.0, 560.0),
             DesktopWindow::Settings => egui::vec2(760.0, 500.0),
             DesktopWindow::Applications => egui::vec2(700.0, 480.0),
@@ -1930,6 +1939,10 @@ impl RobcoNativeApp {
             DesktopWindow::TerminalMode => egui::vec2(720.0, 500.0),
             DesktopWindow::PtyApp => egui::vec2(960.0, 600.0),
         }
+    }
+
+    fn desktop_file_manager_window_min_size() -> egui::Vec2 {
+        egui::vec2(760.0, 520.0)
     }
 
     fn desktop_default_window_pos(ctx: &Context, size: egui::Vec2) -> egui::Pos2 {
@@ -2141,15 +2154,24 @@ impl RobcoNativeApp {
     }
 
     fn truncate_file_manager_label(text: &str, max_chars: usize) -> String {
-        if text.chars().count() <= max_chars {
+        let total_chars = text.chars().count();
+        if total_chars <= max_chars {
             return text.to_string();
         }
         if max_chars <= 3 {
             return ".".repeat(max_chars);
         }
-        let mut out: String = text.chars().take(max_chars - 3).collect();
-        out.push_str("...");
-        out
+        let suffix_budget = ((max_chars - 3) + 1) / 2;
+        let mut suffix: String = text
+            .chars()
+            .skip(total_chars.saturating_sub(suffix_budget))
+            .collect();
+        if total_chars > suffix_budget && suffix.starts_with('.') {
+            suffix.remove(0);
+        }
+        let prefix_budget = max_chars.saturating_sub(3 + suffix.chars().count());
+        let prefix: String = text.chars().take(prefix_budget).collect();
+        format!("{prefix}...{suffix}")
     }
 
     fn settings_panel_texture(
@@ -2877,28 +2899,42 @@ impl RobcoNativeApp {
     }
 
     fn desktop_icon_label_lines(label: &str) -> Vec<String> {
-        if label.len() <= 12 || !label.contains(' ') {
+        const MAX_LINE_CHARS: usize = 14;
+
+        if label.chars().count() <= MAX_LINE_CHARS {
             return vec![label.to_string()];
         }
         let words: Vec<&str> = label.split_whitespace().collect();
         if words.len() < 2 {
-            return vec![label.to_string()];
+            return vec![Self::truncate_file_manager_label(label, MAX_LINE_CHARS)];
         }
-        let midpoint = label.len() / 2;
-        let mut split_idx = 1usize;
-        let mut best_delta = usize::MAX;
-        let mut prefix_len = words[0].len();
-        for idx in 1..words.len() {
-            let delta = prefix_len.abs_diff(midpoint);
-            if delta < best_delta {
-                best_delta = delta;
-                split_idx = idx;
+
+        let mut first_line = String::new();
+        let mut split_idx = 0usize;
+        for (idx, word) in words.iter().enumerate() {
+            let candidate = if first_line.is_empty() {
+                (*word).to_string()
+            } else {
+                format!("{first_line} {word}")
+            };
+            if candidate.chars().count() > MAX_LINE_CHARS {
+                break;
             }
-            if idx < words.len() - 1 {
-                prefix_len += 1 + words[idx].len();
-            }
+            first_line = candidate;
+            split_idx = idx + 1;
         }
-        vec![words[..split_idx].join(" "), words[split_idx..].join(" ")]
+        if first_line.is_empty() {
+            return vec![Self::truncate_file_manager_label(label, MAX_LINE_CHARS)];
+        }
+        if split_idx >= words.len() {
+            return vec![first_line];
+        }
+
+        let second_line = words[split_idx..].join(" ");
+        vec![
+            first_line,
+            Self::truncate_file_manager_label(&second_line, MAX_LINE_CHARS),
+        ]
     }
 
     fn paint_desktop_icon_label(ui: &mut egui::Ui, rect: egui::Rect, label: &str, color: Color32) {
@@ -7745,9 +7781,16 @@ impl RobcoNativeApp {
         }
     }
 
+    fn terminal_status_bar_repaint_interval(ctx: &Context) -> Duration {
+        if !ctx.input(|i| i.focused) {
+            return Duration::from_secs(300);
+        }
+        let now = Local::now();
+        Duration::from_secs(u64::from((60 - now.second()).max(1)))
+    }
+
     fn draw_terminal_status_bar(&self, ctx: &Context) {
-        // Repaint once per second to keep the clock updated
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        ctx.request_repaint_after(Self::terminal_status_bar_repaint_interval(ctx));
         let palette = current_palette();
         TopBottomPanel::bottom("native_terminal_status_bar")
             .resizable(false)
@@ -8413,6 +8456,7 @@ impl RobcoNativeApp {
         let mut header_action = DesktopHeaderAction::None;
         let generation = self.desktop_window_generation(DesktopWindow::FileManager);
         let default_size = Self::desktop_default_window_size(DesktopWindow::FileManager);
+        let min_size = Self::desktop_file_manager_window_min_size();
         let save_picker_size = egui::vec2(860.0, 560.0);
         let mut window = egui::Window::new("File Manager")
             .id(Id::new(("native_file_manager", generation)))
@@ -8420,7 +8464,7 @@ impl RobcoNativeApp {
             .title_bar(false)
             .frame(Self::desktop_window_frame())
             .resizable(true)
-            .min_size([400.0, 300.0])
+            .min_size(min_size)
             .default_size([default_size.x, default_size.y]);
         if save_picker_mode {
             window = window.resizable(false);
@@ -8438,6 +8482,8 @@ impl RobcoNativeApp {
                 .fixed_pos(rect.min)
                 .fixed_size(rect.size());
         } else if let Some((pos, size)) = restore {
+            let size = Self::desktop_clamp_window_size(ctx, size, min_size);
+            let pos = Self::desktop_clamp_window_pos(ctx, pos, size);
             // Unmaximize or first open with a saved size: generation was bumped so egui
             // has no memory for this ID — default_size sets the initial size correctly.
             window = window.current_pos(pos).default_size(size);
@@ -12687,6 +12733,49 @@ mod tests {
         assert_eq!(clipboard.paths, vec![note]);
         assert!(matches!(clipboard.mode, FileManagerClipboardMode::Copy));
         assert_eq!(app.shell_status, "Copied note.txt");
+    }
+
+    #[test]
+    fn autologin_open_mode_honors_desktop_default() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.start_open = true;
+        app.settings.draft.default_open_mode = OpenMode::Desktop;
+
+        app.apply_autologin_open_mode();
+
+        assert!(app.desktop_mode_open);
+        assert!(!app.start_open);
+
+        app.desktop_mode_open = false;
+        app.start_open = true;
+        app.settings.draft.default_open_mode = OpenMode::Terminal;
+
+        app.apply_autologin_open_mode();
+
+        assert!(!app.desktop_mode_open);
+        assert!(app.start_open);
+    }
+
+    #[test]
+    fn file_manager_label_truncation_preserves_distinguishing_suffix() {
+        assert_eq!(
+            RobcoNativeApp::truncate_file_manager_label(
+                "Screenshot 2026-03-18 at 17.37.56.png",
+                16,
+            ),
+            "Screens...56.png"
+        );
+    }
+
+    #[test]
+    fn desktop_icon_label_lines_compact_long_file_names() {
+        assert_eq!(
+            RobcoNativeApp::desktop_icon_label_lines("Screenshot 2026-03-18 at 17.37.56.png"),
+            vec!["Screenshot".to_string(), "2026-...56.png".to_string()]
+        );
     }
 
     #[test]
