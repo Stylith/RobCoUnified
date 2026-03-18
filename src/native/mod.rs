@@ -1,4 +1,5 @@
 mod about_screen;
+mod applications_standalone;
 pub mod app;
 mod connections_screen;
 mod data;
@@ -7,6 +8,7 @@ mod desktop_app;
 mod document_browser;
 mod donkey_kong;
 mod edit_menus_screen;
+mod editor_standalone;
 mod editor_app;
 mod file_manager;
 mod file_manager_app;
@@ -18,6 +20,7 @@ mod hacking_screen;
 mod installer_screen;
 mod menu;
 mod nuke_codes_screen;
+mod nuke_codes_standalone;
 mod programs_screen;
 mod prompt;
 mod prompt_flow;
@@ -38,7 +41,10 @@ pub use robcos_native_services::{
 pub use robcos_native_settings_app::NativeSettingsPanel;
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
+pub use applications_standalone::RobcoNativeApplicationsApp;
+pub use editor_standalone::RobcoNativeEditorApp;
 pub use file_manager_standalone::RobcoNativeFileManagerApp;
+pub use nuke_codes_standalone::RobcoNativeNukeCodesApp;
 pub use settings_standalone::{
     standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
 };

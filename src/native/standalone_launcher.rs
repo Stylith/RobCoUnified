@@ -8,6 +8,9 @@ pub const ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_US
 pub enum StandaloneNativeApp {
     FileManager,
     Settings,
+    Editor,
+    Applications,
+    NukeCodes,
 }
 
 impl StandaloneNativeApp {
@@ -15,6 +18,9 @@ impl StandaloneNativeApp {
         match self {
             Self::FileManager => "robcos-file-manager",
             Self::Settings => "robcos-settings",
+            Self::Editor => "robcos-editor",
+            Self::Applications => "robcos-applications",
+            Self::NukeCodes => "robcos-nuke-codes",
         }
     }
 
@@ -22,6 +28,9 @@ impl StandaloneNativeApp {
         match self {
             Self::FileManager => "file manager",
             Self::Settings => "settings",
+            Self::Editor => "editor",
+            Self::Applications => "applications",
+            Self::NukeCodes => "nuke codes",
         }
     }
 }
@@ -100,5 +109,8 @@ mod tests {
     fn standalone_app_labels_are_user_facing() {
         assert_eq!(StandaloneNativeApp::FileManager.label(), "file manager");
         assert_eq!(StandaloneNativeApp::Settings.label(), "settings");
+        assert_eq!(StandaloneNativeApp::Editor.label(), "editor");
+        assert_eq!(StandaloneNativeApp::Applications.label(), "applications");
+        assert_eq!(StandaloneNativeApp::NukeCodes.label(), "nuke codes");
     }
 }

@@ -1911,11 +1911,7 @@ impl RobcoNativeApp {
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
     }
 
-    pub(crate) fn prepare_standalone_settings_window(
-        &mut self,
-        session_username: Option<String>,
-        panel: Option<NativeSettingsPanel>,
-    ) {
+    fn restore_standalone_session_identity(&mut self, session_username: Option<String>) {
         let session_username = session_username
             .and_then(|username| {
                 let trimmed = username.trim().to_string();
@@ -1930,7 +1926,28 @@ impl RobcoNativeApp {
                 self.restore_for_user(&username, &user);
             }
         }
+    }
+
+    fn prepare_standalone_window_shell(
+        &mut self,
+        session_username: Option<String>,
+        desktop_mode_open: bool,
+    ) {
+        self.restore_standalone_session_identity(session_username);
         self.desktop_window_states.clear();
+        self.close_desktop_overlays();
+        self.terminal_prompt = None;
+        self.desktop_mode_open = desktop_mode_open;
+        self.desktop_active_window = None;
+        self.apply_status_update(clear_shell_status());
+    }
+
+    pub(crate) fn prepare_standalone_settings_window(
+        &mut self,
+        session_username: Option<String>,
+        panel: Option<NativeSettingsPanel>,
+    ) {
+        self.prepare_standalone_window_shell(session_username, false);
         self.reset_desktop_settings_window();
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
         self.settings.open = true;
@@ -1938,15 +1955,12 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.picking_icon_for_shortcut = None;
         self.picking_wallpaper = false;
-        self.desktop_mode_open = false;
         self.desktop_active_window = Some(DesktopWindow::Settings);
-        self.close_desktop_overlays();
-        self.terminal_prompt = None;
         self.apply_status_update(clear_settings_status());
-        self.apply_status_update(clear_shell_status());
     }
 
     pub(crate) fn update_standalone_settings_window(&mut self, ctx: &Context) {
+        self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
         self.dispatch_context_menu_action(ctx);
         if self.terminal_prompt.is_some() {
@@ -1968,6 +1982,49 @@ impl RobcoNativeApp {
         }
     }
 
+    pub(crate) fn prepare_standalone_editor_window(
+        &mut self,
+        session_username: Option<String>,
+        start_path: Option<PathBuf>,
+    ) {
+        self.prepare_standalone_window_shell(session_username, true);
+        self.file_manager.open = false;
+        self.picking_icon_for_shortcut = None;
+        self.picking_wallpaper = false;
+        self.editor.reset_for_desktop_new_document();
+        self.editor.status.clear();
+        self.editor.ui.reset_search();
+        self.prime_desktop_window_defaults(DesktopWindow::Editor);
+        if let Some(path) = start_path {
+            self.open_embedded_path_in_editor(path);
+        } else {
+            self.new_document();
+        }
+        self.desktop_active_window = Some(DesktopWindow::Editor);
+    }
+
+    pub(crate) fn update_standalone_editor_window(&mut self, ctx: &Context) {
+        self.maybe_sync_settings_from_disk(ctx);
+        self.sync_native_appearance(ctx);
+        if self.terminal_prompt.is_some() {
+            self.handle_terminal_prompt_input(ctx);
+            self.consume_terminal_prompt_keys(ctx);
+        }
+        let file_manager_first =
+            self.desktop_active_window != Some(DesktopWindow::FileManager) || !self.file_manager.open;
+        if file_manager_first {
+            self.draw_file_manager(ctx);
+            self.draw_editor(ctx);
+        } else {
+            self.draw_editor(ctx);
+            self.draw_file_manager(ctx);
+        }
+        self.draw_terminal_prompt_overlay_global(ctx);
+        if !self.editor.open && !self.file_manager.open && self.terminal_prompt.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
         self.applications.open
     }
@@ -1978,6 +2035,26 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_applications_draw(&mut self, ctx: &Context) {
         self.draw_applications(ctx);
+    }
+
+    pub(crate) fn prepare_standalone_applications_window(
+        &mut self,
+        session_username: Option<String>,
+    ) {
+        self.prepare_standalone_window_shell(session_username, true);
+        self.applications.status.clear();
+        self.prime_desktop_window_defaults(DesktopWindow::Applications);
+        self.applications.open = true;
+        self.desktop_active_window = Some(DesktopWindow::Applications);
+    }
+
+    pub(crate) fn update_standalone_applications_window(&mut self, ctx: &Context) {
+        self.maybe_sync_settings_from_disk(ctx);
+        self.sync_native_appearance(ctx);
+        self.draw_applications(ctx);
+        if !self.applications.open {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     pub(crate) fn desktop_component_donkey_kong_is_open(&self) -> bool {
@@ -2002,6 +2079,25 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_nuke_codes_draw(&mut self, ctx: &Context) {
         self.draw_nuke_codes_window(ctx);
+    }
+
+    pub(crate) fn prepare_standalone_nuke_codes_window(
+        &mut self,
+        session_username: Option<String>,
+    ) {
+        self.prepare_standalone_window_shell(session_username, true);
+        self.prime_desktop_window_defaults(DesktopWindow::NukeCodes);
+        self.open_desktop_nuke_codes();
+        self.desktop_active_window = Some(DesktopWindow::NukeCodes);
+    }
+
+    pub(crate) fn update_standalone_nuke_codes_window(&mut self, ctx: &Context) {
+        self.maybe_sync_settings_from_disk(ctx);
+        self.sync_native_appearance(ctx);
+        self.draw_nuke_codes_window(ctx);
+        if !self.desktop_nuke_codes_open {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     pub(crate) fn desktop_component_installer_is_open(&self) -> bool {
@@ -4534,6 +4630,48 @@ impl RobcoNativeApp {
         }
     }
 
+    fn launch_standalone_editor(&mut self, path: Option<PathBuf>) {
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        let args = path
+            .map(|path| vec![path.into_os_string()])
+            .unwrap_or_default();
+        match launch_standalone_app(StandaloneNativeApp::Editor, &args, session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
+    fn launch_standalone_applications(&mut self) {
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        match launch_standalone_app(StandaloneNativeApp::Applications, &[], session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
+    fn launch_standalone_nuke_codes(&mut self) {
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        match launch_standalone_app(StandaloneNativeApp::NukeCodes, &[], session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
     fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
         let current_user = get_current_user();
         let session_username = self
@@ -4659,18 +4797,11 @@ impl RobcoNativeApp {
             DesktopShellAction::OpenWindow(window) => match window {
                 DesktopWindow::FileManager => self.launch_standalone_file_manager(None),
                 DesktopWindow::Settings => self.open_standalone_settings(None),
+                DesktopWindow::Applications => self.launch_standalone_applications(),
                 _ => self.open_desktop_window(window),
             },
-            DesktopShellAction::OpenTextEditor => {
-                self.apply_desktop_program_request(DesktopProgramRequest::OpenTextEditor {
-                    close_window: false,
-                });
-            }
-            DesktopShellAction::OpenNukeCodes => {
-                self.apply_desktop_program_request(DesktopProgramRequest::OpenNukeCodes {
-                    close_window: true,
-                });
-            }
+            DesktopShellAction::OpenTextEditor => self.launch_standalone_editor(None),
+            DesktopShellAction::OpenNukeCodes => self.launch_standalone_nuke_codes(),
             DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
             DesktopShellAction::OpenConnectionsSettings => {
                 if connections_macos_disabled() {
@@ -4698,7 +4829,7 @@ impl RobcoNativeApp {
                 let request = resolve_desktop_games_request(&name, BUILTIN_DONKEY_KONG_GAME);
                 self.apply_desktop_program_request(request);
             }
-            DesktopShellAction::OpenPathInEditor(path) => self.open_path_in_editor(path),
+            DesktopShellAction::OpenPathInEditor(path) => self.launch_standalone_editor(Some(path)),
             DesktopShellAction::RevealPathInFileManager(path) => {
                 self.launch_standalone_file_manager(Some(path));
             }
@@ -5312,6 +5443,10 @@ impl RobcoNativeApp {
     }
 
     fn open_path_in_editor(&mut self, path: PathBuf) {
+        self.launch_standalone_editor(Some(path));
+    }
+
+    fn open_embedded_path_in_editor(&mut self, path: PathBuf) {
         match load_text_document(path.clone()) {
             Ok(document) => {
                 self.editor.path = Some(document.path.clone());
@@ -6543,7 +6678,7 @@ impl RobcoNativeApp {
                 self.launch_standalone_file_manager(None);
             }
             DesktopMenuAction::OpenApplications => {
-                self.open_desktop_window(DesktopWindow::Applications);
+                self.launch_standalone_applications();
             }
             DesktopMenuAction::OpenSettings => {
                 self.open_standalone_settings(None);
@@ -7266,14 +7401,10 @@ impl RobcoNativeApp {
     fn apply_desktop_program_request(&mut self, request: DesktopProgramRequest) {
         match request {
             DesktopProgramRequest::OpenTextEditor { close_window: _ } => {
-                if self.editor.path.is_none() {
-                    self.new_document();
-                } else {
-                    self.open_desktop_window(DesktopWindow::Editor);
-                }
+                self.launch_standalone_editor(None);
             }
             DesktopProgramRequest::OpenNukeCodes { close_window: _ } => {
-                self.open_desktop_nuke_codes();
+                self.launch_standalone_nuke_codes();
             }
             DesktopProgramRequest::OpenBuiltinGame => {
                 self.open_desktop_donkey_kong();
