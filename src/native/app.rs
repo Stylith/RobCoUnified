@@ -78,11 +78,11 @@ use super::desktop_status_service::{
 };
 use super::desktop_surface_service::{
     build_default_desktop_icon_positions, desktop_builtin_icons, finalize_dragged_icon_position,
-    icon_position, set_builtin_icon_visible, set_desktop_icon_style,
+    icon_position, load_desktop_surface_entries, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_path as set_desktop_wallpaper_path,
     set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, update_dragged_icon_position,
     wallpaper_browser_start_dir, DesktopBuiltinIconKind, DesktopIconDragGrid,
-    DesktopIconGridLayout,
+    DesktopIconGridLayout, DesktopSurfaceEntry,
 };
 use super::desktop_user_service::{
     create_user as create_desktop_user, delete_user as delete_desktop_user, sorted_user_records,
@@ -103,7 +103,7 @@ use super::edit_menus_screen::{
 use super::editor_app::{
     EditorCommand, EditorTextAlign, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
-use super::file_manager::{FileManagerCommand, NativeFileManagerState};
+use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
 use super::file_manager_app::{
     self, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate, FileManagerEditRuntime,
     FileManagerOpenTarget, FileManagerPickMode, FileManagerPickerCommit, FileManagerPromptAction,
@@ -162,7 +162,7 @@ use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use crate::config::ConnectionKind;
 use crate::config::{
-    CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode,
+    desktop_dir as robco_desktop_dir, CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode,
     DesktopIconStyle, HackingDifficulty, OpenMode, Settings, WallpaperSizeMode,
     CUSTOM_THEME_NAME, THEMES,
 };
@@ -177,6 +177,7 @@ use eframe::egui::{
 use robcos_native_default_apps_app::{
     build_default_app_settings_choices, default_app_slot_description,
 };
+use robcos_native_file_manager_app::FileManagerAction;
 use robcos_native_programs_app::{
     build_desktop_applications_sections, build_terminal_application_entries,
     build_terminal_game_entries, resolve_desktop_applications_request,
@@ -194,6 +195,7 @@ use robcos_native_settings_app::{
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 mod file_manager_desktop_presenter;
@@ -287,7 +289,14 @@ struct AssetCache {
 
 struct DesktopIconLayoutCache {
     layout: DesktopIconGridLayout,
+    desktop_entry_keys: Arc<Vec<String>>,
     positions: Arc<HashMap<String, [f32; 2]>>,
+}
+
+struct DesktopSurfaceEntriesCache {
+    dir: PathBuf,
+    modified: Option<SystemTime>,
+    entries: Arc<Vec<DesktopSurfaceEntry>>,
 }
 
 struct DesktopApplicationsSectionsCache {
@@ -643,6 +652,7 @@ pub struct RobcoNativeApp {
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     shortcut_icon_missing: HashSet<String>,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
+    desktop_surface_entries_cache: Option<DesktopSurfaceEntriesCache>,
     settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     settings_home_rows_cache_standard: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     desktop_applications_sections_cache: Option<DesktopApplicationsSectionsCache>,
@@ -779,6 +789,7 @@ impl Default for RobcoNativeApp {
             shortcut_icon_cache: HashMap::new(),
             shortcut_icon_missing: HashSet::new(),
             desktop_icon_layout_cache: None,
+            desktop_surface_entries_cache: None,
             settings_home_rows_cache_admin: None,
             settings_home_rows_cache_standard: None,
             desktop_applications_sections_cache: None,
@@ -813,6 +824,14 @@ impl RobcoNativeApp {
 
     fn invalidate_desktop_icon_layout_cache(&mut self) {
         self.desktop_icon_layout_cache = None;
+    }
+
+    fn invalidate_desktop_surface_cache(&mut self) {
+        self.desktop_surface_entries_cache = None;
+        self.invalidate_desktop_icon_layout_cache();
+        if self.file_manager.cwd == robco_desktop_dir() {
+            self.file_manager.refresh_contents();
+        }
     }
 
     fn invalidate_program_catalog_cache(&mut self) {
@@ -855,24 +874,61 @@ impl RobcoNativeApp {
     fn default_desktop_icon_positions(
         &mut self,
         layout: DesktopIconGridLayout,
+        desktop_entries: &[DesktopSurfaceEntry],
     ) -> Arc<HashMap<String, [f32; 2]>> {
+        let desktop_entry_keys = Arc::new(
+            desktop_entries
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect::<Vec<_>>(),
+        );
         let needs_rebuild = self
             .desktop_icon_layout_cache
             .as_ref()
-            .is_none_or(|cache| cache.layout != layout);
+            .is_none_or(|cache| {
+                cache.layout != layout || cache.desktop_entry_keys.as_ref() != desktop_entry_keys.as_ref()
+            });
         if needs_rebuild {
             let positions = Arc::new(build_default_desktop_icon_positions(
                 layout,
                 self.settings.draft.desktop_icon_sort,
                 &self.settings.draft.desktop_hidden_builtin_icons,
+                desktop_entries,
                 &self.settings.draft.desktop_shortcuts,
             ));
-            self.desktop_icon_layout_cache = Some(DesktopIconLayoutCache { layout, positions });
+            self.desktop_icon_layout_cache = Some(DesktopIconLayoutCache {
+                layout,
+                desktop_entry_keys,
+                positions,
+            });
         }
         self.desktop_icon_layout_cache
             .as_ref()
             .expect("desktop icon layout cache initialized")
             .positions
+            .clone()
+    }
+
+    fn desktop_surface_entries(&mut self) -> Arc<Vec<DesktopSurfaceEntry>> {
+        let dir = robco_desktop_dir();
+        let modified = std::fs::metadata(&dir).and_then(|meta| meta.modified()).ok();
+        let needs_reload = self
+            .desktop_surface_entries_cache
+            .as_ref()
+            .is_none_or(|cache| cache.dir != dir || cache.modified != modified);
+        if needs_reload {
+            let entries = Arc::new(load_desktop_surface_entries(&dir));
+            self.desktop_surface_entries_cache = Some(DesktopSurfaceEntriesCache {
+                dir,
+                modified,
+                entries,
+            });
+            self.invalidate_desktop_icon_layout_cache();
+        }
+        self.desktop_surface_entries_cache
+            .as_ref()
+            .expect("desktop surface cache initialized")
+            .entries
             .clone()
     }
 
@@ -2212,6 +2268,105 @@ impl RobcoNativeApp {
             Ok(message) => message,
             Err(err) => format!("File action failed: {err}"),
         };
+        let desktop_dir = robco_desktop_dir();
+        if target_dir == desktop_dir || target_dir.starts_with(&desktop_dir) {
+            self.invalidate_desktop_surface_cache();
+        }
+    }
+
+    fn desktop_entry_row(entry: &DesktopSurfaceEntry) -> FileEntryRow {
+        FileEntryRow {
+            path: entry.path.clone(),
+            label: entry.label.clone(),
+            is_dir: entry.is_dir(),
+        }
+    }
+
+    fn create_desktop_folder(&mut self) {
+        let desktop_dir = robco_desktop_dir();
+        self.shell_status = match self
+            .file_manager_runtime
+            .create_folder_in_dir(&desktop_dir, "New Folder")
+        {
+            Ok(path) => {
+                self.invalidate_desktop_surface_cache();
+                format!(
+                    "Created {} on the desktop.",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("folder")
+                )
+            }
+            Err(err) => format!("Desktop folder create failed: {err}"),
+        };
+    }
+
+    fn paste_to_desktop(&mut self) {
+        let desktop_dir = robco_desktop_dir();
+        self.shell_status = match self
+            .file_manager_runtime
+            .paste_clipboard_into_dir(&desktop_dir)
+        {
+            Ok((count, last_dst)) => {
+                self.invalidate_desktop_surface_cache();
+                if count == 1 {
+                    format!(
+                        "Pasted {} onto the desktop.",
+                        last_dst
+                            .as_ref()
+                            .and_then(|path| path.file_name())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("item")
+                    )
+                } else {
+                    format!("Pasted {count} items onto the desktop.")
+                }
+            }
+            Err(err) => format!("Desktop paste failed: {err}"),
+        };
+    }
+
+    fn import_paths_to_desktop(&mut self, paths: Vec<PathBuf>) {
+        let desktop_dir = robco_desktop_dir();
+        self.shell_status = match self
+            .file_manager_runtime
+            .copy_paths_into_dir(paths, &desktop_dir)
+        {
+            Ok((count, last_dst)) => {
+                self.invalidate_desktop_surface_cache();
+                if count == 1 {
+                    format!(
+                        "Imported {} to the desktop.",
+                        last_dst
+                            .as_ref()
+                            .and_then(|path| path.file_name())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("item")
+                    )
+                } else {
+                    format!("Imported {count} items to the desktop.")
+                }
+            }
+            Err(err) => format!("Desktop import failed: {err}"),
+        };
+    }
+
+    fn open_desktop_surface_path(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.open_file_manager_at(path);
+            return;
+        }
+        match file_manager_app::open_target_for_file_manager_action(
+            FileManagerAction::OpenFile(path),
+            &self.live_desktop_file_manager_settings,
+        ) {
+            Ok(FileManagerOpenTarget::NoOp) => {}
+            Ok(FileManagerOpenTarget::Launch(launch)) => {
+                self.shell_status = self.launch_open_with_request(launch);
+            }
+            Ok(FileManagerOpenTarget::OpenInEditor(path)) => self.open_path_in_editor(path),
+            Err(status) => self.shell_status = status,
+        }
     }
 
     fn run_file_manager_command(&mut self, command: FileManagerCommand) {
@@ -2268,10 +2423,10 @@ impl RobcoNativeApp {
                 self.shell_status = "Properties dialog is not implemented yet.".to_string();
             }
             ContextMenuAction::PasteToDesktop => {
-                self.shell_status = "Desktop paste is not implemented yet.".to_string();
+                self.paste_to_desktop();
             }
             ContextMenuAction::NewFolder => {
-                self.run_file_manager_command(FileManagerCommand::NewFolder);
+                self.create_desktop_folder();
             }
             ContextMenuAction::ChangeAppearance => {
                 self.open_desktop_window(DesktopWindow::Settings);
@@ -2524,6 +2679,7 @@ impl RobcoNativeApp {
         };
 
         let hidden_icons = self.settings.draft.desktop_hidden_builtin_icons.clone();
+        let desktop_entries = self.desktop_surface_entries();
         let shortcuts = self.settings.draft.desktop_shortcuts.clone();
         let builtin_entries = desktop_builtin_icons();
         let default_positions = self.default_desktop_icon_positions(DesktopIconGridLayout {
@@ -2532,9 +2688,10 @@ impl RobcoNativeApp {
             height: workspace.height(),
             item_height,
             column_width,
-        });
+        }, &desktop_entries);
         let mut open_window: Option<DesktopWindow> = None;
         let mut open_terminal = false;
+        let mut open_desktop_path: Option<PathBuf> = None;
         let mut shortcut_action: Option<ContextMenuAction> = None;
         let mut needs_persist = false;
 
@@ -2624,6 +2781,109 @@ impl RobcoNativeApp {
             }
         }
 
+        for (entry_idx, entry) in desktop_entries.iter().enumerate() {
+            let entry_key = entry.key.clone();
+            let entry_path = entry.path.clone();
+            let entry_label = entry.label.clone();
+            let entry_is_dir = entry.is_dir();
+            let row = Self::desktop_entry_row(entry);
+            let top_left = {
+                let [x, y] = icon_position(
+                    &self.settings.draft,
+                    &entry_key,
+                    [
+                        workspace.left() + 4.0 + column_width,
+                        workspace.top()
+                            + 16.0
+                            + (builtin_entries.len() + entry_idx) as f32 * item_height,
+                    ],
+                    &default_positions,
+                );
+                egui::pos2(x, y)
+            };
+
+            let icon_rect = egui::Rect::from_min_size(
+                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
+                egui::vec2(icon_size, icon_size),
+            );
+            let label_rect = egui::Rect::from_min_size(
+                top_left + egui::vec2(0.0, icon_size + 2.0),
+                egui::vec2(column_width, label_height.max(16.0)),
+            );
+            let hit_rect = if label_height > 0.0 {
+                egui::Rect::from_min_size(
+                    top_left,
+                    egui::vec2(column_width, icon_size + label_height + 2.0),
+                )
+            } else {
+                icon_rect
+            };
+
+            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
+            let file_manager_drop_hover = entry_is_dir
+                && response
+                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                    .is_some_and(|payload| {
+                        Self::file_manager_drop_allowed(&payload.paths, &entry_path)
+                    });
+
+            match style {
+                DesktopIconStyle::Dos => {
+                    ui.painter().text(
+                        icon_rect.center(),
+                        Align2::CENTER_CENTER,
+                        row.icon(),
+                        FontId::new(18.0, FontFamily::Monospace),
+                        palette.fg,
+                    );
+                }
+                DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
+                    if let Some(texture) = self.file_manager_texture_for_row(&row) {
+                        Self::paint_tinted_texture(ui.painter(), texture, icon_rect, palette.fg);
+                    }
+                }
+                DesktopIconStyle::NoIcons => {}
+            }
+
+            if file_manager_drop_hover {
+                ui.painter().rect_stroke(
+                    hit_rect.expand(2.0),
+                    0.0,
+                    egui::Stroke::new(1.5, palette.fg),
+                );
+            }
+
+            if label_height > 0.0 {
+                Self::paint_desktop_icon_label(ui, label_rect, &entry_label, palette.fg);
+            }
+
+            if response.dragged() {
+                update_dragged_icon_position(
+                    &mut self.settings.draft,
+                    &entry_key,
+                    [top_left.x, top_left.y],
+                    [response.drag_delta().x, response.drag_delta().y],
+                );
+            }
+            if response.drag_stopped() {
+                needs_persist |=
+                    finalize_dragged_icon_position(&mut self.settings.draft, &entry_key, drag_grid);
+            }
+
+            if entry_is_dir {
+                if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>()
+                {
+                    if Self::file_manager_drop_allowed(&payload.paths, &entry_path) {
+                        self.file_manager_handle_drop_to_dir(payload.paths.clone(), entry_path.clone());
+                    }
+                }
+            }
+
+            if response.double_clicked() {
+                open_desktop_path = Some(entry_path);
+            }
+        }
+
         for (sidx, shortcut) in shortcuts.iter().enumerate() {
             let key = format!("shortcut_{}", sidx);
             let top_left = {
@@ -2631,7 +2891,7 @@ impl RobcoNativeApp {
                     &self.settings.draft,
                     &key,
                     [
-                        workspace.left() + 4.0 + column_width,
+                        workspace.left() + 4.0 + column_width * 2.0,
                         workspace.top() + 16.0 + sidx as f32 * item_height,
                     ],
                     &default_positions,
@@ -2768,6 +3028,8 @@ impl RobcoNativeApp {
 
         if open_terminal {
             self.open_desktop_terminal_shell();
+        } else if let Some(path) = open_desktop_path {
+            self.open_desktop_surface_path(path);
         } else if let Some(window) = open_window {
             self.open_desktop_window(window);
         }
@@ -5879,8 +6141,21 @@ impl RobcoNativeApp {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let response = ui.allocate_rect(rect, egui::Sense::click());
+                let desktop_dir = robco_desktop_dir();
+                let file_manager_drop_hover = response
+                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                    .is_some_and(|payload| {
+                        Self::file_manager_drop_allowed(&payload.paths, &desktop_dir)
+                    });
                 if !self.draw_wallpaper(ui.painter(), rect, &palette) {
                     ui.painter().rect_filled(rect, 0.0, palette.bg);
+                }
+                if file_manager_drop_hover {
+                    ui.painter().rect_stroke(
+                        rect.shrink(6.0),
+                        0.0,
+                        egui::Stroke::new(2.0, palette.fg),
+                    );
                 }
                 if !matches!(
                     self.settings.draft.desktop_icon_style,
@@ -5888,12 +6163,36 @@ impl RobcoNativeApp {
                 ) {
                     self.draw_desktop_icons(ui);
                 }
+                if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>()
+                {
+                    if Self::file_manager_drop_allowed(&payload.paths, &desktop_dir) {
+                        self.file_manager_handle_drop_to_dir(payload.paths.clone(), desktop_dir);
+                    }
+                }
                 Self::attach_desktop_empty_context_menu(
                     &mut self.context_menu_action,
                     &response,
                     self.settings.draft.desktop_snap_to_grid,
                     self.settings.draft.desktop_icon_sort,
                 );
+                let dropped_paths: Vec<PathBuf> = ctx.input(|input| {
+                    let hovered = input
+                        .pointer
+                        .hover_pos()
+                        .is_some_and(|pos| rect.contains(pos));
+                    if !hovered {
+                        return Vec::new();
+                    }
+                    input
+                        .raw
+                        .dropped_files
+                        .iter()
+                        .filter_map(|file| file.path.clone())
+                        .collect()
+                });
+                if !dropped_paths.is_empty() {
+                    self.import_paths_to_desktop(dropped_paths);
+                }
                 if response.clicked() {
                     self.close_desktop_overlays();
                 }

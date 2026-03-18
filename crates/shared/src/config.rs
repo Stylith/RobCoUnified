@@ -190,6 +190,22 @@ pub fn user_dir(username: &str) -> PathBuf {
     d
 }
 
+pub fn desktop_dir_for_username(username: &str) -> PathBuf {
+    let d = user_dir(username).join("Desktop");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+pub fn desktop_dir() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        desktop_dir_for_username(&username)
+    } else {
+        let d = base_dir().join("Desktop");
+        let _ = std::fs::create_dir_all(&d);
+        d
+    }
+}
+
 fn default_apps_prompt_marker(username: &str) -> PathBuf {
     user_dir(username).join(".default_apps_prompt")
 }
@@ -1135,6 +1151,12 @@ mod tests {
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert_eq!(decoded.custom_theme_rgb, [0, 255, 0]);
+    }
+
+    #[test]
+    fn desktop_dir_for_username_lives_under_user_dir() {
+        let desktop = desktop_dir_for_username("adi");
+        assert!(desktop.ends_with(Path::new("users").join("adi").join("Desktop")));
     }
 }
 

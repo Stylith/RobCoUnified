@@ -149,6 +149,11 @@ impl NativeFileManagerState {
         *self.view_cache.get_mut() = FileManagerViewCache::default();
     }
 
+    pub fn refresh_contents(&mut self) {
+        self.invalidate_view_cache();
+        self.ensure_selection_valid();
+    }
+
     fn sync_active_tab_path(&mut self) {
         if self.tabs.is_empty() {
             self.tabs.push(self.cwd.clone());
@@ -869,12 +874,17 @@ impl FileManagerEditRuntime {
         &mut self,
         file_manager: &mut NativeFileManagerState,
     ) -> Result<String> {
-        let dst = unique_path_in_dir(&file_manager.cwd, "New Folder");
-        std::fs::create_dir_all(&dst)
-            .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
+        let dst = self.create_folder_in_dir(&file_manager.cwd, "New Folder")?;
         file_manager.invalidate_view_cache();
         file_manager.select(Some(dst.clone()));
         Ok(format!("Created {}", path_display_name(&dst)))
+    }
+
+    pub fn create_folder_in_dir(&mut self, target_dir: &Path, name: &str) -> Result<PathBuf> {
+        let dst = unique_path_in_dir(target_dir, name);
+        std::fs::create_dir_all(&dst)
+            .map_err(|e| anyhow!("Failed creating {}: {e}", dst.display()))?;
+        Ok(dst)
     }
 
     pub fn duplicate_selected(
@@ -1035,10 +1045,29 @@ impl FileManagerEditRuntime {
     }
 
     pub fn paste_clipboard(&mut self, file_manager: &mut NativeFileManagerState) -> Result<String> {
+        let target_dir = file_manager.cwd.clone();
+        let (changed, last_dst) = self.paste_clipboard_into_dir(&target_dir)?;
+        file_manager.invalidate_view_cache();
+        if let Some(dst) = last_dst {
+            file_manager.select(Some(dst.clone()));
+            if changed == 1 {
+                Ok(format!("Pasted {}", path_display_name(&dst)))
+            } else {
+                Ok(format!("Pasted {changed} items"))
+            }
+        } else {
+            Err(anyhow!("Clipboard source no longer exists."))
+        }
+    }
+
+    pub fn paste_clipboard_into_dir(
+        &mut self,
+        target_dir: &Path,
+    ) -> Result<(usize, Option<PathBuf>)> {
         let Some(clipboard) = self.clipboard.clone() else {
             return Err(anyhow!("Clipboard is empty."));
         };
-        let target_dir = file_manager.cwd.clone();
+        let target_dir = target_dir.to_path_buf();
         let mut changed = 0usize;
         let mut last_dst: Option<PathBuf> = None;
 
@@ -1089,18 +1118,40 @@ impl FileManagerEditRuntime {
         }
 
         if changed == 0 {
-            return Err(anyhow!("Clipboard source no longer exists."));
-        }
-        file_manager.invalidate_view_cache();
-        if let Some(dst) = last_dst {
-            file_manager.select(Some(dst.clone()));
-            if changed == 1 {
-                Ok(format!("Pasted {}", path_display_name(&dst)))
-            } else {
-                Ok(format!("Pasted {changed} items"))
-            }
-        } else {
             Err(anyhow!("Clipboard source no longer exists."))
+        } else {
+            Ok((changed, last_dst))
+        }
+    }
+
+    pub fn copy_paths_into_dir(
+        &mut self,
+        paths: Vec<PathBuf>,
+        target_dir: &Path,
+    ) -> Result<(usize, Option<PathBuf>)> {
+        let mut changed = 0usize;
+        let mut last_dst = None;
+        for src in paths {
+            if !src.exists() {
+                continue;
+            }
+            let source_name = path_display_name(&src);
+            let mut dst = target_dir.join(&source_name);
+            if dst.exists() {
+                dst = unique_copy_path_in_dir(target_dir, &source_name, false);
+            }
+            copy_path_recursive(&src, &dst)?;
+            self.record_edit_op(FileManagerEditOp::CopyCreated {
+                src,
+                dst: dst.clone(),
+            });
+            changed += 1;
+            last_dst = Some(dst);
+        }
+        if changed == 0 {
+            Err(anyhow!("Nothing to import."))
+        } else {
+            Ok((changed, last_dst))
         }
     }
 
@@ -1397,6 +1448,50 @@ mod tests {
             labels.iter().any(|label| label == "New Folder"),
             "cached rows should refresh after filesystem mutation"
         );
+    }
+
+    #[test]
+    fn paste_clipboard_into_dir_copies_items_for_desktop_targets() {
+        let temp = TempDirGuard::new("desktop_paste");
+        let src = temp.path.join("notes.txt");
+        let desktop = temp.path.join("Desktop");
+        std::fs::write(&src, "hello").expect("write source file");
+        std::fs::create_dir_all(&desktop).expect("create desktop dir");
+
+        let mut runtime = FileManagerEditRuntime::default();
+        runtime.clipboard = Some(FileManagerClipboardItem {
+            paths: vec![src.clone()],
+            mode: FileManagerClipboardMode::Copy,
+        });
+
+        let (count, last_dst) = runtime
+            .paste_clipboard_into_dir(&desktop)
+            .expect("paste into desktop");
+
+        assert_eq!(count, 1);
+        assert_eq!(last_dst, Some(desktop.join("notes.txt")));
+        assert!(src.exists());
+        assert!(desktop.join("notes.txt").exists());
+    }
+
+    #[test]
+    fn copy_paths_into_dir_recursively_imports_folders() {
+        let temp = TempDirGuard::new("desktop_import");
+        let src_dir = temp.path.join("Projects");
+        let desktop = temp.path.join("Desktop");
+        std::fs::create_dir_all(src_dir.join("nested")).expect("create source dirs");
+        std::fs::create_dir_all(&desktop).expect("create desktop dir");
+        std::fs::write(src_dir.join("nested").join("todo.txt"), "ship it").expect("write nested");
+
+        let mut runtime = FileManagerEditRuntime::default();
+        let (count, last_dst) = runtime
+            .copy_paths_into_dir(vec![src_dir.clone()], &desktop)
+            .expect("copy into desktop");
+
+        assert_eq!(count, 1);
+        assert_eq!(last_dst, Some(desktop.join("Projects")));
+        assert!(desktop.join("Projects").join("nested").join("todo.txt").exists());
+        assert!(src_dir.join("nested").join("todo.txt").exists());
     }
 
     #[test]

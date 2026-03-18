@@ -40,6 +40,32 @@ pub struct DesktopIconDragGrid {
     pub snap_to_grid: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopSurfaceItemKind {
+    Folder,
+    TextFile,
+    ImageFile,
+    AudioFile,
+    VideoFile,
+    ArchiveFile,
+    AppFile,
+    File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopSurfaceEntry {
+    pub key: String,
+    pub path: PathBuf,
+    pub label: String,
+    pub kind: DesktopSurfaceItemKind,
+}
+
+impl DesktopSurfaceEntry {
+    pub fn is_dir(&self) -> bool {
+        self.kind == DesktopSurfaceItemKind::Folder
+    }
+}
+
 const DESKTOP_BUILTIN_ICONS: [DesktopBuiltinIconEntry; 6] = [
     DesktopBuiltinIconEntry {
         kind: DesktopBuiltinIconKind::FileManager,
@@ -167,18 +193,80 @@ pub fn finalize_dragged_icon_position(
 
 fn shortcut_type_rank(shortcut_kind: &str) -> usize {
     match shortcut_kind {
-        "network" => 2,
-        "game" => 3,
-        "nuke_codes" => 4,
-        "editor" => 5,
-        _ => 1,
+        "network" => 22,
+        "game" => 23,
+        "nuke_codes" => 24,
+        "editor" => 25,
+        _ => 21,
     }
+}
+
+fn desktop_surface_kind_for_path(path: &Path) -> DesktopSurfaceItemKind {
+    if path.is_dir() {
+        return DesktopSurfaceItemKind::Folder;
+    }
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "txt" | "md" | "log" | "toml" | "yaml" | "yml" | "json" | "cfg" | "ini" | "conf"
+        | "ron" | "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "hpp" | "sh" | "bash"
+        | "fish" | "lua" | "rb" => DesktopSurfaceItemKind::TextFile,
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => {
+            DesktopSurfaceItemKind::ImageFile
+        }
+        "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" => DesktopSurfaceItemKind::AudioFile,
+        "mp4" | "mkv" | "avi" | "mov" | "webm" => DesktopSurfaceItemKind::VideoFile,
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => DesktopSurfaceItemKind::ArchiveFile,
+        "exe" | "bin" | "appimage" | "dmg" | "deb" | "rpm" | "app" | "bat" | "cmd" => {
+            DesktopSurfaceItemKind::AppFile
+        }
+        _ => DesktopSurfaceItemKind::File,
+    }
+}
+
+fn desktop_surface_kind_rank(kind: DesktopSurfaceItemKind) -> usize {
+    match kind {
+        DesktopSurfaceItemKind::Folder => 1,
+        DesktopSurfaceItemKind::TextFile => 2,
+        DesktopSurfaceItemKind::ImageFile => 3,
+        DesktopSurfaceItemKind::AudioFile => 4,
+        DesktopSurfaceItemKind::VideoFile => 5,
+        DesktopSurfaceItemKind::ArchiveFile => 6,
+        DesktopSurfaceItemKind::AppFile => 7,
+        DesktopSurfaceItemKind::File => 8,
+    }
+}
+
+pub fn load_desktop_surface_entries(dir: &Path) -> Vec<DesktopSurfaceEntry> {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let label = entry.file_name().to_string_lossy().to_string();
+        if label.starts_with('.') {
+            continue;
+        }
+        entries.push(DesktopSurfaceEntry {
+            key: format!("desktop_item:{label}"),
+            path: path.clone(),
+            label,
+            kind: desktop_surface_kind_for_path(&path),
+        });
+    }
+    entries.sort_by_key(|entry| entry.label.to_ascii_lowercase());
+    entries
 }
 
 pub fn build_default_desktop_icon_positions(
     layout: DesktopIconGridLayout,
     sort_mode: DesktopIconSortMode,
     hidden_builtin_icons: &BTreeSet<String>,
+    desktop_entries: &[DesktopSurfaceEntry],
     shortcuts: &[DesktopShortcut],
 ) -> HashMap<String, [f32; 2]> {
     if matches!(sort_mode, DesktopIconSortMode::Custom) {
@@ -194,12 +282,23 @@ pub fn build_default_desktop_icon_positions(
         }
     }
 
+    let mut fallback = ordered_icons.len();
+    for entry in desktop_entries {
+        ordered_icons.push((
+            entry.key.clone(),
+            entry.label.clone(),
+            desktop_surface_kind_rank(entry.kind),
+            fallback,
+        ));
+        fallback += 1;
+    }
+
     for (idx, shortcut) in shortcuts.iter().enumerate() {
         ordered_icons.push((
             format!("shortcut_{idx}"),
             shortcut.label.clone(),
             shortcut_type_rank(&shortcut.shortcut_kind),
-            idx,
+            fallback + idx,
         ));
     }
 
@@ -235,6 +334,18 @@ pub fn build_default_desktop_icon_positions(
 mod tests {
     use super::*;
     use crate::config::DesktopIconSortMode;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos-{label}-{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
 
     fn shortcut(label: &str, kind: &str) -> DesktopShortcut {
         DesktopShortcut {
@@ -261,6 +372,7 @@ mod tests {
             DesktopIconSortMode::Custom,
             &BTreeSet::new(),
             &[],
+            &[],
         );
 
         assert!(positions.is_empty());
@@ -278,11 +390,30 @@ mod tests {
             },
             DesktopIconSortMode::ByName,
             &BTreeSet::new(),
+            &[],
             &[shortcut("Zulu", "app"), shortcut("Alpha", "app")],
         );
 
         let alpha = positions.get("shortcut_1").expect("alpha position");
         let zulu = positions.get("shortcut_0").expect("zulu position");
         assert!(alpha[1] <= zulu[1] || alpha[0] < zulu[0]);
+    }
+
+    #[test]
+    fn desktop_surface_entries_skip_hidden_files_and_classify_folders() {
+        let dir = unique_temp_dir("desktop-surface");
+        fs::create_dir_all(dir.join("Projects")).expect("create folder");
+        fs::write(dir.join("notes.txt"), "hello").expect("write file");
+        fs::write(dir.join(".hidden"), "secret").expect("write hidden file");
+
+        let entries = load_desktop_surface_entries(&dir);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].label, "notes.txt");
+        assert_eq!(entries[0].kind, DesktopSurfaceItemKind::TextFile);
+        assert_eq!(entries[1].label, "Projects");
+        assert_eq!(entries[1].kind, DesktopSurfaceItemKind::Folder);
+
+        let _ = fs::remove_dir_all(dir);
     }
 }
