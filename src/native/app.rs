@@ -28,7 +28,7 @@ use super::desktop_documents_service::{
     document_category_path, rename_document_category as rename_desktop_document_category,
 };
 use super::desktop_file_service::{
-    load_text_document, open_directory_location, reveal_path_location, FileManagerLocation,
+    load_text_document, open_directory_location, FileManagerLocation,
 };
 use super::desktop_launcher_service::{
     add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
@@ -48,7 +48,8 @@ use super::desktop_session_service::{
     close_active_session as close_native_session,
     ensure_login_session_entry as ensure_native_login_session_entry, hacking_start_flash_plan,
     has_pending_session_switch as has_native_pending_session_switch, login_flash_plan,
-    login_selection_auth_method, login_usernames as load_login_usernames, logout_flash_plan,
+    last_session_username, login_selection_auth_method, login_usernames as load_login_usernames,
+    logout_flash_plan,
     persist_shell_snapshot as persist_native_shell_snapshot,
     request_session_switch as request_native_session_switch,
     restore_current_user_from_last_session,
@@ -163,11 +164,14 @@ use super::retro_ui::{
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
+use super::settings_standalone::standalone_settings_panel_arg;
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
+use super::standalone_launcher::{launch_standalone_app, StandaloneNativeApp};
 use crate::config::{
-    desktop_dir as robco_desktop_dir, CliAcsMode, CliColorMode, DesktopFileManagerSettings,
-    DesktopIconSortMode, DesktopIconStyle, HackingDifficulty, NativeStartupWindowMode, OpenMode,
-    Settings, WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
+    desktop_dir as robco_desktop_dir, get_current_user, global_settings_file, user_dir,
+    CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode, DesktopIconStyle,
+    HackingDifficulty, NativeStartupWindowMode, OpenMode, Settings, WallpaperSizeMode,
+    CUSTOM_THEME_NAME, THEMES,
 };
 use crate::config::{ConnectionKind, SavedConnection};
 use crate::core::auth::{AuthMethod, UserRecord};
@@ -197,6 +201,7 @@ use robcos_native_settings_app::{
     NativeSettingsPanel, SettingsHomeTile, SettingsHomeTileAction, TerminalSettingsPanel,
 };
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -704,6 +709,8 @@ pub struct RobcoNativeApp {
     live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
     last_native_appearance: Option<NativeAppearanceKey>,
+    last_settings_sync_check: Instant,
+    last_settings_file_mtime: Option<SystemTime>,
     startup_profile_session_logged: bool,
     startup_profile_desktop_logged: bool,
     repaint_trace_last_pass: u64,
@@ -853,6 +860,8 @@ impl Default for RobcoNativeApp {
             live_desktop_file_manager_settings,
             live_hacking_difficulty,
             last_native_appearance: None,
+            last_settings_sync_check: Instant::now(),
+            last_settings_file_mtime: Self::current_settings_file_mtime(),
             startup_profile_session_logged: false,
             startup_profile_desktop_logged: false,
             repaint_trace_last_pass: 0,
@@ -1024,12 +1033,53 @@ impl RobcoNativeApp {
         self.saved_bluetooth_connections_cache = None;
     }
 
+    fn current_settings_file_path() -> PathBuf {
+        if let Some(username) = get_current_user() {
+            user_dir(&username).join("settings.json")
+        } else {
+            global_settings_file()
+        }
+    }
+
+    fn current_settings_file_mtime() -> Option<SystemTime> {
+        std::fs::metadata(Self::current_settings_file_path())
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+    }
+
+    fn refresh_settings_sync_marker(&mut self) {
+        self.last_settings_file_mtime = Self::current_settings_file_mtime();
+        self.last_settings_sync_check = Instant::now();
+    }
+
     fn replace_settings_draft(&mut self, draft: Settings) {
         self.settings.draft = draft;
         self.sync_runtime_settings_cache();
         self.invalidate_desktop_icon_layout_cache();
         self.invalidate_program_catalog_cache();
         self.invalidate_saved_connections_cache();
+        self.refresh_settings_sync_marker();
+    }
+
+    fn maybe_sync_settings_from_disk(&mut self, ctx: &Context) {
+        const SETTINGS_SYNC_INTERVAL: Duration = Duration::from_millis(500);
+
+        if self.settings.open || self.last_settings_sync_check.elapsed() < SETTINGS_SYNC_INTERVAL {
+            return;
+        }
+        self.last_settings_sync_check = Instant::now();
+
+        let current_mtime = Self::current_settings_file_mtime();
+        if current_mtime == self.last_settings_file_mtime {
+            return;
+        }
+
+        let previous_window_mode = self.settings.draft.native_startup_window_mode;
+        let settings = reload_settings_snapshot();
+        self.replace_settings_draft(settings);
+        if self.settings.draft.native_startup_window_mode != previous_window_mode {
+            self.apply_native_window_mode(ctx);
+        }
     }
 
     fn saved_connections_cached(&mut self, kind: ConnectionKind) -> Arc<Vec<SavedConnection>> {
@@ -1859,6 +1909,63 @@ impl RobcoNativeApp {
     pub(crate) fn desktop_component_settings_on_open(&mut self, _was_open: bool) {
         self.reset_desktop_settings_window();
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
+    }
+
+    pub(crate) fn prepare_standalone_settings_window(
+        &mut self,
+        session_username: Option<String>,
+        panel: Option<NativeSettingsPanel>,
+    ) {
+        let session_username = session_username
+            .and_then(|username| {
+                let trimmed = username.trim().to_string();
+                (!trimmed.is_empty()).then_some(trimmed)
+            })
+            .or_else(get_current_user)
+            .or_else(last_session_username);
+        if let Some(username) = session_username {
+            if let Some(user) = session_user_record(&username) {
+                bind_login_identity(&username);
+                self.ensure_login_session_entry(&username);
+                self.restore_for_user(&username, &user);
+            }
+        }
+        self.desktop_window_states.clear();
+        self.reset_desktop_settings_window();
+        self.prime_desktop_window_defaults(DesktopWindow::Settings);
+        self.settings.open = true;
+        self.settings.panel = panel.unwrap_or_else(desktop_settings_default_panel);
+        self.file_manager.open = false;
+        self.picking_icon_for_shortcut = None;
+        self.picking_wallpaper = false;
+        self.desktop_mode_open = false;
+        self.desktop_active_window = Some(DesktopWindow::Settings);
+        self.close_desktop_overlays();
+        self.terminal_prompt = None;
+        self.apply_status_update(clear_settings_status());
+        self.apply_status_update(clear_shell_status());
+    }
+
+    pub(crate) fn update_standalone_settings_window(&mut self, ctx: &Context) {
+        self.sync_native_appearance(ctx);
+        self.dispatch_context_menu_action(ctx);
+        if self.terminal_prompt.is_some() {
+            self.handle_terminal_prompt_input(ctx);
+            self.consume_terminal_prompt_keys(ctx);
+        }
+        let file_manager_first =
+            self.desktop_active_window != Some(DesktopWindow::FileManager) || !self.file_manager.open;
+        if file_manager_first {
+            self.draw_file_manager(ctx);
+            self.draw_settings(ctx);
+        } else {
+            self.draw_settings(ctx);
+            self.draw_file_manager(ctx);
+        }
+        self.draw_terminal_prompt_overlay_global(ctx);
+        if !self.settings.open && !self.file_manager.open && self.terminal_prompt.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
@@ -2900,11 +3007,10 @@ impl RobcoNativeApp {
                 self.create_desktop_folder();
             }
             ContextMenuAction::ChangeAppearance => {
-                self.open_desktop_window(DesktopWindow::Settings);
-                self.settings.panel = NativeSettingsPanel::Appearance;
+                self.open_standalone_settings(Some(NativeSettingsPanel::Appearance));
             }
             ContextMenuAction::OpenSettings => {
-                self.open_desktop_window(DesktopWindow::Settings);
+                self.open_standalone_settings(None);
             }
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}
@@ -4050,7 +4156,7 @@ impl RobcoNativeApp {
                 let icons_dir =
                     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/Icons");
                 self.picking_icon_for_shortcut = Some(props_idx);
-                self.open_file_manager_at(icons_dir);
+                self.open_embedded_file_manager_at(icons_dir);
             }
             _ => {}
         }
@@ -4403,8 +4509,44 @@ impl RobcoNativeApp {
     }
 
     fn open_file_manager_at(&mut self, path: PathBuf) {
+        self.launch_standalone_file_manager(Some(path));
+    }
+
+    fn open_embedded_file_manager_at(&mut self, path: PathBuf) {
         match open_directory_location(path) {
             Ok(location) => self.apply_file_manager_location(location),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
+    fn launch_standalone_file_manager(&mut self, path: Option<PathBuf>) {
+        let start_path = path.unwrap_or_else(|| self.file_manager.cwd.clone());
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        let args = vec![start_path.into_os_string()];
+        match launch_standalone_app(StandaloneNativeApp::FileManager, &args, session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
+    fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        let mut args = Vec::new();
+        if let Some(panel) = panel {
+            args.push(OsString::from(standalone_settings_panel_arg(panel)));
+        }
+        match launch_standalone_app(StandaloneNativeApp::Settings, &args, session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
             Err(status) => self.shell_status = status,
         }
     }
@@ -4432,7 +4574,7 @@ impl RobcoNativeApp {
             .and_then(|path| path.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| word_processor_dir(&session.username));
         self.editor.save_as_input = Some(self.default_editor_save_name());
-        self.open_file_manager_at(start_dir);
+        self.open_embedded_file_manager_at(start_dir);
         if let Some(path) = self.editor.path.clone() {
             self.file_manager.select(Some(path));
         }
@@ -4514,7 +4656,11 @@ impl RobcoNativeApp {
 
     fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
         match action {
-            DesktopShellAction::OpenWindow(window) => self.open_desktop_window(window),
+            DesktopShellAction::OpenWindow(window) => match window {
+                DesktopWindow::FileManager => self.launch_standalone_file_manager(None),
+                DesktopWindow::Settings => self.open_standalone_settings(None),
+                _ => self.open_desktop_window(window),
+            },
             DesktopShellAction::OpenTextEditor => {
                 self.apply_desktop_program_request(DesktopProgramRequest::OpenTextEditor {
                     close_window: false,
@@ -4530,9 +4676,7 @@ impl RobcoNativeApp {
                 if connections_macos_disabled() {
                     self.shell_status = connections_macos_disabled_hint().to_string();
                 } else {
-                    self.open_desktop_window(DesktopWindow::Settings);
-                    self.settings.panel = NativeSettingsPanel::Connections;
-                    self.apply_status_update(clear_shell_status());
+                    self.open_standalone_settings(Some(NativeSettingsPanel::Connections));
                 }
             }
             DesktopShellAction::LaunchConfiguredApp(name) => {
@@ -4555,10 +4699,9 @@ impl RobcoNativeApp {
                 self.apply_desktop_program_request(request);
             }
             DesktopShellAction::OpenPathInEditor(path) => self.open_path_in_editor(path),
-            DesktopShellAction::RevealPathInFileManager(path) => match reveal_path_location(path) {
-                Ok(location) => self.apply_file_manager_location(location),
-                Err(status) => self.shell_status = status,
-            },
+            DesktopShellAction::RevealPathInFileManager(path) => {
+                self.launch_standalone_file_manager(Some(path));
+            }
         }
     }
 
@@ -6397,13 +6540,13 @@ impl RobcoNativeApp {
                 self.shell_status = file_manager_app::open_with_removed_saved_status(ext_key);
             }
             DesktopMenuAction::OpenFileManager => {
-                self.open_desktop_window(DesktopWindow::FileManager);
+                self.launch_standalone_file_manager(None);
             }
             DesktopMenuAction::OpenApplications => {
                 self.open_desktop_window(DesktopWindow::Applications);
             }
             DesktopMenuAction::OpenSettings => {
-                self.open_desktop_window(DesktopWindow::Settings);
+                self.open_standalone_settings(None);
             }
             DesktopMenuAction::ToggleStartMenu => {
                 if self.start_open {
@@ -9287,7 +9430,7 @@ impl RobcoNativeApp {
                                                 if ui.button("Browse…").clicked() {
                                                     let start = wallpaper_browser_start_dir();
                                                     self.picking_wallpaper = true;
-                                                    self.open_file_manager_at(start);
+                                                    self.open_embedded_file_manager_at(start);
                                                 }
                                             });
                                             ui.add_space(8.0);
@@ -12149,6 +12292,7 @@ impl eframe::App for RobcoNativeApp {
             }
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
         }
+        self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
 
         if let Some(flash) = &self.terminal_flash {

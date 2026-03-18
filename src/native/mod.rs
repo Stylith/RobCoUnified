@@ -24,7 +24,9 @@ mod prompt_flow;
 mod pty_screen;
 mod retro_ui;
 mod settings_screen;
+mod settings_standalone;
 mod shell_screen;
+mod standalone_launcher;
 
 pub use robcos_native_services::{
     desktop_connections_service, desktop_default_apps_service, desktop_documents_service,
@@ -33,6 +35,11 @@ pub use robcos_native_services::{
     desktop_status_service, desktop_surface_service, desktop_user_service,
     shared_file_manager_settings, shared_types,
 };
+pub use robcos_native_settings_app::NativeSettingsPanel;
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
 pub use file_manager_standalone::RobcoNativeFileManagerApp;
+pub use settings_standalone::{
+    standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
+};
+pub use standalone_launcher::ROBCOS_NATIVE_STANDALONE_USER_ENV;

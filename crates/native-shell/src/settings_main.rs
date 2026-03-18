@@ -4,12 +4,12 @@ use robcos::config::{reload_settings, set_current_user};
 use robcos::core::auth::ensure_default_admin;
 use robcos::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    RobcoNativeFileManagerApp, ROBCOS_NATIVE_STANDALONE_USER_ENV,
+    standalone_settings_panel_from_arg, NativeSettingsPanel, RobcoNativeSettingsApp,
+    ROBCOS_NATIVE_STANDALONE_USER_ENV,
 };
-use std::path::PathBuf;
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
-const APP_TITLE: &str = "My Computer";
+const APP_TITLE: &str = "Settings";
 
 fn load_icon() -> Option<IconData> {
     let image = image::load_from_memory(APP_ICON_BYTES).ok()?.into_rgba8();
@@ -21,31 +21,39 @@ fn load_icon() -> Option<IconData> {
     })
 }
 
-fn start_path_from_args() -> Option<PathBuf> {
-    std::env::args_os().nth(1).map(PathBuf::from)
-}
-
-fn bind_launch_user() {
-    let session_username = std::env::var(ROBCOS_NATIVE_STANDALONE_USER_ENV)
+fn launch_session_username() -> Option<String> {
+    std::env::var(ROBCOS_NATIVE_STANDALONE_USER_ENV)
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    if let Some(username) = session_username.as_deref() {
+        .filter(|value| !value.is_empty())
+}
+
+fn bind_launch_user(session_username: Option<&str>) {
+    if let Some(username) = session_username {
         set_current_user(Some(username));
     } else {
         restore_current_user_from_last_session();
     }
 }
 
+fn panel_from_args() -> Option<NativeSettingsPanel> {
+    std::env::args()
+        .nth(1)
+        .as_deref()
+        .and_then(standalone_settings_panel_from_arg)
+}
+
 fn main() -> Result<()> {
     ensure_default_admin();
-    bind_launch_user();
+    let session_username = launch_session_username();
+    bind_launch_user(session_username.as_deref());
     reload_settings();
 
+    let panel = panel_from_args();
     let mut viewport = ViewportBuilder::default()
         .with_title(APP_TITLE)
-        .with_inner_size(RobcoNativeFileManagerApp::default_window_size())
-        .with_min_inner_size(RobcoNativeFileManagerApp::min_window_size());
+        .with_inner_size(RobcoNativeSettingsApp::default_window_size())
+        .with_min_inner_size(RobcoNativeSettingsApp::min_window_size());
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -54,7 +62,6 @@ fn main() -> Result<()> {
         viewport,
         ..Default::default()
     };
-    let start_path = start_path_from_args();
 
     eframe::run_native(
         APP_TITLE,
@@ -62,7 +69,10 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeFileManagerApp::new(start_path.clone())))
+            Ok(Box::new(RobcoNativeSettingsApp::new(
+                session_username.clone(),
+                panel,
+            )))
         }),
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))
