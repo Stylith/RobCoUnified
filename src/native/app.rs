@@ -156,7 +156,7 @@ use super::pty_screen::{
 };
 use super::retro_ui::{
     configure_visuals, configure_visuals_for_settings, current_palette, RetroScreen,
-    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    RetroPalette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
@@ -1077,7 +1077,12 @@ impl RobcoNativeApp {
         painter.image(texture.id(), rect, uv, tint);
     }
 
-    fn draw_wallpaper(&self, painter: &egui::Painter, screen: egui::Rect) -> bool {
+    fn draw_wallpaper(
+        &self,
+        painter: &egui::Painter,
+        screen: egui::Rect,
+        palette: &RetroPalette,
+    ) -> bool {
         let Some(cache) = &self.asset_cache else {
             return false;
         };
@@ -1087,13 +1092,13 @@ impl RobcoNativeApp {
 
         let image_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        let tint = current_palette().fg;
+        let tint = palette.fg;
         match self.settings.draft.desktop_wallpaper_size_mode {
             WallpaperSizeMode::FitToScreen | WallpaperSizeMode::Stretch => {
                 painter.image(texture.id(), screen, uv, tint);
             }
             WallpaperSizeMode::Centered => {
-                painter.rect_filled(screen, 0.0, current_palette().bg);
+                painter.rect_filled(screen, 0.0, palette.bg);
                 let origin = screen.center() - image_size * 0.5;
                 painter.image(
                     texture.id(),
@@ -1103,7 +1108,7 @@ impl RobcoNativeApp {
                 );
             }
             WallpaperSizeMode::DefaultSize => {
-                painter.rect_filled(screen, 0.0, current_palette().bg);
+                painter.rect_filled(screen, 0.0, palette.bg);
                 painter.image(
                     texture.id(),
                     egui::Rect::from_min_size(screen.min, image_size),
@@ -1112,7 +1117,7 @@ impl RobcoNativeApp {
                 );
             }
             WallpaperSizeMode::Tile => {
-                painter.rect_filled(screen, 0.0, current_palette().bg);
+                painter.rect_filled(screen, 0.0, palette.bg);
                 let mut y = screen.top();
                 while y < screen.bottom() {
                     let mut x = screen.left();
@@ -1174,8 +1179,7 @@ impl RobcoNativeApp {
         )
     }
 
-    fn apply_global_retro_menu_chrome(ctx: &Context) {
-        let palette = current_palette();
+    fn apply_global_retro_menu_chrome(ctx: &Context, palette: &RetroPalette) {
         let stroke = egui::Stroke::new(2.0, palette.fg);
         ctx.style_mut(|style| {
             style.visuals.window_stroke = stroke;
@@ -5376,7 +5380,8 @@ impl RobcoNativeApp {
     }
 
     fn draw_top_bar(&mut self, ctx: &Context) {
-        Self::apply_global_retro_menu_chrome(ctx);
+        let palette = current_palette();
+        Self::apply_global_retro_menu_chrome(ctx, &palette);
         let app_menu_name = desktop_app_menu_name(
             self.desktop_active_window,
             self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
@@ -5386,7 +5391,6 @@ impl RobcoNativeApp {
             .exact_height(30.0)
             .show_separator_line(false)
             .show(ctx, |ui| {
-                let palette = current_palette();
                 ui.painter()
                     .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
                 ui.horizontal(|ui| {
@@ -5698,17 +5702,18 @@ impl RobcoNativeApp {
             self.asset_cache = Some(Self::build_asset_cache(ctx));
         }
         self.sync_wallpaper(ctx);
+        let palette = current_palette();
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(current_palette().bg)
+                    .fill(palette.bg)
                     .inner_margin(0.0),
             )
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let response = ui.allocate_rect(rect, egui::Sense::click());
-                if !self.draw_wallpaper(ui.painter(), rect) {
-                    ui.painter().rect_filled(rect, 0.0, current_palette().bg);
+                if !self.draw_wallpaper(ui.painter(), rect, &palette) {
+                    ui.painter().rect_filled(rect, 0.0, palette.bg);
                 }
                 if !matches!(
                     self.settings.draft.desktop_icon_style,

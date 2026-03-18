@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::FileManagerViewMode;
 use crate::native::file_manager_desktop::FILE_MANAGER_APP_TITLE;
+use crate::native::retro_ui::RetroPalette;
 
 impl RobcoNativeApp {
     fn attach_file_manager_context_menu(
@@ -143,12 +144,12 @@ impl RobcoNativeApp {
 
     fn retro_file_manager_button(
         ui: &mut egui::Ui,
+        palette: &RetroPalette,
         label: impl Into<String>,
         desired: egui::Vec2,
         active: bool,
         stroked: bool,
     ) -> egui::Response {
-        let palette = current_palette();
         let label = label.into();
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
         let hovered = response.hovered();
@@ -187,6 +188,7 @@ impl RobcoNativeApp {
 
     fn retro_file_manager_item(
         ui: &mut egui::Ui,
+        palette: &RetroPalette,
         texture: Option<&TextureHandle>,
         fallback_icon: &str,
         label: &str,
@@ -195,7 +197,6 @@ impl RobcoNativeApp {
         stroked: bool,
         grid_mode: bool,
     ) -> egui::Response {
-        let palette = current_palette();
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let hovered = response.hovered();
         let highlighted = active || hovered;
@@ -276,6 +277,7 @@ impl RobcoNativeApp {
         &mut self,
         ctx: &Context,
         ui: &egui::Ui,
+        palette: &RetroPalette,
         response: &egui::Response,
         row: &super::super::file_manager::FileEntryRow,
         save_picker_mode: bool,
@@ -318,7 +320,7 @@ impl RobcoNativeApp {
                 ui.painter().rect_stroke(
                     response.rect,
                     0.0,
-                    egui::Stroke::new(2.0, current_palette().fg),
+                    egui::Stroke::new(2.0, palette.fg),
                 );
             }
             if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>() {
@@ -351,6 +353,7 @@ impl RobcoNativeApp {
         search_id: &Id,
         header_action: &mut DesktopHeaderAction,
     ) {
+        let palette = current_palette();
         egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
             .frame(egui::Frame::none())
             .exact_height(136.0)
@@ -359,8 +362,7 @@ impl RobcoNativeApp {
                     Self::draw_desktop_window_header(ui, FILE_MANAGER_APP_TITLE, maximized);
 
                 if let Some(banner) = desktop_model.action_mode.banner() {
-                    let banner_color = current_palette().fg;
-                    ui.colored_label(banner_color, banner);
+                    ui.colored_label(palette.fg, banner);
                 }
 
                 ui.horizontal_wrapped(|ui| {
@@ -369,6 +371,7 @@ impl RobcoNativeApp {
                         let title = Self::truncate_file_manager_label(&tab.title, 12);
                         let response = Self::retro_file_manager_button(
                             ui,
+                            &palette,
                             format!(
                                 "[{}:{}{}]",
                                 idx + 1,
@@ -401,6 +404,7 @@ impl RobcoNativeApp {
                     for drive in &desktop_model.drives {
                         let response = Self::retro_file_manager_button(
                             ui,
+                            &palette,
                             drive.label.clone(),
                             egui::vec2(120.0, 26.0),
                             drive.active,
@@ -416,7 +420,7 @@ impl RobcoNativeApp {
                             ui.painter().rect_stroke(
                                 response.rect,
                                 0.0,
-                                egui::Stroke::new(2.0, current_palette().fg),
+                                egui::Stroke::new(2.0, palette.fg),
                             );
                         }
                         if response.clicked() {
@@ -462,8 +466,7 @@ impl RobcoNativeApp {
                     let tree_on = desktop_model.show_tree_panel;
                     let list_on = desktop_model.view_mode == FileManagerViewMode::List;
                     let grid_on = desktop_model.view_mode == FileManagerViewMode::Grid;
-                    let fg = current_palette().fg;
-                    let sel_color = |on: bool| if on { Color32::BLACK } else { fg };
+                    let sel_color = |on: bool| if on { Color32::BLACK } else { palette.fg };
                     if ui
                         .selectable_label(tree_on, RichText::new("Tree").color(sel_color(tree_on)))
                         .clicked()
@@ -503,6 +506,7 @@ impl RobcoNativeApp {
         save_picker_mode: bool,
         footer_model: &file_manager_desktop::FileManagerDesktopFooterModel,
     ) {
+        let palette = current_palette();
         egui::TopBottomPanel::bottom(Id::new(("fm_bottom", generation)))
             .frame(egui::Frame::none())
             .exact_height(if save_picker_mode { 56.0 } else { 44.0 })
@@ -510,7 +514,7 @@ impl RobcoNativeApp {
                 ui.painter().hline(
                     ui.max_rect().x_range(),
                     ui.max_rect().top() + 1.0,
-                    egui::Stroke::new(1.0, current_palette().fg),
+                    egui::Stroke::new(1.0, palette.fg),
                 );
                 ui.add_space(4.0);
                 if let Some(current_name) = &footer_model.file_name {
@@ -590,6 +594,7 @@ impl RobcoNativeApp {
         if !desktop_model.show_tree_panel {
             return;
         }
+        let palette = current_palette();
         egui::SidePanel::left(Id::new(("fm_tree", generation)))
             .frame(egui::Frame::none())
             .width_range(140.0..=280.0)
@@ -611,6 +616,7 @@ impl RobcoNativeApp {
                             let selected = Some(path) == self.file_manager.tree_selected.as_ref();
                             let response = Self::retro_file_manager_button(
                                 ui,
+                                &palette,
                                 item.line.clone(),
                                 egui::vec2(ui.available_width(), 26.0),
                                 selected,
@@ -626,7 +632,7 @@ impl RobcoNativeApp {
                                 ui.painter().rect_stroke(
                                     response.rect,
                                     0.0,
-                                    egui::Stroke::new(2.0, current_palette().fg),
+                                    egui::Stroke::new(2.0, palette.fg),
                                 );
                             }
                             if response.clicked() {
@@ -661,6 +667,7 @@ impl RobcoNativeApp {
         has_single_file_selection: bool,
         has_clipboard: bool,
     ) {
+        let palette = current_palette();
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show_inside(ui, |ui| {
@@ -678,6 +685,7 @@ impl RobcoNativeApp {
                                     let preview = self.svg_preview_texture(row);
                                     let response = Self::retro_file_manager_item(
                                         ui,
+                                        &palette,
                                         preview.as_ref(),
                                         row.icon(),
                                         &row.label,
@@ -689,6 +697,7 @@ impl RobcoNativeApp {
                                     self.handle_file_manager_row_interaction(
                                         ctx,
                                         ui,
+                                        &palette,
                                         &response,
                                         row,
                                         save_picker_mode,
@@ -735,6 +744,7 @@ impl RobcoNativeApp {
                                                 let preview = self.svg_preview_texture(row);
                                                 let response = Self::retro_file_manager_item(
                                                     ui,
+                                                    &palette,
                                                     preview.as_ref(),
                                                     row.icon(),
                                                     &label,
@@ -746,6 +756,7 @@ impl RobcoNativeApp {
                                                 self.handle_file_manager_row_interaction(
                                                     ctx,
                                                     ui,
+                                                    &palette,
                                                     &response,
                                                     row,
                                                     save_picker_mode,
