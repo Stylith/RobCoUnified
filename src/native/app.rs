@@ -189,7 +189,7 @@ use robcos_native_settings_app::{
     desktop_settings_connections_nav_items, desktop_settings_default_panel,
     desktop_settings_home_rows, desktop_settings_user_management_nav_items, gui_cli_profile_mut,
     gui_cli_profile_slot_label, gui_cli_profile_slots, settings_panel_title, GuiCliProfileSlot,
-    NativeSettingsPanel, SettingsHomeTile, SettingsHomeTileAction,
+    NativeSettingsPanel, SettingsHomeTile, SettingsHomeTileAction, TerminalSettingsPanel,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -294,6 +294,13 @@ struct DesktopApplicationsSectionsCache {
     show_text_editor: bool,
     show_nuke_codes: bool,
     sections: Arc<DesktopApplicationsSections>,
+}
+
+struct EditMenuEntriesCache {
+    applications: Option<Arc<Vec<String>>>,
+    documents: Option<Arc<Vec<String>>>,
+    network: Option<Arc<Vec<String>>>,
+    games: Option<Arc<Vec<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -614,6 +621,7 @@ pub struct RobcoNativeApp {
     start_open_leaf: Option<StartLeaf>,
     desktop_mode_open: bool,
     terminal_nav: TerminalNavigationState,
+    terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
@@ -638,6 +646,9 @@ pub struct RobcoNativeApp {
     settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     settings_home_rows_cache_standard: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     desktop_applications_sections_cache: Option<DesktopApplicationsSectionsCache>,
+    edit_menu_entries_cache: EditMenuEntriesCache,
+    sorted_user_records_cache: Option<Arc<Vec<(String, UserRecord)>>>,
+    sorted_usernames_cache: Option<Arc<Vec<String>>>,
     live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
     last_native_appearance: Option<NativeAppearanceKey>,
@@ -673,6 +684,7 @@ struct ParkedSessionState {
     start_open_submenu: Option<StartSubmenu>,
     start_open_leaf: Option<StartLeaf>,
     terminal_nav: TerminalNavigationState,
+    terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
     terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
@@ -745,6 +757,7 @@ impl Default for RobcoNativeApp {
             start_open_leaf: None,
             desktop_mode_open: false,
             terminal_nav: terminal_defaults,
+            terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_nuke_codes: NukeCodesView::default(),
             terminal_pty: None,
             terminal_installer: TerminalInstallerState::default(),
@@ -769,6 +782,14 @@ impl Default for RobcoNativeApp {
             settings_home_rows_cache_admin: None,
             settings_home_rows_cache_standard: None,
             desktop_applications_sections_cache: None,
+            edit_menu_entries_cache: EditMenuEntriesCache {
+                applications: None,
+                documents: None,
+                network: None,
+                games: None,
+            },
+            sorted_user_records_cache: None,
+            sorted_usernames_cache: None,
             live_desktop_file_manager_settings,
             live_hacking_difficulty,
             last_native_appearance: None,
@@ -796,6 +817,20 @@ impl RobcoNativeApp {
 
     fn invalidate_program_catalog_cache(&mut self) {
         self.desktop_applications_sections_cache = None;
+    }
+
+    fn invalidate_edit_menu_entries_cache(&mut self, target: EditMenuTarget) {
+        match target {
+            EditMenuTarget::Applications => self.edit_menu_entries_cache.applications = None,
+            EditMenuTarget::Documents => self.edit_menu_entries_cache.documents = None,
+            EditMenuTarget::Network => self.edit_menu_entries_cache.network = None,
+            EditMenuTarget::Games => self.edit_menu_entries_cache.games = None,
+        }
+    }
+
+    fn invalidate_user_cache(&mut self) {
+        self.sorted_user_records_cache = None;
+        self.sorted_usernames_cache = None;
     }
 
     fn replace_settings_draft(&mut self, draft: Settings) {
@@ -881,6 +916,42 @@ impl RobcoNativeApp {
             .as_ref()
             .expect("desktop applications sections cache initialized")
             .sections
+            .clone()
+    }
+
+    fn edit_menu_entries_cached(&mut self, target: EditMenuTarget) -> Arc<Vec<String>> {
+        let cached = match target {
+            EditMenuTarget::Applications => self.edit_menu_entries_cache.applications.clone(),
+            EditMenuTarget::Documents => self.edit_menu_entries_cache.documents.clone(),
+            EditMenuTarget::Network => self.edit_menu_entries_cache.network.clone(),
+            EditMenuTarget::Games => self.edit_menu_entries_cache.games.clone(),
+        };
+        if let Some(entries) = cached {
+            return entries;
+        }
+        let entries = Arc::new(self.edit_program_entries(target));
+        match target {
+            EditMenuTarget::Applications => {
+                self.edit_menu_entries_cache.applications = Some(entries.clone())
+            }
+            EditMenuTarget::Documents => {
+                self.edit_menu_entries_cache.documents = Some(entries.clone())
+            }
+            EditMenuTarget::Network => self.edit_menu_entries_cache.network = Some(entries.clone()),
+            EditMenuTarget::Games => self.edit_menu_entries_cache.games = Some(entries.clone()),
+        }
+        entries
+    }
+
+    fn sorted_user_records_cached(&mut self) -> Arc<Vec<(String, UserRecord)>> {
+        self.sorted_user_records_cache
+            .get_or_insert_with(|| Arc::new(sorted_user_records()))
+            .clone()
+    }
+
+    fn sorted_usernames_cached(&mut self) -> Arc<Vec<String>> {
+        self.sorted_usernames_cache
+            .get_or_insert_with(|| Arc::new(sorted_usernames()))
             .clone()
     }
 
@@ -1301,6 +1372,7 @@ impl RobcoNativeApp {
             start_open_submenu: self.start_open_submenu,
             start_open_leaf: self.start_open_leaf,
             terminal_nav: self.current_terminal_navigation_state(),
+            terminal_settings_panel: self.terminal_settings_panel,
             terminal_nuke_codes: self.terminal_nuke_codes.clone(),
             terminal_pty: self.terminal_pty.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
@@ -1366,6 +1438,7 @@ impl RobcoNativeApp {
         self.start_open_submenu = parked.start_open_submenu;
         self.start_open_leaf = parked.start_open_leaf;
         self.apply_terminal_navigation_state(parked.terminal_nav);
+        self.terminal_settings_panel = parked.terminal_settings_panel;
         self.terminal_nuke_codes = parked.terminal_nuke_codes;
         self.terminal_pty = parked.terminal_pty;
         self.terminal_installer = parked.terminal_installer;
@@ -3758,6 +3831,7 @@ impl RobcoNativeApp {
                             AuthMethod::Password,
                             Some(&password),
                         ));
+                        self.invalidate_user_cache();
                     }
                     TerminalUserPasswordFlow::Reset => {
                         self.apply_shell_status_result(
@@ -3768,6 +3842,7 @@ impl RobcoNativeApp {
                             )
                             .map(|_| "Password updated.".to_string()),
                         );
+                        self.invalidate_user_cache();
                     }
                     TerminalUserPasswordFlow::ChangeAuth => {
                         self.apply_shell_status_result(update_user_auth_method(
@@ -3775,6 +3850,7 @@ impl RobcoNativeApp {
                             AuthMethod::Password,
                             Some(&password),
                         ));
+                        self.invalidate_user_cache();
                     }
                 }
                 self.set_user_management_mode(UserManagementMode::Root, 0);
@@ -4405,6 +4481,7 @@ impl RobcoNativeApp {
                 };
                 self.shell_status = add_catalog_entry(catalog, name, argv);
                 self.invalidate_program_catalog_cache();
+                self.invalidate_edit_menu_entries_cache(other);
             }
         }
     }
@@ -4421,6 +4498,7 @@ impl RobcoNativeApp {
                 };
                 self.shell_status = delete_catalog_entry(catalog, name);
                 self.invalidate_program_catalog_cache();
+                self.invalidate_edit_menu_entries_cache(other);
             }
         }
     }
@@ -4439,7 +4517,10 @@ impl RobcoNativeApp {
         match target {
             EditMenuTarget::Documents => {
                 match rename_desktop_document_category(old_name, new_name) {
-                    Ok(status) => self.shell_status = status,
+                    Ok(status) => {
+                        self.shell_status = status;
+                        self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
+                    }
                     Err(err) => self.shell_status = err,
                 }
             }
@@ -4451,6 +4532,7 @@ impl RobcoNativeApp {
                     Ok(status) => {
                         self.shell_status = status;
                         self.invalidate_program_catalog_cache();
+                        self.invalidate_edit_menu_entries_cache(other);
                     }
                     Err(err) => self.shell_status = err,
                 }
@@ -4460,13 +4542,17 @@ impl RobcoNativeApp {
 
     fn add_document_category(&mut self, name: String, path_raw: String) {
         match add_desktop_document_category(name, &path_raw) {
-            Ok(status) => self.shell_status = status,
+            Ok(status) => {
+                self.shell_status = status;
+                self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
+            }
             Err(err) => self.shell_status = err,
         }
     }
 
     fn delete_document_category(&mut self, name: &str) {
         self.shell_status = delete_desktop_document_category(name);
+        self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
     }
 
     fn sorted_document_categories() -> Vec<String> {
@@ -4667,6 +4753,9 @@ impl RobcoNativeApp {
 
     fn apply_terminal_screen_open_plan(&mut self, plan: TerminalScreenOpenPlan) {
         self.navigate_to_screen(plan.screen);
+        if matches!(plan.screen, TerminalScreen::Settings) {
+            self.terminal_settings_panel = TerminalSettingsPanel::Home;
+        }
         if plan.reset_installer {
             self.terminal_installer.reset();
         }
@@ -4723,6 +4812,16 @@ impl RobcoNativeApp {
     }
 
     fn handle_terminal_back(&mut self) {
+        if matches!(self.terminal_nav.screen, TerminalScreen::Settings)
+            && self.terminal_nav.settings_choice.is_none()
+            && !matches!(self.terminal_settings_panel, TerminalSettingsPanel::Home)
+        {
+            crate::sound::play_navigate();
+            self.terminal_settings_panel = TerminalSettingsPanel::Home;
+            self.terminal_nav.settings_idx = 0;
+            self.apply_status_update(clear_shell_status());
+            return;
+        }
         let action = resolve_terminal_back_action(TerminalBackContext {
             screen: self.terminal_nav.screen,
             has_settings_choice: self.terminal_nav.settings_choice.is_some(),
@@ -4899,6 +4998,7 @@ impl RobcoNativeApp {
                 self.terminal_prompt = None;
                 if confirmed {
                     self.apply_shell_status_result(delete_desktop_user(&username));
+                    self.invalidate_user_cache();
                 }
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
@@ -4909,6 +5009,7 @@ impl RobcoNativeApp {
                 self.terminal_prompt = None;
                 if confirmed {
                     self.apply_shell_status_result(toggle_desktop_user_admin(&username));
+                    self.invalidate_user_cache();
                 }
                 self.set_user_management_mode(UserManagementMode::Root, 0);
             }
@@ -6123,6 +6224,7 @@ impl RobcoNativeApp {
         let event = run_terminal_settings_screen(
             ctx,
             &mut self.settings.draft,
+            &mut self.terminal_settings_panel,
             &mut self.terminal_nav.settings_idx,
             &mut self.terminal_nav.settings_choice,
             self.session.as_ref().is_some_and(|s| s.is_admin),
@@ -6141,12 +6243,25 @@ impl RobcoNativeApp {
         match event {
             TerminalSettingsEvent::None => {}
             TerminalSettingsEvent::Persist => self.persist_native_settings(),
+            TerminalSettingsEvent::OpenPanel(panel) => {
+                self.terminal_settings_panel = panel;
+                self.terminal_nav.settings_idx = 0;
+                self.terminal_nav.settings_choice = None;
+                self.apply_status_update(clear_shell_status());
+            }
             TerminalSettingsEvent::Back => {
-                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
-                    TerminalScreen::MainMenu,
-                    0,
-                    true,
-                ));
+                if matches!(self.terminal_settings_panel, TerminalSettingsPanel::Home) {
+                    self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                        TerminalScreen::MainMenu,
+                        0,
+                        true,
+                    ));
+                } else {
+                    self.terminal_settings_panel = TerminalSettingsPanel::Home;
+                    self.terminal_nav.settings_idx = 0;
+                    self.terminal_nav.settings_choice = None;
+                    self.apply_status_update(clear_shell_status());
+                }
             }
             TerminalSettingsEvent::OpenConnections => {
                 self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
@@ -6751,6 +6866,7 @@ impl RobcoNativeApp {
                 }
                 UserManagementExecutionPlan::ApplyCreateUser { username, method } => {
                     self.apply_shell_status_result(create_desktop_user(&username, method, None));
+                    self.invalidate_user_cache();
                     self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementExecutionPlan::OpenConfirmDeleteUser { username } => {
@@ -6778,6 +6894,7 @@ impl RobcoNativeApp {
                     self.apply_shell_status_result(update_user_auth_method(
                         &username, method, None,
                     ));
+                    self.invalidate_user_cache();
                     self.set_user_management_mode(UserManagementMode::Root, 0);
                 }
                 UserManagementExecutionPlan::OpenConfirmToggleAdmin { username } => {
@@ -8912,9 +9029,10 @@ impl RobcoNativeApp {
                 egui::ScrollArea::vertical()
                     .max_height((left.available_height() * 0.7).clamp(180.0, 380.0))
                     .show(left, |ui| {
-                        for name in self.edit_program_entries(self.settings.edit_target) {
+                        let entries = self.edit_menu_entries_cached(self.settings.edit_target);
+                        for name in entries.iter() {
                             ui.horizontal(|ui| {
-                                ui.label(&name);
+                                ui.label(name.as_str());
                                 if ui.button("Delete").clicked() {
                                     self.delete_program_entry(self.settings.edit_target, &name);
                                     self.apply_status_update(mirror_shell_to_settings(
@@ -8975,9 +9093,9 @@ impl RobcoNativeApp {
     }
 
     fn draw_settings_user_view_panel(&mut self, ui: &mut egui::Ui) {
-        let users = sorted_user_records();
+        let users = self.sorted_user_records_cached();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for (name, record) in users {
+            for (name, record) in users.iter() {
                 ui.label(format!(
                     "{} | auth: {} | admin: {}",
                     name,
@@ -8989,7 +9107,7 @@ impl RobcoNativeApp {
     }
 
     fn draw_settings_user_create_panel(&mut self, ui: &mut egui::Ui) {
-        let users = sorted_usernames();
+        let users = self.sorted_usernames_cached();
         ui.group(|ui| {
             Self::settings_two_columns(ui, |left, right| {
                 let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
@@ -9077,6 +9195,7 @@ impl RobcoNativeApp {
                                     Some(&self.settings.user_create_password),
                                 ) {
                                     Ok(status) => {
+                                        self.invalidate_user_cache();
                                         self.apply_status_update(settings_status(status));
                                         self.settings.user_create_username.clear();
                                         self.settings.user_create_password.clear();
@@ -9097,6 +9216,7 @@ impl RobcoNativeApp {
                                 None,
                             ) {
                                 Ok(status) => {
+                                    self.invalidate_user_cache();
                                     self.apply_status_update(settings_status(status));
                                     self.settings.user_create_username.clear();
                                     self.settings.user_selected = username;
@@ -9115,7 +9235,7 @@ impl RobcoNativeApp {
 
     fn draw_settings_user_edit_panel(&mut self, ui: &mut egui::Ui, current_only: bool) {
         let current_username = self.session.as_ref().map(|s| s.username.clone());
-        let users = sorted_user_records();
+        let users = self.sorted_user_records_cached();
         let names: Vec<String> = users.iter().map(|(name, _)| name.clone()).collect();
         if names.is_empty() {
             ui.small("No users found.");
@@ -9258,6 +9378,7 @@ impl RobcoNativeApp {
                                     Some(&self.settings.user_edit_password),
                                 ) {
                                     Ok(status) => {
+                                        self.invalidate_user_cache();
                                         self.apply_status_update(settings_status(status));
                                         self.settings.user_edit_password.clear();
                                         self.settings.user_edit_password_confirm.clear();
@@ -9276,6 +9397,7 @@ impl RobcoNativeApp {
                                 None,
                             ) {
                                 Ok(status) => {
+                                    self.invalidate_user_cache();
                                     self.apply_status_update(settings_status(status));
                                     self.settings.user_selected_loaded_for.clear();
                                 }
@@ -9292,6 +9414,7 @@ impl RobcoNativeApp {
                         let username = self.settings.user_selected.clone();
                         match toggle_desktop_user_admin(&username) {
                             Ok(status) => {
+                                self.invalidate_user_cache();
                                 self.apply_status_update(settings_status(status));
                                 self.settings.user_selected_loaded_for.clear();
                             }
@@ -9317,6 +9440,7 @@ impl RobcoNativeApp {
                             let username = self.settings.user_selected.clone();
                             match delete_desktop_user(&username) {
                                 Ok(status) => {
+                                    self.invalidate_user_cache();
                                     self.apply_status_update(settings_status(status));
                                     self.settings.user_delete_confirm.clear();
                                     self.settings.user_selected_loaded_for.clear();

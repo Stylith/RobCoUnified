@@ -15,11 +15,19 @@ pub enum TerminalSettingsEvent {
     None,
     Persist,
     Back,
+    OpenPanel(TerminalSettingsPanel),
     OpenConnections,
     OpenEditMenus,
     OpenDefaultApps,
     OpenAbout,
     EnterUserManagement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalSettingsPanel {
+    Home,
+    General,
+    Appearance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +92,8 @@ pub struct DesktopSettingsUiDefaults {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsRowId {
+    OpenGeneral,
+    OpenAppearance,
     Sound,
     SystemSoundVolume,
     Bootup,
@@ -296,23 +306,30 @@ pub fn gui_cli_profile_mut(
 }
 
 pub fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<String> {
-    terminal_settings_rows_with_ids(draft, is_admin)
+    terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, draft, is_admin)
         .into_iter()
         .map(|(label, _)| label)
         .collect()
 }
 
 pub fn handle_settings_activation(
+    panel: TerminalSettingsPanel,
     draft: &mut Settings,
     idx: usize,
     choice_overlay: &mut Option<SettingsChoiceOverlay>,
     is_admin: bool,
 ) -> TerminalSettingsEvent {
-    let rows = terminal_settings_rows_with_ids(draft, is_admin);
+    let rows = terminal_settings_rows_with_ids(panel, draft, is_admin);
     let Some((_, row_id)) = rows.get(idx) else {
         return TerminalSettingsEvent::Back;
     };
     match row_id {
+        SettingsRowId::OpenGeneral => {
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::General)
+        }
+        SettingsRowId::OpenAppearance => {
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::Appearance)
+        }
         SettingsRowId::Sound => {
             draft.sound = !draft.sound;
             TerminalSettingsEvent::Persist
@@ -401,12 +418,13 @@ pub fn apply_settings_choice(draft: &mut Settings, kind: SettingsChoiceKind, sel
 }
 
 pub fn adjust_settings_slider(
+    panel: TerminalSettingsPanel,
     draft: &mut Settings,
     idx: usize,
     is_admin: bool,
     delta: i16,
 ) -> bool {
-    let rows = terminal_settings_rows_with_ids(draft, is_admin);
+    let rows = terminal_settings_rows_with_ids(panel, draft, is_admin);
     let Some((_, row_id)) = rows.get(idx) else {
         return false;
     };
@@ -441,95 +459,106 @@ pub fn adjust_settings_slider(
 }
 
 fn terminal_settings_rows_with_ids(
+    panel: TerminalSettingsPanel,
     draft: &Settings,
     is_admin: bool,
 ) -> Vec<(String, SettingsRowId)> {
-    let mut rows = vec![
-        (
-            format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
-            SettingsRowId::Sound,
-        ),
-        (
-            format!(
-                "System Sound Volume: {}% [adjust]",
-                draft.system_sound_volume
-            ),
-            SettingsRowId::SystemSoundVolume,
-        ),
-        (
-            format!(
-                "Bootup: {} [toggle]",
-                if draft.bootup { "ON" } else { "OFF" }
-            ),
-            SettingsRowId::Bootup,
-        ),
-        (
-            format!(
-                "Navigation Hints: {} [toggle]",
-                if draft.show_navigation_hints {
-                    "ON"
-                } else {
-                    "OFF"
-                }
-            ),
-            SettingsRowId::NavigationHints,
-        ),
-        (
-            format!("Theme: {} [choose]", draft.theme),
-            SettingsRowId::Theme,
-        ),
-        (
-            format!(
-                "Border Glyphs: {} [toggle]",
-                match draft.cli_acs_mode {
-                    CliAcsMode::Ascii => "ASCII",
-                    CliAcsMode::Unicode => "Unicode Smooth",
-                }
-            ),
-            SettingsRowId::BorderGlyphs,
-        ),
-        (
-            format!(
-                "Default Open Mode: {} [choose]",
-                match draft.default_open_mode {
-                    OpenMode::Terminal => "Terminal",
-                    OpenMode::Desktop => "Desktop",
-                }
-            ),
-            SettingsRowId::DefaultOpenMode,
-        ),
-    ];
-    if draft.theme == CUSTOM_THEME_NAME {
-        let [r, g, b] = draft.custom_theme_rgb;
-        rows.splice(
-            4..4,
-            [
-                (
-                    format!("Custom Theme Red: {r} [adjust]"),
-                    SettingsRowId::CustomThemeRed,
+    match panel {
+        TerminalSettingsPanel::Home => {
+            let mut rows = vec![
+                ("General".to_string(), SettingsRowId::OpenGeneral),
+                ("Appearance".to_string(), SettingsRowId::OpenAppearance),
+                ("Default Apps".to_string(), SettingsRowId::DefaultApps),
+            ];
+            if !macos_connections_disabled() {
+                rows.push(("Connections".to_string(), SettingsRowId::Connections));
+            }
+            rows.push(("Edit Menus".to_string(), SettingsRowId::EditMenus));
+            if is_admin {
+                rows.push(("User Management".to_string(), SettingsRowId::UserManagement));
+            }
+            rows.push(("About".to_string(), SettingsRowId::About));
+            rows.push(("Back".to_string(), SettingsRowId::Back));
+            rows
+        }
+        TerminalSettingsPanel::General => vec![
+            (
+                format!(
+                    "Default Open Mode: {} [choose]",
+                    match draft.default_open_mode {
+                        OpenMode::Terminal => "Terminal",
+                        OpenMode::Desktop => "Desktop",
+                    }
                 ),
-                (
-                    format!("Custom Theme Green: {g} [adjust]"),
-                    SettingsRowId::CustomThemeGreen,
+                SettingsRowId::DefaultOpenMode,
+            ),
+            (
+                format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
+                SettingsRowId::Sound,
+            ),
+            (
+                format!(
+                    "System Sound Volume: {}% [adjust]",
+                    draft.system_sound_volume
                 ),
-                (
-                    format!("Custom Theme Blue: {b} [adjust]"),
-                    SettingsRowId::CustomThemeBlue,
+                SettingsRowId::SystemSoundVolume,
+            ),
+            (
+                format!(
+                    "Bootup: {} [toggle]",
+                    if draft.bootup { "ON" } else { "OFF" }
                 ),
-            ],
-        );
+                SettingsRowId::Bootup,
+            ),
+            (
+                format!(
+                    "Navigation Hints: {} [toggle]",
+                    if draft.show_navigation_hints {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ),
+                SettingsRowId::NavigationHints,
+            ),
+            ("Back".to_string(), SettingsRowId::Back),
+        ],
+        TerminalSettingsPanel::Appearance => {
+            let mut rows = vec![(
+                format!("Theme: {} [choose]", draft.theme),
+                SettingsRowId::Theme,
+            )];
+            if draft.theme == CUSTOM_THEME_NAME {
+                let [r, g, b] = draft.custom_theme_rgb;
+                rows.extend([
+                    (
+                        format!("Custom Theme Red: {r} [adjust]"),
+                        SettingsRowId::CustomThemeRed,
+                    ),
+                    (
+                        format!("Custom Theme Green: {g} [adjust]"),
+                        SettingsRowId::CustomThemeGreen,
+                    ),
+                    (
+                        format!("Custom Theme Blue: {b} [adjust]"),
+                        SettingsRowId::CustomThemeBlue,
+                    ),
+                ]);
+            }
+            rows.push((
+                format!(
+                    "Border Glyphs: {} [toggle]",
+                    match draft.cli_acs_mode {
+                        CliAcsMode::Ascii => "ASCII",
+                        CliAcsMode::Unicode => "Unicode Smooth",
+                    }
+                ),
+                SettingsRowId::BorderGlyphs,
+            ));
+            rows.push(("Back".to_string(), SettingsRowId::Back));
+            rows
+        }
     }
-    if !macos_connections_disabled() {
-        rows.push(("Connections".to_string(), SettingsRowId::Connections));
-    }
-    rows.push(("Edit Menus".to_string(), SettingsRowId::EditMenus));
-    rows.push(("Default Apps".to_string(), SettingsRowId::DefaultApps));
-    rows.push(("About".to_string(), SettingsRowId::About));
-    if is_admin {
-        rows.push(("User Management".to_string(), SettingsRowId::UserManagement));
-    }
-    rows.push(("Back".to_string(), SettingsRowId::Back));
-    rows
 }
 
 fn adjust_rgb_component(value: &mut u8, delta: i16) {
@@ -551,11 +580,10 @@ mod tests {
     fn terminal_settings_rows_include_default_apps_and_about() {
         let draft = get_settings();
         let user_rows = terminal_settings_rows(&draft, false);
+        assert!(user_rows.iter().any(|label| label == "General"));
+        assert!(user_rows.iter().any(|label| label == "Appearance"));
         assert!(user_rows.iter().any(|label| label == "Edit Menus"));
         assert!(user_rows.iter().any(|label| label == "Default Apps"));
-        assert!(user_rows
-            .iter()
-            .any(|label| label.starts_with("Border Glyphs: ")));
         assert!(user_rows.iter().any(|label| label == "About"));
         assert_eq!(user_rows.last().map(|label| label.as_str()), Some("Back"));
 
@@ -568,51 +596,94 @@ mod tests {
     fn handle_settings_activation_routes_new_rows_correctly() {
         let mut draft = get_settings();
         let mut overlay = None;
-        let rows = terminal_settings_rows_with_ids(&draft, true);
-        if let Some(connections_idx) = rows
+        let user_rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, &draft, false);
+        if let Some(connections_idx) = user_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::Connections)
         {
             assert!(matches!(
-                handle_settings_activation(&mut draft, connections_idx, &mut overlay, true),
+                handle_settings_activation(
+                    TerminalSettingsPanel::Home,
+                    &mut draft,
+                    connections_idx,
+                    &mut overlay,
+                    false,
+                ),
                 TerminalSettingsEvent::OpenConnections
             ));
         }
-        let default_apps_idx = rows
+        let general_idx = user_rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::OpenGeneral)
+            .unwrap();
+        let default_apps_idx = user_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::DefaultApps)
             .unwrap();
-        let edit_menus_idx = rows
+        let edit_menus_idx = user_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::EditMenus)
             .unwrap();
-        let about_idx = rows
+        let about_idx = user_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::About)
             .unwrap();
-        let user_mgmt_idx = rows
+        let admin_rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, &draft, true);
+        let user_mgmt_idx = admin_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::UserManagement)
             .unwrap();
 
         assert!(matches!(
-            handle_settings_activation(&mut draft, edit_menus_idx, &mut overlay, false),
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                general_idx,
+                &mut overlay,
+                false,
+            ),
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::General)
+        ));
+        assert!(matches!(
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                edit_menus_idx,
+                &mut overlay,
+                false,
+            ),
             TerminalSettingsEvent::OpenEditMenus
         ));
         assert!(matches!(
-            handle_settings_activation(&mut draft, default_apps_idx, &mut overlay, false),
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                default_apps_idx,
+                &mut overlay,
+                false,
+            ),
             TerminalSettingsEvent::OpenDefaultApps
         ));
         assert!(matches!(
-            handle_settings_activation(&mut draft, about_idx, &mut overlay, false),
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                about_idx,
+                &mut overlay,
+                false,
+            ),
             TerminalSettingsEvent::OpenAbout
         ));
         assert!(matches!(
-            handle_settings_activation(&mut draft, user_mgmt_idx, &mut overlay, false),
-            TerminalSettingsEvent::Back
-        ));
-        assert!(matches!(
-            handle_settings_activation(&mut draft, user_mgmt_idx, &mut overlay, true),
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                user_mgmt_idx,
+                &mut overlay,
+                true,
+            ),
             TerminalSettingsEvent::EnterUserManagement
         ));
     }
@@ -620,7 +691,7 @@ mod tests {
     #[test]
     fn connections_row_respects_platform_capability() {
         let draft = get_settings();
-        let rows = terminal_settings_rows_with_ids(&draft, false);
+        let rows = terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, &draft, false);
         let has_connections = rows.iter().any(|(_, id)| *id == SettingsRowId::Connections);
         assert_eq!(has_connections, !macos_connections_disabled());
     }
@@ -629,14 +700,21 @@ mod tests {
     fn border_glyphs_row_toggles_acs_mode() {
         let mut draft = get_settings();
         let mut overlay = None;
-        let rows = terminal_settings_rows_with_ids(&draft, false);
+        let rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
         let idx = rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::BorderGlyphs)
             .expect("border glyph row");
         let before = draft.cli_acs_mode;
         assert!(matches!(
-            handle_settings_activation(&mut draft, idx, &mut overlay, false),
+            handle_settings_activation(
+                TerminalSettingsPanel::Appearance,
+                &mut draft,
+                idx,
+                &mut overlay,
+                false,
+            ),
             TerminalSettingsEvent::Persist
         ));
         assert_ne!(draft.cli_acs_mode, before);
@@ -646,7 +724,8 @@ mod tests {
     fn custom_rgb_rows_show_only_for_custom_theme() {
         let mut draft = get_settings();
         draft.theme = "Green (Default)".to_string();
-        let base_rows = terminal_settings_rows_with_ids(&draft, false);
+        let base_rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
         assert!(!base_rows
             .iter()
             .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed)));
@@ -658,7 +737,8 @@ mod tests {
             .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeBlue)));
 
         draft.theme = CUSTOM_THEME_NAME.to_string();
-        let custom_rows = terminal_settings_rows_with_ids(&draft, false);
+        let custom_rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
         assert!(custom_rows
             .iter()
             .any(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed)));
@@ -675,12 +755,19 @@ mod tests {
         let mut draft = get_settings();
         draft.theme = CUSTOM_THEME_NAME.to_string();
         draft.custom_theme_rgb = [10, 20, 30];
-        let rows = terminal_settings_rows_with_ids(&draft, false);
+        let rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
         let red_idx = rows
             .iter()
             .position(|(_, id)| matches!(id, SettingsRowId::CustomThemeRed))
             .expect("red row");
-        assert!(adjust_settings_slider(&mut draft, red_idx, false, 5));
+        assert!(adjust_settings_slider(
+            TerminalSettingsPanel::Appearance,
+            &mut draft,
+            red_idx,
+            false,
+            5,
+        ));
         assert_eq!(draft.custom_theme_rgb[0], 15);
         assert_eq!(draft.theme, CUSTOM_THEME_NAME);
     }
