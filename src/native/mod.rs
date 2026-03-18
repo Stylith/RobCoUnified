@@ -13,6 +13,7 @@ mod file_manager_app;
 mod file_manager_desktop;
 mod file_manager_menu;
 mod file_manager_prompt;
+mod file_manager_standalone;
 mod hacking_screen;
 mod installer_screen;
 mod menu;
@@ -34,3 +35,4 @@ pub use robcos_native_services::{
 };
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
+pub use file_manager_standalone::RobcoNativeFileManagerApp;
