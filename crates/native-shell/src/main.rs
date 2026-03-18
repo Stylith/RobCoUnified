@@ -24,7 +24,20 @@ fn parse_native_startup_window_mode_override(
         Some(value) if matches!(value.as_str(), "windowed" | "safe") => {
             Some(NativeStartupWindowMode::Windowed)
         }
-        Some(value) if matches!(value.as_str(), "maximized" | "desktop") => {
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "borderless" | "borderless-fullscreen" | "borderless_fullscreen" | "desktop"
+            ) =>
+        {
+            Some(NativeStartupWindowMode::BorderlessFullscreen)
+        }
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "maximized" | "maximized-window" | "maximized_window"
+            ) =>
+        {
             Some(NativeStartupWindowMode::Maximized)
         }
         Some(_) | None => None,
@@ -44,8 +57,12 @@ fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
         .with_min_inner_size([960.0, 600.0])
         .with_title("RobCoOS Native");
     match mode {
-        // Borderless maximized keeps the desktop feel without forcing exclusive fullscreen.
         NativeStartupWindowMode::Maximized => viewport
+            .with_decorations(true)
+            .with_fullscreen(false)
+            .with_maximized(true),
+        // Borderless fullscreen keeps the desktop feel without forcing exclusive fullscreen.
+        NativeStartupWindowMode::BorderlessFullscreen => viewport
             .with_decorations(false)
             .with_fullscreen(false)
             .with_maximized(true),
@@ -105,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_native_startup_window_mode_override_supports_safe_and_fullscreen() {
+    fn parse_native_startup_window_mode_override_supports_safe_borderless_and_fullscreen() {
         assert_eq!(
             parse_native_startup_window_mode_override(Some("windowed")),
             Some(NativeStartupWindowMode::Windowed)
@@ -113,6 +130,14 @@ mod tests {
         assert_eq!(
             parse_native_startup_window_mode_override(Some("safe")),
             Some(NativeStartupWindowMode::Windowed)
+        );
+        assert_eq!(
+            parse_native_startup_window_mode_override(Some("borderless")),
+            Some(NativeStartupWindowMode::BorderlessFullscreen)
+        );
+        assert_eq!(
+            parse_native_startup_window_mode_override(Some("desktop")),
+            Some(NativeStartupWindowMode::BorderlessFullscreen)
         );
         assert_eq!(
             parse_native_startup_window_mode_override(Some("fullscreen")),
@@ -128,6 +153,13 @@ mod tests {
                 Some("windowed"),
             ),
             NativeStartupWindowMode::Windowed
+        );
+        assert_eq!(
+            resolve_native_startup_window_mode(
+                NativeStartupWindowMode::Windowed,
+                Some("borderless_fullscreen"),
+            ),
+            NativeStartupWindowMode::BorderlessFullscreen
         );
         assert_eq!(
             resolve_native_startup_window_mode(

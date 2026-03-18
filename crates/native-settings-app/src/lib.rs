@@ -397,7 +397,8 @@ pub fn open_settings_choice(draft: &Settings, kind: SettingsChoiceKind) -> Setti
         SettingsChoiceKind::WindowMode => match draft.native_startup_window_mode {
             NativeStartupWindowMode::Windowed => 0,
             NativeStartupWindowMode::Maximized => 1,
-            NativeStartupWindowMode::Fullscreen => 2,
+            NativeStartupWindowMode::BorderlessFullscreen => 2,
+            NativeStartupWindowMode::Fullscreen => 3,
         },
     };
     SettingsChoiceOverlay { kind, selected }
@@ -410,6 +411,7 @@ pub fn settings_choice_items(kind: SettingsChoiceKind) -> Vec<String> {
         SettingsChoiceKind::WindowMode => vec![
             "Windowed".to_string(),
             "Maximized".to_string(),
+            "Borderless Fullscreen".to_string(),
             "Fullscreen".to_string(),
         ],
     }
@@ -432,7 +434,8 @@ pub fn apply_settings_choice(draft: &mut Settings, kind: SettingsChoiceKind, sel
         SettingsChoiceKind::WindowMode => {
             draft.native_startup_window_mode = match selected {
                 1 => NativeStartupWindowMode::Maximized,
-                2 => NativeStartupWindowMode::Fullscreen,
+                2 => NativeStartupWindowMode::BorderlessFullscreen,
+                3 => NativeStartupWindowMode::Fullscreen,
                 _ => NativeStartupWindowMode::Windowed,
             };
         }
@@ -753,6 +756,19 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn window_mode_choice_items_include_borderless_fullscreen() {
+        assert_eq!(
+            settings_choice_items(SettingsChoiceKind::WindowMode),
+            vec![
+                "Windowed".to_string(),
+                "Maximized".to_string(),
+                "Borderless Fullscreen".to_string(),
+                "Fullscreen".to_string(),
+            ]
+        );
     }
 
     #[test]

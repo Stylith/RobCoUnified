@@ -353,7 +353,14 @@ pub enum OpenMode {
 pub enum NativeStartupWindowMode {
     #[default]
     Windowed,
+    #[serde(rename = "maximized_window")]
     Maximized,
+    #[serde(
+        rename = "borderless_fullscreen",
+        alias = "maximized",
+        alias = "desktop"
+    )]
+    BorderlessFullscreen,
     Fullscreen,
 }
 
@@ -362,6 +369,7 @@ impl NativeStartupWindowMode {
         match self {
             Self::Windowed => "Windowed",
             Self::Maximized => "Maximized",
+            Self::BorderlessFullscreen => "Borderless Fullscreen",
             Self::Fullscreen => "Fullscreen",
         }
     }
@@ -1145,6 +1153,22 @@ mod tests {
         assert_eq!(
             decoded.native_startup_window_mode,
             NativeStartupWindowMode::Windowed
+        );
+    }
+
+    #[test]
+    fn native_startup_window_mode_decodes_legacy_maximized_as_borderless_fullscreen() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.insert(
+            "native_startup_window_mode".to_string(),
+            serde_json::Value::String("maximized".to_string()),
+        );
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert_eq!(
+            decoded.native_startup_window_mode,
+            NativeStartupWindowMode::BorderlessFullscreen
         );
     }
 

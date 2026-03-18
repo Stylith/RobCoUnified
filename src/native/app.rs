@@ -5484,6 +5484,11 @@ impl RobcoNativeApp {
             }
             NativeStartupWindowMode::Maximized => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+            NativeStartupWindowMode::BorderlessFullscreen => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
             }
@@ -9095,6 +9100,7 @@ impl RobcoNativeApp {
                                                 for mode in [
                                                     NativeStartupWindowMode::Windowed,
                                                     NativeStartupWindowMode::Maximized,
+                                                    NativeStartupWindowMode::BorderlessFullscreen,
                                                     NativeStartupWindowMode::Fullscreen,
                                                 ] {
                                                     if Self::retro_choice_button(
