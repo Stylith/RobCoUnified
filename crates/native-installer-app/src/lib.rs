@@ -38,12 +38,15 @@ pub enum RuntimeTool {
     Blueutil,
 }
 
-pub fn available_runtime_tools() -> Vec<RuntimeTool> {
-    let mut tools = vec![RuntimeTool::PlaySound];
+const DEFAULT_RUNTIME_TOOLS: &[RuntimeTool] = &[RuntimeTool::PlaySound];
+const MACOS_RUNTIME_TOOLS: &[RuntimeTool] = &[RuntimeTool::PlaySound, RuntimeTool::Blueutil];
+
+pub fn available_runtime_tools() -> &'static [RuntimeTool] {
     if cfg!(target_os = "macos") {
-        tools.push(RuntimeTool::Blueutil);
+        MACOS_RUNTIME_TOOLS
+    } else {
+        DEFAULT_RUNTIME_TOOLS
     }
-    tools
 }
 
 pub fn runtime_tool_title(tool: RuntimeTool) -> &'static str {

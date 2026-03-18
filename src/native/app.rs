@@ -181,15 +181,15 @@ use robcos_native_programs_app::{
     build_desktop_applications_sections, build_terminal_application_entries,
     build_terminal_game_entries, resolve_desktop_applications_request,
     resolve_desktop_games_request, resolve_terminal_applications_request,
-    resolve_terminal_catalog_request, resolve_terminal_games_request, DesktopProgramRequest,
-    TerminalProgramRequest,
+    resolve_terminal_catalog_request, resolve_terminal_games_request,
+    DesktopApplicationsSections, DesktopProgramRequest, TerminalProgramRequest,
 };
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_back_target,
     desktop_settings_connections_nav_items, desktop_settings_default_panel,
     desktop_settings_home_rows, desktop_settings_user_management_nav_items, gui_cli_profile_mut,
     gui_cli_profile_slot_label, gui_cli_profile_slots, settings_panel_title, GuiCliProfileSlot,
-    NativeSettingsPanel, SettingsHomeTileAction,
+    NativeSettingsPanel, SettingsHomeTile, SettingsHomeTileAction,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -288,6 +288,12 @@ struct AssetCache {
 struct DesktopIconLayoutCache {
     layout: DesktopIconGridLayout,
     positions: Arc<HashMap<String, [f32; 2]>>,
+}
+
+struct DesktopApplicationsSectionsCache {
+    show_text_editor: bool,
+    show_nuke_codes: bool,
+    sections: Arc<DesktopApplicationsSections>,
 }
 
 #[derive(Debug, Clone)]
@@ -629,6 +635,9 @@ pub struct RobcoNativeApp {
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     shortcut_icon_missing: HashSet<String>,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
+    settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
+    settings_home_rows_cache_standard: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
+    desktop_applications_sections_cache: Option<DesktopApplicationsSectionsCache>,
     live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
     last_native_appearance: Option<NativeAppearanceKey>,
@@ -757,6 +766,9 @@ impl Default for RobcoNativeApp {
             shortcut_icon_cache: HashMap::new(),
             shortcut_icon_missing: HashSet::new(),
             desktop_icon_layout_cache: None,
+            settings_home_rows_cache_admin: None,
+            settings_home_rows_cache_standard: None,
+            desktop_applications_sections_cache: None,
             live_desktop_file_manager_settings,
             live_hacking_difficulty,
             last_native_appearance: None,
@@ -782,10 +794,15 @@ impl RobcoNativeApp {
         self.desktop_icon_layout_cache = None;
     }
 
+    fn invalidate_program_catalog_cache(&mut self) {
+        self.desktop_applications_sections_cache = None;
+    }
+
     fn replace_settings_draft(&mut self, draft: Settings) {
         self.settings.draft = draft;
         self.sync_runtime_settings_cache();
         self.invalidate_desktop_icon_layout_cache();
+        self.invalidate_program_catalog_cache();
     }
 
     fn sync_native_appearance(&mut self, ctx: &Context) {
@@ -821,6 +838,49 @@ impl RobcoNativeApp {
             .as_ref()
             .expect("desktop icon layout cache initialized")
             .positions
+            .clone()
+    }
+
+    fn settings_home_rows_for_session(&mut self, is_admin: bool) -> Arc<Vec<Vec<SettingsHomeTile>>> {
+        let cache = if is_admin {
+            &mut self.settings_home_rows_cache_admin
+        } else {
+            &mut self.settings_home_rows_cache_standard
+        };
+        cache
+            .get_or_insert_with(|| Arc::new(desktop_settings_home_rows(is_admin)))
+            .clone()
+    }
+
+    fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
+        let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor;
+        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes;
+        let needs_rebuild = self
+            .desktop_applications_sections_cache
+            .as_ref()
+            .is_none_or(|cache| {
+                cache.show_text_editor != show_text_editor
+                    || cache.show_nuke_codes != show_nuke_codes
+            });
+        if needs_rebuild {
+            let configured_names = catalog_names(ProgramCatalog::Applications);
+            let sections = Arc::new(build_desktop_applications_sections(
+                show_text_editor,
+                show_nuke_codes,
+                &configured_names,
+                BUILTIN_TEXT_EDITOR_APP,
+                BUILTIN_NUKE_CODES_APP,
+            ));
+            self.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
+                show_text_editor,
+                show_nuke_codes,
+                sections,
+            });
+        }
+        self.desktop_applications_sections_cache
+            .as_ref()
+            .expect("desktop applications sections cache initialized")
+            .sections
             .clone()
     }
 
@@ -4344,6 +4404,7 @@ impl RobcoNativeApp {
                     return;
                 };
                 self.shell_status = add_catalog_entry(catalog, name, argv);
+                self.invalidate_program_catalog_cache();
             }
         }
     }
@@ -4359,6 +4420,7 @@ impl RobcoNativeApp {
                     return;
                 };
                 self.shell_status = delete_catalog_entry(catalog, name);
+                self.invalidate_program_catalog_cache();
             }
         }
     }
@@ -4386,7 +4448,10 @@ impl RobcoNativeApp {
                     return;
                 };
                 match rename_catalog_entry(catalog, old_name, new_name) {
-                    Ok(status) => self.shell_status = status,
+                    Ok(status) => {
+                        self.shell_status = status;
+                        self.invalidate_program_catalog_cache();
+                    }
                     Err(err) => self.shell_status = err,
                 }
             }
@@ -4943,6 +5008,7 @@ impl RobcoNativeApp {
                 self.terminal_prompt = None;
                 let event =
                     add_package_to_menu(&mut self.terminal_installer, &pkg, target, &display_name);
+                self.invalidate_program_catalog_cache();
                 self.apply_installer_event(event);
             }
             PromptOutcome::ConfirmInstallerAction {
@@ -7809,7 +7875,7 @@ impl RobcoNativeApp {
 
             match panel {
                 NativeSettingsPanel::Home => {
-                    let rows = desktop_settings_home_rows(is_admin);
+                    let rows = self.settings_home_rows_for_session(is_admin);
                     let tile_w = 140.0;
                     let tile_h = 112.0;
                     let gap_x = 34.0;
@@ -9613,6 +9679,7 @@ impl RobcoNativeApp {
         }
         if let Some((pkg, target)) = deferred_add_to_menu {
             self.desktop_installer.add_to_menu(&pkg, target);
+            self.invalidate_program_catalog_cache();
         }
     }
 
@@ -10407,7 +10474,7 @@ impl RobcoNativeApp {
         ui.separator();
         ui.add_space(12.0);
 
-        for (idx, tool) in available_runtime_tools().into_iter().enumerate() {
+        for (idx, tool) in available_runtime_tools().iter().copied().enumerate() {
             if idx > 0 {
                 ui.add_space(12.0);
             }
@@ -10478,13 +10545,7 @@ impl RobcoNativeApp {
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
             header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
-            let sections = build_desktop_applications_sections(
-                self.settings.draft.builtin_menu_visibility.text_editor,
-                self.settings.draft.builtin_menu_visibility.nuke_codes,
-                &catalog_names(ProgramCatalog::Applications),
-                BUILTIN_TEXT_EDITOR_APP,
-                BUILTIN_NUKE_CODES_APP,
-            );
+            let sections = self.desktop_applications_sections();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Built-in");
                 for entry in &sections.builtins {

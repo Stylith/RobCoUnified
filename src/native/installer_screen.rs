@@ -359,7 +359,7 @@ fn draw_runtime_tools(
     let tools = available_runtime_tools();
     let mut items = Vec::new();
     let mut runtime_rows = Vec::new();
-    for tool in tools {
+    for tool in tools.iter().copied() {
         items.push(runtime_tool_menu_label(
             tool,
             state.runtime_tool_installed_cached(tool),
