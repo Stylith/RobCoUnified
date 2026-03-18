@@ -954,6 +954,32 @@ impl FileManagerEditRuntime {
         Ok(format!("Renamed to {}", path_display_name(&dst)))
     }
 
+    pub fn rename_entry(&mut self, entry: FileEntryRow, new_name: String) -> Result<PathBuf> {
+        let Some(parent) = entry.path.parent() else {
+            return Err(anyhow!("Cannot rename this item."));
+        };
+        let name = new_name.trim();
+        if name.is_empty() {
+            return Err(anyhow!("Name cannot be empty."));
+        }
+        if name.contains('/') || name.contains('\\') {
+            return Err(anyhow!("Name cannot contain path separators."));
+        }
+        if name == entry.label {
+            return Ok(entry.path);
+        }
+        let dst = parent.join(name);
+        if dst.exists() {
+            return Err(anyhow!("Destination already exists: {}", dst.display()));
+        }
+        move_path(&entry.path, &dst)?;
+        self.record_edit_op(FileManagerEditOp::Moved {
+            from: entry.path,
+            to: dst.clone(),
+        });
+        Ok(dst)
+    }
+
     pub fn move_selected(
         &mut self,
         file_manager: &mut NativeFileManagerState,
@@ -1184,6 +1210,27 @@ impl FileManagerEditRuntime {
         } else {
             Ok(format!("Moved {moved} items to trash"))
         }
+    }
+
+    pub fn delete_entries(&mut self, entries: Vec<FileEntryRow>) -> Result<usize> {
+        if entries.is_empty() {
+            return Err(anyhow!("Select a file or folder first."));
+        }
+        let trash_dir = base_dir().join(".fm_trash");
+        std::fs::create_dir_all(&trash_dir)
+            .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
+        let mut moved = 0usize;
+        for entry in entries {
+            let name = path_display_name(&entry.path);
+            let trash_target = unique_path_in_dir(&trash_dir, &name);
+            move_path(&entry.path, &trash_target)?;
+            self.record_edit_op(FileManagerEditOp::Moved {
+                from: entry.path,
+                to: trash_target,
+            });
+            moved += 1;
+        }
+        Ok(moved)
     }
 
     pub fn undo(&mut self, file_manager: &mut NativeFileManagerState) -> Result<String> {

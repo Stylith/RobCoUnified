@@ -28,6 +28,14 @@ fn is_admin(username: String) -> bool {
         .unwrap_or(false)
 }
 
+pub fn cached_package_description(state: &DesktopInstallerState, pkg: &str) -> Option<String> {
+    state.cached_package_description(pkg)
+}
+
+pub fn runtime_tool_installed_cached(state: &mut DesktopInstallerState, tool: RuntimeTool) -> bool {
+    state.runtime_tool_installed_cached(tool)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_installer_screen(
     ctx: &eframe::egui::Context,

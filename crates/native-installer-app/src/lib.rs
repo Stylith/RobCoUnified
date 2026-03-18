@@ -935,6 +935,12 @@ impl DesktopInstallerState {
         fetched
     }
 
+    pub fn cached_package_description(&self, pkg: &str) -> Option<String> {
+        self.package_descriptions
+            .get(pkg)
+            .and_then(|desc| desc.clone())
+    }
+
     pub fn pm_label(&self) -> &str {
         self.selected_pm().map(|p| p.name()).unwrap_or("Not Found")
     }
@@ -1014,6 +1020,23 @@ impl DesktopInstallerState {
         match tool {
             RuntimeTool::PlaySound => self.runtime_playsound_installed(),
             RuntimeTool::Blueutil => self.runtime_blueutil_installed(),
+        }
+    }
+
+    fn refresh_runtime_tool_cache(&mut self) {
+        if self.runtime_playsound_installed.is_none() {
+            self.runtime_playsound_installed = Some(has_python_module("playsound"));
+        }
+        if cfg!(target_os = "macos") && self.runtime_blueutil_installed.is_none() {
+            self.runtime_blueutil_installed = Some(which("blueutil"));
+        }
+    }
+
+    pub fn runtime_tool_installed_cached(&mut self, tool: RuntimeTool) -> bool {
+        self.refresh_runtime_tool_cache();
+        match tool {
+            RuntimeTool::PlaySound => self.runtime_playsound_installed.unwrap_or(false),
+            RuntimeTool::Blueutil => self.runtime_blueutil_installed.unwrap_or(false),
         }
     }
 }
