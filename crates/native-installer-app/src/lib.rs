@@ -242,6 +242,7 @@ pub struct DesktopInstallerState {
     pub available_pms: Vec<PackageManager>,
     pub selected_pm_idx: usize,
     package_descriptions: HashMap<String, Option<String>>,
+    installed_search_cache: HashMap<String, HashSet<String>>,
     installed_description_cache: Option<HashMap<String, HashMap<String, String>>>,
     runtime_playsound_installed: Option<bool>,
     runtime_blueutil_installed: Option<bool>,
@@ -266,6 +267,7 @@ impl Default for DesktopInstallerState {
             available_pms: Vec::new(),
             selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
+            installed_search_cache: HashMap::new(),
             installed_description_cache: None,
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
@@ -453,6 +455,14 @@ impl PackageManager {
     }
 
     pub fn search(self, query: &str) -> Vec<SearchResult> {
+        self.search_with_installed(query, None)
+    }
+
+    pub fn search_with_installed(
+        self,
+        query: &str,
+        installed_snapshot: Option<&HashSet<String>>,
+    ) -> Vec<SearchResult> {
         let exe = self.executable();
         let out = match self {
             PackageManager::Brew => Command::new(&exe).args(["search", query]).output().ok(),
@@ -467,7 +477,17 @@ impl PackageManager {
         }
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-        let installed: HashSet<String> = self.list_installed().into_iter().collect();
+        let fallback_installed = if installed_snapshot.is_none()
+            && !(cfg!(target_os = "macos") && matches!(self, PackageManager::Brew))
+        {
+            Some(self.list_installed().into_iter().collect::<HashSet<_>>())
+        } else {
+            None
+        };
+        let empty_installed = HashSet::new();
+        let installed = installed_snapshot
+            .or(fallback_installed.as_ref())
+            .unwrap_or(&empty_installed);
         if matches!(self, PackageManager::Pacman | PackageManager::Yay) {
             let lines: Vec<&str> = out.lines().collect();
             let mut results = Vec::new();
@@ -767,6 +787,31 @@ impl DesktopInstallerState {
         pm.name().to_string()
     }
 
+    fn cached_installed_snapshot_for_pm(&self, pm: PackageManager) -> Option<HashSet<String>> {
+        if self.selected_pm_idx < self.available_pms.len()
+            && self.available_pms[self.selected_pm_idx] == pm
+            && !self.installed_packages.is_empty()
+        {
+            return Some(self.installed_packages.iter().cloned().collect());
+        }
+        self.installed_search_cache
+            .get(&Self::installed_cache_key(pm))
+            .cloned()
+    }
+
+    fn remember_installed_snapshot_for_pm<I>(&mut self, pm: PackageManager, packages: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.installed_search_cache
+            .insert(Self::installed_cache_key(pm), packages.into_iter().collect());
+    }
+
+    fn invalidate_installed_snapshot_for_pm(&mut self, pm: PackageManager) {
+        self.installed_search_cache
+            .remove(&Self::installed_cache_key(pm));
+    }
+
     fn ensure_installed_description_cache(
         &mut self,
     ) -> &mut HashMap<String, HashMap<String, String>> {
@@ -823,24 +868,17 @@ impl DesktopInstallerState {
             self.status = "Enter a search term.".to_string();
             return;
         }
-        if !has_internet() {
-            self.status = "Error: No internet connection.".to_string();
-            self.notice = Some(DesktopInstallerNotice {
-                message: "Search requires an internet connection.".to_string(),
-                success: false,
-            });
-            return;
-        }
         let Some(pm) = self.selected_pm() else {
             self.status = "Error: No package manager found.".to_string();
             return;
         };
+        let installed_snapshot = self.cached_installed_snapshot_for_pm(pm);
         self.notice = None;
         self.search_receiver = None;
         self.status = format!("Searching for \"{query}\"...");
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let results = pm.search(&query);
+            let results = pm.search_with_installed(&query, installed_snapshot.as_ref());
             let _ = tx.send(DesktopSearchResponse { query, results });
         });
         self.search_receiver = Some(rx);
@@ -881,6 +919,7 @@ impl DesktopInstallerState {
         let selected_pm = self.selected_pm();
         self.installed_packages = selected_pm.map(|p| p.list_installed()).unwrap_or_default();
         if let Some(pm) = selected_pm {
+            self.remember_installed_snapshot_for_pm(pm, self.installed_packages.clone());
             for pkg in &self.installed_packages {
                 if let Some(desc) = self.installed_description_cached_for_pm(pm, pkg) {
                     self.package_descriptions.insert(pkg.clone(), Some(desc));
@@ -909,7 +948,7 @@ impl DesktopInstallerState {
     }
 
     pub fn can_fetch_descriptions(&self) -> bool {
-        has_internet()
+        true
     }
 
     pub fn fetch_package_description(&mut self, pkg: &str) -> Option<String> {
@@ -935,13 +974,7 @@ impl DesktopInstallerState {
             .iter()
             .find(|r| r.pkg == pkg)
             .and_then(|r| r.description.clone())
-            .or_else(|| {
-                if has_internet() {
-                    selected_pm.and_then(|pm| pm.package_description(pkg))
-                } else {
-                    None
-                }
-            });
+            .or_else(|| selected_pm.and_then(|pm| pm.package_description(pkg)));
         if installed_pkg {
             if let (Some(pm), Some(desc)) = (selected_pm, fetched.as_ref()) {
                 self.persist_installed_description(pm, pkg, desc);
@@ -988,6 +1021,9 @@ impl DesktopInstallerState {
         let Some(confirm) = self.confirm_dialog.take() else {
             return DesktopInstallerEvent::None;
         };
+        if let Some(pm) = self.selected_pm() {
+            self.invalidate_installed_snapshot_for_pm(pm);
+        }
         match build_desktop_installer_event(self.selected_pm(), confirm, has_internet()) {
             Ok(DesktopInstallerEvent::LaunchCommand {
                 argv,
@@ -1175,13 +1211,12 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
     if query.is_empty() {
         return InstallerEvent::Status("Search cancelled.".to_string());
     }
-    if !has_internet() {
-        return InstallerEvent::Status("Error: No internet connection.".to_string());
-    }
     let Some(pm) = state.selected_pm() else {
         return InstallerEvent::Status("Error: No supported package manager found.".to_string());
     };
-    state.search_results = pm.search(&query);
+    let installed_snapshot = (!state.installed_packages.is_empty())
+        .then(|| state.installed_packages.iter().cloned().collect::<HashSet<_>>());
+    state.search_results = pm.search_with_installed(&query, installed_snapshot.as_ref());
     state.search_query = query;
     state.search_idx = 0;
     state.search_page = 0;

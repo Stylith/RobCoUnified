@@ -11,6 +11,7 @@ pub enum StandaloneNativeApp {
     Editor,
     Applications,
     NukeCodes,
+    Installer,
 }
 
 impl StandaloneNativeApp {
@@ -21,6 +22,7 @@ impl StandaloneNativeApp {
             Self::Editor => "robcos-editor",
             Self::Applications => "robcos-applications",
             Self::NukeCodes => "robcos-nuke-codes",
+            Self::Installer => "robcos-installer",
         }
     }
 
@@ -31,6 +33,7 @@ impl StandaloneNativeApp {
             Self::Editor => "editor",
             Self::Applications => "applications",
             Self::NukeCodes => "nuke codes",
+            Self::Installer => "installer",
         }
     }
 }
@@ -112,5 +115,6 @@ mod tests {
         assert_eq!(StandaloneNativeApp::Editor.label(), "editor");
         assert_eq!(StandaloneNativeApp::Applications.label(), "applications");
         assert_eq!(StandaloneNativeApp::NukeCodes.label(), "nuke codes");
+        assert_eq!(StandaloneNativeApp::Installer.label(), "installer");
     }
 }

@@ -2118,6 +2118,34 @@ impl RobcoNativeApp {
         }
     }
 
+    pub(crate) fn prepare_standalone_installer_window(
+        &mut self,
+        session_username: Option<String>,
+    ) {
+        self.prepare_standalone_window_shell(session_username, true);
+        self.prime_desktop_window_defaults(DesktopWindow::Installer);
+        self.desktop_installer.open = true;
+        self.desktop_active_window = Some(DesktopWindow::Installer);
+    }
+
+    pub(crate) fn update_standalone_installer_window(&mut self, ctx: &Context) {
+        self.process_desktop_pty_input_early(ctx);
+        self.maybe_sync_settings_from_disk(ctx);
+        self.sync_native_appearance(ctx);
+        let pty_last =
+            self.desktop_active_window == Some(DesktopWindow::PtyApp) && self.terminal_pty.is_some();
+        if pty_last {
+            self.draw_installer(ctx);
+            self.draw_desktop_pty_window(ctx);
+        } else {
+            self.draw_desktop_pty_window(ctx);
+            self.draw_installer(ctx);
+        }
+        if !self.desktop_installer.open && self.terminal_pty.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
     pub(crate) fn desktop_component_terminal_mode_is_open(&self) -> bool {
         self.terminal_mode.open
     }
@@ -4672,6 +4700,19 @@ impl RobcoNativeApp {
         }
     }
 
+    fn launch_standalone_installer(&mut self) {
+        let current_user = get_current_user();
+        let session_username = self
+            .session
+            .as_ref()
+            .map(|session| session.username.as_str())
+            .or(current_user.as_deref());
+        match launch_standalone_app(StandaloneNativeApp::Installer, &[], session_username) {
+            Ok(()) => self.apply_status_update(clear_shell_status()),
+            Err(status) => self.shell_status = status,
+        }
+    }
+
     fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
         let current_user = get_current_user();
         let session_username = self
@@ -4798,6 +4839,7 @@ impl RobcoNativeApp {
                 DesktopWindow::FileManager => self.launch_standalone_file_manager(None),
                 DesktopWindow::Settings => self.open_standalone_settings(None),
                 DesktopWindow::Applications => self.launch_standalone_applications(),
+                DesktopWindow::Installer => self.launch_standalone_installer(),
                 _ => self.open_desktop_window(window),
             },
             DesktopShellAction::OpenTextEditor => self.launch_standalone_editor(None),
@@ -12378,23 +12420,8 @@ impl RobcoNativeApp {
             self.run_file_manager_command(FileManagerCommand::Redo);
         }
     }
-}
 
-impl eframe::App for RobcoNativeApp {
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
-    }
-
-    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
-        self.persist_snapshot();
-    }
-
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // Process PTY keyboard input at the very top of the frame, before
-        // any egui widgets render.  Widgets (TextEdit, menus, buttons) can
-        // consume Event::Key and Event::Text from the events list during
-        // their show() calls, leaving the PTY with zero events if it runs
-        // after them.
+    fn process_desktop_pty_input_early(&mut self, ctx: &Context) {
         let mut early_pty_close = false;
         if self.desktop_mode_open && self.desktop_active_window == Some(DesktopWindow::PtyApp) {
             if let Some(state) = self.terminal_pty.as_mut() {
@@ -12405,8 +12432,6 @@ impl eframe::App for RobcoNativeApp {
                     state.show_perf_overlay = !state.show_perf_overlay;
                 }
                 handle_pty_input(ctx, &mut state.session);
-                // Clear keyboard events so the later draw pass doesn't
-                // double-process them.
                 ctx.input_mut(|i| {
                     i.events.retain(|e| {
                         !matches!(
@@ -12423,6 +12448,23 @@ impl eframe::App for RobcoNativeApp {
             }
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
         }
+    }
+}
+
+impl eframe::App for RobcoNativeApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.persist_snapshot();
+    }
+
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Process PTY keyboard input at the very top of the frame, before
+        // any egui widgets render. Widgets can otherwise consume key events
+        // before the PTY sees them.
+        self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
 

@@ -17,6 +17,7 @@ mod file_manager_menu;
 mod file_manager_prompt;
 mod file_manager_standalone;
 mod hacking_screen;
+mod installer_standalone;
 mod installer_screen;
 mod menu;
 mod nuke_codes_screen;
@@ -44,6 +45,7 @@ pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp}
 pub use applications_standalone::RobcoNativeApplicationsApp;
 pub use editor_standalone::RobcoNativeEditorApp;
 pub use file_manager_standalone::RobcoNativeFileManagerApp;
+pub use installer_standalone::RobcoNativeInstallerApp;
 pub use nuke_codes_standalone::RobcoNativeNukeCodesApp;
 pub use settings_standalone::{
     standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
