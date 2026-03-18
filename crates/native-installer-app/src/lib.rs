@@ -129,7 +129,6 @@ pub struct TerminalInstallerState {
 
 impl Default for TerminalInstallerState {
     fn default() -> Self {
-        let available = PackageManager::detect_all();
         Self {
             view: InstallerView::Root,
             root_idx: 0,
@@ -145,7 +144,7 @@ impl Default for TerminalInstallerState {
             search_query: String::new(),
             installed_packages: Vec::new(),
             installed_filter: String::new(),
-            available_pms: available,
+            available_pms: Vec::new(),
             selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
             runtime_playsound_installed: None,
@@ -254,7 +253,6 @@ pub struct DesktopInstallerState {
 
 impl Default for DesktopInstallerState {
     fn default() -> Self {
-        let available = PackageManager::detect_all();
         Self {
             open: false,
             view: DesktopInstallerView::Home,
@@ -265,7 +263,7 @@ impl Default for DesktopInstallerState {
             installed_page: 0,
             search_page: 0,
             status: String::new(),
-            available_pms: available,
+            available_pms: Vec::new(),
             selected_pm_idx: 0,
             package_descriptions: HashMap::new(),
             installed_description_cache: load_installed_description_cache(),
@@ -756,6 +754,15 @@ pub fn is_arch_based_linux() -> bool {
 }
 
 impl DesktopInstallerState {
+    pub fn ensure_available_pms(&mut self) {
+        if self.available_pms.is_empty() {
+            self.available_pms = PackageManager::detect_all();
+            self.selected_pm_idx = self
+                .selected_pm_idx
+                .min(self.available_pms.len().saturating_sub(1));
+        }
+    }
+
     fn installed_cache_key(pm: PackageManager) -> String {
         pm.name().to_string()
     }
@@ -775,7 +782,8 @@ impl DesktopInstallerState {
         save_installed_description_cache(&self.installed_description_cache);
     }
 
-    pub fn selected_pm(&self) -> Option<PackageManager> {
+    pub fn selected_pm(&mut self) -> Option<PackageManager> {
+        self.ensure_available_pms();
         self.available_pms.get(self.selected_pm_idx).copied()
     }
 
@@ -941,8 +949,30 @@ impl DesktopInstallerState {
             .and_then(|desc| desc.clone())
     }
 
-    pub fn pm_label(&self) -> &str {
+    pub fn pm_label(&mut self) -> &str {
         self.selected_pm().map(|p| p.name()).unwrap_or("Not Found")
+    }
+
+    fn reset_for_package_manager_change(&mut self) {
+        self.search_results.clear();
+        self.search_query.clear();
+        self.search_page = 0;
+        self.installed_packages.clear();
+        self.installed_filter.clear();
+        self.installed_page = 0;
+        self.package_descriptions.clear();
+        self.confirm_dialog = None;
+        self.notice = None;
+    }
+
+    pub fn select_package_manager(&mut self, idx: usize) -> bool {
+        self.ensure_available_pms();
+        if idx >= self.available_pms.len() || idx == self.selected_pm_idx {
+            return false;
+        }
+        self.selected_pm_idx = idx;
+        self.reset_for_package_manager_change();
+        true
     }
 
     pub fn confirm_action(&mut self) -> DesktopInstallerEvent {
@@ -1180,7 +1210,7 @@ pub fn settle_view_after_package_command(state: &mut TerminalInstallerState) {
 }
 
 pub fn build_package_command(
-    state: &TerminalInstallerState,
+    state: &mut TerminalInstallerState,
     pkg: &str,
     action: InstallerPackageAction,
 ) -> InstallerEvent {
@@ -1336,6 +1366,18 @@ pub fn add_package_to_menu(
 }
 
 impl TerminalInstallerState {
+    pub fn ensure_available_pms(&mut self) {
+        if self.available_pms.is_empty() {
+            self.available_pms = PackageManager::detect_all();
+            self.selected_pm_idx = self
+                .selected_pm_idx
+                .min(self.available_pms.len().saturating_sub(1));
+            self.pm_select_idx = self
+                .pm_select_idx
+                .min(self.available_pms.len().saturating_sub(1));
+        }
+    }
+
     pub fn is_at_root(&self) -> bool {
         matches!(self.view, InstallerView::Root)
     }
@@ -1423,11 +1465,12 @@ impl TerminalInstallerState {
         self.runtime_blueutil_installed = None;
     }
 
-    pub fn selected_pm(&self) -> Option<PackageManager> {
+    pub fn selected_pm(&mut self) -> Option<PackageManager> {
+        self.ensure_available_pms();
         self.available_pms.get(self.selected_pm_idx).copied()
     }
 
-    pub fn pm_label(&self) -> &str {
+    pub fn pm_label(&mut self) -> &str {
         self.selected_pm()
             .map(|pm| pm.name())
             .unwrap_or("Not Found")

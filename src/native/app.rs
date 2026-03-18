@@ -5759,7 +5759,7 @@ impl RobcoNativeApp {
             } => {
                 self.terminal_prompt = None;
                 if confirmed {
-                    let event = build_package_command(&self.terminal_installer, &pkg, action);
+                    let event = build_package_command(&mut self.terminal_installer, &pkg, action);
                     self.apply_installer_event(event);
                 } else {
                     self.apply_status_update(cancelled_shell_status());
@@ -10721,6 +10721,7 @@ impl RobcoNativeApp {
             ui.add_space(8.0);
 
             // ── Package manager selector ─────────────────────────────────
+            state.ensure_available_pms();
             if state.available_pms.len() > 1 {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Package Manager:").color(palette.dim).small());
@@ -10742,7 +10743,7 @@ impl RobcoNativeApp {
                                         )
                                         .clicked()
                                     {
-                                        state.selected_pm_idx = idx;
+                                        state.select_package_manager(idx);
                                     }
                                 }
                             });

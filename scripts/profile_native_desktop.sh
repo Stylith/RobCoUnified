@@ -7,9 +7,10 @@ LOG_FILE="$PROFILE_DIR/startup.log"
 APP_LOG="/tmp/robcos-profile-run.log"
 
 mkdir -p "$PROFILE_DIR/users"
+mkdir -p "$PROFILE_DIR/users/profile"
 printf '{"profile":{"password_hash":"","is_admin":true,"auth_method":"no_password"}}\n' \
   > "$PROFILE_DIR/users/users.json"
-printf '{"default_open_mode":"desktop"}\n' > "$PROFILE_DIR/settings.json"
+printf '{"default_open_mode":"desktop"}\n' > "$PROFILE_DIR/users/profile/settings.json"
 
 START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
 
@@ -28,18 +29,29 @@ for _ in {1..200}; do
   sleep 0.1
 done
 
-sleep 3
+sleep 10
 
-cpu_samples=()
-for _ in {1..5}; do
-  cpu_samples+=("$(ps -o %cpu= -p "$PID" | tr -d ' ')")
-  sleep 1
-done
+AVG_CPU=""
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  AVG_CPU="$(
+    top -l 6 -pid "$PID" -stats pid,cpu,command 2>/dev/null \
+      | awk -v pid="$PID" '$1 == pid {print $2}' \
+      | tail -n 5 \
+      | awk '{sum+=$1} END { if (NR > 0) printf "%.2f", sum / NR; else print "" }'
+  )"
+fi
 
-AVG_CPU="$(
-  printf '%s\n' "${cpu_samples[@]}" \
-    | awk '{sum+=$1} END { if (NR > 0) printf "%.2f", sum / NR; else print "0.00" }'
-)"
+if [[ -z "$AVG_CPU" ]]; then
+  cpu_samples=()
+  for _ in {1..10}; do
+    cpu_samples+=("$(ps -o %cpu= -p "$PID" | tr -d ' ')")
+    sleep 1
+  done
+  AVG_CPU="$(
+    printf '%s\n' "${cpu_samples[@]}" \
+      | awk '{sum+=$1} END { if (NR > 0) printf "%.2f", sum / NR; else print "0.00" }'
+  )"
+fi
 RSS_KB="$(ps -o rss= -p "$PID" | tr -d ' ')"
 RSS_MB="$(python3 -c 'import sys; print(f"{int(sys.argv[1]) / 1024:.1f}")' "$RSS_KB")"
 

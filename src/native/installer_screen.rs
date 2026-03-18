@@ -215,6 +215,7 @@ fn draw_root(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
+    state.ensure_available_pms();
     let pm_label = state.pm_label().to_string();
     let mut items = vec![
         "Search".to_string(),
@@ -291,6 +292,7 @@ fn draw_package_manager_select(
     status_row: usize,
     content_col: usize,
 ) -> InstallerEvent {
+    state.ensure_available_pms();
     let mut items: Vec<String> = state
         .available_pms
         .iter()

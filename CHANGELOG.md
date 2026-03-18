@@ -1,9 +1,5 @@
 # Changelog
 
-All notable changes to RobCoOS will be documented in this file.
-
-The format is based on Keep a Changelog, adapted to the way this project ships releases.
-
 ## 0.4.4 - 2026-03-17
 
 ### Fixed
