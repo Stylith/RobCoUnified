@@ -12,6 +12,12 @@ use crate::config::DesktopFileManagerSettings;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopTitleKind {
+    Static(&'static str),
+    PtyFallback(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopHostedApp {
     Desktop,
     FileManager,
@@ -123,6 +129,110 @@ pub struct DesktopTaskbarEntry {
     pub inactive: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DesktopComponentSpec {
+    pub window: DesktopWindow,
+    pub hosted_app: DesktopHostedApp,
+    pub id_salt: &'static str,
+    pub default_size: [f32; 2],
+    pub show_in_taskbar: bool,
+    pub show_in_window_menu: bool,
+    title_kind: DesktopTitleKind,
+}
+
+const DESKTOP_COMPONENT_SPECS: [DesktopComponentSpec; 9] = [
+    DesktopComponentSpec {
+        window: DesktopWindow::FileManager,
+        hosted_app: DesktopHostedApp::FileManager,
+        id_salt: "native_file_manager",
+        default_size: [860.0, 560.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static(FILE_MANAGER_APP_TITLE),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::Editor,
+        hosted_app: DesktopHostedApp::Editor,
+        id_salt: "native_word_processor",
+        default_size: [820.0, 560.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static(EDITOR_APP_TITLE),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::Settings,
+        hosted_app: DesktopHostedApp::Settings,
+        id_salt: "native_settings",
+        default_size: [760.0, 500.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static("Settings"),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::Applications,
+        hosted_app: DesktopHostedApp::Applications,
+        id_salt: "native_applications",
+        default_size: [700.0, 480.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static("Applications"),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::DonkeyKong,
+        hosted_app: DesktopHostedApp::Game,
+        id_salt: "native_donkey_kong",
+        default_size: [820.0, 720.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static(BUILTIN_DONKEY_KONG_GAME),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::NukeCodes,
+        hosted_app: DesktopHostedApp::Utility,
+        id_salt: "native_nuke_codes",
+        default_size: [640.0, 420.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::Static("Nuke Codes"),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::Installer,
+        hosted_app: DesktopHostedApp::Installer,
+        id_salt: "native_installer",
+        default_size: [800.0, 600.0],
+        show_in_taskbar: true,
+        show_in_window_menu: false,
+        title_kind: DesktopTitleKind::Static("Program Installer"),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::TerminalMode,
+        hosted_app: DesktopHostedApp::Terminal,
+        id_salt: "native_terminal_mode",
+        default_size: [720.0, 500.0],
+        show_in_taskbar: false,
+        show_in_window_menu: false,
+        title_kind: DesktopTitleKind::Static("Terminal"),
+    },
+    DesktopComponentSpec {
+        window: DesktopWindow::PtyApp,
+        hosted_app: DesktopHostedApp::PtyApp,
+        id_salt: "native_desktop_pty",
+        default_size: [960.0, 600.0],
+        show_in_taskbar: true,
+        show_in_window_menu: true,
+        title_kind: DesktopTitleKind::PtyFallback("PTY App"),
+    },
+];
+
+impl DesktopComponentSpec {
+    pub fn title(self, pty_title: Option<&str>) -> String {
+        match self.title_kind {
+            DesktopTitleKind::Static(label) => label.to_string(),
+            DesktopTitleKind::PtyFallback(fallback) => pty_title.unwrap_or(fallback).to_string(),
+        }
+    }
+}
+
 impl DesktopHostedApp {
     pub fn menu_sections(self) -> &'static [DesktopMenuSection] {
         match self {
@@ -156,6 +266,17 @@ impl DesktopMenuSection {
             DesktopMenuSection::Help => "Help",
         }
     }
+}
+
+pub fn desktop_component_specs() -> &'static [DesktopComponentSpec] {
+    &DESKTOP_COMPONENT_SPECS
+}
+
+pub fn desktop_component_spec(window: DesktopWindow) -> &'static DesktopComponentSpec {
+    DESKTOP_COMPONENT_SPECS
+        .iter()
+        .find(|spec| spec.window == window)
+        .expect("desktop component spec")
 }
 
 pub fn build_shared_desktop_menu_section(section: DesktopMenuSection) -> Vec<DesktopMenuItem> {
@@ -266,33 +387,19 @@ pub fn build_window_menu_section(
         .collect()
 }
 
-pub fn taskbar_window_order() -> &'static [DesktopWindow] {
-    &[
-        DesktopWindow::FileManager,
-        DesktopWindow::Editor,
-        DesktopWindow::Settings,
-        DesktopWindow::Applications,
-        DesktopWindow::DonkeyKong,
-        DesktopWindow::NukeCodes,
-        DesktopWindow::Installer,
-        DesktopWindow::PtyApp,
-    ]
-}
-
 pub fn build_taskbar_entries(
     open_windows: &[DesktopWindow],
     active_window: Option<DesktopWindow>,
     pty_title: Option<&str>,
 ) -> Vec<DesktopTaskbarEntry> {
-    taskbar_window_order()
+    desktop_component_specs()
         .iter()
-        .copied()
-        .filter(|window| open_windows.contains(window))
-        .map(|window| DesktopTaskbarEntry {
-            window,
-            label: desktop_window_title(window, pty_title),
+        .filter(|spec| spec.show_in_taskbar && open_windows.contains(&spec.window))
+        .map(|spec| DesktopTaskbarEntry {
+            window: spec.window,
+            label: spec.title(pty_title),
             // Taskbar chrome renders the "active" look in the inverse branch.
-            inactive: active_window != Some(window),
+            inactive: active_window != Some(spec.window),
         })
         .collect()
 }
@@ -326,32 +433,13 @@ pub fn build_active_desktop_menu_section(
 }
 
 pub fn hosted_app_for_window(window: Option<DesktopWindow>) -> DesktopHostedApp {
-    match window {
-        Some(DesktopWindow::FileManager) => DesktopHostedApp::FileManager,
-        Some(DesktopWindow::Editor) => DesktopHostedApp::Editor,
-        Some(DesktopWindow::Settings) => DesktopHostedApp::Settings,
-        Some(DesktopWindow::Applications) => DesktopHostedApp::Applications,
-        Some(DesktopWindow::DonkeyKong) => DesktopHostedApp::Game,
-        Some(DesktopWindow::NukeCodes) => DesktopHostedApp::Utility,
-        Some(DesktopWindow::TerminalMode) => DesktopHostedApp::Terminal,
-        Some(DesktopWindow::PtyApp) => DesktopHostedApp::PtyApp,
-        Some(DesktopWindow::Installer) => DesktopHostedApp::Installer,
-        None => DesktopHostedApp::Desktop,
-    }
+    window
+        .map(|window| desktop_component_spec(window).hosted_app)
+        .unwrap_or(DesktopHostedApp::Desktop)
 }
 
 pub fn desktop_window_title(window: DesktopWindow, pty_title: Option<&str>) -> String {
-    match window {
-        DesktopWindow::FileManager => FILE_MANAGER_APP_TITLE.to_string(),
-        DesktopWindow::Editor => EDITOR_APP_TITLE.to_string(),
-        DesktopWindow::Settings => "Settings".to_string(),
-        DesktopWindow::Applications => "Applications".to_string(),
-        DesktopWindow::DonkeyKong => BUILTIN_DONKEY_KONG_GAME.to_string(),
-        DesktopWindow::NukeCodes => "Nuke Codes".to_string(),
-        DesktopWindow::Installer => "Program Installer".to_string(),
-        DesktopWindow::TerminalMode => "Terminal".to_string(),
-        DesktopWindow::PtyApp => pty_title.unwrap_or("PTY App").to_string(),
-    }
+    desktop_component_spec(window).title(pty_title)
 }
 
 pub fn desktop_app_menu_name(
@@ -464,6 +552,20 @@ mod tests {
         assert_eq!(
             desktop_window_title(DesktopWindow::PtyApp, Some("Shell")),
             "Shell"
+        );
+    }
+
+    #[test]
+    fn desktop_component_registry_is_single_source_of_truth() {
+        let specs = desktop_component_specs();
+        assert_eq!(specs[0].window, DesktopWindow::FileManager);
+        assert_eq!(specs[6].window, DesktopWindow::Installer);
+        assert_eq!(specs[7].window, DesktopWindow::TerminalMode);
+        assert!(!specs[7].show_in_taskbar);
+        assert!(!specs[6].show_in_window_menu);
+        assert_eq!(
+            desktop_component_spec(DesktopWindow::Settings).id_salt,
+            "native_settings"
         );
     }
 

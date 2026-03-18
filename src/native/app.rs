@@ -7,9 +7,10 @@ use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_di
 use super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
 use super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
-    build_taskbar_entries, build_window_menu_section, desktop_app_menu_name, hosted_app_for_window,
-    taskbar_window_order, DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext,
-    DesktopMenuItem, DesktopMenuSection, DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
+    build_taskbar_entries, build_window_menu_section, desktop_app_menu_name,
+    desktop_component_spec, desktop_component_specs, hosted_app_for_window, DesktopHostedApp,
+    DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection,
+    DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
 };
 use super::desktop_connections_service::{
     connect_connection_and_refresh_settings, connection_requires_password,
@@ -1832,17 +1833,7 @@ impl RobcoNativeApp {
 
     fn desktop_window_egui_id(&self, window: DesktopWindow) -> egui::Id {
         let gen = self.desktop_window_generation(window);
-        match window {
-            DesktopWindow::FileManager => Id::new(("native_file_manager", gen)),
-            DesktopWindow::Editor => Id::new(("native_word_processor", gen)),
-            DesktopWindow::Settings => Id::new(("native_settings", gen)),
-            DesktopWindow::Applications => Id::new(("native_applications", gen)),
-            DesktopWindow::DonkeyKong => Id::new(("native_donkey_kong", gen)),
-            DesktopWindow::NukeCodes => Id::new(("native_nuke_codes", gen)),
-            DesktopWindow::Installer => Id::new(("native_installer", gen)),
-            DesktopWindow::PtyApp => Id::new(("native_desktop_pty", gen)),
-            DesktopWindow::TerminalMode => Id::new(("native_terminal_mode", gen)),
-        }
+        Id::new((desktop_component_spec(window).id_salt, gen))
     }
 
     fn next_desktop_window_generation(&mut self) -> u64 {
@@ -1935,17 +1926,8 @@ impl RobcoNativeApp {
     }
 
     fn desktop_default_window_size(window: DesktopWindow) -> egui::Vec2 {
-        match window {
-            DesktopWindow::FileManager => egui::vec2(860.0, 560.0),
-            DesktopWindow::Editor => egui::vec2(820.0, 560.0),
-            DesktopWindow::Settings => egui::vec2(760.0, 500.0),
-            DesktopWindow::Applications => egui::vec2(700.0, 480.0),
-            DesktopWindow::DonkeyKong => egui::vec2(820.0, 720.0),
-            DesktopWindow::NukeCodes => egui::vec2(640.0, 420.0),
-            DesktopWindow::Installer => egui::vec2(800.0, 600.0),
-            DesktopWindow::TerminalMode => egui::vec2(720.0, 500.0),
-            DesktopWindow::PtyApp => egui::vec2(960.0, 600.0),
-        }
+        let [x, y] = desktop_component_spec(window).default_size;
+        egui::vec2(x, y)
     }
 
     fn desktop_file_manager_window_min_size() -> egui::Vec2 {
@@ -2031,20 +2013,13 @@ impl RobcoNativeApp {
     }
 
     fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        const ORDER: [DesktopWindow; 9] = [
-            DesktopWindow::FileManager,
-            DesktopWindow::Editor,
-            DesktopWindow::Settings,
-            DesktopWindow::Applications,
-            DesktopWindow::DonkeyKong,
-            DesktopWindow::NukeCodes,
-            DesktopWindow::Installer,
-            DesktopWindow::TerminalMode,
-            DesktopWindow::PtyApp,
-        ];
-        ORDER.into_iter().rev().find(|window| {
-            self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
-        })
+        desktop_component_specs()
+            .iter()
+            .rev()
+            .map(|spec| spec.window)
+            .find(|window| {
+                self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
+            })
     }
 
     fn focus_desktop_window(&mut self, ctx: Option<&Context>, window: DesktopWindow) {
@@ -4506,19 +4481,8 @@ impl RobcoNativeApp {
 
     fn draw_desktop_windows(&mut self, ctx: &Context) {
         self.sync_desktop_active_window();
-        const ORDER: [DesktopWindow; 9] = [
-            DesktopWindow::FileManager,
-            DesktopWindow::Editor,
-            DesktopWindow::Settings,
-            DesktopWindow::Applications,
-            DesktopWindow::DonkeyKong,
-            DesktopWindow::NukeCodes,
-            DesktopWindow::Installer,
-            DesktopWindow::TerminalMode,
-            DesktopWindow::PtyApp,
-        ];
         let active = self.desktop_active_window;
-        for window in ORDER {
+        for window in desktop_component_specs().iter().map(|spec| spec.window) {
             if Some(window) == active {
                 continue;
             }
@@ -6363,22 +6327,15 @@ impl RobcoNativeApp {
     fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         let menu = ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
-            let entries: Vec<DesktopWindowMenuEntry> = [
-                DesktopWindow::FileManager,
-                DesktopWindow::Editor,
-                DesktopWindow::Settings,
-                DesktopWindow::Applications,
-                DesktopWindow::DonkeyKong,
-                DesktopWindow::NukeCodes,
-                DesktopWindow::PtyApp,
-            ]
-            .into_iter()
-            .map(|window| DesktopWindowMenuEntry {
-                window,
-                open: self.desktop_window_is_open(window),
-                active: self.desktop_active_window == Some(window),
-            })
-            .collect();
+            let entries: Vec<DesktopWindowMenuEntry> = desktop_component_specs()
+                .iter()
+                .filter(|spec| spec.show_in_window_menu)
+                .map(|spec| DesktopWindowMenuEntry {
+                    window: spec.window,
+                    open: self.desktop_window_is_open(spec.window),
+                    active: self.desktop_active_window == Some(spec.window),
+                })
+                .collect();
             let items = build_window_menu_section(
                 &entries,
                 self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
@@ -6838,9 +6795,10 @@ impl RobcoNativeApp {
                     }
                     ui.label(RichText::new("|").monospace().color(Color32::BLACK));
                     ui.add_space(8.0);
-                    let open_windows: Vec<DesktopWindow> = taskbar_window_order()
+                    let open_windows: Vec<DesktopWindow> = desktop_component_specs()
                         .iter()
-                        .copied()
+                        .filter(|spec| spec.show_in_taskbar)
+                        .map(|spec| spec.window)
                         .filter(|window| self.desktop_window_is_open(*window))
                         .collect();
                     let entries = build_taskbar_entries(
