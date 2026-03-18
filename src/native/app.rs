@@ -408,6 +408,20 @@ enum DesktopHeaderAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopWindowRectTracking {
+    FullRect,
+    PositionOnly,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResizableDesktopWindowOptions {
+    min_size: egui::Vec2,
+    default_size: egui::Vec2,
+    default_pos: Option<egui::Pos2>,
+    clamp_restore: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartSubmenu {
     System,
 }
@@ -2097,6 +2111,87 @@ impl RobcoNativeApp {
                 (workspace.bottom() - size.y).max(workspace.top()),
             ),
         )
+    }
+
+    fn build_resizable_desktop_window<'open, Title>(
+        &mut self,
+        ctx: &Context,
+        desktop_window: DesktopWindow,
+        title: Title,
+        open: &'open mut bool,
+        options: ResizableDesktopWindowOptions,
+    ) -> (egui::Window<'open>, bool)
+    where
+        Title: Into<egui::WidgetText>,
+    {
+        let maximized = self.desktop_window_is_maximized(desktop_window);
+        let restore = self.take_desktop_window_restore_dims(desktop_window);
+        let mut window = egui::Window::new(title)
+            .id(self.desktop_window_egui_id(desktop_window))
+            .open(open)
+            .title_bar(false)
+            .frame(Self::desktop_window_frame())
+            .resizable(true)
+            .min_size(options.min_size)
+            .default_size(options.default_size);
+        if let Some(default_pos) = options.default_pos {
+            window = window.default_pos(default_pos);
+        }
+        if maximized {
+            let rect = Self::desktop_workspace_rect(ctx);
+            window = window
+                .movable(false)
+                .resizable(false)
+                .fixed_pos(rect.min)
+                .fixed_size(rect.size());
+        } else if let Some((mut pos, mut size)) = restore {
+            if options.clamp_restore {
+                size = Self::desktop_clamp_window_size(ctx, size, options.min_size);
+                pos = Self::desktop_clamp_window_pos(ctx, pos, size);
+            }
+            window = window.current_pos(pos).default_size(size);
+        }
+        (window, maximized)
+    }
+
+    fn finish_desktop_window_host(
+        &mut self,
+        ctx: &Context,
+        desktop_window: DesktopWindow,
+        open: &mut bool,
+        maximized: bool,
+        shown_rect: Option<egui::Rect>,
+        shown_contains_pointer: bool,
+        rect_tracking: DesktopWindowRectTracking,
+        header_action: DesktopHeaderAction,
+    ) {
+        self.maybe_activate_desktop_window_from_click(ctx, desktop_window, shown_contains_pointer);
+        if !maximized {
+            match rect_tracking {
+                DesktopWindowRectTracking::FullRect => {
+                    if let Some(rect) = shown_rect {
+                        self.note_desktop_window_rect(desktop_window, rect);
+                    }
+                }
+                DesktopWindowRectTracking::PositionOnly => {
+                    if let Some(pos) = shown_rect.map(|rect| rect.min) {
+                        let state = self.desktop_window_state_mut(desktop_window);
+                        state.restore_pos = Some([pos.x, pos.y]);
+                    }
+                }
+            }
+        }
+        match header_action {
+            DesktopHeaderAction::None => {}
+            DesktopHeaderAction::Close => *open = false,
+            DesktopHeaderAction::Minimize => {
+                self.set_desktop_window_minimized(desktop_window, true);
+            }
+            DesktopHeaderAction::ToggleMaximize => {
+                self.toggle_desktop_window_maximized(desktop_window, shown_rect);
+            }
+        }
+        self.update_desktop_window_state(desktop_window, *open);
     }
 
     fn prime_desktop_window_defaults(&mut self, window: DesktopWindow) {
@@ -8772,28 +8867,20 @@ impl RobcoNativeApp {
         }
 
         let mut open = self.editor.open;
-        let maximized = self.desktop_window_is_maximized(DesktopWindow::Editor);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Editor);
         let mut header_action = DesktopHeaderAction::None;
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::Editor,
+            &title,
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(400.0, 300.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::Editor),
+                default_pos: None,
+                clamp_restore: false,
+            },
+        );
         let generation = self.desktop_window_generation(DesktopWindow::Editor);
-        let mut window = egui::Window::new(&title)
-            .id(Id::new(("native_word_processor", generation)))
-            .open(&mut open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size([400.0, 300.0])
-            .default_size([820.0, 560.0]);
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            window = window.current_pos(pos).default_size(size);
-        }
         let text_edit_id = Id::new(("editor_text_edit", generation));
         let shown = window.show(ctx, |ui| {
             // ── HEADER ───────────────────────────────────────────────────────
@@ -8892,27 +8979,16 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        self.maybe_activate_desktop_window_from_click(
+        self.finish_desktop_window_host(
             ctx,
             DesktopWindow::Editor,
+            &mut open,
+            maximized,
+            shown_rect,
             shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
         );
-        if !maximized {
-            if let Some(rect) = shown_rect {
-                self.note_desktop_window_rect(DesktopWindow::Editor, rect);
-            }
-        }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::Editor, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::Editor, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::Editor, open);
     }
 
     fn draw_settings(&mut self, ctx: &Context) {
@@ -9624,32 +9700,16 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        // Context menus are attached to specific content widgets inside the
-        // window closure, not to the outer Area response (which causes
-        // "double use of widget" ID collisions in egui 0.29).
-        self.maybe_activate_desktop_window_from_click(
+        self.finish_desktop_window_host(
             ctx,
             DesktopWindow::Settings,
+            &mut open,
+            maximized,
+            shown_rect,
             shown_contains_pointer,
+            DesktopWindowRectTracking::PositionOnly,
+            header_action,
         );
-        if !maximized {
-            // Only save position, not size — settings window is fixed-size.
-            if let Some(pos) = shown_rect.map(|r| r.min) {
-                let state = self.desktop_window_state_mut(DesktopWindow::Settings);
-                state.restore_pos = Some([pos.x, pos.y]);
-            }
-        }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::Settings, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::Settings, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::Settings, open);
     }
 
     fn draw_settings_default_apps_panel(&mut self, ui: &mut egui::Ui) -> bool {
@@ -11672,28 +11732,19 @@ impl RobcoNativeApp {
         }
         let mut open = self.applications.open;
         let mut close_after_launch = false;
-        let maximized = self.desktop_window_is_maximized(DesktopWindow::Applications);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Applications);
         let mut header_action = DesktopHeaderAction::None;
-        let generation = self.desktop_window_generation(DesktopWindow::Applications);
-        let mut window = egui::Window::new("Applications")
-            .id(Id::new(("native_applications", generation)))
-            .open(&mut open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size([320.0, 250.0])
-            .default_size([420.0, 380.0]);
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            window = window.current_pos(pos).default_size(size);
-        }
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::Applications,
+            "Applications",
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(320.0, 250.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::Applications),
+                default_pos: None,
+                clamp_restore: false,
+            },
+        );
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
             header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
@@ -11756,17 +11807,16 @@ impl RobcoNativeApp {
         if close_after_launch {
             open = false;
         }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::Applications, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::Applications, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::Applications, open);
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::Applications,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
     }
 
     fn draw_desktop_donkey_kong(&mut self, ctx: &Context) {
@@ -11777,28 +11827,19 @@ impl RobcoNativeApp {
         }
         ctx.request_repaint();
         let mut open = self.donkey_kong_window.open;
-        let maximized = self.desktop_window_is_maximized(DesktopWindow::DonkeyKong);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::DonkeyKong);
         let mut header_action = DesktopHeaderAction::None;
-        let generation = self.desktop_window_generation(DesktopWindow::DonkeyKong);
-        let mut window = egui::Window::new(BUILTIN_DONKEY_KONG_GAME)
-            .id(Id::new(("native_donkey_kong", generation)))
-            .open(&mut open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size([560.0, 500.0])
-            .default_size(Self::desktop_default_window_size(DesktopWindow::DonkeyKong));
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            window = window.current_pos(pos).default_size(size);
-        }
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::DonkeyKong,
+            BUILTIN_DONKEY_KONG_GAME,
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(560.0, 500.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::DonkeyKong),
+                default_pos: None,
+                clamp_restore: false,
+            },
+        );
         let theme = self.current_donkey_kong_theme();
         let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
         let input = donkey_kong_input_from_ctx(ctx);
@@ -11825,30 +11866,16 @@ impl RobcoNativeApp {
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        // Context menus are attached to specific content widgets inside the
-        // window closure, not to the outer Area response (which causes
-        // "double use of widget" ID collisions in egui 0.29).
-        self.maybe_activate_desktop_window_from_click(
+        self.finish_desktop_window_host(
             ctx,
             DesktopWindow::DonkeyKong,
+            &mut open,
+            maximized,
+            shown_rect,
             shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
         );
-        if !maximized {
-            if let Some(rect) = shown_rect {
-                self.note_desktop_window_rect(DesktopWindow::DonkeyKong, rect);
-            }
-        }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::DonkeyKong, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::DonkeyKong, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::DonkeyKong, open);
     }
 
     fn draw_nuke_codes_window(&mut self, ctx: &Context) {
@@ -11858,29 +11885,20 @@ impl RobcoNativeApp {
             return;
         }
         let mut open = self.desktop_nuke_codes_open;
-        let maximized = self.desktop_window_is_maximized(DesktopWindow::NukeCodes);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::NukeCodes);
         let mut header_action = DesktopHeaderAction::None;
         let mut refresh = false;
-        let generation = self.desktop_window_generation(DesktopWindow::NukeCodes);
-        let mut window = egui::Window::new("Nuke Codes")
-            .id(Id::new(("native_nuke_codes", generation)))
-            .open(&mut open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size([300.0, 200.0])
-            .default_size([480.0, 260.0]);
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            window = window.current_pos(pos).default_size(size);
-        }
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::NukeCodes,
+            "Nuke Codes",
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(300.0, 200.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::NukeCodes),
+                default_pos: None,
+                clamp_restore: false,
+            },
+        );
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
             header_action = Self::draw_desktop_window_header(ui, "Nuke Codes", maximized);
@@ -11922,64 +11940,50 @@ impl RobcoNativeApp {
         if refresh {
             self.terminal_nuke_codes = fetch_nuke_codes();
         }
-        if !maximized {
-            if let Some(rect) = shown_rect {
-                self.note_desktop_window_rect(DesktopWindow::NukeCodes, rect);
-            }
-        }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::NukeCodes, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::NukeCodes, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::NukeCodes, open);
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::NukeCodes,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
     }
 
     fn draw_desktop_pty_window(&mut self, ctx: &Context) {
         if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
             return;
         }
-        let maximized = self.desktop_window_is_maximized(DesktopWindow::PtyApp);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::PtyApp);
-        let generation = self.desktop_window_generation(DesktopWindow::PtyApp);
         let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
         let pty_focused = self.desktop_active_window == Some(DesktopWindow::PtyApp);
+        let Some(pty_state) = self.terminal_pty.as_ref() else {
+            self.update_desktop_window_state(DesktopWindow::PtyApp, false);
+            return;
+        };
+        let title = pty_state.title.clone();
+        let min_size = Self::native_pty_window_min_size(pty_state);
+        let mut open = true;
+        let mut header_action = DesktopHeaderAction::None;
+        let mut event = PtyScreenEvent::None;
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::PtyApp,
+            title.clone(),
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size,
+                default_size,
+                default_pos: Some(default_pos),
+                clamp_restore: true,
+            },
+        );
         let Some(state) = self.terminal_pty.as_mut() else {
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
             return;
         };
-        let mut open = true;
-        let mut header_action = DesktopHeaderAction::None;
-        let title = state.title.clone();
-        let mut event = PtyScreenEvent::None;
-        let min_size = Self::native_pty_window_min_size(state);
-        let mut window = egui::Window::new(title.clone())
-            .id(Id::new(("native_desktop_pty", generation)))
-            .open(&mut open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size(min_size)
-            .default_pos(default_pos)
-            .default_size(default_size);
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((pos, size)) = restore {
-            let size = Self::desktop_clamp_window_size(ctx, size, min_size);
-            let pos = Self::desktop_clamp_window_pos(ctx, pos, size);
-            window = window.current_pos(pos).default_size(size);
-        }
         let shown = window.show(ctx, |ui| {
             // NOTE: do NOT call apply_settings_control_style here — it changes
             // extreme_bg_color and margins, which destabilizes available_size()
@@ -12048,18 +12052,16 @@ impl RobcoNativeApp {
         if let Some(plan) = desktop_exit_plan {
             self.apply_terminal_desktop_pty_exit_plan(plan);
         }
-
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(DesktopWindow::PtyApp, true)
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(DesktopWindow::PtyApp, shown_rect)
-            }
-        }
-        self.update_desktop_window_state(DesktopWindow::PtyApp, open);
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::PtyApp,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
     }
 
     fn draw_terminal_mode(&mut self, ctx: &Context) {
@@ -13158,6 +13160,35 @@ mod tests {
         assert!(!state.minimized);
         assert!(!state.user_resized);
         assert_ne!(state.generation, 5);
+    }
+
+    #[test]
+    fn shared_desktop_window_host_tracks_position_only_and_handles_minimize() {
+        let mut app = RobcoNativeApp::default();
+        app.settings.open = true;
+        let state = app.desktop_window_state_mut(DesktopWindow::Settings);
+        state.restore_size = Some([760.0, 500.0]);
+        let mut open = true;
+
+        app.finish_desktop_window_host(
+            &Context::default(),
+            DesktopWindow::Settings,
+            &mut open,
+            false,
+            Some(egui::Rect::from_min_size(
+                egui::pos2(32.0, 48.0),
+                egui::vec2(760.0, 500.0),
+            )),
+            false,
+            DesktopWindowRectTracking::PositionOnly,
+            DesktopHeaderAction::Minimize,
+        );
+
+        let state = app.desktop_window_state(DesktopWindow::Settings);
+        assert!(open);
+        assert_eq!(state.restore_pos, Some([32.0, 48.0]));
+        assert_eq!(state.restore_size, Some([760.0, 500.0]));
+        assert!(app.desktop_window_is_minimized(DesktopWindow::Settings));
     }
 
     #[test]
