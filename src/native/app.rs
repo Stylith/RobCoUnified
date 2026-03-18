@@ -690,6 +690,7 @@ pub struct RobcoNativeApp {
     last_native_appearance: Option<NativeAppearanceKey>,
     startup_profile_session_logged: bool,
     startup_profile_desktop_logged: bool,
+    repaint_trace_last_pass: u64,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
     // Spotlight search
     spotlight_open: bool,
@@ -838,6 +839,7 @@ impl Default for RobcoNativeApp {
             last_native_appearance: None,
             startup_profile_session_logged: false,
             startup_profile_desktop_logged: false,
+            repaint_trace_last_pass: 0,
             appearance_tab: 0,
             spotlight_open: false,
             spotlight_query: String::new(),
@@ -903,6 +905,58 @@ impl RobcoNativeApp {
             Self::append_startup_profile_marker("desktop_ready");
             self.startup_profile_desktop_logged = true;
         }
+    }
+
+    fn maybe_trace_repaint_causes(&mut self, ctx: &Context) {
+        let Some(path) = std::env::var_os("ROBCOS_REPAINT_TRACE_LOG") else {
+            return;
+        };
+        let pass = ctx.cumulative_pass_nr();
+        if pass == 0 || pass == self.repaint_trace_last_pass {
+            return;
+        }
+        self.repaint_trace_last_pass = pass;
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        else {
+            return;
+        };
+        let timestamp_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let causes = ctx.repaint_causes();
+        let cause_text = if causes.is_empty() {
+            "none".to_string()
+        } else {
+            causes
+                .into_iter()
+                .map(|cause| cause.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        let requested = ctx.has_requested_repaint();
+        let input_summary = ctx.input(|input| {
+            format!(
+                "events={} pointer_delta=({:.2},{:.2}) motion={:?} latest_pos={:?}",
+                input.events.len(),
+                input.pointer.delta().x,
+                input.pointer.delta().y,
+                input.pointer.motion(),
+                input.pointer.latest_pos(),
+            )
+        });
+        let mode = if self.desktop_mode_open {
+            "desktop"
+        } else {
+            "terminal"
+        };
+        let _ = writeln!(
+            file,
+            "{timestamp_ms} pass={pass} mode={mode} requested={requested} causes={cause_text} input={input_summary}"
+        );
     }
 
     fn sync_runtime_settings_cache(&mut self) {
@@ -11864,6 +11918,7 @@ impl eframe::App for RobcoNativeApp {
         }
 
         self.maybe_write_startup_profile_markers();
+        self.maybe_trace_repaint_causes(ctx);
 
         if self.session.is_none() {
             self.draw_terminal_status_bar(ctx);

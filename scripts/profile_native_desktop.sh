@@ -4,6 +4,7 @@ set -euo pipefail
 BINARY_PATH="${1:-/Users/hal-9000/RobCoUnified/target/release/robcos-native}"
 PROFILE_DIR="$(mktemp -d /tmp/robcos-profile.XXXXXX)"
 LOG_FILE="$PROFILE_DIR/startup.log"
+REPAINT_LOG="$PROFILE_DIR/repaint.log"
 APP_LOG="/tmp/robcos-profile-run.log"
 
 mkdir -p "$PROFILE_DIR/users"
@@ -17,6 +18,7 @@ START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
 ROBCOS_BASE_DIR="$PROFILE_DIR" \
 ROBCOS_AUTOLOGIN_USER=profile \
 ROBCOS_STARTUP_PROFILE_LOG="$LOG_FILE" \
+ROBCOS_REPAINT_TRACE_LOG="$REPAINT_LOG" \
 "$BINARY_PATH" >"$APP_LOG" 2>&1 &
 PID=$!
 
@@ -75,6 +77,13 @@ else
   echo "MISSING_LOG"
 fi
 printf 'STARTUP_LOG_END\n'
+printf 'REPAINT_LOG_BEGIN\n'
+if [[ -f "$REPAINT_LOG" ]]; then
+  tail -n 40 "$REPAINT_LOG"
+else
+  echo "MISSING_REPAINT_LOG"
+fi
+printf 'REPAINT_LOG_END\n'
 printf 'APP_LOG_BEGIN\n'
 if [[ -f "$APP_LOG" ]]; then
   tail -n 40 "$APP_LOG"
