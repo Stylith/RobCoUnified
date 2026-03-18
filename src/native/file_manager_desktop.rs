@@ -194,14 +194,6 @@ impl FileManagerDesktopViewModel {
         self.tabs.len() > 1
     }
 
-    pub fn search_label(&self) -> &'static str {
-        if self.search_query.is_empty() {
-            "Search: (Ctrl+F)"
-        } else {
-            "Search:"
-        }
-    }
-
     pub fn grid_columns(&self, available_width: f32, tile_width: f32) -> usize {
         ((available_width / tile_width).floor() as usize).max(1)
     }
@@ -406,7 +398,6 @@ mod tests {
         assert_eq!(model.search_query, "");
         assert_eq!(model.status.view_label, "Grid View");
         assert_eq!(model.status.tree_label, "Tree On");
-        assert_eq!(model.search_label(), "Search: (Ctrl+F)");
         assert!(model.close_tab_enabled());
         assert_eq!(model.grid_columns(301.0, 150.0), 2);
         assert!(!model.tabs.is_empty());

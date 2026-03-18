@@ -348,7 +348,7 @@ impl RobcoNativeApp {
         ui: &mut egui::Ui,
         generation: u64,
         maximized: bool,
-        save_picker_mode: bool,
+        _save_picker_mode: bool,
         desktop_model: &file_manager_desktop::FileManagerDesktopViewModel,
         search_id: &Id,
         header_action: &mut DesktopHeaderAction,
@@ -356,91 +356,75 @@ impl RobcoNativeApp {
         let palette = current_palette();
         egui::TopBottomPanel::top(Id::new(("fm_top", generation)))
             .frame(egui::Frame::none())
-            .exact_height(136.0)
+            .exact_height(118.0)
             .show_inside(ui, |ui| {
                 *header_action =
                     Self::draw_desktop_window_header(ui, FILE_MANAGER_APP_TITLE, maximized);
 
                 if let Some(banner) = desktop_model.action_mode.banner() {
-                    ui.colored_label(palette.fg, banner);
+                    egui::Frame::none()
+                        .stroke(egui::Stroke::new(1.0, palette.fg))
+                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                        .show(ui, |ui| {
+                            ui.colored_label(palette.fg, banner);
+                        });
+                    ui.add_space(4.0);
                 }
 
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Tabs").strong());
-                    for (idx, tab) in desktop_model.tabs.iter().enumerate() {
-                        let title = Self::truncate_file_manager_label(&tab.title, 12);
-                        let response = Self::retro_file_manager_button(
-                            ui,
-                            &palette,
-                            format!(
-                                "[{}:{}{}]",
-                                idx + 1,
-                                title,
-                                if tab.active { "*" } else { "" }
-                            ),
-                            egui::vec2(132.0, 28.0),
-                            tab.active,
-                            false,
-                        );
-                        if response.clicked() {
-                            let _ = self.file_manager.switch_to_tab(idx);
-                        }
-                    }
-                    if ui.button("+").clicked() {
-                        self.run_file_manager_command(FileManagerCommand::NewTab);
-                    }
-                    let close_tab = if desktop_model.close_tab_enabled() {
-                        ui.button("x")
-                    } else {
-                        Self::retro_disabled_button(ui, "x")
-                    };
-                    if close_tab.clicked() {
-                        self.run_file_manager_command(FileManagerCommand::CloseTab);
-                    }
-                });
-
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Drives").strong());
-                    for drive in &desktop_model.drives {
-                        let response = Self::retro_file_manager_button(
-                            ui,
-                            &palette,
-                            drive.label.clone(),
-                            egui::vec2(120.0, 26.0),
-                            drive.active,
-                            true,
-                        );
-                        let drop_hover = !save_picker_mode
-                            && response
-                                .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                                .is_some_and(|payload| {
-                                    Self::file_manager_drop_allowed(&payload.paths, &drive.path)
-                                });
-                        if drop_hover {
-                            ui.painter().rect_stroke(
-                                response.rect,
-                                0.0,
-                                egui::Stroke::new(2.0, palette.fg),
-                            );
-                        }
-                        if response.clicked() {
-                            self.file_manager
-                                .open_selected_tree_path(drive.path.clone());
-                        }
-                        if let Some(payload) =
-                            response.dnd_release_payload::<NativeFileManagerDragPayload>()
-                        {
-                            if !save_picker_mode
-                                && Self::file_manager_drop_allowed(&payload.paths, &drive.path)
-                            {
-                                self.file_manager_handle_drop_to_dir(
-                                    payload.paths.clone(),
-                                    drive.path.clone(),
+                egui::Frame::none()
+                    .stroke(egui::Stroke::new(1.0, palette.fg))
+                    .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for (idx, tab) in desktop_model.tabs.iter().enumerate() {
+                                let title = Self::truncate_file_manager_label(&tab.title, 12);
+                                let response = Self::retro_file_manager_button(
+                                    ui,
+                                    &palette,
+                                    format!(
+                                        "[{}:{}{}]",
+                                        idx + 1,
+                                        title,
+                                        if tab.active { "*" } else { "" }
+                                    ),
+                                    egui::vec2(126.0, 28.0),
+                                    tab.active,
+                                    true,
                                 );
+                                if response.clicked() {
+                                    let _ = self.file_manager.switch_to_tab(idx);
+                                }
                             }
-                        }
-                    }
-                });
+                            let new_tab = Self::retro_file_manager_button(
+                                ui,
+                                &palette,
+                                "+",
+                                egui::vec2(30.0, 28.0),
+                                false,
+                                true,
+                            );
+                            if new_tab.clicked() {
+                                self.run_file_manager_command(FileManagerCommand::NewTab);
+                            }
+                            let close_tab = if desktop_model.close_tab_enabled() {
+                                Self::retro_file_manager_button(
+                                    ui,
+                                    &palette,
+                                    "x",
+                                    egui::vec2(30.0, 28.0),
+                                    false,
+                                    true,
+                                )
+                            } else {
+                                Self::retro_disabled_button(ui, "x")
+                            };
+                            if close_tab.clicked() {
+                                self.run_file_manager_command(FileManagerCommand::CloseTab);
+                            }
+                        });
+                    });
+
+                ui.add_space(4.0);
 
                 let search_requested = self.desktop_active_window
                     == Some(DesktopWindow::FileManager)
@@ -450,52 +434,95 @@ impl RobcoNativeApp {
                 }
 
                 let mut search_query = desktop_model.search_query.clone();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(desktop_model.search_label()).strong());
-                    let search_width = (ui.available_width() - 240.0).max(180.0);
-                    let search = ui.add_sized(
-                        [search_width, 0.0],
-                        TextEdit::singleline(&mut search_query)
-                            .id(search_id.clone())
-                            .hint_text("filter files and folders"),
-                    );
-                    if search.changed() {
-                        self.file_manager.update_search_query(search_query.clone());
-                    }
-                    ui.add_space(8.0);
-                    let tree_on = desktop_model.show_tree_panel;
-                    let list_on = desktop_model.view_mode == FileManagerViewMode::List;
-                    let grid_on = desktop_model.view_mode == FileManagerViewMode::Grid;
-                    let sel_color = |on: bool| if on { Color32::BLACK } else { palette.fg };
-                    if ui
-                        .selectable_label(tree_on, RichText::new("Tree").color(sel_color(tree_on)))
-                        .clicked()
-                    {
-                        self.run_file_manager_command(FileManagerCommand::ToggleTreePanel);
-                    }
-                    if ui
-                        .selectable_label(list_on, RichText::new("List").color(sel_color(list_on)))
-                        .clicked()
-                    {
-                        self.run_file_manager_command(FileManagerCommand::SetViewMode(
-                            FileManagerViewMode::List,
-                        ));
-                    }
-                    if ui
-                        .selectable_label(grid_on, RichText::new("Grid").color(sel_color(grid_on)))
-                        .clicked()
-                    {
-                        self.run_file_manager_command(FileManagerCommand::SetViewMode(
-                            FileManagerViewMode::Grid,
-                        ));
-                    }
-                });
+                egui::Frame::none()
+                    .stroke(egui::Stroke::new(1.0, palette.fg))
+                    .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            Self::apply_installer_dropdown_style(ui, palette);
+                            egui::ComboBox::from_id_salt(("fm_drive_picker", generation))
+                                .width(160.0)
+                                .selected_text(
+                                    desktop_model
+                                        .current_drive_label
+                                        .as_deref()
+                                        .unwrap_or("Drive"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    Self::apply_installer_dropdown_style(ui, palette);
+                                    for drive in &desktop_model.drives {
+                                        if ui
+                                            .selectable_label(drive.active, &drive.label)
+                                            .clicked()
+                                        {
+                                            self.file_manager
+                                                .open_selected_tree_path(drive.path.clone());
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
 
-                if let Some(drive) = &desktop_model.current_drive_label {
-                    ui.label(RichText::new(format!("Drive: {drive}")).strong());
-                }
-                ui.label(RichText::new(&desktop_model.path_label).strong());
-                ui.separator();
+                            let search_width = (ui.available_width() - 190.0).max(180.0);
+                            let search = ui.add_sized(
+                                [search_width, 28.0],
+                                TextEdit::singleline(&mut search_query)
+                                    .id(search_id.clone())
+                                    .hint_text("filter files and folders"),
+                            );
+                            if search.changed() {
+                                self.file_manager.update_search_query(search_query.clone());
+                            }
+
+                            let tree_toggle = Self::retro_file_manager_button(
+                                ui,
+                                &palette,
+                                "Tree",
+                                egui::vec2(56.0, 28.0),
+                                desktop_model.show_tree_panel,
+                                true,
+                            );
+                            if tree_toggle.clicked() {
+                                self.run_file_manager_command(FileManagerCommand::ToggleTreePanel);
+                            }
+
+                            let list_toggle = Self::retro_file_manager_button(
+                                ui,
+                                &palette,
+                                "List",
+                                egui::vec2(56.0, 28.0),
+                                desktop_model.view_mode == FileManagerViewMode::List,
+                                true,
+                            );
+                            if list_toggle.clicked() {
+                                self.run_file_manager_command(FileManagerCommand::SetViewMode(
+                                    FileManagerViewMode::List,
+                                ));
+                            }
+
+                            let grid_toggle = Self::retro_file_manager_button(
+                                ui,
+                                &palette,
+                                "Grid",
+                                egui::vec2(56.0, 28.0),
+                                desktop_model.view_mode == FileManagerViewMode::Grid,
+                                true,
+                            );
+                            if grid_toggle.clicked() {
+                                self.run_file_manager_command(FileManagerCommand::SetViewMode(
+                                    FileManagerViewMode::Grid,
+                                ));
+                            }
+                        });
+                    });
+
+                ui.add_space(4.0);
+
+                egui::Frame::none()
+                    .stroke(egui::Stroke::new(1.0, palette.fg))
+                    .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(&desktop_model.path_label).strong());
+                    });
             });
     }
 
@@ -671,6 +698,7 @@ impl RobcoNativeApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show_inside(ui, |ui| {
+                let content_drop_target = self.file_manager.cwd.clone();
                 if desktop_model.rows.is_empty() {
                     ui.label("No files match the current search.");
                     return;
@@ -682,7 +710,7 @@ impl RobcoNativeApp {
                             .show(ui, |ui| {
                                 for row in &desktop_model.rows {
                                     let selected = self.file_manager.is_path_selected(&row.path);
-                                    let preview = self.svg_preview_texture(row);
+                                    let preview = self.svg_preview_texture(ctx, row);
                                     let response = Self::retro_file_manager_item(
                                         ui,
                                         &palette,
@@ -711,8 +739,39 @@ impl RobcoNativeApp {
                                     ui.available_rect_before_wrap(),
                                     egui::Sense::click(),
                                 );
+                                let drop_hover = !save_picker_mode
+                                    && background
+                                        .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                                        .is_some_and(|payload| {
+                                            Self::file_manager_drop_allowed(
+                                                &payload.paths,
+                                                &content_drop_target,
+                                            )
+                                        });
+                                if drop_hover {
+                                    ui.painter().rect_stroke(
+                                        background.rect,
+                                        0.0,
+                                        egui::Stroke::new(2.0, palette.fg),
+                                    );
+                                }
                                 if background.clicked() && !save_picker_mode {
                                     self.file_manager.clear_multi_selection();
+                                }
+                                if let Some(payload) =
+                                    background.dnd_release_payload::<NativeFileManagerDragPayload>()
+                                {
+                                    if !save_picker_mode
+                                        && Self::file_manager_drop_allowed(
+                                            &payload.paths,
+                                            &content_drop_target,
+                                        )
+                                    {
+                                        self.file_manager_handle_drop_to_dir(
+                                            payload.paths.clone(),
+                                            content_drop_target.clone(),
+                                        );
+                                    }
                                 }
                                 Self::attach_file_manager_context_menu(
                                     &mut self.context_menu_action,
@@ -741,7 +800,7 @@ impl RobcoNativeApp {
                                                 let label = Self::truncate_file_manager_label(
                                                     &row.label, 16,
                                                 );
-                                                let preview = self.svg_preview_texture(row);
+                                                let preview = self.svg_preview_texture(ctx, row);
                                                 let response = Self::retro_file_manager_item(
                                                     ui,
                                                     &palette,
@@ -773,8 +832,39 @@ impl RobcoNativeApp {
                                     ui.available_rect_before_wrap(),
                                     egui::Sense::click(),
                                 );
+                                let drop_hover = !save_picker_mode
+                                    && background
+                                        .dnd_hover_payload::<NativeFileManagerDragPayload>()
+                                        .is_some_and(|payload| {
+                                            Self::file_manager_drop_allowed(
+                                                &payload.paths,
+                                                &content_drop_target,
+                                            )
+                                        });
+                                if drop_hover {
+                                    ui.painter().rect_stroke(
+                                        background.rect,
+                                        0.0,
+                                        egui::Stroke::new(2.0, palette.fg),
+                                    );
+                                }
                                 if background.clicked() && !save_picker_mode {
                                     self.file_manager.clear_multi_selection();
+                                }
+                                if let Some(payload) =
+                                    background.dnd_release_payload::<NativeFileManagerDragPayload>()
+                                {
+                                    if !save_picker_mode
+                                        && Self::file_manager_drop_allowed(
+                                            &payload.paths,
+                                            &content_drop_target,
+                                        )
+                                    {
+                                        self.file_manager_handle_drop_to_dir(
+                                            payload.paths.clone(),
+                                            content_drop_target.clone(),
+                                        );
+                                    }
                                 }
                                 Self::attach_file_manager_context_menu(
                                     &mut self.context_menu_action,

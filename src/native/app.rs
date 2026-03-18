@@ -275,16 +275,16 @@ struct AssetCache {
     icon_edit_menus: Option<TextureHandle>,
     icon_user_management: Option<TextureHandle>,
     icon_about: Option<TextureHandle>,
-    icon_folder: TextureHandle,
-    icon_folder_open: TextureHandle,
-    icon_file: TextureHandle,
-    icon_text: TextureHandle,
-    icon_image: TextureHandle,
-    icon_audio: TextureHandle,
-    icon_video: TextureHandle,
-    icon_archive: TextureHandle,
-    icon_app: TextureHandle,
-    icon_shortcut_badge: TextureHandle,
+    icon_folder: Option<TextureHandle>,
+    icon_folder_open: Option<TextureHandle>,
+    icon_file: Option<TextureHandle>,
+    icon_text: Option<TextureHandle>,
+    icon_image: Option<TextureHandle>,
+    icon_audio: Option<TextureHandle>,
+    icon_video: Option<TextureHandle>,
+    icon_archive: Option<TextureHandle>,
+    icon_app: Option<TextureHandle>,
+    icon_shortcut_badge: Option<TextureHandle>,
     icon_gaming: Option<TextureHandle>,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
@@ -1296,70 +1296,31 @@ impl RobcoNativeApp {
             icon_edit_menus: None,
             icon_user_management: None,
             icon_about: None,
-            icon_folder: Self::load_svg_icon(
-                ctx,
-                "icon_folder",
-                include_bytes!("../Icons/pixel--folder-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_folder_open: Self::load_svg_icon(
-                ctx,
-                "icon_folder_open",
-                include_bytes!("../Icons/pixel--folder-open-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_file: Self::load_svg_icon(
-                ctx,
-                "icon_file",
-                include_bytes!("../Icons/pixel--clipboard-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_text: Self::load_svg_icon(
-                ctx,
-                "icon_text",
-                include_bytes!("../Icons/pixel--newspaper-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_image: Self::load_svg_icon(
-                ctx,
-                "icon_image",
-                include_bytes!("../Icons/pixel--image-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_audio: Self::load_svg_icon(
-                ctx,
-                "icon_audio",
-                include_bytes!("../Icons/pixel--music-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_video: Self::load_svg_icon(
-                ctx,
-                "icon_video",
-                include_bytes!("../Icons/pixel--media.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_archive: Self::load_svg_icon(
-                ctx,
-                "icon_archive",
-                include_bytes!("../Icons/pixel--save-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_app: Self::load_svg_icon(
-                ctx,
-                "icon_app",
-                include_bytes!("../Icons/pixel--programming.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_shortcut_badge: Self::load_svg_icon(
-                ctx,
-                "icon_shortcut_badge",
-                include_bytes!("../Icons/pixel--external-link-solid.svg"),
-                Some(16),
-            ),
+            icon_folder: None,
+            icon_folder_open: None,
+            icon_file: None,
+            icon_text: None,
+            icon_image: None,
+            icon_audio: None,
+            icon_video: None,
+            icon_archive: None,
+            icon_app: None,
+            icon_shortcut_badge: None,
             icon_gaming: None,
             wallpaper: None,
             wallpaper_loaded_for: String::new(),
         }
+    }
+
+    fn ensure_cached_svg_icon(
+        slot: &mut Option<TextureHandle>,
+        ctx: &Context,
+        id: &str,
+        svg_bytes: &[u8],
+        size_px: Option<u32>,
+    ) -> TextureHandle {
+        slot.get_or_insert_with(|| Self::load_svg_icon(ctx, id, svg_bytes, size_px))
+            .clone()
     }
 
     fn sync_wallpaper(&mut self, ctx: &Context) {
@@ -2282,15 +2243,28 @@ impl RobcoNativeApp {
     }
 
     fn file_manager_texture_for_row(
-        &self,
+        &mut self,
+        ctx: &Context,
         row: &super::file_manager::FileEntryRow,
-    ) -> Option<&TextureHandle> {
-        let cache = self.asset_cache.as_ref()?;
+    ) -> Option<TextureHandle> {
+        let cache = self.asset_cache.as_mut()?;
         if row.is_parent_dir() {
-            return Some(&cache.icon_folder_open);
+            return Some(Self::ensure_cached_svg_icon(
+                &mut cache.icon_folder_open,
+                ctx,
+                "icon_folder_open",
+                include_bytes!("../Icons/pixel--folder-open-solid.svg"),
+                Some(64),
+            ));
         }
         if row.is_dir {
-            return Some(&cache.icon_folder);
+            return Some(Self::ensure_cached_svg_icon(
+                &mut cache.icon_folder,
+                ctx,
+                "icon_folder",
+                include_bytes!("../Icons/pixel--folder-solid.svg"),
+                Some(64),
+            ));
         }
         let extension = row
             .path
@@ -2301,15 +2275,61 @@ impl RobcoNativeApp {
         Some(match extension.as_str() {
             "txt" | "md" | "log" | "toml" | "yaml" | "yml" | "json" | "cfg" | "ini" | "conf"
             | "ron" | "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "hpp" | "sh" | "bash"
-            | "fish" | "lua" | "rb" => &cache.icon_text,
-            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => &cache.icon_image,
-            "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" => &cache.icon_audio,
-            "mp4" | "mkv" | "avi" | "mov" | "webm" => &cache.icon_video,
-            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => &cache.icon_archive,
-            "exe" | "bin" | "appimage" | "dmg" | "deb" | "rpm" | "app" | "bat" | "cmd" => {
-                &cache.icon_app
+            | "fish" | "lua" | "rb" => Self::ensure_cached_svg_icon(
+                &mut cache.icon_text,
+                ctx,
+                "icon_text",
+                include_bytes!("../Icons/pixel--newspaper-solid.svg"),
+                Some(64),
+            ),
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => {
+                Self::ensure_cached_svg_icon(
+                    &mut cache.icon_image,
+                    ctx,
+                    "icon_image",
+                    include_bytes!("../Icons/pixel--image-solid.svg"),
+                    Some(64),
+                )
             }
-            _ => &cache.icon_file,
+            "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" => Self::ensure_cached_svg_icon(
+                &mut cache.icon_audio,
+                ctx,
+                "icon_audio",
+                include_bytes!("../Icons/pixel--music-solid.svg"),
+                Some(64),
+            ),
+            "mp4" | "mkv" | "avi" | "mov" | "webm" => Self::ensure_cached_svg_icon(
+                &mut cache.icon_video,
+                ctx,
+                "icon_video",
+                include_bytes!("../Icons/pixel--media.svg"),
+                Some(64),
+            ),
+            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => {
+                Self::ensure_cached_svg_icon(
+                    &mut cache.icon_archive,
+                    ctx,
+                    "icon_archive",
+                    include_bytes!("../Icons/pixel--save-solid.svg"),
+                    Some(64),
+                )
+            }
+            "exe" | "bin" | "appimage" | "dmg" | "deb" | "rpm" | "app" | "bat" | "cmd" => {
+                Self::ensure_cached_svg_icon(
+                    &mut cache.icon_app,
+                    ctx,
+                    "icon_app",
+                    include_bytes!("../Icons/pixel--programming.svg"),
+                    Some(64),
+                )
+            }
+            _ => Self::ensure_cached_svg_icon(
+                &mut cache.icon_file,
+                ctx,
+                "icon_file",
+                include_bytes!("../Icons/pixel--clipboard-solid.svg"),
+                Some(64),
+            ),
         })
     }
 
@@ -2332,7 +2352,8 @@ impl RobcoNativeApp {
     /// Returns the SVG preview from cache if available, otherwise the default asset icon.
     /// Returns an owned TextureHandle (Arc clone) so callers don't borrow self across &mut calls.
     fn svg_preview_texture(
-        &self,
+        &mut self,
+        ctx: &Context,
         row: &super::file_manager::FileEntryRow,
     ) -> Option<TextureHandle> {
         let is_svg = row
@@ -2347,7 +2368,7 @@ impl RobcoNativeApp {
                 return Some(tex.clone());
             }
         }
-        self.file_manager_texture_for_row(row).cloned()
+        self.file_manager_texture_for_row(ctx, row)
     }
 
     fn load_cached_shortcut_icon(
@@ -2937,19 +2958,50 @@ impl RobcoNativeApp {
     }
 
     fn draw_desktop_icons(&mut self, ui: &mut egui::Ui) {
-        let Some(cache) = self.asset_cache.as_ref() else {
-            return;
+        let (
+            tex_file_manager,
+            tex_editor,
+            tex_installer,
+            tex_settings,
+            tex_nuke_codes,
+            tex_terminal,
+            tex_connections,
+        ) = {
+            let Some(cache) = self.asset_cache.as_ref() else {
+                return;
+            };
+            (
+                cache.icon_file_manager.clone(),
+                cache.icon_editor.clone(),
+                cache.icon_installer.clone(),
+                cache.icon_settings.clone(),
+                cache.icon_nuke_codes.clone(),
+                cache.icon_terminal.clone(),
+                cache.icon_connections.clone(),
+            )
         };
-        // Clone all needed textures upfront so we release the cache borrow
-        let tex_file_manager = cache.icon_file_manager.clone();
-        let tex_editor = cache.icon_editor.clone();
-        let tex_installer = cache.icon_installer.clone();
-        let tex_settings = cache.icon_settings.clone();
-        let tex_nuke_codes = cache.icon_nuke_codes.clone();
-        let tex_terminal = cache.icon_terminal.clone();
-        let tex_shortcut_badge = cache.icon_shortcut_badge.clone();
-        let tex_app = cache.icon_app.clone();
-        let tex_connections = cache.icon_connections.clone();
+        let tex_shortcut_badge = Self::ensure_cached_svg_icon(
+            &mut self
+                .asset_cache
+                .as_mut()
+                .expect("desktop asset cache")
+                .icon_shortcut_badge,
+            ui.ctx(),
+            "icon_shortcut_badge",
+            include_bytes!("../Icons/pixel--external-link-solid.svg"),
+            Some(16),
+        );
+        let tex_app = Self::ensure_cached_svg_icon(
+            &mut self
+                .asset_cache
+                .as_mut()
+                .expect("desktop asset cache")
+                .icon_app,
+            ui.ctx(),
+            "icon_app",
+            include_bytes!("../Icons/pixel--programming.svg"),
+            Some(64),
+        );
 
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
@@ -3142,8 +3194,8 @@ impl RobcoNativeApp {
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    if let Some(texture) = self.file_manager_texture_for_row(&row) {
-                        Self::paint_tinted_texture(ui.painter(), texture, icon_rect, icon_fg);
+                    if let Some(texture) = self.file_manager_texture_for_row(ui.ctx(), &row) {
+                        Self::paint_tinted_texture(ui.painter(), &texture, icon_rect, icon_fg);
                     }
                 }
                 DesktopIconStyle::NoIcons => {}
