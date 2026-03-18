@@ -462,7 +462,12 @@ impl RobcoNativeApp {
                                     }
                                 });
 
-                            let search_width = (ui.available_width() - 190.0).max(180.0);
+                            let fixed_controls_width = 160.0
+                                + (56.0 * 3.0)
+                                + (ui.spacing().item_spacing.x * 5.0)
+                                + 16.0;
+                            let search_width =
+                                (ui.available_width() - fixed_controls_width).clamp(180.0, 420.0);
                             let search = ui.add_sized(
                                 [search_width, 28.0],
                                 TextEdit::singleline(&mut search_query)
