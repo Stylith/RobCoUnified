@@ -199,6 +199,10 @@ fn terminal_settings_rows_for_panel(
                     crate::config::OpenMode::Desktop => "Desktop",
                 }
             ),
+            format!(
+                "Startup Window Mode: {} [choose]",
+                draft.native_startup_window_mode.label()
+            ),
             format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
             format!(
                 "System Sound Volume: {}% [adjust]",

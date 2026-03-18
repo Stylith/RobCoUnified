@@ -4,7 +4,8 @@ use robcos_native_services::desktop_default_apps_service::{
 use robcos_native_services::desktop_user_service::sorted_usernames;
 use robcos_native_terminal_app::{SettingsChoiceKind, SettingsChoiceOverlay};
 use robcos_shared::config::{
-    CliAcsMode, DesktopCliProfiles, DesktopPtyProfileSettings, OpenMode, Settings,
+    CliAcsMode, DesktopCliProfiles, DesktopPtyProfileSettings, NativeStartupWindowMode, OpenMode,
+    Settings,
     CUSTOM_THEME_NAME, THEMES,
 };
 use robcos_shared::connections::macos_connections_disabled;
@@ -104,6 +105,7 @@ enum SettingsRowId {
     CustomThemeBlue,
     BorderGlyphs,
     DefaultOpenMode,
+    StartupWindowMode,
     Connections,
     EditMenus,
     DefaultApps,
@@ -364,6 +366,13 @@ pub fn handle_settings_activation(
             ));
             TerminalSettingsEvent::None
         }
+        SettingsRowId::StartupWindowMode => {
+            *choice_overlay = Some(open_settings_choice(
+                draft,
+                SettingsChoiceKind::StartupWindowMode,
+            ));
+            TerminalSettingsEvent::None
+        }
         SettingsRowId::Connections => TerminalSettingsEvent::OpenConnections,
         SettingsRowId::EditMenus => TerminalSettingsEvent::OpenEditMenus,
         SettingsRowId::DefaultApps => TerminalSettingsEvent::OpenDefaultApps,
@@ -389,6 +398,11 @@ pub fn open_settings_choice(draft: &Settings, kind: SettingsChoiceKind) -> Setti
             OpenMode::Terminal => 0,
             OpenMode::Desktop => 1,
         },
+        SettingsChoiceKind::StartupWindowMode => match draft.native_startup_window_mode {
+            NativeStartupWindowMode::Maximized => 0,
+            NativeStartupWindowMode::Windowed => 1,
+            NativeStartupWindowMode::Fullscreen => 2,
+        },
     };
     SettingsChoiceOverlay { kind, selected }
 }
@@ -397,6 +411,11 @@ pub fn settings_choice_items(kind: SettingsChoiceKind) -> Vec<String> {
     match kind {
         SettingsChoiceKind::Theme => THEMES.iter().map(|(name, _)| (*name).to_string()).collect(),
         SettingsChoiceKind::DefaultOpenMode => vec!["Terminal".to_string(), "Desktop".to_string()],
+        SettingsChoiceKind::StartupWindowMode => vec![
+            "Maximized".to_string(),
+            "Windowed".to_string(),
+            "Fullscreen".to_string(),
+        ],
     }
 }
 
@@ -412,6 +431,13 @@ pub fn apply_settings_choice(draft: &mut Settings, kind: SettingsChoiceKind, sel
                 OpenMode::Terminal
             } else {
                 OpenMode::Desktop
+            };
+        }
+        SettingsChoiceKind::StartupWindowMode => {
+            draft.native_startup_window_mode = match selected {
+                1 => NativeStartupWindowMode::Windowed,
+                2 => NativeStartupWindowMode::Fullscreen,
+                _ => NativeStartupWindowMode::Maximized,
             };
         }
     }
@@ -491,6 +517,13 @@ fn terminal_settings_rows_with_ids(
                     }
                 ),
                 SettingsRowId::DefaultOpenMode,
+            ),
+            (
+                format!(
+                    "Startup Window Mode: {} [choose]",
+                    draft.native_startup_window_mode.label()
+                ),
+                SettingsRowId::StartupWindowMode,
             ),
             (
                 format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
@@ -694,6 +727,35 @@ mod tests {
         let rows = terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, &draft, false);
         let has_connections = rows.iter().any(|(_, id)| *id == SettingsRowId::Connections);
         assert_eq!(has_connections, !macos_connections_disabled());
+    }
+
+    #[test]
+    fn startup_window_mode_row_opens_choice_overlay() {
+        let mut draft = get_settings();
+        let mut overlay = None;
+        let rows = terminal_settings_rows_with_ids(TerminalSettingsPanel::General, &draft, false);
+        let idx = rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::StartupWindowMode)
+            .expect("startup window mode row");
+
+        assert!(matches!(
+            handle_settings_activation(
+                TerminalSettingsPanel::General,
+                &mut draft,
+                idx,
+                &mut overlay,
+                false,
+            ),
+            TerminalSettingsEvent::None
+        ));
+        assert!(matches!(
+            overlay,
+            Some(SettingsChoiceOverlay {
+                kind: SettingsChoiceKind::StartupWindowMode,
+                ..
+            })
+        ));
     }
 
     #[test]

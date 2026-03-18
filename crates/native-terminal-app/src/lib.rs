@@ -16,6 +16,7 @@ pub use user_management::{
 pub enum SettingsChoiceKind {
     Theme,
     DefaultOpenMode,
+    StartupWindowMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

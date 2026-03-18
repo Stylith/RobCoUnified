@@ -165,7 +165,7 @@ use super::shell_screen::{draw_login_screen, draw_main_menu_screen};
 use crate::config::{ConnectionKind, SavedConnection};
 use crate::config::{
     desktop_dir as robco_desktop_dir, CliAcsMode, CliColorMode, DesktopFileManagerSettings, DesktopIconSortMode,
-    DesktopIconStyle, HackingDifficulty, OpenMode, Settings, WallpaperSizeMode,
+    DesktopIconStyle, HackingDifficulty, NativeStartupWindowMode, OpenMode, Settings, WallpaperSizeMode,
     CUSTOM_THEME_NAME, THEMES,
 };
 use crate::core::auth::{AuthMethod, UserRecord};
@@ -8971,6 +8971,34 @@ impl RobcoNativeApp {
                                         left.small(
                                             "Choose which interface opens first after login.",
                                         );
+                                        left.add_space(12.0);
+                                        left.label("Startup Window Mode");
+                                        left.horizontal_wrapped(|ui| {
+                                            for mode in [
+                                                NativeStartupWindowMode::Maximized,
+                                                NativeStartupWindowMode::Windowed,
+                                                NativeStartupWindowMode::Fullscreen,
+                                            ] {
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    mode.label(),
+                                                    self.settings.draft.native_startup_window_mode
+                                                        == mode,
+                                                )
+                                                .clicked()
+                                                    && self.settings.draft.native_startup_window_mode
+                                                        != mode
+                                                {
+                                                    self.settings.draft.native_startup_window_mode =
+                                                        mode;
+                                                    changed = true;
+                                                }
+                                            }
+                                        });
+                                        left.add_space(8.0);
+                                        left.small(
+                                            "Maximized is the default. Windowed is safest on older GPUs. Restart applies changes.",
+                                        );
                                     });
 
                                     Self::settings_section(right, "Options", |right| {
@@ -9453,6 +9481,10 @@ impl RobcoNativeApp {
                                         OpenMode::Terminal => "Terminal",
                                         OpenMode::Desktop => "Desktop",
                                     }
+                                ));
+                                ui.label(format!(
+                                    "Startup Window Mode: {}",
+                                    self.settings.draft.native_startup_window_mode.label()
                                 ));
                             }
                             NativeSettingsPanel::Home => {}

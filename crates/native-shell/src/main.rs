@@ -1,17 +1,10 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::reload_settings;
+use robcos::config::{get_settings, reload_settings, NativeStartupWindowMode};
 use robcos::core::auth::ensure_default_admin;
 use robcos::native::{configure_native_context, RobcoNativeApp};
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeStartupWindowMode {
-    Maximized,
-    Windowed,
-    Fullscreen,
-}
 
 fn load_icon() -> Option<IconData> {
     let image = image::load_from_memory(APP_ICON_BYTES).ok()?.into_rgba8();
@@ -23,23 +16,29 @@ fn load_icon() -> Option<IconData> {
     })
 }
 
-fn parse_native_startup_window_mode(value: Option<&str>) -> NativeStartupWindowMode {
+fn parse_native_startup_window_mode_override(
+    value: Option<&str>,
+) -> Option<NativeStartupWindowMode> {
     match value.map(|value| value.trim().to_ascii_lowercase()) {
-        Some(value) if value == "fullscreen" => NativeStartupWindowMode::Fullscreen,
+        Some(value) if value == "fullscreen" => Some(NativeStartupWindowMode::Fullscreen),
         Some(value) if matches!(value.as_str(), "windowed" | "safe") => {
-            NativeStartupWindowMode::Windowed
+            Some(NativeStartupWindowMode::Windowed)
         }
         Some(value) if matches!(value.as_str(), "maximized" | "desktop") => {
-            NativeStartupWindowMode::Maximized
+            Some(NativeStartupWindowMode::Maximized)
         }
-        Some(_) | None => NativeStartupWindowMode::Maximized,
+        Some(_) | None => None,
     }
 }
 
-fn build_startup_viewport() -> ViewportBuilder {
-    let mode = parse_native_startup_window_mode(
-        std::env::var("ROBCOS_NATIVE_WINDOW_MODE").ok().as_deref(),
-    );
+fn resolve_native_startup_window_mode(
+    configured_mode: NativeStartupWindowMode,
+    override_value: Option<&str>,
+) -> NativeStartupWindowMode {
+    parse_native_startup_window_mode_override(override_value).unwrap_or(configured_mode)
+}
+
+fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
     let viewport = ViewportBuilder::default()
         .with_inner_size([1360.0, 840.0])
         .with_min_inner_size([960.0, 600.0])
@@ -64,7 +63,12 @@ fn build_startup_viewport() -> ViewportBuilder {
 fn main() -> Result<()> {
     ensure_default_admin();
     reload_settings();
-    let mut viewport = build_startup_viewport();
+    let settings = get_settings();
+    let mode = resolve_native_startup_window_mode(
+        settings.native_startup_window_mode,
+        std::env::var("ROBCOS_NATIVE_WINDOW_MODE").ok().as_deref(),
+    );
+    let mut viewport = build_startup_viewport(mode);
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -88,33 +92,59 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_native_startup_window_mode, NativeStartupWindowMode};
+    use super::{parse_native_startup_window_mode_override, resolve_native_startup_window_mode};
+    use robcos::config::NativeStartupWindowMode;
 
     #[test]
-    fn parse_native_startup_window_mode_defaults_to_maximized() {
+    fn parse_native_startup_window_mode_override_returns_none_for_missing_or_unknown() {
         assert_eq!(
-            parse_native_startup_window_mode(None),
-            NativeStartupWindowMode::Maximized
+            parse_native_startup_window_mode_override(None),
+            None
         );
         assert_eq!(
-            parse_native_startup_window_mode(Some("unknown")),
-            NativeStartupWindowMode::Maximized
+            parse_native_startup_window_mode_override(Some("unknown")),
+            None
         );
     }
 
     #[test]
-    fn parse_native_startup_window_mode_supports_safe_and_fullscreen() {
+    fn parse_native_startup_window_mode_override_supports_safe_and_fullscreen() {
         assert_eq!(
-            parse_native_startup_window_mode(Some("windowed")),
+            parse_native_startup_window_mode_override(Some("windowed")),
+            Some(NativeStartupWindowMode::Windowed)
+        );
+        assert_eq!(
+            parse_native_startup_window_mode_override(Some("safe")),
+            Some(NativeStartupWindowMode::Windowed)
+        );
+        assert_eq!(
+            parse_native_startup_window_mode_override(Some("fullscreen")),
+            Some(NativeStartupWindowMode::Fullscreen)
+        );
+    }
+
+    #[test]
+    fn resolve_native_startup_window_mode_prefers_env_override() {
+        assert_eq!(
+            resolve_native_startup_window_mode(
+                NativeStartupWindowMode::Maximized,
+                Some("windowed"),
+            ),
             NativeStartupWindowMode::Windowed
         );
         assert_eq!(
-            parse_native_startup_window_mode(Some("safe")),
-            NativeStartupWindowMode::Windowed
-        );
-        assert_eq!(
-            parse_native_startup_window_mode(Some("fullscreen")),
+            resolve_native_startup_window_mode(
+                NativeStartupWindowMode::Windowed,
+                Some("fullscreen"),
+            ),
             NativeStartupWindowMode::Fullscreen
+        );
+        assert_eq!(
+            resolve_native_startup_window_mode(
+                NativeStartupWindowMode::Windowed,
+                None,
+            ),
+            NativeStartupWindowMode::Windowed
         );
     }
 }

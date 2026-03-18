@@ -350,6 +350,25 @@ pub enum OpenMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum NativeStartupWindowMode {
+    Windowed,
+    #[default]
+    Maximized,
+    Fullscreen,
+}
+
+impl NativeStartupWindowMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Windowed => "Windowed",
+            Self::Maximized => "Maximized",
+            Self::Fullscreen => "Fullscreen",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum DefaultAppMenuSource {
     #[default]
     Applications,
@@ -761,6 +780,8 @@ pub struct Settings {
     pub cli_acs_mode: CliAcsMode,
     #[serde(default)]
     pub default_open_mode: OpenMode,
+    #[serde(default)]
+    pub native_startup_window_mode: NativeStartupWindowMode,
     #[serde(default = "default_navigation_hints")]
     pub show_navigation_hints: bool,
     #[serde(default = "default_hacking_difficulty")]
@@ -838,6 +859,7 @@ impl Default for Settings {
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
             default_open_mode: OpenMode::Terminal,
+            native_startup_window_mode: NativeStartupWindowMode::Maximized,
             show_navigation_hints: default_navigation_hints(),
             hacking_difficulty: default_hacking_difficulty(),
             hide_builtin_apps_in_menus: false,
@@ -1111,6 +1133,19 @@ mod tests {
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert!(decoded.show_navigation_hints);
+    }
+
+    #[test]
+    fn native_startup_window_mode_defaults_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let obj = value.as_object_mut().expect("settings object");
+        obj.remove("native_startup_window_mode");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert_eq!(
+            decoded.native_startup_window_mode,
+            NativeStartupWindowMode::Maximized
+        );
     }
 
     #[test]
