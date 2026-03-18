@@ -267,14 +267,14 @@ struct AssetCache {
     icon_installer: TextureHandle,
     icon_nuke_codes: TextureHandle,
     icon_editor: TextureHandle,
-    icon_general: TextureHandle,
-    icon_appearance: TextureHandle,
-    icon_default_apps: TextureHandle,
+    icon_general: Option<TextureHandle>,
+    icon_appearance: Option<TextureHandle>,
+    icon_default_apps: Option<TextureHandle>,
     icon_connections: TextureHandle,
-    icon_cli_profiles: TextureHandle,
-    icon_edit_menus: TextureHandle,
-    icon_user_management: TextureHandle,
-    icon_about: TextureHandle,
+    icon_cli_profiles: Option<TextureHandle>,
+    icon_edit_menus: Option<TextureHandle>,
+    icon_user_management: Option<TextureHandle>,
+    icon_about: Option<TextureHandle>,
     icon_folder: TextureHandle,
     icon_folder_open: TextureHandle,
     icon_file: TextureHandle,
@@ -285,7 +285,7 @@ struct AssetCache {
     icon_archive: TextureHandle,
     icon_app: TextureHandle,
     icon_shortcut_badge: TextureHandle,
-    icon_gaming: TextureHandle,
+    icon_gaming: Option<TextureHandle>,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
 }
@@ -1283,54 +1283,19 @@ impl RobcoNativeApp {
                 include_bytes!("../Icons/pixel--pen-solid.svg"),
                 Some(ICON_SIZE),
             ),
-            icon_general: Self::load_svg_icon(
-                ctx,
-                "icon_general",
-                include_bytes!("../Icons/pixel--home-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_appearance: Self::load_svg_icon(
-                ctx,
-                "icon_appearance",
-                include_bytes!("../Icons/pixel--image-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_default_apps: Self::load_svg_icon(
-                ctx,
-                "icon_default_apps",
-                include_bytes!("../Icons/pixel--external-link-solid.svg"),
-                Some(ICON_SIZE),
-            ),
+            icon_general: None,
+            icon_appearance: None,
+            icon_default_apps: None,
             icon_connections: Self::load_svg_icon(
                 ctx,
                 "icon_connections",
                 include_bytes!("../Icons/pixel--globe.svg"),
                 Some(ICON_SIZE),
             ),
-            icon_cli_profiles: Self::load_svg_icon(
-                ctx,
-                "icon_cli_profiles",
-                include_bytes!("../Icons/pixel--code-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_edit_menus: Self::load_svg_icon(
-                ctx,
-                "icon_edit_menus",
-                include_bytes!("../Icons/pixel--bullet-list-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_user_management: Self::load_svg_icon(
-                ctx,
-                "icon_user_management",
-                include_bytes!("../Icons/pixel--user-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_about: Self::load_svg_icon(
-                ctx,
-                "icon_about",
-                include_bytes!("../Icons/pixel--info-circle-solid.svg"),
-                Some(ICON_SIZE),
-            ),
+            icon_cli_profiles: None,
+            icon_edit_menus: None,
+            icon_user_management: None,
+            icon_about: None,
             icon_folder: Self::load_svg_icon(
                 ctx,
                 "icon_folder",
@@ -1391,12 +1356,7 @@ impl RobcoNativeApp {
                 include_bytes!("../Icons/pixel--external-link-solid.svg"),
                 Some(16),
             ),
-            icon_gaming: Self::load_svg_icon(
-                ctx,
-                "icon_gaming",
-                include_bytes!("../Icons/pixel--gaming.svg"),
-                Some(ICON_SIZE),
-            ),
+            icon_gaming: None,
             wallpaper: None,
             wallpaper_loaded_for: String::new(),
         }
@@ -2231,19 +2191,94 @@ impl RobcoNativeApp {
         out
     }
 
-    fn settings_panel_texture(&self, panel: NativeSettingsPanel) -> Option<&TextureHandle> {
-        let cache = self.asset_cache.as_ref()?;
-        Some(match panel {
-            NativeSettingsPanel::General => &cache.icon_general,
-            NativeSettingsPanel::Appearance => &cache.icon_appearance,
-            NativeSettingsPanel::DefaultApps => &cache.icon_default_apps,
-            NativeSettingsPanel::Connections => &cache.icon_connections,
-            NativeSettingsPanel::CliProfiles => &cache.icon_cli_profiles,
-            NativeSettingsPanel::EditMenus => &cache.icon_edit_menus,
-            NativeSettingsPanel::UserManagement => &cache.icon_user_management,
-            NativeSettingsPanel::About => &cache.icon_about,
+    fn settings_panel_texture(
+        &mut self,
+        ctx: &Context,
+        panel: NativeSettingsPanel,
+    ) -> Option<TextureHandle> {
+        let cache = self.asset_cache.as_mut()?;
+        let texture = match panel {
+            NativeSettingsPanel::General => cache.icon_general.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_general",
+                    include_bytes!("../Icons/pixel--home-solid.svg"),
+                    Some(64),
+                )
+            }),
+            NativeSettingsPanel::Appearance => cache.icon_appearance.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_appearance",
+                    include_bytes!("../Icons/pixel--image-solid.svg"),
+                    Some(64),
+                )
+            }),
+            NativeSettingsPanel::DefaultApps => {
+                cache.icon_default_apps.get_or_insert_with(|| {
+                    Self::load_svg_icon(
+                        ctx,
+                        "icon_default_apps",
+                        include_bytes!("../Icons/pixel--external-link-solid.svg"),
+                        Some(64),
+                    )
+                })
+            }
+            NativeSettingsPanel::Connections => &mut cache.icon_connections,
+            NativeSettingsPanel::CliProfiles => cache.icon_cli_profiles.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_cli_profiles",
+                    include_bytes!("../Icons/pixel--code-solid.svg"),
+                    Some(64),
+                )
+            }),
+            NativeSettingsPanel::EditMenus => cache.icon_edit_menus.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_edit_menus",
+                    include_bytes!("../Icons/pixel--bullet-list-solid.svg"),
+                    Some(64),
+                )
+            }),
+            NativeSettingsPanel::UserManagement => {
+                cache.icon_user_management.get_or_insert_with(|| {
+                    Self::load_svg_icon(
+                        ctx,
+                        "icon_user_management",
+                        include_bytes!("../Icons/pixel--user-solid.svg"),
+                        Some(64),
+                    )
+                })
+            }
+            NativeSettingsPanel::About => cache.icon_about.get_or_insert_with(|| {
+                Self::load_svg_icon(
+                    ctx,
+                    "icon_about",
+                    include_bytes!("../Icons/pixel--info-circle-solid.svg"),
+                    Some(64),
+                )
+            }),
             _ => return None,
-        })
+        };
+        Some(texture.clone())
+    }
+
+    fn installer_games_texture(&mut self, ctx: &Context) -> Option<TextureHandle> {
+        let cache = self.asset_cache.as_mut()?;
+        Some(
+            cache
+                .icon_gaming
+                .get_or_insert_with(|| {
+                    Self::load_svg_icon(
+                        ctx,
+                        "icon_gaming",
+                        include_bytes!("../Icons/pixel--gaming.svg"),
+                        Some(64),
+                    )
+                })
+                .clone(),
+        )
     }
 
     fn file_manager_texture_for_row(
@@ -2893,6 +2928,14 @@ impl RobcoNativeApp {
             .rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(1.0, stroke));
     }
 
+    fn desktop_icon_foreground(palette: RetroPalette, selected: bool) -> Color32 {
+        if selected {
+            palette.bg
+        } else {
+            palette.fg
+        }
+    }
+
     fn draw_desktop_icons(&mut self, ui: &mut egui::Ui) {
         let Some(cache) = self.asset_cache.as_ref() else {
             return;
@@ -2988,6 +3031,7 @@ impl RobcoNativeApp {
             let selected = self.desktop_selected_icon
                 == Some(DesktopIconSelection::Builtin(entry.key));
             Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
+            let icon_fg = Self::desktop_icon_foreground(palette, selected);
 
             match style {
                 DesktopIconStyle::Dos => {
@@ -2996,17 +3040,17 @@ impl RobcoNativeApp {
                         Align2::CENTER_CENTER,
                         entry.ascii,
                         FontId::new(18.0, FontFamily::Monospace),
-                        palette.fg,
+                        icon_fg,
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    Self::paint_tinted_texture(ui.painter(), texture, icon_rect, palette.fg);
+                    Self::paint_tinted_texture(ui.painter(), texture, icon_rect, icon_fg);
                 }
                 DesktopIconStyle::NoIcons => {}
             }
 
             if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, entry.label, palette.fg);
+                Self::paint_desktop_icon_label(ui, label_rect, entry.label, icon_fg);
             }
 
             if response.dragged() {
@@ -3076,6 +3120,10 @@ impl RobcoNativeApp {
             let selected = self.desktop_selected_icon
                 == Some(DesktopIconSelection::Surface(entry_key.clone()));
             Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
+            let icon_fg = Self::desktop_icon_foreground(palette, selected);
+            response.dnd_set_drag_payload(NativeFileManagerDragPayload {
+                paths: vec![entry_path.clone()],
+            });
             let file_manager_drop_hover = entry_is_dir
                 && response
                     .dnd_hover_payload::<NativeFileManagerDragPayload>()
@@ -3090,12 +3138,12 @@ impl RobcoNativeApp {
                         Align2::CENTER_CENTER,
                         row.icon(),
                         FontId::new(18.0, FontFamily::Monospace),
-                        palette.fg,
+                        icon_fg,
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
                     if let Some(texture) = self.file_manager_texture_for_row(&row) {
-                        Self::paint_tinted_texture(ui.painter(), texture, icon_rect, palette.fg);
+                        Self::paint_tinted_texture(ui.painter(), texture, icon_rect, icon_fg);
                     }
                 }
                 DesktopIconStyle::NoIcons => {}
@@ -3110,7 +3158,7 @@ impl RobcoNativeApp {
             }
 
             if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, &entry_label, palette.fg);
+                Self::paint_desktop_icon_label(ui, label_rect, &entry_label, icon_fg);
             }
 
             if response.dragged() {
@@ -3212,6 +3260,7 @@ impl RobcoNativeApp {
             let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
             let selected = self.desktop_selected_icon == Some(DesktopIconSelection::Shortcut(sidx));
             Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
+            let icon_fg = Self::desktop_icon_foreground(palette, selected);
 
             match style {
                 DesktopIconStyle::Dos => {
@@ -3220,7 +3269,7 @@ impl RobcoNativeApp {
                         Align2::CENTER_CENTER,
                         "[LNK]",
                         FontId::new(18.0, FontFamily::Monospace),
-                        palette.fg,
+                        icon_fg,
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
@@ -3233,7 +3282,7 @@ impl RobcoNativeApp {
                             None
                         };
                     if let Some(tex) = icon_tex {
-                        Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, palette.fg);
+                        Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, icon_fg);
                     } else {
                         let kind_tex = match shortcut.shortcut_kind.as_str() {
                             "network" => &tex_connections,
@@ -3241,26 +3290,27 @@ impl RobcoNativeApp {
                             "editor" => &tex_editor,
                             _ => &tex_app,
                         };
-                        Self::paint_tinted_texture(ui.painter(), kind_tex, icon_rect, palette.fg);
+                        Self::paint_tinted_texture(ui.painter(), kind_tex, icon_rect, icon_fg);
                     }
                     let badge_size = (icon_size * 0.35).max(10.0);
                     let badge_rect = egui::Rect::from_min_size(
                         icon_rect.min + egui::vec2(0.0, icon_size - badge_size),
                         egui::vec2(badge_size, badge_size),
                     );
-                    ui.painter().rect_filled(badge_rect, 0.0, Color32::BLACK);
+                    let badge_bg = if selected { palette.panel } else { Color32::BLACK };
+                    ui.painter().rect_filled(badge_rect, 0.0, badge_bg);
                     Self::paint_tinted_texture(
                         ui.painter(),
                         &tex_shortcut_badge,
                         badge_rect,
-                        palette.fg,
+                        icon_fg,
                     );
                 }
                 DesktopIconStyle::NoIcons => {}
             }
 
             if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, &shortcut.label, palette.fg);
+                Self::paint_desktop_icon_label(ui, label_rect, &shortcut.label, icon_fg);
             }
 
             if response.dragged() {
@@ -8738,14 +8788,15 @@ impl RobcoNativeApp {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = gap_x;
                             for tile in row {
+                                let panel_texture = match tile.action {
+                                    SettingsHomeTileAction::OpenPanel(panel) => {
+                                        self.settings_panel_texture(ctx, panel)
+                                    }
+                                    SettingsHomeTileAction::CloseWindow => None,
+                                };
                                 let response = Self::retro_settings_tile(
                                     ui,
-                                    match tile.action {
-                                        SettingsHomeTileAction::OpenPanel(panel) => {
-                                            self.settings_panel_texture(panel)
-                                        }
-                                        SettingsHomeTileAction::CloseWindow => None,
-                                    },
+                                    panel_texture.as_ref(),
                                     tile.icon,
                                     tile.label,
                                     tile.enabled,
@@ -10280,7 +10331,7 @@ impl RobcoNativeApp {
             .asset_cache
             .as_ref()
             .map(|c| c.icon_connections.clone());
-        let tex_games = self.asset_cache.as_ref().map(|c| c.icon_gaming.clone());
+        let tex_games = self.installer_games_texture(ctx);
 
         let shown = window.show(ctx, |ui| {
             Self::apply_installer_widget_style(ui, palette);
