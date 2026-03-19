@@ -534,7 +534,14 @@ impl RobcoShell {
                 self.start_menu.close();
             }
             Message::StartMenuSelectRoot(idx) => {
+                use super::desktop_start_menu::{
+                    start_root_leaf_for_idx, start_root_submenu_for_idx,
+                };
                 self.start_menu.selected_root = idx;
+                self.start_menu.open_leaf = start_root_leaf_for_idx(idx);
+                self.start_menu.open_submenu = start_root_submenu_for_idx(idx);
+                self.start_menu.leaf_selected = 0;
+                self.start_menu.system_selected = 0;
             }
             Message::StartMenuSelectSystem(idx) => {
                 self.start_menu.system_selected = idx;
@@ -658,13 +665,20 @@ impl RobcoShell {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        use iced::widget::column;
-        column![
+        use iced::widget::{column, stack};
+
+        let shell_ui: Element<'_, Message> = column![
             self.view_top_bar(),
             self.view_desktop(),
             self.view_taskbar(),
         ]
-        .into()
+        .into();
+
+        if self.start_menu.open {
+            stack![shell_ui, self.view_start_menu()].into()
+        } else {
+            shell_ui
+        }
     }
 
     fn view_top_bar(&self) -> Element<'_, Message> {
@@ -859,6 +873,224 @@ impl RobcoShell {
                 ..container::Style::default()
             })
             .into()
+    }
+
+    /// Render the start menu panel, anchored to the bottom-left of the screen.
+    ///
+    /// The panel opens above the [Start] button and contains:
+    /// - Left column: root menu items (Applications, Documents, Network, Games, System, …)
+    /// - Right panel: submenu or leaf entries for the selected root item
+    fn view_start_menu(&self) -> Element<'_, Message> {
+        use super::desktop_start_menu::{
+            start_root_leaf_for_idx, start_root_submenu_for_idx, StartLeaf, StartSubmenu,
+            START_ROOT_ITEMS, START_ROOT_VIS_ROWS,
+        };
+        use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
+        use iced::{Alignment, Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let panel_bg = palette.panel.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let hovered_bg = palette.hovered_bg.to_iced();
+
+        let selected_root = self.start_menu.selected_root;
+
+        // ── Root column ───────────────────────────────────────────────────────
+        let mut root_col = column![].spacing(0).width(200);
+
+        // Header
+        root_col = root_col.push(
+            container(
+                text("R O B C O O S").size(13).color(fg)
+            )
+            .padding([6, 10])
+            .width(Length::Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(panel_bg)),
+                border: Border { color: fg, width: 0.0, radius: 0.0.into() },
+                ..container::Style::default()
+            })
+        );
+
+        // Separator
+        root_col = root_col.push(
+            container(Space::with_height(1))
+                .width(Length::Fill)
+                .style(move |_t| container::Style {
+                    background: Some(iced::Background::Color(dim)),
+                    ..container::Style::default()
+                })
+        );
+
+        for (vis_idx, root_slot) in START_ROOT_VIS_ROWS.iter().enumerate() {
+            match root_slot {
+                None => {
+                    // Separator row
+                    root_col = root_col.push(
+                        container(Space::with_height(1))
+                            .width(Length::Fill)
+                            .style(move |_t| container::Style {
+                                background: Some(iced::Background::Color(dim)),
+                                ..container::Style::default()
+                            })
+                    );
+                }
+                Some(item_idx) => {
+                    let idx = *item_idx;
+                    let label = START_ROOT_ITEMS[idx];
+                    let is_sel = idx == selected_root;
+                    let has_sub = start_root_leaf_for_idx(idx).is_some()
+                        || start_root_submenu_for_idx(idx).is_some();
+                    let arrow = if has_sub { " >" } else { "  " };
+                    let disp = format!("{label}{arrow}");
+
+                    let (item_bg, item_fg) = if is_sel {
+                        (selected_bg, selected_fg)
+                    } else {
+                        (bg, fg)
+                    };
+
+                    root_col = root_col.push(
+                        button(
+                            row![
+                                text(disp).size(13).color(item_fg),
+                            ]
+                            .padding([4, 8])
+                        )
+                        .on_press(Message::StartMenuSelectRoot(idx))
+                        .width(Length::Fill)
+                        .style(move |_t, status| {
+                            use iced::widget::button::Status;
+                            let bg = match status {
+                                Status::Hovered => Some(iced::Background::Color(hovered_bg)),
+                                _ => Some(iced::Background::Color(item_bg)),
+                            };
+                            button::Style {
+                                background: bg,
+                                text_color: item_fg,
+                                border: Border::default(),
+                                ..button::Style::default()
+                            }
+                        })
+                        .padding(0)
+                    );
+                }
+            }
+            let _ = vis_idx;
+        }
+
+        let root_panel = container(root_col)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: Border { color: fg, width: 2.0, radius: 0.0.into() },
+                ..container::Style::default()
+            });
+
+        // ── Right panel (submenu / leaf) ──────────────────────────────────────
+        let leaf = start_root_leaf_for_idx(selected_root);
+        let submenu = start_root_submenu_for_idx(selected_root);
+
+        let right_panel: Option<Element<'_, Message>> = if let Some(sub) = submenu {
+            // System submenu.
+            use super::desktop_start_menu::START_SYSTEM_ITEMS;
+            let mut sub_col = column![].spacing(0).width(180);
+            for (label, _action) in START_SYSTEM_ITEMS.iter() {
+                sub_col = sub_col.push(
+                    button(
+                        text(*label).size(13).color(fg).width(Length::Fill)
+                    )
+                    .on_press(Message::StartMenuNavigate(super::message::NavDirection::Right))
+                    .width(Length::Fill)
+                    .style(move |_t, status| {
+                        use iced::widget::button::Status;
+                        let bg_color = match status {
+                            Status::Hovered | Status::Pressed => hovered_bg,
+                            _ => bg,
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg_color)),
+                            text_color: fg,
+                            border: Border::default(),
+                            ..button::Style::default()
+                        }
+                    })
+                    .padding([4, 8])
+                );
+            }
+            let _ = sub;
+            Some(
+                container(sub_col)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        border: Border { color: fg, width: 2.0, radius: 0.0.into() },
+                        ..container::Style::default()
+                    })
+                    .into()
+            )
+        } else if let Some(lf) = leaf {
+            let label = match lf {
+                StartLeaf::Applications => "Applications",
+                StartLeaf::Documents => "Documents",
+                StartLeaf::Network => "Network",
+                StartLeaf::Games => "Games",
+            };
+            let mut leaf_col = column![
+                container(text(label).size(13).color(fg))
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(panel_bg)),
+                        ..container::Style::default()
+                    }),
+                container(Space::with_height(1))
+                    .width(Length::Fill)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(dim)),
+                        ..container::Style::default()
+                    }),
+            ].spacing(0).width(200);
+            leaf_col = leaf_col.push(
+                text("(Loading…)").size(12).color(dim)
+            );
+            Some(
+                container(leaf_col)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        border: Border { color: fg, width: 2.0, radius: 0.0.into() },
+                        ..container::Style::default()
+                    })
+                    .into()
+            )
+        } else {
+            None
+        };
+
+        // ── Compose left + optional right panel ───────────────────────────────
+        let menu_body: Element<'_, Message> = if let Some(right) = right_panel {
+            row![root_panel, right].spacing(0).into()
+        } else {
+            root_panel.into()
+        };
+
+        // ── Position anchored to bottom-left of screen ────────────────────────
+        // `stack` positions children absolutely; we push the menu to the
+        // bottom-left using a column with a spacer on top.
+        let dismiss = mouse_area(
+            column![
+                Space::with_height(Length::Fill),
+                menu_body,
+                Space::with_height(32), // taskbar height
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+        )
+        .on_press(Message::StartMenuClose);
+
+        dismiss.into()
     }
 
     /// Return the application theme.

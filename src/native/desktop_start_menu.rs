@@ -66,7 +66,7 @@ pub(super) const START_ROOT_VIS_ROWS: [Option<usize>; 9] = [
     Some(7),
 ];
 
-const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 5] = [
+pub(super) const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 5] = [
     ("Program Installer", StartSystemAction::ProgramInstaller),
     ("Terminal", StartSystemAction::Terminal),
     ("File Manager", StartSystemAction::FileManager),
