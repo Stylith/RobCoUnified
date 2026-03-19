@@ -7,22 +7,235 @@
 #![allow(dead_code)]
 
 use super::app::StartMenuRenameState;
-use super::desktop_app::{DesktopMenuAction, DesktopMenuSection, DesktopShellAction};
+use super::desktop_app::DesktopMenuSection;
 use super::desktop_search_service::NativeSpotlightResult;
 use super::desktop_settings_service::load_settings_snapshot;
 use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_surface_service::DesktopSurfaceEntry;
 use super::desktop_wm_widget::{DesktopWindowHost, WindowChild};
-use super::message::{ContextMenuAction, DesktopIconId, Message};
+use super::message::{ContextMenuAction, DesktopIconId, Message, NavDirection};
+use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use super::shared_types::DesktopWindow;
-use crate::config::{DesktopIconSortMode, Settings};
+use crate::config::{set_current_user, Settings, HEADER_LINES};
+use crate::core::auth::{clear_session, UserRecord};
 use chrono::Local;
+use iced::widget::text_input;
 use iced::{Element, Subscription, Task, Theme};
 use robcos_native_editor_app::EditorWindow;
-use robcos_native_file_manager_app::{FileManagerAction, NativeFileManagerState};
+use robcos_native_file_manager_app::NativeFileManagerState;
 use robcos_native_settings_app::NativeSettingsPanel;
+use robcos_native_terminal_app::{
+    entry_for_selectable_idx, login_menu_rows_from_users, resolve_login_password_submission,
+    resolve_login_selection_plan, resolve_main_menu_action, resolve_terminal_back_action,
+    selectable_menu_count, terminal_runtime_defaults, terminal_screen_open_plan,
+    terminal_settings_refresh_plan, LoginMenuRow, MainMenuSelectionAction, TerminalBackAction,
+    TerminalBackContext, TerminalLoginPasswordPlan, TerminalLoginSelectionPlan,
+    TerminalLoginState, TerminalLoginSubmitAction, TerminalNavigationState,
+    TerminalScreen, TerminalScreenOpenPlan, TerminalSelectionIndexTarget, MAIN_MENU_ENTRIES,
+};
+use robcos_native_services::desktop_session_service::{
+    authenticate_login, bind_login_identity, clear_all_sessions, login_selection_auth_method,
+    login_usernames,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+const TERMINAL_PROMPT_INPUT_ID: &str = "robcos-iced-terminal-prompt";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalMenuAction {
+    OpenScreen(TerminalScreen),
+    Back,
+    ShowStatus(&'static str),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TerminalMenuEntry {
+    label: &'static str,
+    action: Option<TerminalMenuAction>,
+}
+
+const APPLICATION_MENU_ENTRIES: &[TerminalMenuEntry] = &[
+    TerminalMenuEntry {
+        label: "File Manager (desktop app)",
+        action: Some(TerminalMenuAction::ShowStatus(
+            "Hosted desktop apps stay separate from terminal mode and land in Phase 3h.",
+        )),
+    },
+    TerminalMenuEntry {
+        label: "Editor (desktop app)",
+        action: Some(TerminalMenuAction::ShowStatus(
+            "Hosted desktop apps stay separate from terminal mode and land in Phase 3h.",
+        )),
+    },
+    TerminalMenuEntry {
+        label: "Nuke Codes",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::NukeCodes)),
+    },
+    TerminalMenuEntry {
+        label: "---",
+        action: None,
+    },
+    TerminalMenuEntry {
+        label: "Back",
+        action: Some(TerminalMenuAction::Back),
+    },
+];
+
+const DOCUMENT_MENU_ENTRIES: &[TerminalMenuEntry] = &[
+    TerminalMenuEntry {
+        label: "Logs",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::Logs)),
+    },
+    TerminalMenuEntry {
+        label: "Document Browser",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::DocumentBrowser)),
+    },
+    TerminalMenuEntry {
+        label: "---",
+        action: None,
+    },
+    TerminalMenuEntry {
+        label: "Back",
+        action: Some(TerminalMenuAction::Back),
+    },
+];
+
+const NETWORK_MENU_ENTRIES: &[TerminalMenuEntry] = &[
+    TerminalMenuEntry {
+        label: "CLI Terminal",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::PtyApp)),
+    },
+    TerminalMenuEntry {
+        label: "Network Utilities",
+        action: Some(TerminalMenuAction::ShowStatus(
+            "Network program launchers are not wired in robcos-iced yet.",
+        )),
+    },
+    TerminalMenuEntry {
+        label: "---",
+        action: None,
+    },
+    TerminalMenuEntry {
+        label: "Back",
+        action: Some(TerminalMenuAction::Back),
+    },
+];
+
+const GAMES_MENU_ENTRIES: &[TerminalMenuEntry] = &[
+    TerminalMenuEntry {
+        label: "Donkey Kong",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::DonkeyKong)),
+    },
+    TerminalMenuEntry {
+        label: "---",
+        action: None,
+    },
+    TerminalMenuEntry {
+        label: "Back",
+        action: Some(TerminalMenuAction::Back),
+    },
+];
+
+const SETTINGS_MENU_ENTRIES: &[TerminalMenuEntry] = &[
+    TerminalMenuEntry {
+        label: "Connections",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::Connections)),
+    },
+    TerminalMenuEntry {
+        label: "Default Apps",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::DefaultApps)),
+    },
+    TerminalMenuEntry {
+        label: "Edit Menus",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::EditMenus)),
+    },
+    TerminalMenuEntry {
+        label: "User Management",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::UserManagement)),
+    },
+    TerminalMenuEntry {
+        label: "About",
+        action: Some(TerminalMenuAction::OpenScreen(TerminalScreen::About)),
+    },
+    TerminalMenuEntry {
+        label: "---",
+        action: None,
+    },
+    TerminalMenuEntry {
+        label: "Back",
+        action: Some(TerminalMenuAction::Back),
+    },
+];
+
+const BACK_ONLY_MENU_ENTRIES: &[TerminalMenuEntry] = &[TerminalMenuEntry {
+    label: "Back",
+    action: Some(TerminalMenuAction::Back),
+}];
+
+fn terminal_menu_entries_for_screen(screen: TerminalScreen) -> Option<&'static [TerminalMenuEntry]> {
+    match screen {
+        TerminalScreen::MainMenu => None,
+        TerminalScreen::Applications => Some(APPLICATION_MENU_ENTRIES),
+        TerminalScreen::Documents => Some(DOCUMENT_MENU_ENTRIES),
+        TerminalScreen::Network => Some(NETWORK_MENU_ENTRIES),
+        TerminalScreen::Games => Some(GAMES_MENU_ENTRIES),
+        TerminalScreen::Settings => Some(SETTINGS_MENU_ENTRIES),
+        TerminalScreen::ProgramInstaller
+        | TerminalScreen::Logs
+        | TerminalScreen::DocumentBrowser
+        | TerminalScreen::Connections
+        | TerminalScreen::DefaultApps
+        | TerminalScreen::EditMenus
+        | TerminalScreen::About
+        | TerminalScreen::UserManagement
+        | TerminalScreen::DonkeyKong
+        | TerminalScreen::NukeCodes
+        | TerminalScreen::PtyApp => Some(BACK_ONLY_MENU_ENTRIES),
+    }
+}
+
+fn terminal_menu_selectable_count(entries: &[TerminalMenuEntry]) -> usize {
+    entries.iter().filter(|entry| entry.action.is_some()).count()
+}
+
+fn terminal_menu_entry_for_idx(entries: &[TerminalMenuEntry], idx: usize) -> Option<TerminalMenuEntry> {
+    entries
+        .iter()
+        .copied()
+        .filter(|entry| entry.action.is_some())
+        .nth(idx)
+}
+
+fn terminal_back_selected_idx(current: TerminalScreen, target: TerminalScreen) -> usize {
+    match (current, target) {
+        (TerminalScreen::Applications, TerminalScreen::MainMenu) => 0,
+        (TerminalScreen::Documents, TerminalScreen::MainMenu)
+        | (TerminalScreen::Logs, TerminalScreen::MainMenu)
+        | (TerminalScreen::DocumentBrowser, TerminalScreen::MainMenu) => 1,
+        (TerminalScreen::Network, TerminalScreen::MainMenu) => 2,
+        (TerminalScreen::Games, TerminalScreen::MainMenu)
+        | (TerminalScreen::DonkeyKong, TerminalScreen::MainMenu) => 3,
+        (TerminalScreen::ProgramInstaller, TerminalScreen::MainMenu) => 4,
+        (TerminalScreen::PtyApp, TerminalScreen::MainMenu) => 5,
+        (TerminalScreen::Settings, TerminalScreen::MainMenu)
+        | (TerminalScreen::Connections, TerminalScreen::MainMenu)
+        | (TerminalScreen::DefaultApps, TerminalScreen::MainMenu)
+        | (TerminalScreen::EditMenus, TerminalScreen::MainMenu)
+        | (TerminalScreen::About, TerminalScreen::MainMenu)
+        | (TerminalScreen::UserManagement, TerminalScreen::MainMenu) => 7,
+        (TerminalScreen::Logs, TerminalScreen::Documents) => 0,
+        (TerminalScreen::DocumentBrowser, TerminalScreen::Documents) => 1,
+        (TerminalScreen::DonkeyKong, TerminalScreen::Games) => 0,
+        (TerminalScreen::NukeCodes, TerminalScreen::Applications) => 2,
+        (TerminalScreen::Connections, TerminalScreen::Settings) => 0,
+        (TerminalScreen::DefaultApps, TerminalScreen::Settings) => 1,
+        (TerminalScreen::EditMenus, TerminalScreen::Settings) => 2,
+        (TerminalScreen::UserManagement, TerminalScreen::Settings) => 3,
+        (TerminalScreen::About, TerminalScreen::Settings) => 4,
+        _ => 0,
+    }
+}
 
 // ── Egui-free window geometry ─────────────────────────────────────────────────
 
@@ -401,8 +614,14 @@ pub struct RobcoShell {
     pub surface: DesktopSurfaceState,
 
     // ── Mode ────────────────────────────────────────────────────────────────
-    /// true = desktop mode, false = terminal mode (full-screen PTY canvas)
+    /// true = desktop mode, false = the full-screen RobCo terminal-mode UI
     pub desktop_mode: bool,
+
+    // ── Terminal mode ───────────────────────────────────────────────────────
+    pub terminal_nav: TerminalNavigationState,
+    pub login: TerminalLoginState,
+    pub login_rows: Vec<LoginMenuRow>,
+    pub terminal_prompt: Option<TerminalPrompt>,
 
     // ── Session ─────────────────────────────────────────────────────────────
     /// Logged-in username. `None` = login screen is shown.
@@ -437,6 +656,7 @@ impl RobcoShell {
     pub fn new() -> (Self, Task<Message>) {
         let settings = load_settings_snapshot();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let login_rows = login_menu_rows_from_users(login_usernames());
         let mut windows = WindowManager::new();
         // Open two demo windows so the WM widget is testable on launch.
         windows.open(
@@ -457,7 +677,11 @@ impl RobcoShell {
             spotlight: SpotlightState::default(),
             start_menu: StartMenuState::default(),
             surface: DesktopSurfaceState::default(),
-            desktop_mode: true,
+            desktop_mode: false,
+            terminal_nav: terminal_runtime_defaults(),
+            login: TerminalLoginState::default(),
+            login_rows,
+            terminal_prompt: None,
             session_username: None,
             session_is_admin: false,
             file_manager: NativeFileManagerState::new(home),
@@ -479,11 +703,20 @@ impl RobcoShell {
         match message {
             // ── Spotlight ───────────────────────────────────────────────────
             Message::OpenSpotlight => {
-                self.start_menu.close();
-                self.spotlight.reset();
+                if self.desktop_mode {
+                    self.start_menu.close();
+                    self.spotlight.reset();
+                }
             }
             Message::CloseSpotlight => {
-                self.spotlight.close();
+                if self.desktop_mode {
+                    self.spotlight.close();
+                    self.start_menu.close();
+                } else if self.terminal_prompt.is_some() {
+                    self.cancel_terminal_prompt();
+                } else {
+                    self.handle_terminal_back();
+                }
             }
             Message::SpotlightQueryChanged(q) => {
                 self.spotlight.query = q;
@@ -493,7 +726,6 @@ impl RobcoShell {
                 self.spotlight.set_tab(t);
             }
             Message::SpotlightNavigate(dir) => {
-                use super::message::NavDirection;
                 match dir {
                     NavDirection::Down => {
                         if self.spotlight.selected + 1 < self.spotlight.results.len() {
@@ -535,13 +767,26 @@ impl RobcoShell {
             }
             Message::StartMenuSelectRoot(idx) => {
                 use super::desktop_start_menu::{
-                    start_root_leaf_for_idx, start_root_submenu_for_idx,
+                    start_root_action_for_idx, start_root_leaf_for_idx, start_root_submenu_for_idx,
+                    StartRootAction,
                 };
                 self.start_menu.selected_root = idx;
                 self.start_menu.open_leaf = start_root_leaf_for_idx(idx);
                 self.start_menu.open_submenu = start_root_submenu_for_idx(idx);
                 self.start_menu.leaf_selected = 0;
                 self.start_menu.system_selected = 0;
+                if let Some(action) = start_root_action_for_idx(idx) {
+                    self.start_menu.close();
+                    return match action {
+                        StartRootAction::ReturnToTerminal => self.update(Message::DesktopModeToggled),
+                        StartRootAction::Logout => self.update(Message::LogoutRequested),
+                        StartRootAction::Shutdown => {
+                            self.shell_status =
+                                "Shutdown is not wired in robcos-iced yet.".to_string();
+                            Task::none()
+                        }
+                    };
+                }
             }
             Message::StartMenuSelectSystem(idx) => {
                 self.start_menu.system_selected = idx;
@@ -634,12 +879,76 @@ impl RobcoShell {
             }
             Message::DesktopModeToggled => {
                 self.desktop_mode = !self.desktop_mode;
+                self.start_menu.close();
+                self.spotlight.close();
+                self.shell_status = if self.desktop_mode {
+                    "Entered Desktop Mode.".to_string()
+                } else {
+                    "Returned to terminal mode.".to_string()
+                };
             }
 
             // ── Session ──────────────────────────────────────────────────────
+            Message::LoginUsernameSelected(username) => {
+                self.login.selected_username = username.clone();
+                let mut selectable_idx = 0usize;
+                for row in &self.login_rows {
+                    match row {
+                        LoginMenuRow::User(user) if *user == username => {
+                            self.login.selected_idx = selectable_idx;
+                            break;
+                        }
+                        LoginMenuRow::User(_) | LoginMenuRow::Exit => {
+                            selectable_idx += 1;
+                        }
+                        LoginMenuRow::Separator => {}
+                    }
+                }
+            }
+            Message::LoginPasswordChanged(password) => {
+                self.login.password = password.clone();
+                if let Some(prompt) = self.terminal_prompt.as_mut() {
+                    if matches!(prompt.action, TerminalPromptAction::LoginPassword) {
+                        prompt.buffer = password;
+                    }
+                }
+            }
+            Message::LoginSubmitted => {
+                return self.submit_login_prompt();
+            }
             Message::LogoutRequested => {
-                self.session_username = None;
-                self.session_is_admin = false;
+                self.handle_logout();
+            }
+
+            // ── Terminal mode ───────────────────────────────────────────────
+            Message::TerminalNavigate(dir) => {
+                if !self.desktop_mode {
+                    self.move_terminal_selection(dir);
+                }
+            }
+            Message::TerminalActivateSelected => {
+                if !self.desktop_mode {
+                    return self.activate_selected_terminal_item();
+                }
+            }
+            Message::TerminalBackRequested => {
+                if !self.desktop_mode {
+                    if self.terminal_prompt.is_some() {
+                        self.cancel_terminal_prompt();
+                    } else {
+                        self.handle_terminal_back();
+                    }
+                }
+            }
+            Message::TerminalPromptCancelled => {
+                if !self.desktop_mode {
+                    self.cancel_terminal_prompt();
+                }
+            }
+            Message::TerminalSelectionActivated(idx) => {
+                if !self.desktop_mode {
+                    return self.activate_terminal_selection(idx);
+                }
             }
 
             // ── Desktop surface ──────────────────────────────────────────────
@@ -657,7 +966,7 @@ impl RobcoShell {
                         }
                         // Terminal mode has no target_window — toggle desktop mode.
                         if entry.kind == DesktopBuiltinIconKind::Terminal {
-                            self.desktop_mode = !self.desktop_mode;
+                            return self.update(Message::DesktopModeToggled);
                         }
                     }
                 }
@@ -680,8 +989,485 @@ impl RobcoShell {
         Task::none()
     }
 
+    fn terminal_prompt_id() -> text_input::Id {
+        text_input::Id::new(TERMINAL_PROMPT_INPUT_ID)
+    }
+
+    fn focus_terminal_prompt() -> Task<Message> {
+        let id = Self::terminal_prompt_id();
+        Task::batch([text_input::focus(id.clone()), text_input::move_cursor_to_end(id)])
+    }
+
+    fn refresh_login_rows(&mut self) {
+        self.login_rows = login_menu_rows_from_users(login_usernames());
+        let selectable_count = self
+            .login_rows
+            .iter()
+            .filter(|row| matches!(row, LoginMenuRow::User(_) | LoginMenuRow::Exit))
+            .count();
+        self.login.selected_idx = self
+            .login
+            .selected_idx
+            .min(selectable_count.saturating_sub(1));
+    }
+
+    fn open_password_prompt(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+    ) -> Task<Message> {
+        self.terminal_prompt = Some(TerminalPrompt {
+            kind: TerminalPromptKind::Password,
+            title: title.into(),
+            prompt: prompt.into(),
+            buffer: String::new(),
+            confirm_yes: true,
+            action: TerminalPromptAction::LoginPassword,
+        });
+        self.login.password.clear();
+        Self::focus_terminal_prompt()
+    }
+
+    fn cancel_terminal_prompt(&mut self) {
+        let clear_login_state = self
+            .terminal_prompt
+            .as_ref()
+            .is_some_and(|prompt| matches!(prompt.action, TerminalPromptAction::LoginPassword));
+        self.terminal_prompt = None;
+        if clear_login_state {
+            self.login.password.clear();
+            self.login.error.clear();
+        }
+    }
+
+    fn apply_terminal_screen_open_plan(&mut self, plan: TerminalScreenOpenPlan) {
+        self.terminal_nav.screen = plan.screen;
+        if plan.clear_settings_choice {
+            self.terminal_nav.settings_choice = None;
+        }
+        if plan.clear_default_app_slot {
+            self.terminal_nav.default_app_slot = None;
+        }
+        if plan.reset_user_management_to_root {
+            self.terminal_nav.user_management_mode =
+                robcos_native_terminal_app::UserManagementMode::Root;
+        }
+        match plan.index_target {
+            TerminalSelectionIndexTarget::None => {}
+            TerminalSelectionIndexTarget::MainMenu => {
+                self.terminal_nav.main_menu_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Applications => {
+                self.terminal_nav.apps_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Documents => {
+                self.terminal_nav.documents_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Logs => {
+                self.terminal_nav.logs_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Network => {
+                self.terminal_nav.network_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Games => {
+                self.terminal_nav.games_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::Settings => {
+                self.terminal_nav.settings_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::DefaultApps => {
+                self.terminal_nav.default_apps_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::UserManagement => {
+                self.terminal_nav.user_management_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::DocumentBrowser => {
+                self.terminal_nav.browser_idx = plan.selected_idx;
+            }
+            TerminalSelectionIndexTarget::ProgramInstallerRoot
+            | TerminalSelectionIndexTarget::ConnectionsRoot => {}
+        }
+        if plan.clear_status {
+            self.shell_status.clear();
+        }
+    }
+
+    fn apply_main_menu_selection_action(
+        &mut self,
+        action: MainMenuSelectionAction,
+    ) -> Task<Message> {
+        match action {
+            MainMenuSelectionAction::OpenScreen {
+                screen,
+                selected_idx,
+                clear_status,
+            } => {
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    screen,
+                    selected_idx,
+                    clear_status,
+                ));
+                Task::none()
+            }
+            MainMenuSelectionAction::OpenTerminalMode => {
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::PtyApp,
+                    0,
+                    true,
+                ));
+                self.shell_status =
+                    "CLI terminal/PTTY work remains separate and lands in Phase 3h.".to_string();
+                Task::none()
+            }
+            MainMenuSelectionAction::EnterDesktopMode => self.update(Message::DesktopModeToggled),
+            MainMenuSelectionAction::RefreshSettingsAndOpen => {
+                self.settings = load_settings_snapshot();
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+                Task::none()
+            }
+            MainMenuSelectionAction::BeginLogout => self.update(Message::LogoutRequested),
+        }
+    }
+
+    fn apply_terminal_menu_action(&mut self, action: TerminalMenuAction) -> Task<Message> {
+        match action {
+            TerminalMenuAction::OpenScreen(screen) => {
+                if matches!(screen, TerminalScreen::DocumentBrowser) {
+                    self.terminal_nav.browser_return_screen = TerminalScreen::Documents;
+                }
+                if matches!(screen, TerminalScreen::NukeCodes) {
+                    self.terminal_nav.nuke_codes_return_screen = TerminalScreen::Applications;
+                }
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(screen, 0, true));
+                if matches!(screen, TerminalScreen::PtyApp) {
+                    self.shell_status =
+                        "CLI terminal/PTTY work remains separate and lands in Phase 3h."
+                            .to_string();
+                }
+                Task::none()
+            }
+            TerminalMenuAction::Back => {
+                self.handle_terminal_back();
+                Task::none()
+            }
+            TerminalMenuAction::ShowStatus(status) => {
+                self.shell_status = status.to_string();
+                Task::none()
+            }
+        }
+    }
+
+    fn apply_terminal_login_selection_plan(
+        &mut self,
+        plan: TerminalLoginSelectionPlan<UserRecord>,
+    ) -> Task<Message> {
+        self.login.error.clear();
+        match plan {
+            TerminalLoginSelectionPlan::Exit => {
+                self.shell_status = "Close the window to exit RobCoOS.".to_string();
+                Task::none()
+            }
+            TerminalLoginSelectionPlan::PromptPassword { username, prompt } => {
+                self.login.selected_username = username;
+                self.login.clear_password_and_error();
+                self.open_password_prompt(prompt.title, prompt.prompt)
+            }
+            TerminalLoginSelectionPlan::Submit {
+                action,
+                missing_username_is_select_user,
+            } => self.apply_terminal_login_submit_action(action, missing_username_is_select_user),
+            TerminalLoginSelectionPlan::StartHacking { username } => {
+                self.login.selected_username = username;
+                self.login.error =
+                    "Hacking login is not implemented in robcos-iced yet.".to_string();
+                Task::none()
+            }
+            TerminalLoginSelectionPlan::ShowError(error) => {
+                self.login.error = error;
+                Task::none()
+            }
+        }
+    }
+
+    fn apply_terminal_login_password_plan(
+        &mut self,
+        plan: TerminalLoginPasswordPlan<UserRecord>,
+    ) -> Task<Message> {
+        let follow_up = self.apply_terminal_login_submit_action(plan.action, true);
+        if let Some(prompt) = plan.reopen_prompt {
+            self.open_password_prompt(prompt.title, prompt.prompt)
+        } else {
+            follow_up
+        }
+    }
+
+    fn apply_terminal_login_submit_action(
+        &mut self,
+        action: TerminalLoginSubmitAction<UserRecord>,
+        missing_username_is_select_user: bool,
+    ) -> Task<Message> {
+        self.login.error.clear();
+        match action {
+            TerminalLoginSubmitAction::MissingUsername => {
+                self.login.error = if missing_username_is_select_user {
+                    "Select a user.".to_string()
+                } else {
+                    "Username cannot be empty.".to_string()
+                };
+                Task::none()
+            }
+            TerminalLoginSubmitAction::Authenticated { username, user } => {
+                bind_login_identity(&username);
+                self.settings = load_settings_snapshot();
+                self.session_username = Some(username.clone());
+                self.session_is_admin = user.is_admin;
+                self.desktop_mode = false;
+                self.terminal_prompt = None;
+                self.login.selected_username = username.clone();
+                self.login.clear_password_and_error();
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    TerminalScreen::MainMenu,
+                    0,
+                    true,
+                ));
+                self.shell_status = format!("Logged in as {username}.");
+                Task::none()
+            }
+            TerminalLoginSubmitAction::ShowError(error) => {
+                self.login.error = error;
+                Task::none()
+            }
+        }
+    }
+
+    fn handle_logout(&mut self) {
+        clear_all_sessions();
+        clear_session();
+        set_current_user(None);
+        self.settings = load_settings_snapshot();
+        self.session_username = None;
+        self.session_is_admin = false;
+        self.desktop_mode = false;
+        self.spotlight.close();
+        self.start_menu.close();
+        self.terminal_prompt = None;
+        self.terminal_nav = terminal_runtime_defaults();
+        self.login.reset();
+        self.refresh_login_rows();
+        self.shell_status = "Logged out.".to_string();
+    }
+
+    fn submit_login_prompt(&mut self) -> Task<Message> {
+        let Some(prompt) = self.terminal_prompt.take() else {
+            return Task::none();
+        };
+        if !matches!(prompt.action, TerminalPromptAction::LoginPassword) {
+            return Task::none();
+        }
+        self.login.password = prompt.buffer;
+        let plan = resolve_login_password_submission(
+            &self.login.selected_username,
+            &self.login.password,
+            self.session_username.is_some(),
+            false,
+            authenticate_login,
+        );
+        self.apply_terminal_login_password_plan(plan)
+    }
+
+    fn current_terminal_selectable_count(&self) -> usize {
+        if self.session_username.is_none() {
+            return self
+                .login_rows
+                .iter()
+                .filter(|row| matches!(row, LoginMenuRow::User(_) | LoginMenuRow::Exit))
+                .count();
+        }
+        if matches!(self.terminal_nav.screen, TerminalScreen::MainMenu) {
+            return selectable_menu_count();
+        }
+        terminal_menu_entries_for_screen(self.terminal_nav.screen)
+            .map(terminal_menu_selectable_count)
+            .unwrap_or(0)
+    }
+
+    fn current_terminal_selected_idx(&self) -> usize {
+        if self.session_username.is_none() {
+            return self.login.selected_idx;
+        }
+        match self.terminal_nav.screen {
+            TerminalScreen::MainMenu => self.terminal_nav.main_menu_idx,
+            TerminalScreen::Applications => self.terminal_nav.apps_idx,
+            TerminalScreen::Documents => self.terminal_nav.documents_idx,
+            TerminalScreen::Logs => self.terminal_nav.logs_idx,
+            TerminalScreen::Network => self.terminal_nav.network_idx,
+            TerminalScreen::Games => self.terminal_nav.games_idx,
+            TerminalScreen::Settings => self.terminal_nav.settings_idx,
+            TerminalScreen::DefaultApps => self.terminal_nav.default_apps_idx,
+            TerminalScreen::DocumentBrowser => self.terminal_nav.browser_idx,
+            TerminalScreen::UserManagement => self.terminal_nav.user_management_idx,
+            TerminalScreen::ProgramInstaller
+            | TerminalScreen::Connections
+            | TerminalScreen::EditMenus
+            | TerminalScreen::About
+            | TerminalScreen::DonkeyKong
+            | TerminalScreen::NukeCodes
+            | TerminalScreen::PtyApp => 0,
+        }
+    }
+
+    fn set_current_terminal_selected_idx(&mut self, idx: usize) {
+        if self.session_username.is_none() {
+            self.login.selected_idx = idx;
+            return;
+        }
+        match self.terminal_nav.screen {
+            TerminalScreen::MainMenu => self.terminal_nav.main_menu_idx = idx,
+            TerminalScreen::Applications => self.terminal_nav.apps_idx = idx,
+            TerminalScreen::Documents => self.terminal_nav.documents_idx = idx,
+            TerminalScreen::Logs => self.terminal_nav.logs_idx = idx,
+            TerminalScreen::Network => self.terminal_nav.network_idx = idx,
+            TerminalScreen::Games => self.terminal_nav.games_idx = idx,
+            TerminalScreen::Settings => self.terminal_nav.settings_idx = idx,
+            TerminalScreen::DefaultApps => self.terminal_nav.default_apps_idx = idx,
+            TerminalScreen::DocumentBrowser => self.terminal_nav.browser_idx = idx,
+            TerminalScreen::UserManagement => self.terminal_nav.user_management_idx = idx,
+            TerminalScreen::ProgramInstaller
+            | TerminalScreen::Connections
+            | TerminalScreen::EditMenus
+            | TerminalScreen::About
+            | TerminalScreen::DonkeyKong
+            | TerminalScreen::NukeCodes
+            | TerminalScreen::PtyApp => {}
+        }
+    }
+
+    fn move_terminal_selection(&mut self, dir: NavDirection) {
+        if self.terminal_prompt.is_some() {
+            return;
+        }
+        let selectable_count = self.current_terminal_selectable_count();
+        if selectable_count == 0 {
+            return;
+        }
+        let mut selected_idx = self.current_terminal_selected_idx();
+        match dir {
+            NavDirection::Up => {
+                selected_idx = selected_idx.saturating_sub(1);
+            }
+            NavDirection::Down => {
+                selected_idx = (selected_idx + 1).min(selectable_count.saturating_sub(1));
+            }
+            _ => return,
+        }
+        self.set_current_terminal_selected_idx(selected_idx);
+    }
+
+    fn activate_selected_terminal_item(&mut self) -> Task<Message> {
+        self.activate_terminal_selection(self.current_terminal_selected_idx())
+    }
+
+    fn activate_terminal_selection(&mut self, idx: usize) -> Task<Message> {
+        if self.terminal_prompt.is_some() {
+            return Task::none();
+        }
+        let selectable_count = self.current_terminal_selectable_count();
+        if selectable_count == 0 {
+            return Task::none();
+        }
+        let idx = idx.min(selectable_count.saturating_sub(1));
+        self.set_current_terminal_selected_idx(idx);
+
+        if self.session_username.is_none() {
+            self.refresh_login_rows();
+            self.login.selected_idx = idx;
+            let usernames: Vec<String> = self
+                .login_rows
+                .iter()
+                .filter_map(|row| match row {
+                    LoginMenuRow::User(user) => Some(user.clone()),
+                    LoginMenuRow::Separator | LoginMenuRow::Exit => None,
+                })
+                .collect();
+            let plan = resolve_login_selection_plan(
+                idx,
+                &usernames,
+                login_selection_auth_method,
+                |username| authenticate_login(username, ""),
+            );
+            return self.apply_terminal_login_selection_plan(plan);
+        }
+
+        if matches!(self.terminal_nav.screen, TerminalScreen::MainMenu) {
+            if let Some(action) = entry_for_selectable_idx(idx).action {
+                return self.apply_main_menu_selection_action(resolve_main_menu_action(action));
+            }
+            return Task::none();
+        }
+
+        let Some(entries) = terminal_menu_entries_for_screen(self.terminal_nav.screen) else {
+            return Task::none();
+        };
+        let Some(entry) = terminal_menu_entry_for_idx(entries, idx) else {
+            return Task::none();
+        };
+        let Some(action) = entry.action else {
+            return Task::none();
+        };
+        self.apply_terminal_menu_action(action)
+    }
+
+    fn handle_terminal_back(&mut self) {
+        let current_screen = self.terminal_nav.screen;
+        let action = resolve_terminal_back_action(TerminalBackContext {
+            screen: current_screen,
+            has_settings_choice: self.terminal_nav.settings_choice.is_some(),
+            has_default_app_slot: self.terminal_nav.default_app_slot.is_some(),
+            connections_at_root: true,
+            installer_at_root: true,
+            has_embedded_pty: false,
+            pty_return_screen: TerminalScreen::MainMenu,
+            nuke_codes_return_screen: self.terminal_nav.nuke_codes_return_screen,
+            browser_return_screen: self.terminal_nav.browser_return_screen,
+        });
+
+        match action {
+            TerminalBackAction::NoOp => {}
+            TerminalBackAction::ClearSettingsChoice => {
+                self.terminal_nav.settings_choice = None;
+            }
+            TerminalBackAction::ClearDefaultAppSlot => {
+                self.terminal_nav.default_app_slot = None;
+            }
+            TerminalBackAction::UseConnectionsInnerBack
+            | TerminalBackAction::UseInstallerInnerBack => {}
+            TerminalBackAction::NavigateTo {
+                screen,
+                clear_status,
+                reset_installer: _,
+            } => {
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    screen,
+                    terminal_back_selected_idx(current_screen, screen),
+                    clear_status,
+                ));
+            }
+            TerminalBackAction::ClosePtyAndReturn { return_screen } => {
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    return_screen,
+                    terminal_back_selected_idx(current_screen, return_screen),
+                    true,
+                ));
+            }
+        }
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
         use iced::widget::{column, stack};
+
+        if !self.desktop_mode {
+            return self.view_terminal_mode();
+        }
 
         let shell_ui: Element<'_, Message> = column![
             self.view_top_bar(),
@@ -697,6 +1483,596 @@ impl RobcoShell {
         } else {
             shell_ui
         }
+    }
+
+    fn view_terminal_mode(&self) -> Element<'_, Message> {
+        use iced::widget::stack;
+
+        let base = if self.session_username.is_none() {
+            self.view_terminal_login_screen()
+        } else {
+            match self.terminal_nav.screen {
+                TerminalScreen::MainMenu => self.view_terminal_main_menu(),
+                screen => self.view_terminal_standard_screen(screen),
+            }
+        };
+
+        if self.terminal_prompt.is_some() {
+            stack![base, self.view_terminal_prompt_overlay()].into()
+        } else {
+            base
+        }
+    }
+
+    fn view_terminal_login_screen(&self) -> Element<'_, Message> {
+        let error_color = iced::Color::from_rgb8(255, 128, 128);
+        let (footer, footer_color) = if !self.login.error.is_empty() {
+            (self.login.error.clone(), error_color)
+        } else if !self.shell_status.is_empty() {
+            (
+                self.shell_status.clone(),
+                super::retro_theme::current_retro_colors().dim.to_iced(),
+            )
+        } else {
+            (
+                "Arrow keys move | Enter select".to_string(),
+                super::retro_theme::current_retro_colors().dim.to_iced(),
+            )
+        };
+
+        self.view_terminal_frame(
+            "ROBCO TERMLINK - Select User".to_string(),
+            Some("Welcome. Please select a user.".to_string()),
+            self.view_terminal_login_rows(),
+            footer,
+            footer_color,
+        )
+    }
+
+    fn view_terminal_main_menu(&self) -> Element<'_, Message> {
+        let user_label = self
+            .session_username
+            .as_ref()
+            .map(|username| {
+                format!(
+                    "User: {username}{}    RobCoOS {}",
+                    if self.session_is_admin { " [ADMIN]" } else { "" },
+                    env!("CARGO_PKG_VERSION")
+                )
+            })
+            .unwrap_or_else(|| format!("RobCoOS {}", env!("CARGO_PKG_VERSION")));
+        let footer = if self.shell_status.is_empty() {
+            "Arrow keys move | Enter select | Esc back".to_string()
+        } else {
+            self.shell_status.clone()
+        };
+        self.view_terminal_frame(
+            "Main Menu".to_string(),
+            Some(user_label),
+            self.view_terminal_main_menu_entries(),
+            footer,
+            super::retro_theme::current_retro_colors().dim.to_iced(),
+        )
+    }
+
+    fn view_terminal_standard_screen(&self, screen: TerminalScreen) -> Element<'_, Message> {
+        use iced::widget::{column, container, text};
+        use iced::Length;
+
+        let note = match screen {
+            TerminalScreen::Applications => {
+                Some("Terminal mode UI is active. Hosted desktop apps remain separate and land in Phase 3h.")
+            }
+            TerminalScreen::Documents => Some("Document and log browsers will be wired into these routes next."),
+            TerminalScreen::Network => {
+                Some("This is terminal mode UI, not the actual CLI terminal app.")
+            }
+            TerminalScreen::Games => Some("Game launch routes exist here; interactive ports follow later."),
+            TerminalScreen::ProgramInstaller => {
+                Some("Program Installer UI is reserved here; the real hosted app path lands later.")
+            }
+            TerminalScreen::Settings => {
+                Some("Settings sub-routes are wired into terminal mode navigation.")
+            }
+            TerminalScreen::Connections => {
+                Some("Connections settings screen is not rendered in iced yet.")
+            }
+            TerminalScreen::DefaultApps => {
+                Some("Default app editing is not rendered in iced yet.")
+            }
+            TerminalScreen::EditMenus => {
+                Some("Menu editing is not rendered in iced yet.")
+            }
+            TerminalScreen::About => Some("About screen is not rendered in iced yet."),
+            TerminalScreen::UserManagement => {
+                Some("User management UI is not rendered in iced yet.")
+            }
+            TerminalScreen::Logs => Some("Logs browser is not rendered in iced yet."),
+            TerminalScreen::DocumentBrowser => {
+                Some("Document browser is not rendered in iced yet.")
+            }
+            TerminalScreen::DonkeyKong => Some("Donkey Kong route is reserved here."),
+            TerminalScreen::NukeCodes => Some("Nuke Codes route is reserved here."),
+            TerminalScreen::PtyApp => {
+                Some("The actual CLI terminal/PTTY app remains separate from terminal mode and lands in Phase 3h.")
+            }
+            TerminalScreen::MainMenu => None,
+        };
+
+        let body: Element<'_, Message> = if let Some(entries) = terminal_menu_entries_for_screen(screen) {
+            let mut layout = column![].spacing(12).width(Length::Fill).height(Length::Fill);
+            if let Some(note) = note {
+                let dim = super::retro_theme::current_retro_colors().dim.to_iced();
+                layout = layout.push(
+                    container(
+                        text(note)
+                            .font(iced::Font::MONOSPACE)
+                            .size(14)
+                            .color(dim)
+                    )
+                    .width(Length::Fill)
+                );
+            }
+            layout = layout.push(self.view_terminal_menu_entries(entries, self.current_terminal_selected_idx()));
+            layout.into()
+        } else {
+            container(text("TODO").font(iced::Font::MONOSPACE)).into()
+        };
+
+        let footer = if self.shell_status.is_empty() {
+            "Arrow keys move | Enter select | Esc back".to_string()
+        } else {
+            self.shell_status.clone()
+        };
+        self.view_terminal_frame(
+            match screen {
+                TerminalScreen::Applications => "Applications",
+                TerminalScreen::Documents => "Documents",
+                TerminalScreen::Network => "Network",
+                TerminalScreen::Games => "Games",
+                TerminalScreen::DonkeyKong => "Donkey Kong",
+                TerminalScreen::NukeCodes => "Nuke Codes",
+                TerminalScreen::PtyApp => "CLI Terminal",
+                TerminalScreen::ProgramInstaller => "Program Installer",
+                TerminalScreen::Logs => "Logs",
+                TerminalScreen::DocumentBrowser => "Document Browser",
+                TerminalScreen::Settings => "Settings",
+                TerminalScreen::EditMenus => "Edit Menus",
+                TerminalScreen::Connections => "Connections",
+                TerminalScreen::DefaultApps => "Default Apps",
+                TerminalScreen::About => "About",
+                TerminalScreen::UserManagement => "User Management",
+                TerminalScreen::MainMenu => "Main Menu",
+            }
+            .to_string(),
+            self.session_username.as_ref().map(|username| {
+                format!(
+                    "User: {username}{}",
+                    if self.session_is_admin { " [ADMIN]" } else { "" }
+                )
+            }),
+            body,
+            footer,
+            super::retro_theme::current_retro_colors().dim.to_iced(),
+        )
+    }
+
+    fn view_terminal_frame<'a>(
+        &self,
+        title: String,
+        subtitle: Option<String>,
+        body: Element<'a, Message>,
+        footer_text: String,
+        footer_color: iced::Color,
+    ) -> Element<'a, Message> {
+        use iced::widget::{column, container, text, Space};
+        use iced::Length;
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+
+        let mut header = column![].spacing(0);
+        for line in HEADER_LINES {
+            header = header.push(
+                text(*line)
+                    .font(iced::Font::MONOSPACE)
+                    .size(20)
+                    .color(fg),
+            );
+        }
+
+        let separator = || {
+            container(Space::with_height(1))
+                .width(Length::Fill)
+                .style(move |_t| container::Style {
+                    background: Some(iced::Background::Color(dim)),
+                    ..container::Style::default()
+                })
+        };
+
+        let mut layout = column![
+            header,
+            Space::with_height(8),
+            separator(),
+            Space::with_height(8),
+            text(title)
+                .font(iced::Font::MONOSPACE)
+                .size(22)
+                .color(fg),
+            Space::with_height(8),
+            separator(),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        if let Some(subtitle) = subtitle {
+            layout = layout.push(Space::with_height(8)).push(
+                text(subtitle)
+                    .font(iced::Font::MONOSPACE)
+                    .size(14)
+                    .color(fg),
+            );
+        }
+
+        layout = layout
+            .push(Space::with_height(16))
+            .push(container(body).width(Length::Fill).height(Length::Fill))
+            .push(Space::with_height(12))
+            .push(separator())
+            .push(Space::with_height(8))
+            .push(
+                text(footer_text)
+                    .font(iced::Font::MONOSPACE)
+                    .size(14)
+                    .color(footer_color),
+            );
+
+        container(layout)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding([20, 28])
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    fn view_terminal_login_rows(&self) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, scrollable, text};
+        use iced::{Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let hovered_bg = palette.hovered_bg.to_iced();
+
+        let mut col = column![].spacing(2).width(Length::Fill);
+        let mut selectable_idx = 0usize;
+
+        for row in &self.login_rows {
+            match row {
+                LoginMenuRow::Separator => {
+                    col = col.push(
+                        container(
+                            text("---")
+                                .font(iced::Font::MONOSPACE)
+                                .size(16)
+                                .color(dim)
+                        )
+                        .padding([2, 8])
+                        .width(Length::Fill),
+                    );
+                }
+                LoginMenuRow::User(user) => {
+                    let idx = selectable_idx;
+                    let selected = idx == self.login.selected_idx;
+                    let item_bg = if selected { selected_bg } else { bg };
+                    let item_fg = if selected { selected_fg } else { fg };
+                    let label = if selected {
+                        format!("> {user}")
+                    } else {
+                        format!("  {user}")
+                    };
+                    col = col.push(
+                        button(
+                            text(label)
+                                .font(iced::Font::MONOSPACE)
+                                .size(16)
+                                .color(item_fg)
+                        )
+                        .on_press(Message::TerminalSelectionActivated(idx))
+                        .width(Length::Fill)
+                        .style(move |_t, status| {
+                            use iced::widget::button::Status;
+                            let bg_color = match status {
+                                Status::Hovered => hovered_bg,
+                                _ => item_bg,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg_color)),
+                                text_color: item_fg,
+                                border: Border::default(),
+                                ..button::Style::default()
+                            }
+                        })
+                        .padding([4, 8]),
+                    );
+                    selectable_idx += 1;
+                }
+                LoginMenuRow::Exit => {
+                    let idx = selectable_idx;
+                    let selected = idx == self.login.selected_idx;
+                    let item_bg = if selected { selected_bg } else { bg };
+                    let item_fg = if selected { selected_fg } else { fg };
+                    let label = if selected {
+                        "> Exit".to_string()
+                    } else {
+                        "  Exit".to_string()
+                    };
+                    col = col.push(
+                        button(
+                            text(label)
+                                .font(iced::Font::MONOSPACE)
+                                .size(16)
+                                .color(item_fg)
+                        )
+                        .on_press(Message::TerminalSelectionActivated(idx))
+                        .width(Length::Fill)
+                        .style(move |_t, status| {
+                            use iced::widget::button::Status;
+                            let bg_color = match status {
+                                Status::Hovered => hovered_bg,
+                                _ => item_bg,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg_color)),
+                                text_color: item_fg,
+                                border: Border::default(),
+                                ..button::Style::default()
+                            }
+                        })
+                        .padding([4, 8]),
+                    );
+                    selectable_idx += 1;
+                }
+            }
+        }
+
+        scrollable(col).height(Length::Fill).into()
+    }
+
+    fn view_terminal_main_menu_entries(&self) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, scrollable, text};
+        use iced::{Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let hovered_bg = palette.hovered_bg.to_iced();
+
+        let mut col = column![].spacing(2).width(Length::Fill);
+        let mut selectable_idx = 0usize;
+
+        for entry in MAIN_MENU_ENTRIES {
+            if entry.action.is_none() {
+                col = col.push(
+                    container(
+                        text(entry.label)
+                            .font(iced::Font::MONOSPACE)
+                            .size(16)
+                            .color(dim)
+                    )
+                    .padding([2, 8])
+                    .width(Length::Fill),
+                );
+                continue;
+            }
+
+            let idx = selectable_idx;
+            let selected = idx == self.terminal_nav.main_menu_idx;
+            let item_bg = if selected { selected_bg } else { bg };
+            let item_fg = if selected { selected_fg } else { fg };
+            let label = if selected {
+                format!("> {}", entry.label)
+            } else {
+                format!("  {}", entry.label)
+            };
+            col = col.push(
+                button(
+                    text(label)
+                        .font(iced::Font::MONOSPACE)
+                        .size(16)
+                        .color(item_fg)
+                )
+                .on_press(Message::TerminalSelectionActivated(idx))
+                .width(Length::Fill)
+                .style(move |_t, status| {
+                    use iced::widget::button::Status;
+                    let bg_color = match status {
+                        Status::Hovered => hovered_bg,
+                        _ => item_bg,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg_color)),
+                        text_color: item_fg,
+                        border: Border::default(),
+                        ..button::Style::default()
+                    }
+                })
+                .padding([4, 8]),
+            );
+            selectable_idx += 1;
+        }
+
+        scrollable(col).height(iced::Length::Fill).into()
+    }
+
+    fn view_terminal_menu_entries(
+        &self,
+        entries: &[TerminalMenuEntry],
+        selected_idx: usize,
+    ) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, scrollable, text};
+        use iced::{Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let hovered_bg = palette.hovered_bg.to_iced();
+
+        let mut col = column![].spacing(2).width(Length::Fill);
+        let mut selectable_idx = 0usize;
+
+        for entry in entries {
+            let Some(action) = entry.action else {
+                col = col.push(
+                    container(
+                        text(entry.label)
+                            .font(iced::Font::MONOSPACE)
+                            .size(16)
+                            .color(dim)
+                    )
+                    .padding([2, 8])
+                    .width(Length::Fill),
+                );
+                continue;
+            };
+
+            let idx = selectable_idx;
+            let selected = idx == selected_idx;
+            let item_bg = if selected { selected_bg } else { bg };
+            let item_fg = if selected { selected_fg } else { fg };
+            let label = if selected {
+                format!("> {}", entry.label)
+            } else {
+                format!("  {}", entry.label)
+            };
+            col = col.push(
+                button(
+                    text(label)
+                        .font(iced::Font::MONOSPACE)
+                        .size(16)
+                        .color(item_fg)
+                )
+                .on_press(Message::TerminalSelectionActivated(idx))
+                .width(Length::Fill)
+                .style(move |_t, status| {
+                    use iced::widget::button::Status;
+                    let bg_color = match status {
+                        Status::Hovered => hovered_bg,
+                        _ => item_bg,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg_color)),
+                        text_color: item_fg,
+                        border: Border::default(),
+                        ..button::Style::default()
+                    }
+                })
+                .padding([4, 8]),
+            );
+            let _ = action;
+            selectable_idx += 1;
+        }
+
+        scrollable(col).height(Length::Fill).into()
+    }
+
+    fn view_terminal_prompt_overlay(&self) -> Element<'_, Message> {
+        use iced::widget::{column, container, row, text, text_input, Space};
+        use iced::{Alignment, Border, Length};
+
+        let Some(prompt) = self.terminal_prompt.as_ref() else {
+            return Space::with_width(Length::Shrink).into();
+        };
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+
+        let input = text_input("", &prompt.buffer)
+            .id(Self::terminal_prompt_id())
+            .on_input(Message::LoginPasswordChanged)
+            .on_submit(Message::LoginSubmitted)
+            .secure(matches!(prompt.kind, TerminalPromptKind::Password))
+            .font(iced::Font::MONOSPACE)
+            .size(16)
+            .style(move |_t, _s| iced::widget::text_input::Style {
+                background: iced::Background::Color(bg),
+                border: Border {
+                    color: fg,
+                    width: 2.0,
+                    radius: 0.0.into(),
+                },
+                icon: fg,
+                placeholder: dim,
+                value: fg,
+                selection: selected_bg,
+            })
+            .padding([8, 10]);
+
+        let panel = container(
+            column![
+                text(prompt.title.as_str())
+                    .font(iced::Font::MONOSPACE)
+                    .size(18)
+                    .color(fg),
+                text(prompt.prompt.as_str())
+                    .font(iced::Font::MONOSPACE)
+                    .size(14)
+                    .color(fg),
+                input,
+                text("Enter apply | Esc cancel")
+                    .font(iced::Font::MONOSPACE)
+                    .size(12)
+                    .color(dim),
+            ]
+            .spacing(12)
+            .width(420)
+        )
+        .padding(18)
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            border: Border {
+                color: fg,
+                width: 2.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+        container(
+            column![
+                Space::with_height(Length::Fill),
+                row![
+                    Space::with_width(Length::Fill),
+                    panel,
+                    Space::with_width(Length::Fill),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(Length::Fill),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn view_top_bar(&self) -> Element<'_, Message> {
@@ -827,7 +2203,6 @@ impl RobcoShell {
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
         let bg = palette.bg.to_iced();
-        let panel_bg = palette.panel.to_iced();
         let selected_bg = palette.selected_bg.to_iced();
         let selected_fg = palette.selected_fg.to_iced();
 
@@ -1120,11 +2495,11 @@ impl RobcoShell {
     /// - Right panel: submenu or leaf entries for the selected root item
     fn view_start_menu(&self) -> Element<'_, Message> {
         use super::desktop_start_menu::{
-            start_root_leaf_for_idx, start_root_submenu_for_idx, StartLeaf, StartSubmenu,
-            START_ROOT_ITEMS, START_ROOT_VIS_ROWS,
+            start_root_leaf_for_idx, start_root_submenu_for_idx, StartLeaf, START_ROOT_ITEMS,
+            START_ROOT_VIS_ROWS,
         };
-        use iced::widget::{button, column, container, mouse_area, row, scrollable, text, Space};
-        use iced::{Alignment, Border, Length};
+        use iced::widget::{button, column, container, mouse_area, row, text, Space};
+        use iced::{Border, Length};
 
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
@@ -1355,6 +2730,16 @@ impl RobcoShell {
                     Some(Message::OpenSpotlight)
                 }
                 Key::Named(Named::Escape) => Some(Message::CloseSpotlight),
+                Key::Named(Named::ArrowLeft) => Some(Message::TerminalBackRequested),
+                Key::Named(Named::ArrowUp) => {
+                    Some(Message::TerminalNavigate(NavDirection::Up))
+                }
+                Key::Named(Named::ArrowDown) => {
+                    Some(Message::TerminalNavigate(NavDirection::Down))
+                }
+                Key::Named(Named::Enter) => {
+                    Some(Message::TerminalActivateSelected)
+                }
                 _ => None,
             }
         });

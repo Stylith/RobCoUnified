@@ -206,6 +206,14 @@ pub enum Message {
     // ── Terminal / PTY ────────────────────────────────────────────────────────
     /// Switch the shell between terminal mode and desktop mode.
     DesktopModeToggled,
+    /// Move the current full-screen terminal UI selection.
+    TerminalNavigate(NavDirection),
+    /// Activate the currently selected full-screen terminal UI item.
+    TerminalActivateSelected,
+    /// Navigate back within the full-screen terminal UI.
+    TerminalBackRequested,
+    /// Close the active full-screen terminal prompt without submitting it.
+    TerminalPromptCancelled,
     /// User input bytes to send to the PTY.
     PtyInput(Vec<u8>),
     /// Async: PTY produced output bytes.
@@ -214,8 +222,7 @@ pub enum Message {
     PtyTitleChanged(String),
     /// Async: PTY child process exited.
     PtyExited,
-    /// Terminal navigation (menu selections, screen transitions, etc.).
-    /// Carries an opaque index; the terminal sub-state interprets it.
+    /// Activate a specific selectable row in the full-screen terminal UI.
     TerminalSelectionActivated(usize),
 
     // ── Settings ──────────────────────────────────────────────────────────────
