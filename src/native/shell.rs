@@ -634,6 +634,8 @@ pub struct RobcoShell {
     // before the iced scaffold compiles.
     pub file_manager: NativeFileManagerState,
     pub editor: EditorWindow,
+    /// iced text editor content — the live buffer for the Editor desktop window.
+    pub editor_content: iced::widget::text_editor::Content,
     pub settings_panel: Option<NativeSettingsPanel>,
 
     // ── Settings ────────────────────────────────────────────────────────────
@@ -686,6 +688,7 @@ impl RobcoShell {
             session_is_admin: false,
             file_manager: NativeFileManagerState::new(home),
             editor: EditorWindow::default(),
+            editor_content: iced::widget::text_editor::Content::new(),
             settings_panel: None,
             settings,
             shell_status: String::new(),
@@ -981,6 +984,31 @@ impl RobcoShell {
             }
             Message::PersistSnapshotRequested => {
                 // Phase 3: call persist_native_shell_snapshot()
+            }
+
+            Message::TextEditorAction(action) => {
+                self.editor_content.perform(action);
+                self.editor.dirty = true;
+            }
+
+            Message::FileManagerCommand(cmd) => {
+                use robcos_native_file_manager_app::FileManagerCommand;
+                match cmd {
+                    FileManagerCommand::GoUp => {
+                        self.file_manager.up();
+                    }
+                    FileManagerCommand::OpenSelected => {
+                        let action = self.file_manager.activate_selected();
+                        use robcos_native_file_manager_app::FileManagerAction;
+                        if let FileManagerAction::ChangedDir = action {
+                            // directory was entered; view cache already refreshed
+                        }
+                    }
+                    FileManagerCommand::ToggleHiddenFiles => {
+                        // hidden files toggle is tracked in settings; handled in Phase 4
+                    }
+                    _ => {}
+                }
             }
 
             // All other variants are stubs for Phase 3+
@@ -2147,7 +2175,7 @@ impl RobcoShell {
     }
 
     fn view_desktop(&self) -> Element<'_, Message> {
-        use iced::widget::{column, container, stack, text};
+        use iced::widget::stack;
         use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
@@ -2162,23 +2190,38 @@ impl RobcoShell {
                 let lifecycle = w.lifecycle;
                 let resizable = w.resizable;
                 let rect = w.rect;
-                let title = format!("{:?}", id);
 
-                let content: Element<'_, Message> = container(
-                    column![
-                        text(format!("{:?}", id)).size(15).color(fg),
-                        text("Window content placeholder").size(11).color(dim),
-                    ]
-                    .spacing(6)
-                    .padding(10)
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    ..container::Style::default()
-                })
-                .into();
+                let title = match id {
+                    DesktopWindow::FileManager => {
+                        let name = self.file_manager.cwd
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("/");
+                        format!("File Manager — {}", name)
+                    }
+                    DesktopWindow::Editor => {
+                        let name = self.editor.path
+                            .as_deref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("Untitled");
+                        if self.editor.dirty {
+                            format!("Editor — {}*", name)
+                        } else {
+                            format!("Editor — {}", name)
+                        }
+                    }
+                    DesktopWindow::Settings => "Settings".to_string(),
+                    DesktopWindow::PtyApp => "Terminal".to_string(),
+                    _ => format!("{:?}", id),
+                };
+
+                let content: Element<'_, Message> = match id {
+                    DesktopWindow::FileManager => self.view_file_manager(),
+                    DesktopWindow::Editor => self.view_editor(),
+                    DesktopWindow::Settings => self.view_settings_app(),
+                    _ => self.view_window_placeholder(id, fg, dim, bg),
+                };
 
                 WindowChild { id, rect, title, lifecycle, is_active, resizable, content }
             })
@@ -2191,6 +2234,202 @@ impl RobcoShell {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+
+    // ── Hosted app views ─────────────────────────────────────────────────────
+
+    /// File manager window content.
+    fn view_file_manager(&self) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, row, scrollable, text};
+        use iced::{Alignment, Length};
+        use robcos_native_file_manager_app::FileManagerCommand;
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+
+        // Toolbar: Up button + current path
+        let cwd_str = self.file_manager.cwd.display().to_string();
+        let toolbar = row![
+            button(text("↑ Up").size(12).color(fg))
+                .padding([2, 8])
+                .style(move |_t, _s| iced::widget::button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: fg,
+                    border: iced::Border { color: dim, width: 1.0, radius: 2.0.into() },
+                    ..Default::default()
+                })
+                .on_press(Message::FileManagerCommand(FileManagerCommand::GoUp)),
+            text(cwd_str).size(12).color(fg),
+        ]
+        .spacing(8)
+        .padding([4, 8])
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
+
+        let rows = self.file_manager.rows();
+        let selected = &self.file_manager.selected;
+        let file_rows: Vec<Element<'_, Message>> = rows
+            .iter()
+            .map(|row| {
+                let name = row.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("..")
+                    .to_string();
+                let icon = row.icon();
+                let is_selected = selected.as_deref() == Some(row.path.as_path());
+                let (row_bg, row_fg) = if is_selected {
+                    (selected_bg, selected_fg)
+                } else {
+                    (bg, fg)
+                };
+                let label = format!("{} {}", icon, name);
+                button(text(label).size(12).color(row_fg))
+                    .padding([2, 12])
+                    .width(Length::Fill)
+                    .style(move |_t, _s| iced::widget::button::Style {
+                        background: Some(iced::Background::Color(row_bg)),
+                        text_color: row_fg,
+                        ..Default::default()
+                    })
+                    .on_press(Message::FileManagerCommand(FileManagerCommand::OpenSelected))
+                    .into()
+            })
+            .collect();
+
+        let file_list = scrollable(
+            column(file_rows).width(Length::Fill)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        let body = column![toolbar, file_list]
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        container(body)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    /// Editor window content — wraps iced's text_editor widget.
+    fn view_editor(&self) -> Element<'_, Message> {
+        use iced::widget::{column, container, text, text_editor};
+        use iced::{Font, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let dim = palette.dim.to_iced();
+
+        // Status bar: path + dirty indicator
+        let status_str = if self.editor.dirty { "● Modified" } else { "" };
+        let status = container(
+            text(status_str).size(11).color(dim)
+        )
+        .padding([2, 8])
+        .width(Length::Fill);
+
+        let editor_widget = text_editor(&self.editor_content)
+            .on_action(Message::TextEditorAction)
+            .font(Font::MONOSPACE)
+            .size(13.0)
+            .height(Length::Fill);
+
+        column![editor_widget, status]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// Settings window content — scrollable settings panel list.
+    fn view_settings_app(&self) -> Element<'_, Message> {
+        use iced::widget::{column, container, scrollable, text};
+        use iced::Length;
+        use robcos_native_settings_app::{desktop_settings_home_rows, settings_panel_title};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+
+        let current_panel = self.settings_panel.unwrap_or(
+            robcos_native_settings_app::desktop_settings_default_panel()
+        );
+        let title_str = settings_panel_title(current_panel);
+
+        let header = container(
+            text(title_str).size(14).color(fg)
+        )
+        .padding([8, 12])
+        .width(iced::Length::Fill);
+
+        let rows = desktop_settings_home_rows(self.session_is_admin);
+        let mut items: Vec<iced::Element<'_, Message>> = Vec::new();
+        for tile_row in &rows {
+            for tile in tile_row {
+                let label = tile.label;
+                items.push(
+                    container(text(label).size(12).color(fg))
+                        .padding([4, 12])
+                        .width(iced::Length::Fill)
+                        .style(move |_t| container::Style {
+                            border: iced::Border { color: dim, width: 0.0, radius: 0.0.into() },
+                            ..Default::default()
+                        })
+                        .into()
+                );
+            }
+        }
+
+        let body = scrollable(
+            column(items).width(Length::Fill).spacing(2)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        container(column![header, body].width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    /// Fallback placeholder for windows without a dedicated view yet.
+    fn view_window_placeholder(
+        &self,
+        id: DesktopWindow,
+        fg: iced::Color,
+        dim: iced::Color,
+        bg: iced::Color,
+    ) -> Element<'_, Message> {
+        use iced::widget::{column, container, text};
+        use iced::Length;
+        container(
+            column![
+                text(format!("{:?}", id)).size(15).color(fg),
+                text("Coming soon").size(11).color(dim),
+            ]
+            .spacing(6)
+            .padding(10),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            ..container::Style::default()
+        })
+        .into()
     }
 
     /// Render the desktop surface: black background with builtin icon column on the left.

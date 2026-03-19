@@ -233,6 +233,8 @@ pub enum Message {
     // ── Editor ────────────────────────────────────────────────────────────────
     EditorCommand(EditorCommand),
     EditorTextCommand(EditorTextCommand),
+    /// Low-level text editing action from the iced text_editor widget.
+    TextEditorAction(iced::widget::text_editor::Action),
     EditorFileOpenRequested(PathBuf),
     EditorSaveAsRequested,
 
