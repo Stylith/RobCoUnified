@@ -5,6 +5,7 @@ resolver = "2"
 
 [workspace.dependencies]
 lru = "0.12"
+iced = { version = "0.13", features = ["canvas", "image", "tokio"] }
 
 [package]
 name = "robcos"
@@ -35,6 +36,7 @@ image         = { version = "0.25", default-features = false, features = ["png",
 fontdue       = "0.8"
 libc          = "0.2"
 lru           = { workspace = true }
+iced          = { workspace = true }
 resvg         = "0.44"
 usvg          = "0.44"
 robcos-native-services = { path = "crates/native-services" }

@@ -6,17 +6,19 @@
 
 #![allow(dead_code)]
 
+use super::app::StartMenuRenameState;
 use super::desktop_app::{DesktopMenuAction, DesktopMenuSection, DesktopShellAction};
 use super::desktop_search_service::NativeSpotlightResult;
+use super::desktop_settings_service::load_settings_snapshot;
 use super::desktop_start_menu::{StartLeaf, StartSubmenu};
-use super::app::StartMenuRenameState;
 use super::desktop_surface_service::DesktopSurfaceEntry;
-use super::shared_types::DesktopWindow;
 use super::message::{ContextMenuAction, DesktopIconId, Message};
+use super::shared_types::DesktopWindow;
+use crate::config::{DesktopIconSortMode, Settings};
+use iced::{Element, Subscription, Task, Theme};
 use robcos_native_editor_app::EditorWindow;
 use robcos_native_file_manager_app::{FileManagerAction, NativeFileManagerState};
 use robcos_native_settings_app::NativeSettingsPanel;
-use crate::config::{DesktopIconSortMode, Settings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -411,11 +413,313 @@ pub struct RobcoShell {
     // before the iced scaffold compiles.
     pub file_manager: NativeFileManagerState,
     pub editor: EditorWindow,
-    pub settings_panel: NativeSettingsPanel,
+    pub settings_panel: Option<NativeSettingsPanel>,
 
     // ── Settings ────────────────────────────────────────────────────────────
     pub settings: Settings,
 
     // ── Status bar ──────────────────────────────────────────────────────────
     pub shell_status: String,
+}
+
+// ── RobcoShell iced Application methods ──────────────────────────────────────
+
+impl RobcoShell {
+    /// Construct the initial shell state and return it alongside the first Task.
+    ///
+    /// Called by the iced entry point via `run_with(RobcoShell::new)`.
+    pub fn new() -> (Self, Task<Message>) {
+        let settings = load_settings_snapshot();
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let shell = Self {
+            windows: WindowManager::new(),
+            spotlight: SpotlightState::default(),
+            start_menu: StartMenuState::default(),
+            surface: DesktopSurfaceState::default(),
+            desktop_mode: true,
+            session_username: None,
+            session_is_admin: false,
+            file_manager: NativeFileManagerState::new(home),
+            editor: EditorWindow::default(),
+            settings_panel: None,
+            settings,
+            shell_status: String::new(),
+        };
+        (shell, Task::none())
+    }
+
+    /// Dispatch a message to the appropriate sub-state handler.
+    ///
+    /// Returns a Task for any async follow-up work. Most variants are sync
+    /// (Task::none). Async variants (PTY, file ops, search) will be added
+    /// in Phase 3 via Task::perform / Subscription.
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            // ── Spotlight ───────────────────────────────────────────────────
+            Message::OpenSpotlight => {
+                self.start_menu.close();
+                self.spotlight.reset();
+            }
+            Message::CloseSpotlight => {
+                self.spotlight.close();
+            }
+            Message::SpotlightQueryChanged(q) => {
+                self.spotlight.query = q;
+                self.spotlight.selected = 0;
+            }
+            Message::SpotlightTabChanged(t) => {
+                self.spotlight.set_tab(t);
+            }
+            Message::SpotlightNavigate(dir) => {
+                use super::message::NavDirection;
+                match dir {
+                    NavDirection::Down => {
+                        if self.spotlight.selected + 1 < self.spotlight.results.len() {
+                            self.spotlight.selected += 1;
+                        }
+                    }
+                    NavDirection::Up => {
+                        self.spotlight.selected = self.spotlight.selected.saturating_sub(1);
+                    }
+                    NavDirection::Right | NavDirection::Tab => {
+                        self.spotlight.set_tab(self.spotlight.tab.saturating_add(1));
+                    }
+                    NavDirection::Left | NavDirection::ShiftTab => {
+                        self.spotlight.set_tab(self.spotlight.tab.saturating_sub(1));
+                    }
+                }
+            }
+            Message::SpotlightActivateSelected => {
+                self.spotlight.close();
+                self.spotlight.query.clear();
+            }
+            Message::SpotlightResultsReady(results) => {
+                self.spotlight.results = results;
+                self.spotlight.selected = 0;
+                self.spotlight.mark_refreshed();
+            }
+
+            // ── Start menu ──────────────────────────────────────────────────
+            Message::StartButtonClicked => {
+                if self.start_menu.open {
+                    self.start_menu.close();
+                } else {
+                    self.spotlight.close();
+                    self.start_menu.open = true;
+                }
+            }
+            Message::StartMenuClose => {
+                self.start_menu.close();
+            }
+            Message::StartMenuSelectRoot(idx) => {
+                self.start_menu.selected_root = idx;
+            }
+            Message::StartMenuSelectSystem(idx) => {
+                self.start_menu.system_selected = idx;
+            }
+            Message::StartMenuSelectLeaf(idx) => {
+                self.start_menu.leaf_selected = idx;
+            }
+            Message::StartMenuOpenSubmenu(s) => {
+                self.start_menu.open_submenu = Some(s);
+            }
+            Message::StartMenuOpenLeaf(l) => {
+                self.start_menu.open_leaf = Some(l);
+            }
+            Message::StartMenuActivate => {
+                // Phase 3: resolve action and execute it
+            }
+            Message::StartMenuNavigate(_dir) => {
+                // Phase 3: keyboard nav within start menu
+            }
+
+            // ── Window management ────────────────────────────────────────────
+            Message::OpenWindow(w) => {
+                if !self.windows.is_open(w) {
+                    // Default size/position — will come from WindowManager in Phase 3
+                    self.windows.open(w, WindowRect::new(100.0, 60.0, 800.0, 560.0), (400.0, 300.0), true);
+                } else {
+                    self.windows.bring_to_front(w);
+                }
+            }
+            Message::CloseWindow(w) => {
+                self.windows.close(w);
+            }
+            Message::MinimizeWindow(w) => {
+                self.windows.minimize(w);
+            }
+            Message::ToggleMaximizeWindow(w) => {
+                // Workspace rect approximation; real one comes from layout in Phase 3
+                self.windows.toggle_maximize(w, WindowRect::new(0.0, 32.0, 1360.0, 808.0));
+            }
+            Message::FocusWindow(w) => {
+                self.windows.bring_to_front(w);
+            }
+            Message::WindowHeaderButtonClicked { window, button } => {
+                use super::message::WindowHeaderButton;
+                match button {
+                    WindowHeaderButton::Close => self.windows.close(window),
+                    WindowHeaderButton::Minimize => self.windows.minimize(window),
+                    WindowHeaderButton::Maximize | WindowHeaderButton::Restore => {
+                        self.windows.toggle_maximize(window, WindowRect::new(0.0, 32.0, 1360.0, 808.0));
+                    }
+                }
+            }
+
+            // ── Taskbar ──────────────────────────────────────────────────────
+            Message::TaskbarWindowClicked(w) => {
+                if self.windows.get(w).map_or(false, |m| m.is_minimized()) {
+                    // Un-minimise
+                    if let Some(win) = self.windows.get_mut(w) {
+                        win.lifecycle = WindowLifecycle::Normal;
+                    }
+                    self.windows.bring_to_front(w);
+                } else if self.windows.active() == Some(w) {
+                    self.windows.minimize(w);
+                } else {
+                    self.windows.bring_to_front(w);
+                }
+            }
+
+            // ── Shell actions ────────────────────────────────────────────────
+            Message::ShellAction(action) => {
+                use super::desktop_app::DesktopShellAction;
+                match action {
+                    DesktopShellAction::OpenWindow(w) => {
+                        return self.update(Message::OpenWindow(w));
+                    }
+                    _ => { /* Phase 3 */ }
+                }
+            }
+            Message::DesktopModeToggled => {
+                self.desktop_mode = !self.desktop_mode;
+            }
+
+            // ── Session ──────────────────────────────────────────────────────
+            Message::LogoutRequested => {
+                self.session_username = None;
+                self.session_is_admin = false;
+            }
+
+            // ── Desktop surface ──────────────────────────────────────────────
+            Message::DesktopSelectionCleared => {
+                self.surface.selected_icon = None;
+            }
+            Message::DesktopIconClicked { id, .. } => {
+                self.surface.selected_icon = Some(id);
+            }
+
+            // ── System ───────────────────────────────────────────────────────
+            Message::PersistSnapshotRequested => {
+                // Phase 3: call persist_native_shell_snapshot()
+            }
+
+            // All other variants are stubs for Phase 3+
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// Render the shell.
+    ///
+    /// Phase 2: minimal retro-styled layout with top bar, center, and taskbar.
+    /// Phase 3 will replace the center with the real window-manager widget and
+    /// the top/bottom bars with the real menu bar and taskbar.
+    pub fn view(&self) -> Element<'_, Message> {
+        use iced::widget::{button, column, container, row, text, Space};
+        use iced::{Color, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let panel_bg = palette.panel.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+
+        // ── Top menu bar ─────────────────────────────────────────────────────
+        let top_bar = container(
+            row![
+                text("RobCoOS").size(18).color(fg),
+                Space::with_width(Length::Fill),
+                text("Phase 2").size(14).color(palette.dim.to_iced()),
+            ]
+            .padding(6)
+            .spacing(8)
+        )
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(panel_bg)),
+            ..container::Style::default()
+        });
+
+        // ── Center workspace ─────────────────────────────────────────────────
+        let center = container(
+            column![
+                text("R O B C O O S").size(28).color(fg),
+                text(match &self.session_username {
+                    Some(u) => format!("Logged in as: {u}"),
+                    None    => "RobCoOS — not logged in".to_string(),
+                }).size(16).color(palette.dim.to_iced()),
+                text(if self.desktop_mode { "Desktop mode" } else { "Terminal mode" })
+                    .size(14).color(palette.dim.to_iced()),
+                text("iced scaffold — Phase 2").size(12).color(palette.dim.to_iced()),
+            ]
+            .spacing(10)
+            .padding(40)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            ..container::Style::default()
+        });
+
+        // ── Bottom taskbar ───────────────────────────────────────────────────
+        let start_label = if self.start_menu.open { "[Close]" } else { "[Start]" };
+        let start_btn = button(
+            text(start_label).size(16).color(iced::Color::BLACK)
+        )
+        .on_press(Message::StartButtonClicked)
+        .style(move |_theme, _status| button::Style {
+            background: Some(iced::Background::Color(fg)),
+            text_color: selected_fg,
+            border: iced::Border {
+                color: fg,
+                width: 2.0,
+                radius: 0.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+        let taskbar = container(
+            row![
+                start_btn,
+                Space::with_width(Length::Fill),
+            ]
+            .padding(4)
+            .spacing(8)
+        )
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(panel_bg)),
+            ..container::Style::default()
+        });
+
+        column![top_bar, center, taskbar].into()
+    }
+
+    /// Return the application theme.
+    ///
+    /// Phase 2: uses iced's built-in Dark theme.
+    /// Phase 4: replace with a custom `RetroTheme` that applies the full palette.
+    pub fn theme(&self) -> Theme {
+        Theme::Dark
+    }
+
+    /// Return active subscriptions.
+    ///
+    /// Phase 2: none.
+    /// Phase 3: add PTY output stream, settings-file watcher, tick timer.
+    pub fn subscription(&self) -> Subscription<Message> {
+        Subscription::none()
+    }
 }

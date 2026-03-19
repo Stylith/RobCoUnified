@@ -1,6 +1,7 @@
 mod about_screen;
-pub(super) mod message;
-pub(super) mod shell;
+pub mod message;
+pub mod retro_theme;
+pub mod shell;
 mod applications_standalone;
 pub mod app;
 mod builtin_icons;
