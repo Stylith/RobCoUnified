@@ -6,11 +6,7 @@ use super::connections_screen::{
 use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
 use super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
 use super::desktop_app::{
-    build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
-    build_taskbar_entries, build_window_menu_section, desktop_app_menu_name,
-    desktop_component_binding, desktop_component_spec, desktop_components, hosted_app_for_window,
-    DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem,
-    DesktopMenuSection, DesktopShellAction, DesktopWindow, DesktopWindowMenuEntry,
+    DesktopShellAction, DesktopWindow,
 };
 use super::desktop_connections_service::{
     connect_connection_and_refresh_settings, connection_requires_password,
@@ -35,15 +31,12 @@ use super::desktop_launcher_service::{
     rename_catalog_entry, resolve_catalog_launch, ProgramCatalog,
 };
 use super::desktop_search_service::{
-    gather_spotlight_results, spotlight_category_tag, start_application_entries,
-    start_document_entries, start_game_entries, start_network_entries, NativeSpotlightCategory,
-    NativeSpotlightResult, NativeStartLeafAction, NativeStartLeafEntry,
+    NativeSpotlightResult, NativeStartLeafAction,
 };
 #[cfg(test)]
 use super::desktop_session_service::active_session_identity;
 use super::desktop_session_service::{
-    active_session_index as active_native_session_index,
-    active_session_username as active_native_session_username, apply_session_switch,
+    active_session_index as active_native_session_index, apply_session_switch,
     authenticate_login, bind_login_identity, clear_all_sessions as clear_native_sessions,
     close_active_session as close_native_session,
     ensure_login_session_entry as ensure_native_login_session_entry, hacking_start_flash_plan,
@@ -66,10 +59,7 @@ use super::desktop_settings_service::{
     pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
 };
 use super::desktop_shortcuts_service::{
-    create_shortcut_from_start_action, delete_shortcut as delete_desktop_shortcut,
     set_shortcut_icon as set_desktop_shortcut_icon,
-    shortcut_launch_command as desktop_shortcut_launch_command, sort_shortcuts,
-    toggle_snap_to_grid as toggle_desktop_snap_to_grid,
     update_shortcut_properties as update_desktop_shortcut_properties, ShortcutPropertiesUpdate,
 };
 use super::desktop_status_service::{
@@ -79,11 +69,10 @@ use super::desktop_status_service::{
     NativeStatusValue,
 };
 use super::desktop_surface_service::{
-    build_default_desktop_icon_positions, desktop_builtin_icons, finalize_dragged_icon_position,
-    icon_position, load_desktop_surface_entries, set_builtin_icon_visible, set_desktop_icon_style,
+    build_default_desktop_icon_positions, desktop_builtin_icons, load_desktop_surface_entries, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_path as set_desktop_wallpaper_path,
-    set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, update_dragged_icon_position,
-    wallpaper_browser_start_dir, DesktopBuiltinIconKind, DesktopIconDragGrid,
+    set_wallpaper_size_mode as set_desktop_wallpaper_size_mode,
+    wallpaper_browser_start_dir,
     DesktopIconGridLayout, DesktopSurfaceEntry,
 };
 use super::desktop_user_service::{
@@ -160,7 +149,7 @@ use super::pty_screen::{
     TERMINAL_MODE_PTY_CELL_W,
 };
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_settings, current_palette, RetroPalette, RetroScreen,
+    configure_visuals, configure_visuals_for_settings, current_palette, RetroScreen,
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
@@ -211,15 +200,15 @@ use std::time::{Duration, Instant};
 mod file_manager_desktop_presenter;
 
 #[derive(Debug, Clone)]
-struct SessionState {
-    username: String,
-    is_admin: bool,
+pub(super) struct SessionState {
+    pub(super) username: String,
+    pub(super) is_admin: bool,
 }
 
 #[derive(Debug, Clone)]
-struct SettingsWindow {
-    open: bool,
-    draft: Settings,
+pub(super) struct SettingsWindow {
+    pub(super) open: bool,
+    pub(super) draft: Settings,
     status: String,
     panel: NativeSettingsPanel,
     default_app_custom_text_code: String,
@@ -266,35 +255,35 @@ struct NativeAppearanceKey {
     custom_theme_rgb: [u8; 3],
 }
 
-struct AssetCache {
-    icon_settings: TextureHandle,
-    icon_file_manager: TextureHandle,
-    icon_terminal: TextureHandle,
-    icon_applications: TextureHandle,
-    icon_installer: TextureHandle,
-    icon_nuke_codes: TextureHandle,
-    icon_editor: TextureHandle,
-    icon_general: Option<TextureHandle>,
-    icon_appearance: Option<TextureHandle>,
-    icon_default_apps: Option<TextureHandle>,
-    icon_connections: TextureHandle,
-    icon_cli_profiles: Option<TextureHandle>,
-    icon_edit_menus: Option<TextureHandle>,
-    icon_user_management: Option<TextureHandle>,
-    icon_about: Option<TextureHandle>,
-    icon_folder: Option<TextureHandle>,
-    icon_folder_open: Option<TextureHandle>,
-    icon_file: Option<TextureHandle>,
-    icon_text: Option<TextureHandle>,
-    icon_image: Option<TextureHandle>,
-    icon_audio: Option<TextureHandle>,
-    icon_video: Option<TextureHandle>,
-    icon_archive: Option<TextureHandle>,
-    icon_app: Option<TextureHandle>,
-    icon_shortcut_badge: Option<TextureHandle>,
-    icon_gaming: Option<TextureHandle>,
-    wallpaper: Option<TextureHandle>,
-    wallpaper_loaded_for: String,
+pub(super) struct AssetCache {
+    pub(super) icon_settings: TextureHandle,
+    pub(super) icon_file_manager: TextureHandle,
+    pub(super) icon_terminal: TextureHandle,
+    pub(super) icon_applications: TextureHandle,
+    pub(super) icon_installer: TextureHandle,
+    pub(super) icon_nuke_codes: TextureHandle,
+    pub(super) icon_editor: TextureHandle,
+    pub(super) icon_general: Option<TextureHandle>,
+    pub(super) icon_appearance: Option<TextureHandle>,
+    pub(super) icon_default_apps: Option<TextureHandle>,
+    pub(super) icon_connections: TextureHandle,
+    pub(super) icon_cli_profiles: Option<TextureHandle>,
+    pub(super) icon_edit_menus: Option<TextureHandle>,
+    pub(super) icon_user_management: Option<TextureHandle>,
+    pub(super) icon_about: Option<TextureHandle>,
+    pub(super) icon_folder: Option<TextureHandle>,
+    pub(super) icon_folder_open: Option<TextureHandle>,
+    pub(super) icon_file: Option<TextureHandle>,
+    pub(super) icon_text: Option<TextureHandle>,
+    pub(super) icon_image: Option<TextureHandle>,
+    pub(super) icon_audio: Option<TextureHandle>,
+    pub(super) icon_video: Option<TextureHandle>,
+    pub(super) icon_archive: Option<TextureHandle>,
+    pub(super) icon_app: Option<TextureHandle>,
+    pub(super) icon_shortcut_badge: Option<TextureHandle>,
+    pub(super) icon_gaming: Option<TextureHandle>,
+    pub(super) wallpaper: Option<TextureHandle>,
+    pub(super) wallpaper_loaded_for: String,
 }
 
 struct DesktopIconLayoutCache {
@@ -323,15 +312,15 @@ struct EditMenuEntriesCache {
 }
 
 #[derive(Debug, Clone)]
-struct ShortcutPropertiesState {
-    shortcut_idx: usize,
-    name_draft: String,
-    command_draft: String,
-    icon_path_draft: Option<String>,
+pub(super) struct ShortcutPropertiesState {
+    pub(super) shortcut_idx: usize,
+    pub(super) name_draft: String,
+    pub(super) command_draft: String,
+    pub(super) icon_path_draft: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DesktopIconSelection {
+pub(super) enum DesktopIconSelection {
     Builtin(&'static str),
     Surface(String),
     Shortcut(usize),
@@ -345,14 +334,14 @@ struct DesktopItemPropertiesState {
 }
 
 #[derive(Debug, Clone)]
-struct StartMenuRenameState {
-    target: EditMenuTarget,
-    original_name: String,
-    name_input: String,
+pub(super) struct StartMenuRenameState {
+    pub(super) target: EditMenuTarget,
+    pub(super) original_name: String,
+    pub(super) name_input: String,
 }
 
 #[derive(Debug, Clone)]
-enum ContextMenuAction {
+pub(super) enum ContextMenuAction {
     Open,
     OpenWith,
     Rename,
@@ -393,125 +382,15 @@ enum ContextMenuAction {
     OpenDesktopItemProperties(PathBuf),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct DesktopWindowState {
-    minimized: bool,
-    maximized: bool,
-    restore_pos: Option<[f32; 2]>,
-    restore_size: Option<[f32; 2]>,
-    user_resized: bool,
-    apply_restore: bool,
-    generation: u64,
-}
+use super::desktop_window_mgmt::{
+    DesktopHeaderAction, DesktopWindowRectTracking, DesktopWindowState,
+    ResizableDesktopWindowOptions,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DesktopHeaderAction {
-    None,
-    Minimize,
-    ToggleMaximize,
-    Close,
-}
+pub(super) use super::desktop_start_menu::{
+    StartLeaf, StartSubmenu,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DesktopWindowRectTracking {
-    FullRect,
-    PositionOnly,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ResizableDesktopWindowOptions {
-    min_size: egui::Vec2,
-    default_size: egui::Vec2,
-    default_pos: Option<egui::Pos2>,
-    clamp_restore: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartSubmenu {
-    System,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartLeaf {
-    Applications,
-    Documents,
-    Network,
-    Games,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartSystemAction {
-    ProgramInstaller,
-    Terminal,
-    FileManager,
-    Settings,
-    Connections,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartRootAction {
-    ReturnToTerminal,
-    Logout,
-    Shutdown,
-}
-
-const START_ROOT_ITEMS: [&str; 8] = [
-    "Applications",
-    "Documents",
-    "Network",
-    "Games",
-    "System",
-    "Return To Terminal Mode",
-    "Logout",
-    "Shutdown",
-];
-
-const START_ROOT_VIS_ROWS: [Option<usize>; 9] = [
-    Some(0),
-    Some(1),
-    Some(2),
-    Some(3),
-    Some(4),
-    None,
-    Some(5),
-    Some(6),
-    Some(7),
-];
-
-const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 5] = [
-    ("Program Installer", StartSystemAction::ProgramInstaller),
-    ("Terminal", StartSystemAction::Terminal),
-    ("File Manager", StartSystemAction::FileManager),
-    ("Settings", StartSystemAction::Settings),
-    ("Connections", StartSystemAction::Connections),
-];
-
-fn start_root_leaf_for_idx(idx: usize) -> Option<StartLeaf> {
-    match idx {
-        0 => Some(StartLeaf::Applications),
-        1 => Some(StartLeaf::Documents),
-        2 => Some(StartLeaf::Network),
-        3 => Some(StartLeaf::Games),
-        _ => None,
-    }
-}
-
-fn start_root_submenu_for_idx(idx: usize) -> Option<StartSubmenu> {
-    if idx == 4 {
-        Some(StartSubmenu::System)
-    } else {
-        None
-    }
-}
-
-fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
-    match idx {
-        5 => Some(StartRootAction::ReturnToTerminal),
-        6 => Some(StartRootAction::Logout),
-        7 => Some(StartRootAction::Shutdown),
-        _ => None,
-    }
-}
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
@@ -651,31 +530,31 @@ fn apply_native_text_style(ctx: &Context) {
 
 pub struct RobcoNativeApp {
     login: TerminalLoginState,
-    session: Option<SessionState>,
-    file_manager: NativeFileManagerState,
-    editor: EditorWindow,
-    settings: SettingsWindow,
+    pub(super) session: Option<SessionState>,
+    pub(super) file_manager: NativeFileManagerState,
+    pub(super) editor: EditorWindow,
+    pub(super) settings: SettingsWindow,
     applications: ApplicationsWindow,
     donkey_kong_window: DonkeyKongWindow,
     donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
-    desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
-    desktop_active_window: Option<DesktopWindow>,
-    desktop_start_button_rect: Option<egui::Rect>,
-    start_root_panel_height: f32,
-    start_open: bool,
-    start_selected_root: usize,
-    start_system_selected: usize,
-    start_leaf_selected: usize,
-    start_open_submenu: Option<StartSubmenu>,
-    start_open_leaf: Option<StartLeaf>,
-    desktop_mode_open: bool,
+    pub(super) desktop_window_states: HashMap<DesktopWindow, DesktopWindowState>,
+    pub(super) desktop_active_window: Option<DesktopWindow>,
+    pub(super) desktop_start_button_rect: Option<egui::Rect>,
+    pub(super) start_root_panel_height: f32,
+    pub(super) start_open: bool,
+    pub(super) start_selected_root: usize,
+    pub(super) start_system_selected: usize,
+    pub(super) start_leaf_selected: usize,
+    pub(super) start_open_submenu: Option<StartSubmenu>,
+    pub(super) start_open_leaf: Option<StartLeaf>,
+    pub(super) desktop_mode_open: bool,
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
-    terminal_pty: Option<NativePtyState>,
+    pub(super) terminal_pty: Option<NativePtyState>,
     terminal_installer: TerminalInstallerState,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
@@ -683,19 +562,19 @@ pub struct RobcoNativeApp {
     terminal_flash: Option<TerminalFlash>,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
-    desktop_window_generation_seed: u64,
-    file_manager_runtime: FileManagerEditRuntime,
-    asset_cache: Option<AssetCache>,
-    context_menu_action: Option<ContextMenuAction>,
-    shell_status: String,
-    desktop_selected_icon: Option<DesktopIconSelection>,
+    pub(super) desktop_window_generation_seed: u64,
+    pub(super) file_manager_runtime: FileManagerEditRuntime,
+    pub(super) asset_cache: Option<AssetCache>,
+    pub(super) context_menu_action: Option<ContextMenuAction>,
+    pub(super) shell_status: String,
+    pub(super) desktop_selected_icon: Option<DesktopIconSelection>,
     desktop_item_properties: Option<DesktopItemPropertiesState>,
-    shortcut_properties: Option<ShortcutPropertiesState>,
-    start_menu_rename: Option<StartMenuRenameState>,
+    pub(super) shortcut_properties: Option<ShortcutPropertiesState>,
+    pub(super) start_menu_rename: Option<StartMenuRenameState>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
-    shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
-    shortcut_icon_missing: HashSet<String>,
+    pub(super) shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
+    pub(super) shortcut_icon_missing: HashSet<String>,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
     desktop_surface_entries_cache: Option<DesktopSurfaceEntriesCache>,
     settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
@@ -706,7 +585,7 @@ pub struct RobcoNativeApp {
     sorted_usernames_cache: Option<Arc<Vec<String>>>,
     saved_network_connections_cache: Option<Arc<Vec<SavedConnection>>>,
     saved_bluetooth_connections_cache: Option<Arc<Vec<SavedConnection>>>,
-    live_desktop_file_manager_settings: DesktopFileManagerSettings,
+    pub(super) live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
     last_native_appearance: Option<NativeAppearanceKey>,
     last_settings_sync_check: Instant,
@@ -716,13 +595,13 @@ pub struct RobcoNativeApp {
     repaint_trace_last_pass: u64,
     appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
     // Spotlight search
-    spotlight_open: bool,
-    spotlight_query: String,
-    spotlight_tab: u8, // 0=All 1=Apps 2=Documents 3=Files
-    spotlight_selected: usize,
-    spotlight_results: Vec<NativeSpotlightResult>,
-    spotlight_last_query: String,
-    spotlight_last_tab: u8,
+    pub(super) spotlight_open: bool,
+    pub(super) spotlight_query: String,
+    pub(super) spotlight_tab: u8, // 0=All 1=Apps 2=Documents 3=Files
+    pub(super) spotlight_selected: usize,
+    pub(super) spotlight_results: Vec<NativeSpotlightResult>,
+    pub(super) spotlight_last_query: String,
+    pub(super) spotlight_last_tab: u8,
 }
 
 struct ParkedSessionState {
@@ -998,11 +877,11 @@ impl RobcoNativeApp {
         self.live_hacking_difficulty = self.settings.draft.hacking_difficulty;
     }
 
-    fn invalidate_desktop_icon_layout_cache(&mut self) {
+    pub(super) fn invalidate_desktop_icon_layout_cache(&mut self) {
         self.desktop_icon_layout_cache = None;
     }
 
-    fn invalidate_desktop_surface_cache(&mut self) {
+    pub(super) fn invalidate_desktop_surface_cache(&mut self) {
         self.desktop_surface_entries_cache = None;
         self.invalidate_desktop_icon_layout_cache();
         if self.file_manager.cwd == robco_desktop_dir() {
@@ -1108,7 +987,7 @@ impl RobcoNativeApp {
         self.last_native_appearance = Some(key);
     }
 
-    fn default_desktop_icon_positions(
+    pub(super) fn default_desktop_icon_positions(
         &mut self,
         layout: DesktopIconGridLayout,
         desktop_entries: &[DesktopSurfaceEntry],
@@ -1144,7 +1023,7 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    fn desktop_surface_entries(&mut self) -> Arc<Vec<DesktopSurfaceEntry>> {
+    pub(super) fn desktop_surface_entries(&mut self) -> Arc<Vec<DesktopSurfaceEntry>> {
         let dir = robco_desktop_dir();
         let modified = std::fs::metadata(&dir)
             .and_then(|meta| meta.modified())
@@ -1266,7 +1145,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn load_svg_icon(
+    pub(super) fn load_svg_icon(
         ctx: &Context,
         id: &str,
         svg_bytes: &[u8],
@@ -1296,7 +1175,7 @@ impl RobcoNativeApp {
         ctx.load_texture(id, image, egui::TextureOptions::LINEAR)
     }
 
-    fn load_wallpaper_texture(ctx: &Context, path: &str) -> Option<TextureHandle> {
+    pub(super) fn load_wallpaper_texture(ctx: &Context, path: &str) -> Option<TextureHandle> {
         if path.trim().is_empty() {
             return None;
         }
@@ -1318,82 +1197,8 @@ impl RobcoNativeApp {
         ))
     }
 
-    fn build_asset_cache(ctx: &Context) -> AssetCache {
-        const ICON_SIZE: u32 = 64;
 
-        AssetCache {
-            icon_settings: Self::load_svg_icon(
-                ctx,
-                "icon_settings",
-                include_bytes!("../Icons/pixel--cog-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_file_manager: Self::load_svg_icon(
-                ctx,
-                "icon_file_manager",
-                include_bytes!("../Icons/pixel--folder-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_terminal: Self::load_svg_icon(
-                ctx,
-                "icon_terminal",
-                include_bytes!("../Icons/pixel--code-block-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_applications: Self::load_svg_icon(
-                ctx,
-                "icon_applications",
-                include_bytes!("../Icons/pixel--grid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_installer: Self::load_svg_icon(
-                ctx,
-                "icon_installer",
-                include_bytes!("../Icons/pixel--file-import-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_nuke_codes: Self::load_svg_icon(
-                ctx,
-                "icon_nuke_codes",
-                include_bytes!("../Icons/pixel--exclamation-triangle-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_editor: Self::load_svg_icon(
-                ctx,
-                "icon_editor",
-                include_bytes!("../Icons/pixel--pen-solid.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_general: None,
-            icon_appearance: None,
-            icon_default_apps: None,
-            icon_connections: Self::load_svg_icon(
-                ctx,
-                "icon_connections",
-                include_bytes!("../Icons/pixel--globe.svg"),
-                Some(ICON_SIZE),
-            ),
-            icon_cli_profiles: None,
-            icon_edit_menus: None,
-            icon_user_management: None,
-            icon_about: None,
-            icon_folder: None,
-            icon_folder_open: None,
-            icon_file: None,
-            icon_text: None,
-            icon_image: None,
-            icon_audio: None,
-            icon_video: None,
-            icon_archive: None,
-            icon_app: None,
-            icon_shortcut_badge: None,
-            icon_gaming: None,
-            wallpaper: None,
-            wallpaper_loaded_for: String::new(),
-        }
-    }
-
-    fn ensure_cached_svg_icon(
+    pub(super) fn ensure_cached_svg_icon(
         slot: &mut Option<TextureHandle>,
         ctx: &Context,
         id: &str,
@@ -1404,18 +1209,8 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    fn sync_wallpaper(&mut self, ctx: &Context) {
-        let wallpaper_path = self.settings.draft.desktop_wallpaper.as_str();
-        if let Some(cache) = &mut self.asset_cache {
-            if cache.wallpaper_loaded_for != wallpaper_path {
-                cache.wallpaper = Self::load_wallpaper_texture(ctx, wallpaper_path);
-                cache.wallpaper_loaded_for.clear();
-                cache.wallpaper_loaded_for.push_str(wallpaper_path);
-            }
-        }
-    }
 
-    fn paint_tinted_texture(
+    pub(super) fn paint_tinted_texture(
         painter: &egui::Painter,
         texture: &TextureHandle,
         rect: egui::Rect,
@@ -1425,65 +1220,6 @@ impl RobcoNativeApp {
         painter.image(texture.id(), rect, uv, tint);
     }
 
-    fn draw_wallpaper(
-        &self,
-        painter: &egui::Painter,
-        screen: egui::Rect,
-        palette: &RetroPalette,
-    ) -> bool {
-        let Some(cache) = &self.asset_cache else {
-            return false;
-        };
-        let Some(texture) = &cache.wallpaper else {
-            return false;
-        };
-
-        let image_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        let tint = palette.fg;
-        match self.settings.draft.desktop_wallpaper_size_mode {
-            WallpaperSizeMode::FitToScreen | WallpaperSizeMode::Stretch => {
-                painter.image(texture.id(), screen, uv, tint);
-            }
-            WallpaperSizeMode::Centered => {
-                painter.rect_filled(screen, 0.0, palette.bg);
-                let origin = screen.center() - image_size * 0.5;
-                painter.image(
-                    texture.id(),
-                    egui::Rect::from_min_size(origin, image_size),
-                    uv,
-                    tint,
-                );
-            }
-            WallpaperSizeMode::DefaultSize => {
-                painter.rect_filled(screen, 0.0, palette.bg);
-                painter.image(
-                    texture.id(),
-                    egui::Rect::from_min_size(screen.min, image_size),
-                    uv,
-                    tint,
-                );
-            }
-            WallpaperSizeMode::Tile => {
-                painter.rect_filled(screen, 0.0, palette.bg);
-                let mut y = screen.top();
-                while y < screen.bottom() {
-                    let mut x = screen.left();
-                    while x < screen.right() {
-                        painter.image(
-                            texture.id(),
-                            egui::Rect::from_min_size(egui::pos2(x, y), image_size),
-                            uv,
-                            tint,
-                        );
-                        x += image_size.x.max(1.0);
-                    }
-                    y += image_size.y.max(1.0);
-                }
-            }
-        }
-        true
-    }
 
     fn reset_desktop_settings_window(&mut self) {
         let draft = load_settings_snapshot();
@@ -1527,16 +1263,6 @@ impl RobcoNativeApp {
         )
     }
 
-    fn apply_global_retro_menu_chrome(ctx: &Context, palette: &RetroPalette) {
-        let stroke = egui::Stroke::new(2.0, palette.fg);
-        ctx.style_mut(|style| {
-            style.visuals.window_stroke = stroke;
-            style.visuals.window_rounding = egui::Rounding::ZERO;
-            style.visuals.menu_rounding = egui::Rounding::ZERO;
-            style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-            style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        });
-    }
 
     fn session_idx_from_digit_key(key: Key) -> Option<usize> {
         match key {
@@ -2186,363 +1912,6 @@ impl RobcoNativeApp {
         }
     }
 
-    fn desktop_window_is_open(&self, window: DesktopWindow) -> bool {
-        (desktop_component_binding(window).is_open)(self)
-    }
-
-    fn desktop_window_state(&self, window: DesktopWindow) -> DesktopWindowState {
-        self.desktop_window_states
-            .get(&window)
-            .copied()
-            .unwrap_or_default()
-    }
-
-    fn desktop_window_state_mut(&mut self, window: DesktopWindow) -> &mut DesktopWindowState {
-        self.desktop_window_states.entry(window).or_default()
-    }
-
-    fn desktop_window_generation(&self, window: DesktopWindow) -> u64 {
-        self.desktop_window_states
-            .get(&window)
-            .map(|state| state.generation)
-            .unwrap_or(0)
-    }
-
-    fn desktop_window_egui_id(&self, window: DesktopWindow) -> egui::Id {
-        let gen = self.desktop_window_generation(window);
-        Id::new((desktop_component_spec(window).id_salt, gen))
-    }
-
-    fn next_desktop_window_generation(&mut self) -> u64 {
-        let generation = self.desktop_window_generation_seed;
-        self.desktop_window_generation_seed =
-            self.desktop_window_generation_seed.wrapping_add(1).max(1);
-        generation
-    }
-
-    fn desktop_window_is_minimized(&self, window: DesktopWindow) -> bool {
-        self.desktop_window_is_open(window) && self.desktop_window_state(window).minimized
-    }
-
-    fn desktop_window_is_maximized(&self, window: DesktopWindow) -> bool {
-        self.desktop_window_is_open(window) && self.desktop_window_state(window).maximized
-    }
-
-    fn set_desktop_window_minimized(&mut self, window: DesktopWindow, minimized: bool) {
-        if !self.desktop_window_is_open(window) {
-            return;
-        }
-        let state = self.desktop_window_state_mut(window);
-        state.minimized = minimized;
-        if minimized {
-            if self.desktop_active_window == Some(window) {
-                self.desktop_active_window = self.first_open_desktop_window();
-            }
-        } else {
-            self.desktop_active_window = Some(window);
-        }
-    }
-
-    fn take_desktop_window_restore_dims(
-        &mut self,
-        window: DesktopWindow,
-    ) -> Option<(egui::Pos2, egui::Vec2)> {
-        let state = self.desktop_window_state_mut(window);
-        if state.maximized || !state.apply_restore {
-            return None;
-        }
-        state.apply_restore = false;
-        let pos = state.restore_pos?;
-        let size = state.restore_size?;
-        Some((egui::pos2(pos[0], pos[1]), egui::vec2(size[0], size[1])))
-    }
-
-    fn note_desktop_window_rect(&mut self, window: DesktopWindow, rect: egui::Rect) {
-        let state = self.desktop_window_state_mut(window);
-        state.restore_pos = Some([rect.min.x, rect.min.y]);
-        let restore_size = Self::desktop_window_restore_size(rect);
-        state.restore_size = Some([restore_size.x, restore_size.y]);
-        state.apply_restore = false;
-    }
-
-    fn toggle_desktop_window_maximized(
-        &mut self,
-        window: DesktopWindow,
-        current_rect: Option<egui::Rect>,
-    ) {
-        if !self.desktop_window_is_open(window) {
-            return;
-        }
-        let generation = self.next_desktop_window_generation();
-        let state = self.desktop_window_state_mut(window);
-        if state.maximized {
-            state.maximized = false;
-            state.apply_restore = true;
-            state.generation = generation;
-        } else {
-            if let Some(rect) = current_rect {
-                state.restore_pos = Some([rect.min.x, rect.min.y]);
-                let restore_size = Self::desktop_window_restore_size(rect);
-                state.restore_size = Some([restore_size.x, restore_size.y]);
-                state.user_resized = true;
-            }
-            state.maximized = true;
-            state.apply_restore = false;
-            state.generation = generation;
-        }
-        state.minimized = false;
-        self.desktop_active_window = Some(window);
-    }
-
-    fn desktop_window_restore_size(rect: egui::Rect) -> egui::Vec2 {
-        let margin = Self::desktop_window_frame().total_margin().sum();
-        egui::vec2(
-            (rect.width() - margin.x).max(160.0),
-            (rect.height() - margin.y).max(120.0),
-        )
-    }
-
-    fn desktop_default_window_size(window: DesktopWindow) -> egui::Vec2 {
-        let [x, y] = desktop_component_spec(window).default_size;
-        egui::vec2(x, y)
-    }
-
-    fn desktop_file_manager_window_min_size() -> egui::Vec2 {
-        egui::vec2(760.0, 520.0)
-    }
-
-    fn desktop_default_window_pos(ctx: &Context, size: egui::Vec2) -> egui::Pos2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
-        let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
-        let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
-        egui::pos2(x, y)
-    }
-
-    fn desktop_clamp_window_size(
-        ctx: &Context,
-        size: egui::Vec2,
-        min_size: egui::Vec2,
-    ) -> egui::Vec2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
-        egui::vec2(
-            size.x.clamp(min_size.x, workspace.width().max(min_size.x)),
-            size.y.clamp(min_size.y, workspace.height().max(min_size.y)),
-        )
-    }
-
-    fn desktop_clamp_window_pos(ctx: &Context, pos: egui::Pos2, size: egui::Vec2) -> egui::Pos2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
-        egui::pos2(
-            pos.x.clamp(
-                workspace.left(),
-                (workspace.right() - size.x).max(workspace.left()),
-            ),
-            pos.y.clamp(
-                workspace.top(),
-                (workspace.bottom() - size.y).max(workspace.top()),
-            ),
-        )
-    }
-
-    fn build_resizable_desktop_window<'open, Title>(
-        &mut self,
-        ctx: &Context,
-        desktop_window: DesktopWindow,
-        title: Title,
-        open: &'open mut bool,
-        options: ResizableDesktopWindowOptions,
-    ) -> (egui::Window<'open>, bool)
-    where
-        Title: Into<egui::WidgetText>,
-    {
-        let maximized = self.desktop_window_is_maximized(desktop_window);
-        let restore = self.take_desktop_window_restore_dims(desktop_window);
-        let mut window = egui::Window::new(title)
-            .id(self.desktop_window_egui_id(desktop_window))
-            .open(open)
-            .title_bar(false)
-            .frame(Self::desktop_window_frame())
-            .resizable(true)
-            .min_size(options.min_size)
-            .default_size(options.default_size);
-        if let Some(default_pos) = options.default_pos {
-            window = window.default_pos(default_pos);
-        }
-        if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
-            window = window
-                .movable(false)
-                .resizable(false)
-                .fixed_pos(rect.min)
-                .fixed_size(rect.size());
-        } else if let Some((mut pos, mut size)) = restore {
-            if options.clamp_restore {
-                size = Self::desktop_clamp_window_size(ctx, size, options.min_size);
-                pos = Self::desktop_clamp_window_pos(ctx, pos, size);
-            }
-            window = window.current_pos(pos).default_size(size);
-        }
-        (window, maximized)
-    }
-
-    fn finish_desktop_window_host(
-        &mut self,
-        ctx: &Context,
-        desktop_window: DesktopWindow,
-        open: &mut bool,
-        maximized: bool,
-        shown_rect: Option<egui::Rect>,
-        shown_contains_pointer: bool,
-        rect_tracking: DesktopWindowRectTracking,
-        header_action: DesktopHeaderAction,
-    ) {
-        self.maybe_activate_desktop_window_from_click(ctx, desktop_window, shown_contains_pointer);
-        if !maximized {
-            match rect_tracking {
-                DesktopWindowRectTracking::FullRect => {
-                    if let Some(rect) = shown_rect {
-                        self.note_desktop_window_rect(desktop_window, rect);
-                    }
-                }
-                DesktopWindowRectTracking::PositionOnly => {
-                    if let Some(pos) = shown_rect.map(|rect| rect.min) {
-                        let state = self.desktop_window_state_mut(desktop_window);
-                        state.restore_pos = Some([pos.x, pos.y]);
-                    }
-                }
-            }
-        }
-        match header_action {
-            DesktopHeaderAction::None => {}
-            DesktopHeaderAction::Close => *open = false,
-            DesktopHeaderAction::Minimize => {
-                self.set_desktop_window_minimized(desktop_window, true);
-            }
-            DesktopHeaderAction::ToggleMaximize => {
-                self.toggle_desktop_window_maximized(desktop_window, shown_rect);
-            }
-        }
-        self.update_desktop_window_state(desktop_window, *open);
-    }
-
-    fn prime_desktop_window_defaults(&mut self, window: DesktopWindow) {
-        let generation = self.next_desktop_window_generation();
-        let state = self.desktop_window_state_mut(window);
-        state.restore_pos = None;
-        state.restore_size = None;
-        state.user_resized = false;
-        state.apply_restore = false;
-        state.maximized = false;
-        state.minimized = false;
-        state.generation = generation;
-    }
-
-    fn set_desktop_window_open(&mut self, window: DesktopWindow, open: bool) {
-        let was_open = self.desktop_window_is_open(window);
-        (desktop_component_binding(window).set_open)(self, open);
-        if !open {
-            self.desktop_window_states.remove(&window);
-        } else if !was_open && self.desktop_window_is_open(window) {
-            let generation = self.next_desktop_window_generation();
-            let state = self.desktop_window_state_mut(window);
-            state.minimized = false;
-            state.maximized = false;
-            state.user_resized = false;
-            state.generation = generation;
-        } else {
-            self.desktop_window_states.entry(window).or_default();
-        }
-    }
-
-    fn first_open_desktop_window(&self) -> Option<DesktopWindow> {
-        desktop_components()
-            .iter()
-            .rev()
-            .map(|component| component.spec.window)
-            .find(|window| {
-                self.desktop_window_is_open(*window) && !self.desktop_window_is_minimized(*window)
-            })
-    }
-
-    fn focus_desktop_window(&mut self, ctx: Option<&Context>, window: DesktopWindow) {
-        self.desktop_active_window = Some(window);
-        if let Some(ctx) = ctx {
-            let layer_id =
-                egui::LayerId::new(egui::Order::Middle, self.desktop_window_egui_id(window));
-            ctx.move_to_top(layer_id);
-        }
-    }
-
-    fn sync_desktop_active_window(&mut self) {
-        if self.desktop_active_window.is_some_and(|window| {
-            !self.desktop_window_is_open(window) || self.desktop_window_is_minimized(window)
-        }) {
-            self.desktop_active_window = self.first_open_desktop_window();
-            return;
-        }
-        if self.desktop_active_window.is_none() {
-            self.desktop_active_window = self.first_open_desktop_window();
-        }
-    }
-
-    fn open_desktop_window(&mut self, window: DesktopWindow) {
-        let was_open = self.desktop_window_is_open(window);
-        if let Some(on_open) = desktop_component_binding(window).on_open {
-            on_open(self, was_open);
-        }
-        self.set_desktop_window_open(window, true);
-        self.set_desktop_window_minimized(window, false);
-        self.desktop_active_window = Some(window);
-        if self.desktop_mode_open {
-            self.close_desktop_overlays();
-        }
-    }
-
-    fn maybe_activate_desktop_window_from_click(
-        &mut self,
-        ctx: &Context,
-        window: DesktopWindow,
-        contains_pointer: bool,
-    ) {
-        let clicked_inside = ctx.input(|i| {
-            (i.pointer.primary_clicked() || i.pointer.secondary_clicked()) && contains_pointer
-        });
-        if clicked_inside {
-            self.focus_desktop_window(Some(ctx), window);
-        }
-    }
-
-    fn handle_closed_desktop_window(&mut self, window: DesktopWindow) {
-        if let Some(on_closed) = desktop_component_binding(window).on_closed {
-            on_closed(self);
-        }
-    }
-
-    fn close_desktop_window(&mut self, window: DesktopWindow) {
-        let was_open = self.desktop_window_is_open(window);
-        self.set_desktop_window_open(window, false);
-        if was_open {
-            self.handle_closed_desktop_window(window);
-        }
-        if self.desktop_active_window == Some(window) {
-            self.desktop_active_window = self.first_open_desktop_window();
-        }
-    }
-
-    fn update_desktop_window_state(&mut self, window: DesktopWindow, open: bool) {
-        let was_open = self.desktop_window_is_open(window);
-        self.set_desktop_window_open(window, open);
-        if was_open && !open {
-            self.handle_closed_desktop_window(window);
-        }
-        if !open && self.desktop_active_window == Some(window) {
-            self.desktop_active_window = self.first_open_desktop_window();
-        }
-    }
-
-    fn active_desktop_app(&self) -> DesktopHostedApp {
-        hosted_app_for_window(self.desktop_active_window)
-    }
 
     fn file_manager_home_path(&self) -> PathBuf {
         if let Some(session) = &self.session {
@@ -2569,7 +1938,7 @@ impl RobcoNativeApp {
         self.file_manager.ensure_selection_valid();
     }
 
-    fn truncate_file_manager_label(text: &str, max_chars: usize) -> String {
+    pub(super) fn truncate_file_manager_label(text: &str, max_chars: usize) -> String {
         let total_chars = text.chars().count();
         if total_chars <= max_chars {
             return text.to_string();
@@ -2678,7 +2047,7 @@ impl RobcoNativeApp {
         )
     }
 
-    fn file_manager_texture_for_row(
+    pub(super) fn file_manager_texture_for_row(
         &mut self,
         ctx: &Context,
         row: &super::file_manager::FileEntryRow,
@@ -2805,7 +2174,7 @@ impl RobcoNativeApp {
         self.file_manager_texture_for_row(ctx, row)
     }
 
-    fn load_cached_shortcut_icon(
+    pub(super) fn load_cached_shortcut_icon(
         &mut self,
         ctx: &Context,
         cache_key: &str,
@@ -2840,12 +2209,12 @@ impl RobcoNativeApp {
         (name, "")
     }
 
-    fn apply_file_manager_settings_update(&mut self, update: FileManagerSettingsUpdate) {
+    pub(super) fn apply_file_manager_settings_update(&mut self, update: FileManagerSettingsUpdate) {
         apply_desktop_file_manager_settings_update(&mut self.settings.draft, update);
         self.sync_runtime_settings_cache();
     }
 
-    fn launch_open_with_command(&mut self, path: &Path, command_line: &str) -> Result<String> {
+    pub(super) fn launch_open_with_command(&mut self, path: &Path, command_line: &str) -> Result<String> {
         let launch = file_manager_app::prepare_open_with_launch(path, command_line)?;
         Ok(self.launch_open_with_request(launch))
     }
@@ -2880,11 +2249,11 @@ impl RobcoNativeApp {
         true
     }
 
-    fn file_manager_selected_file(&self) -> Option<super::file_manager::FileEntryRow> {
+    pub(super) fn file_manager_selected_file(&self) -> Option<super::file_manager::FileEntryRow> {
         file_manager_app::selected_file(self.file_manager_selected_entries())
     }
 
-    fn unique_path_in_dir(dir: &Path, original_name: &str) -> PathBuf {
+    pub(super) fn unique_path_in_dir(dir: &Path, original_name: &str) -> PathBuf {
         let direct = dir.join(original_name);
         if !direct.exists() {
             return direct;
@@ -2908,11 +2277,11 @@ impl RobcoNativeApp {
             .move_paths_to_dir(&mut self.file_manager, paths, target_dir)
     }
 
-    fn file_manager_drop_allowed(paths: &[PathBuf], target_dir: &Path) -> bool {
+    pub(super) fn file_manager_drop_allowed(paths: &[PathBuf], target_dir: &Path) -> bool {
         FileManagerEditRuntime::drop_allowed(paths, target_dir)
     }
 
-    fn file_manager_handle_drop_to_dir(&mut self, paths: Vec<PathBuf>, target_dir: PathBuf) {
+    pub(super) fn file_manager_handle_drop_to_dir(&mut self, paths: Vec<PathBuf>, target_dir: PathBuf) {
         self.shell_status = match self.file_manager_move_paths_to_dir(paths, &target_dir) {
             Ok(message) => message,
             Err(err) => format!("File action failed: {err}"),
@@ -2923,7 +2292,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn desktop_entry_row(entry: &DesktopSurfaceEntry) -> FileEntryRow {
+    pub(super) fn desktop_entry_row(entry: &DesktopSurfaceEntry) -> FileEntryRow {
         FileEntryRow {
             path: entry.path.clone(),
             label: entry.label.clone(),
@@ -2931,7 +2300,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn create_desktop_folder(&mut self) {
+    pub(super) fn create_desktop_folder(&mut self) {
         let desktop_dir = robco_desktop_dir();
         self.shell_status = match self
             .file_manager_runtime
@@ -2950,7 +2319,7 @@ impl RobcoNativeApp {
         };
     }
 
-    fn paste_to_desktop(&mut self) {
+    pub(super) fn paste_to_desktop(&mut self) {
         let desktop_dir = robco_desktop_dir();
         self.shell_status = match self
             .file_manager_runtime
@@ -2975,32 +2344,8 @@ impl RobcoNativeApp {
         };
     }
 
-    fn import_paths_to_desktop(&mut self, paths: Vec<PathBuf>) {
-        let desktop_dir = robco_desktop_dir();
-        self.shell_status = match self
-            .file_manager_runtime
-            .copy_paths_into_dir(paths, &desktop_dir)
-        {
-            Ok((count, last_dst)) => {
-                self.invalidate_desktop_surface_cache();
-                if count == 1 {
-                    format!(
-                        "Imported {} to the desktop.",
-                        last_dst
-                            .as_ref()
-                            .and_then(|path| path.file_name())
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("item")
-                    )
-                } else {
-                    format!("Imported {count} items to the desktop.")
-                }
-            }
-            Err(err) => format!("Desktop import failed: {err}"),
-        };
-    }
 
-    fn open_desktop_surface_path(&mut self, path: PathBuf) {
+    pub(super) fn open_desktop_surface_path(&mut self, path: PathBuf) {
         if path.is_dir() {
             self.open_file_manager_at(path);
             return;
@@ -3018,7 +2363,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn open_desktop_item_properties(&mut self, path: PathBuf) {
+    pub(super) fn open_desktop_item_properties(&mut self, path: PathBuf) {
         let name_draft = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -3034,11 +2379,11 @@ impl RobcoNativeApp {
         });
     }
 
-    fn rename_desktop_item(&mut self, path: PathBuf) {
+    pub(super) fn rename_desktop_item(&mut self, path: PathBuf) {
         self.open_desktop_item_properties(path);
     }
 
-    fn delete_desktop_item(&mut self, path: PathBuf) {
+    pub(super) fn delete_desktop_item(&mut self, path: PathBuf) {
         let label = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -3064,14 +2409,14 @@ impl RobcoNativeApp {
         };
     }
 
-    fn open_desktop_surface_with_prompt(&mut self, path: PathBuf) {
+    pub(super) fn open_desktop_surface_with_prompt(&mut self, path: PathBuf) {
         let ext_key = file_manager_app::open_with_extension_key(&path);
         self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
             path, ext_key, false,
         ));
     }
 
-    fn run_file_manager_command(&mut self, command: FileManagerCommand) {
+    pub(super) fn run_file_manager_command(&mut self, command: FileManagerCommand) {
         let home_path = self.file_manager_home_path();
         match file_manager_app::run_command(
             command,
@@ -3095,193 +2440,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn dispatch_context_menu_action(&mut self, _ctx: &Context) {
-        let Some(action) = self.context_menu_action.take() else {
-            return;
-        };
-        match action {
-            ContextMenuAction::Open => {
-                self.run_file_manager_command(FileManagerCommand::OpenSelected)
-            }
-            ContextMenuAction::OpenWith => {
-                if let Some(entry) = self.file_manager_selected_file() {
-                    let ext_key = file_manager_app::open_with_extension_key(&entry.path);
-                    self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
-                        entry.path, ext_key, false,
-                    ));
-                } else {
-                    self.shell_status = "Open With requires a file.".to_string();
-                }
-            }
-            ContextMenuAction::Rename => self.run_file_manager_command(FileManagerCommand::Rename),
-            ContextMenuAction::Cut => self.run_file_manager_command(FileManagerCommand::Cut),
-            ContextMenuAction::Copy => self.run_file_manager_command(FileManagerCommand::Copy),
-            ContextMenuAction::Paste => self.run_file_manager_command(FileManagerCommand::Paste),
-            ContextMenuAction::Duplicate => {
-                self.run_file_manager_command(FileManagerCommand::Duplicate)
-            }
-            ContextMenuAction::Delete => self.run_file_manager_command(FileManagerCommand::Delete),
-            ContextMenuAction::Properties => {
-                self.shell_status = "Properties dialog is not implemented yet.".to_string();
-            }
-            ContextMenuAction::PasteToDesktop => {
-                self.paste_to_desktop();
-            }
-            ContextMenuAction::NewFolder => {
-                self.create_desktop_folder();
-            }
-            ContextMenuAction::ChangeAppearance => {
-                self.open_standalone_settings(Some(NativeSettingsPanel::Appearance));
-            }
-            ContextMenuAction::OpenSettings => {
-                self.open_standalone_settings(None);
-            }
-            ContextMenuAction::GenericCopy => {}
-            ContextMenuAction::GenericPaste => {}
-            ContextMenuAction::GenericSelectAll => {}
-            ContextMenuAction::CreateShortcut { label, action } => {
-                create_shortcut_from_start_action(&mut self.settings.draft, label, &action);
-                self.persist_native_settings();
-            }
-            ContextMenuAction::RenameStartMenuEntry { target, name } => {
-                self.start_menu_rename = Some(StartMenuRenameState {
-                    target,
-                    original_name: name.clone(),
-                    name_input: name,
-                });
-            }
-            ContextMenuAction::RemoveStartMenuEntry { target, name } => {
-                self.delete_program_entry(target, &name);
-                self.close_start_menu();
-            }
-            ContextMenuAction::DeleteShortcut(idx) => {
-                if delete_desktop_shortcut(&mut self.settings.draft, idx) {
-                    self.persist_native_settings();
-                }
-            }
-            ContextMenuAction::SortDesktopIcons(mode) => {
-                sort_shortcuts(&mut self.settings.draft, mode);
-                self.persist_native_settings();
-            }
-            ContextMenuAction::ToggleSnapToGrid => {
-                toggle_desktop_snap_to_grid(&mut self.settings.draft);
-                self.persist_native_settings();
-            }
-            ContextMenuAction::LaunchShortcut(name) => {
-                let custom_cmd = desktop_shortcut_launch_command(&self.settings.draft, &name);
-                if let Some(cmd) = custom_cmd {
-                    let args: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
-                    self.open_desktop_pty(&name, &args);
-                } else {
-                    self.run_start_leaf_action(NativeStartLeafAction::LaunchConfiguredApp(name));
-                }
-            }
-            ContextMenuAction::OpenShortcutProperties(idx) => {
-                if let Some(sc) = self.settings.draft.desktop_shortcuts.get(idx) {
-                    self.shortcut_properties = Some(ShortcutPropertiesState {
-                        shortcut_idx: idx,
-                        name_draft: sc.label.clone(),
-                        command_draft: sc
-                            .launch_command
-                            .clone()
-                            .unwrap_or_else(|| sc.app_name.clone()),
-                        icon_path_draft: sc.icon_path.clone(),
-                    });
-                }
-            }
-            ContextMenuAction::OpenDesktopItem(path) => {
-                self.open_desktop_surface_path(path);
-            }
-            ContextMenuAction::OpenDesktopItemWith(path) => {
-                self.open_desktop_surface_with_prompt(path);
-            }
-            ContextMenuAction::RenameDesktopItem(path) => {
-                self.rename_desktop_item(path);
-            }
-            ContextMenuAction::DeleteDesktopItem(path) => {
-                self.delete_desktop_item(path);
-            }
-            ContextMenuAction::OpenDesktopItemProperties(path) => {
-                self.open_desktop_item_properties(path);
-            }
-        }
-    }
 
-    fn attach_desktop_empty_context_menu(
-        action: &mut Option<ContextMenuAction>,
-        response: &egui::Response,
-        snap_to_grid: bool,
-        sort_mode: DesktopIconSortMode,
-    ) {
-        response.context_menu(|ui| {
-            Self::apply_context_menu_style(ui);
-            ui.set_min_width(136.0);
-            ui.set_max_width(180.0);
-
-            ui.menu_button("View", |ui| {
-                Self::apply_context_menu_style(ui);
-                ui.set_min_width(140.0);
-                ui.set_max_width(180.0);
-                let name_label = if sort_mode == DesktopIconSortMode::ByName {
-                    "✓ Sort by Name"
-                } else {
-                    "  Sort by Name"
-                };
-                let type_label = if sort_mode == DesktopIconSortMode::ByType {
-                    "✓ Sort by Type"
-                } else {
-                    "  Sort by Type"
-                };
-                if ui.button(name_label).clicked() {
-                    *action = Some(ContextMenuAction::SortDesktopIcons(
-                        DesktopIconSortMode::ByName,
-                    ));
-                    ui.close_menu();
-                }
-                if ui.button(type_label).clicked() {
-                    *action = Some(ContextMenuAction::SortDesktopIcons(
-                        DesktopIconSortMode::ByType,
-                    ));
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                let snap_label = if snap_to_grid {
-                    "✓ Snap to Grid"
-                } else {
-                    "  Snap to Grid"
-                };
-                if ui.button(snap_label).clicked() {
-                    *action = Some(ContextMenuAction::ToggleSnapToGrid);
-                    ui.close_menu();
-                }
-            });
-
-            Self::retro_separator(ui);
-
-            if ui.button("Paste").clicked() {
-                *action = Some(ContextMenuAction::PasteToDesktop);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            if ui.button("New Folder").clicked() {
-                *action = Some(ContextMenuAction::NewFolder);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            if ui.button("Change Appearance...").clicked() {
-                *action = Some(ContextMenuAction::ChangeAppearance);
-                ui.close_menu();
-            }
-            if ui.button("Settings...").clicked() {
-                *action = Some(ContextMenuAction::OpenSettings);
-                ui.close_menu();
-            }
-        });
-    }
 
     fn attach_generic_context_menu(
         action: &mut Option<ContextMenuAction>,
@@ -3310,824 +2469,17 @@ impl RobcoNativeApp {
         });
     }
 
-    fn desktop_icon_label_lines(label: &str) -> Vec<String> {
-        const MAX_LINE_CHARS: usize = 14;
 
-        if label.chars().count() <= MAX_LINE_CHARS {
-            return vec![label.to_string()];
-        }
-        let words: Vec<&str> = label.split_whitespace().collect();
-        if words.len() < 2 {
-            return vec![Self::truncate_file_manager_label(label, MAX_LINE_CHARS)];
-        }
 
-        let mut first_line = String::new();
-        let mut split_idx = 0usize;
-        for (idx, word) in words.iter().enumerate() {
-            let candidate = if first_line.is_empty() {
-                (*word).to_string()
-            } else {
-                format!("{first_line} {word}")
-            };
-            if candidate.chars().count() > MAX_LINE_CHARS {
-                break;
-            }
-            first_line = candidate;
-            split_idx = idx + 1;
-        }
-        if first_line.is_empty() {
-            return vec![Self::truncate_file_manager_label(label, MAX_LINE_CHARS)];
-        }
-        if split_idx >= words.len() {
-            return vec![first_line];
-        }
 
-        let second_line = words[split_idx..].join(" ");
-        vec![
-            first_line,
-            Self::truncate_file_manager_label(&second_line, MAX_LINE_CHARS),
-        ]
-    }
 
-    fn paint_desktop_icon_label(ui: &mut egui::Ui, rect: egui::Rect, label: &str, color: Color32) {
-        let lines = Self::desktop_icon_label_lines(label);
-        if lines.len() == 1 {
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                &lines[0],
-                FontId::new(13.0, FontFamily::Monospace),
-                color,
-            );
-            return;
-        }
-
-        let line_height = 11.0;
-        let total_height = line_height * lines.len() as f32;
-        let start_y = rect.center().y - total_height * 0.5 + line_height * 0.5;
-        for (idx, line) in lines.iter().enumerate() {
-            ui.painter().text(
-                egui::pos2(rect.center().x, start_y + idx as f32 * line_height),
-                Align2::CENTER_CENTER,
-                line,
-                FontId::new(11.0, FontFamily::Monospace),
-                color,
-            );
-        }
-    }
-
-    fn paint_desktop_icon_selection(
-        ui: &mut egui::Ui,
-        rect: egui::Rect,
-        palette: RetroPalette,
-        selected: bool,
-        hovered: bool,
-    ) {
-        if !(selected || hovered) {
-            return;
-        }
-        let fill = if selected {
-            palette.selected_bg
-        } else {
-            palette.panel
-        };
-        let stroke = if selected { palette.fg } else { palette.dim };
-        ui.painter().rect_filled(rect.expand(2.0), 0.0, fill);
-        ui.painter()
-            .rect_stroke(rect.expand(2.0), 0.0, egui::Stroke::new(1.0, stroke));
-    }
-
-    fn desktop_icon_foreground(palette: RetroPalette, selected: bool) -> Color32 {
-        if selected {
-            palette.bg
-        } else {
-            palette.fg
-        }
-    }
-
-    fn draw_desktop_icons(&mut self, ui: &mut egui::Ui) {
-        let (
-            tex_file_manager,
-            tex_editor,
-            tex_installer,
-            tex_settings,
-            tex_nuke_codes,
-            tex_terminal,
-            tex_connections,
-        ) = {
-            let Some(cache) = self.asset_cache.as_ref() else {
-                return;
-            };
-            (
-                cache.icon_file_manager.clone(),
-                cache.icon_editor.clone(),
-                cache.icon_installer.clone(),
-                cache.icon_settings.clone(),
-                cache.icon_nuke_codes.clone(),
-                cache.icon_terminal.clone(),
-                cache.icon_connections.clone(),
-            )
-        };
-        let tex_shortcut_badge = Self::ensure_cached_svg_icon(
-            &mut self
-                .asset_cache
-                .as_mut()
-                .expect("desktop asset cache")
-                .icon_shortcut_badge,
-            ui.ctx(),
-            "icon_shortcut_badge",
-            include_bytes!("../Icons/pixel--external-link-solid.svg"),
-            Some(16),
-        );
-        let tex_app = Self::ensure_cached_svg_icon(
-            &mut self
-                .asset_cache
-                .as_mut()
-                .expect("desktop asset cache")
-                .icon_app,
-            ui.ctx(),
-            "icon_app",
-            include_bytes!("../Icons/pixel--programming.svg"),
-            Some(64),
-        );
-
-        let palette = current_palette();
-        let style = self.settings.draft.desktop_icon_style;
-        let snap = self.settings.draft.desktop_snap_to_grid;
-        let workspace = Self::desktop_workspace_rect(ui.ctx());
-        let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) = match style
-        {
-            DesktopIconStyle::Minimal => (34.0, 0.0, 46.0, 48.0),
-            DesktopIconStyle::Win95 | DesktopIconStyle::Dos => (48.0, 28.0, 84.0, 100.0),
-            DesktopIconStyle::NoIcons => return,
-        };
-
-        let drag_grid = DesktopIconDragGrid {
-            cell_w: column_width,
-            cell_h: item_height,
-            snap_to_grid: snap,
-        };
-
-        let hidden_icons = self.settings.draft.desktop_hidden_builtin_icons.clone();
-        let desktop_entries = self.desktop_surface_entries();
-        let shortcuts = self.settings.draft.desktop_shortcuts.clone();
-        let builtin_entries = desktop_builtin_icons();
-        let default_positions = self.default_desktop_icon_positions(
-            DesktopIconGridLayout {
-                left: workspace.left(),
-                top: workspace.top(),
-                height: workspace.height(),
-                item_height,
-                column_width,
-            },
-            &desktop_entries,
-        );
-        let mut open_window: Option<DesktopWindow> = None;
-        let mut open_terminal = false;
-        let mut open_desktop_path: Option<PathBuf> = None;
-        let mut desktop_action: Option<ContextMenuAction> = None;
-        let mut needs_persist = false;
-
-        for (index, entry) in builtin_entries.iter().enumerate() {
-            if hidden_icons.contains(entry.key) {
-                continue;
-            }
-            let texture = match entry.kind {
-                DesktopBuiltinIconKind::FileManager => &tex_file_manager,
-                DesktopBuiltinIconKind::Editor => &tex_editor,
-                DesktopBuiltinIconKind::Installer => &tex_installer,
-                DesktopBuiltinIconKind::Settings => &tex_settings,
-                DesktopBuiltinIconKind::NukeCodes => &tex_nuke_codes,
-                DesktopBuiltinIconKind::Terminal => &tex_terminal,
-            };
-            let top_left = {
-                let [x, y] = icon_position(
-                    &self.settings.draft,
-                    entry.key,
-                    [
-                        workspace.left() + 4.0,
-                        workspace.top() + 16.0 + index as f32 * item_height,
-                    ],
-                    &default_positions,
-                );
-                egui::pos2(x, y)
-            };
-
-            let icon_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
-                egui::vec2(icon_size, icon_size),
-            );
-            let label_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2(0.0, icon_size + 2.0),
-                egui::vec2(column_width, label_height.max(16.0)),
-            );
-            let hit_rect = if label_height > 0.0 {
-                egui::Rect::from_min_size(
-                    top_left,
-                    egui::vec2(column_width, icon_size + label_height + 2.0),
-                )
-            } else {
-                icon_rect
-            };
-
-            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
-            let selected =
-                self.desktop_selected_icon == Some(DesktopIconSelection::Builtin(entry.key));
-            Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
-            let icon_fg = Self::desktop_icon_foreground(palette, selected);
-
-            match style {
-                DesktopIconStyle::Dos => {
-                    ui.painter().text(
-                        icon_rect.center(),
-                        Align2::CENTER_CENTER,
-                        entry.ascii,
-                        FontId::new(18.0, FontFamily::Monospace),
-                        icon_fg,
-                    );
-                }
-                DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    Self::paint_tinted_texture(ui.painter(), texture, icon_rect, icon_fg);
-                }
-                DesktopIconStyle::NoIcons => {}
-            }
-
-            if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, entry.label, icon_fg);
-            }
-
-            if response.dragged() {
-                update_dragged_icon_position(
-                    &mut self.settings.draft,
-                    entry.key,
-                    [top_left.x, top_left.y],
-                    [response.drag_delta().x, response.drag_delta().y],
-                );
-            }
-            if response.drag_stopped() {
-                needs_persist |=
-                    finalize_dragged_icon_position(&mut self.settings.draft, entry.key, drag_grid);
-            }
-
-            if response.clicked() || response.secondary_clicked() {
-                self.desktop_selected_icon = Some(DesktopIconSelection::Builtin(entry.key));
-            }
-            if response.double_clicked() {
-                if let Some(window) = entry.target_window {
-                    open_window = Some(window);
-                } else {
-                    open_terminal = true;
-                }
-            }
-        }
-
-        for (entry_idx, entry) in desktop_entries.iter().enumerate() {
-            let entry_key = entry.key.clone();
-            let entry_path = entry.path.clone();
-            let entry_label = entry.label.clone();
-            let entry_is_dir = entry.is_dir();
-            let row = Self::desktop_entry_row(entry);
-            let top_left = {
-                let [x, y] = icon_position(
-                    &self.settings.draft,
-                    &entry_key,
-                    [
-                        workspace.left() + 4.0 + column_width,
-                        workspace.top()
-                            + 16.0
-                            + (builtin_entries.len() + entry_idx) as f32 * item_height,
-                    ],
-                    &default_positions,
-                );
-                egui::pos2(x, y)
-            };
-
-            let icon_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
-                egui::vec2(icon_size, icon_size),
-            );
-            let label_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2(0.0, icon_size + 2.0),
-                egui::vec2(column_width, label_height.max(16.0)),
-            );
-            let hit_rect = if label_height > 0.0 {
-                egui::Rect::from_min_size(
-                    top_left,
-                    egui::vec2(column_width, icon_size + label_height + 2.0),
-                )
-            } else {
-                icon_rect
-            };
-
-            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
-            let selected = self.desktop_selected_icon
-                == Some(DesktopIconSelection::Surface(entry_key.clone()));
-            Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
-            let icon_fg = Self::desktop_icon_foreground(palette, selected);
-            response.dnd_set_drag_payload(NativeFileManagerDragPayload {
-                paths: vec![entry_path.clone()],
-            });
-            let file_manager_drop_hover = entry_is_dir
-                && response
-                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                    .is_some_and(|payload| {
-                        Self::file_manager_drop_allowed(&payload.paths, &entry_path)
-                    });
-
-            match style {
-                DesktopIconStyle::Dos => {
-                    ui.painter().text(
-                        icon_rect.center(),
-                        Align2::CENTER_CENTER,
-                        row.icon(),
-                        FontId::new(18.0, FontFamily::Monospace),
-                        icon_fg,
-                    );
-                }
-                DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    if let Some(texture) = self.file_manager_texture_for_row(ui.ctx(), &row) {
-                        Self::paint_tinted_texture(ui.painter(), &texture, icon_rect, icon_fg);
-                    }
-                }
-                DesktopIconStyle::NoIcons => {}
-            }
-
-            if file_manager_drop_hover {
-                ui.painter().rect_stroke(
-                    hit_rect.expand(2.0),
-                    0.0,
-                    egui::Stroke::new(1.5, palette.fg),
-                );
-            }
-
-            if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, &entry_label, icon_fg);
-            }
-
-            if response.dragged() {
-                update_dragged_icon_position(
-                    &mut self.settings.draft,
-                    &entry_key,
-                    [top_left.x, top_left.y],
-                    [response.drag_delta().x, response.drag_delta().y],
-                );
-            }
-            if response.drag_stopped() {
-                needs_persist |=
-                    finalize_dragged_icon_position(&mut self.settings.draft, &entry_key, drag_grid);
-            }
-
-            if response.clicked() || response.secondary_clicked() {
-                self.desktop_selected_icon = Some(DesktopIconSelection::Surface(entry_key.clone()));
-            }
-
-            response.context_menu(|ui| {
-                Self::apply_context_menu_style(ui);
-                ui.set_min_width(140.0);
-                ui.set_max_width(190.0);
-                if ui.button("Open").clicked() {
-                    desktop_action = Some(ContextMenuAction::OpenDesktopItem(entry_path.clone()));
-                    ui.close_menu();
-                }
-                if !entry_is_dir {
-                    if ui.button("Open With...").clicked() {
-                        desktop_action =
-                            Some(ContextMenuAction::OpenDesktopItemWith(entry_path.clone()));
-                        ui.close_menu();
-                    }
-                }
-                Self::retro_separator(ui);
-                if ui.button("Rename").clicked() {
-                    desktop_action = Some(ContextMenuAction::RenameDesktopItem(entry_path.clone()));
-                    ui.close_menu();
-                }
-                if ui.button("Properties").clicked() {
-                    desktop_action = Some(ContextMenuAction::OpenDesktopItemProperties(
-                        entry_path.clone(),
-                    ));
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Delete").clicked() {
-                    desktop_action = Some(ContextMenuAction::DeleteDesktopItem(entry_path.clone()));
-                    ui.close_menu();
-                }
-            });
-
-            if entry_is_dir {
-                if let Some(payload) =
-                    response.dnd_release_payload::<NativeFileManagerDragPayload>()
-                {
-                    if Self::file_manager_drop_allowed(&payload.paths, &entry_path) {
-                        self.file_manager_handle_drop_to_dir(
-                            payload.paths.clone(),
-                            entry_path.clone(),
-                        );
-                    }
-                }
-            }
-
-            if response.double_clicked() {
-                open_desktop_path = Some(entry_path.clone());
-            }
-        }
-
-        for (sidx, shortcut) in shortcuts.iter().enumerate() {
-            let key = format!("shortcut_{}", sidx);
-            let top_left = {
-                let [x, y] = icon_position(
-                    &self.settings.draft,
-                    &key,
-                    [
-                        workspace.left() + 4.0 + column_width * 2.0,
-                        workspace.top() + 16.0 + sidx as f32 * item_height,
-                    ],
-                    &default_positions,
-                );
-                egui::pos2(x, y)
-            };
-
-            let icon_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2((column_width - icon_size) * 0.5, 0.0),
-                egui::vec2(icon_size, icon_size),
-            );
-            let label_rect = egui::Rect::from_min_size(
-                top_left + egui::vec2(0.0, icon_size + 2.0),
-                egui::vec2(column_width, label_height.max(16.0)),
-            );
-            let hit_rect = if label_height > 0.0 {
-                egui::Rect::from_min_size(
-                    top_left,
-                    egui::vec2(column_width, icon_size + label_height + 2.0),
-                )
-            } else {
-                icon_rect
-            };
-
-            let response = ui.allocate_rect(hit_rect, egui::Sense::click_and_drag());
-            let selected = self.desktop_selected_icon == Some(DesktopIconSelection::Shortcut(sidx));
-            Self::paint_desktop_icon_selection(ui, hit_rect, palette, selected, response.hovered());
-            let icon_fg = Self::desktop_icon_foreground(palette, selected);
-
-            match style {
-                DesktopIconStyle::Dos => {
-                    ui.painter().text(
-                        icon_rect.center(),
-                        Align2::CENTER_CENTER,
-                        "[LNK]",
-                        FontId::new(18.0, FontFamily::Monospace),
-                        icon_fg,
-                    );
-                }
-                DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    // Try to use a custom icon texture if icon_path is set
-                    let icon_path_clone = shortcut.icon_path.clone();
-                    let icon_tex: Option<egui::TextureHandle> =
-                        if let Some(ref path) = icon_path_clone {
-                            self.load_cached_shortcut_icon(ui.ctx(), path, Path::new(path), 48)
-                        } else {
-                            None
-                        };
-                    if let Some(tex) = icon_tex {
-                        Self::paint_tinted_texture(ui.painter(), &tex, icon_rect, icon_fg);
-                    } else {
-                        let kind_tex = match shortcut.shortcut_kind.as_str() {
-                            "network" => &tex_connections,
-                            "nuke_codes" => &tex_nuke_codes,
-                            "editor" => &tex_editor,
-                            _ => &tex_app,
-                        };
-                        Self::paint_tinted_texture(ui.painter(), kind_tex, icon_rect, icon_fg);
-                    }
-                    let badge_size = (icon_size * 0.35).max(10.0);
-                    let badge_rect = egui::Rect::from_min_size(
-                        icon_rect.min + egui::vec2(0.0, icon_size - badge_size),
-                        egui::vec2(badge_size, badge_size),
-                    );
-                    let badge_bg = if selected {
-                        palette.panel
-                    } else {
-                        Color32::BLACK
-                    };
-                    ui.painter().rect_filled(badge_rect, 0.0, badge_bg);
-                    Self::paint_tinted_texture(
-                        ui.painter(),
-                        &tex_shortcut_badge,
-                        badge_rect,
-                        icon_fg,
-                    );
-                }
-                DesktopIconStyle::NoIcons => {}
-            }
-
-            if label_height > 0.0 {
-                Self::paint_desktop_icon_label(ui, label_rect, &shortcut.label, icon_fg);
-            }
-
-            if response.dragged() {
-                update_dragged_icon_position(
-                    &mut self.settings.draft,
-                    &key,
-                    [top_left.x, top_left.y],
-                    [response.drag_delta().x, response.drag_delta().y],
-                );
-            }
-            if response.drag_stopped() {
-                needs_persist |=
-                    finalize_dragged_icon_position(&mut self.settings.draft, &key, drag_grid);
-            }
-
-            if response.clicked() || response.secondary_clicked() {
-                self.desktop_selected_icon = Some(DesktopIconSelection::Shortcut(sidx));
-            }
-
-            let app_name_for_menu = shortcut.app_name.clone();
-            response.context_menu(|ui| {
-                Self::apply_context_menu_style(ui);
-                ui.set_min_width(136.0);
-                ui.set_max_width(180.0);
-                if ui.button("Open").clicked() {
-                    desktop_action =
-                        Some(ContextMenuAction::LaunchShortcut(app_name_for_menu.clone()));
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Properties").clicked() {
-                    desktop_action = Some(ContextMenuAction::OpenShortcutProperties(sidx));
-                    ui.close_menu();
-                }
-                Self::retro_separator(ui);
-                if ui.button("Delete Shortcut").clicked() {
-                    desktop_action = Some(ContextMenuAction::DeleteShortcut(sidx));
-                    ui.close_menu();
-                }
-            });
-
-            if response.double_clicked() {
-                desktop_action = Some(ContextMenuAction::LaunchShortcut(shortcut.app_name.clone()));
-            }
-        }
-
-        if needs_persist {
-            self.persist_native_settings();
-        }
-
-        if let Some(action) = desktop_action {
-            match action {
-                ContextMenuAction::DeleteShortcut(idx) => {
-                    if delete_desktop_shortcut(&mut self.settings.draft, idx) {
-                        if self.desktop_selected_icon == Some(DesktopIconSelection::Shortcut(idx)) {
-                            self.desktop_selected_icon = None;
-                        }
-                        self.persist_native_settings();
-                    }
-                }
-                _ => {
-                    self.context_menu_action = Some(action);
-                }
-            }
-        }
-
-        if open_terminal {
-            self.open_desktop_terminal_shell();
-        } else if let Some(path) = open_desktop_path {
-            self.open_desktop_surface_path(path);
-        } else if let Some(window) = open_window {
-            self.open_desktop_window(window);
-        }
-    }
 
     fn draw_editor_save_as_window(&mut self, _ctx: &egui::Context) {}
 
     // ── SPOTLIGHT SEARCH ─────────────────────────────────────────────────
 
-    fn spotlight_gather_results(&mut self) {
-        let query = self.spotlight_query.to_lowercase();
-        let tab = self.spotlight_tab;
-        // Skip if query+tab haven't changed
-        if query == self.spotlight_last_query && tab == self.spotlight_last_tab {
-            return;
-        }
-        self.spotlight_last_query = query.clone();
-        self.spotlight_last_tab = tab;
-        let active_username = active_native_session_username();
-        self.spotlight_results = gather_spotlight_results(
-            &query,
-            tab,
-            active_username.as_deref(),
-            BUILTIN_TEXT_EDITOR_APP,
-            BUILTIN_NUKE_CODES_APP,
-            BUILTIN_DONKEY_KONG_GAME,
-        );
-        self.spotlight_selected = 0;
-    }
 
-    fn spotlight_activate_result(&mut self, result: &NativeSpotlightResult) {
-        self.close_spotlight();
-        self.spotlight_query.clear();
-        if let Some(action) = self.spotlight_action_for_result(result) {
-            self.execute_desktop_shell_action(action);
-        }
-    }
 
-    fn draw_spotlight(&mut self, ctx: &Context) {
-        if !self.spotlight_open {
-            return;
-        }
-
-        // Close on Escape
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.close_spotlight();
-            return;
-        }
-
-        // Arrow key navigation
-        let mut scroll_selected_into_view = false;
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            if !self.spotlight_results.is_empty() {
-                let next = (self.spotlight_selected + 1).min(self.spotlight_results.len() - 1);
-                if next != self.spotlight_selected {
-                    self.spotlight_selected = next;
-                    scroll_selected_into_view = true;
-                }
-            }
-        }
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            let next = self.spotlight_selected.saturating_sub(1);
-            if next != self.spotlight_selected {
-                self.spotlight_selected = next;
-                scroll_selected_into_view = true;
-            }
-        }
-        if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
-            self.move_spotlight_tab(1);
-            scroll_selected_into_view = true;
-        }
-        if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
-            self.move_spotlight_tab(-1);
-            scroll_selected_into_view = true;
-        }
-        if ctx.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift) {
-            self.move_spotlight_tab(1);
-            scroll_selected_into_view = true;
-            ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::NONE, Key::Tab);
-            });
-        }
-        if ctx.input(|i| i.key_pressed(Key::Tab) && i.modifiers.shift) {
-            self.move_spotlight_tab(-1);
-            scroll_selected_into_view = true;
-            ctx.input_mut(|i| {
-                i.consume_key(
-                    egui::Modifiers {
-                        shift: true,
-                        ..Default::default()
-                    },
-                    Key::Tab,
-                );
-            });
-        }
-
-        // Enter to activate
-        let mut activate_idx: Option<usize> = None;
-        if ctx.input(|i| i.key_pressed(Key::Enter)) && !self.spotlight_results.is_empty() {
-            activate_idx = Some(self.spotlight_selected);
-        }
-
-        // Gather results
-        let prev_query = self.spotlight_last_query.clone();
-        let prev_tab = self.spotlight_last_tab;
-        self.spotlight_gather_results();
-        if self.spotlight_last_query != prev_query || self.spotlight_last_tab != prev_tab {
-            scroll_selected_into_view = true;
-        }
-
-        let palette = current_palette();
-        let screen = ctx.screen_rect();
-        let box_width = 600.0_f32.min(screen.width() - 40.0);
-        let box_height = 420.0_f32.min(screen.height() - 80.0);
-
-        egui::Window::new("spotlight_window")
-            .title_bar(false)
-            .resizable(false)
-            .collapsible(false)
-            .fixed_size(egui::vec2(box_width, box_height))
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .order(egui::Order::Foreground)
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.bg)
-                    .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .shadow(egui::epaint::Shadow::NONE)
-                    .inner_margin(egui::Margin::same(12.0)),
-            )
-            .show(ctx, |ui| {
-                let v = ui.visuals_mut();
-                v.override_text_color = Some(palette.fg);
-                v.extreme_bg_color = palette.bg;
-                v.selection.bg_fill = palette.fg;
-                v.selection.stroke = egui::Stroke::new(1.0, palette.fg);
-                // noninteractive (labels, frames)
-                v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-                v.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
-                v.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
-                v.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-                // inactive (buttons at rest)
-                v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-                v.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
-                // hovered
-                v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, palette.fg);
-                v.widgets.hovered.bg_fill = palette.panel;
-                v.widgets.hovered.weak_bg_fill = palette.panel;
-                v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
-                v.widgets.hovered.expansion = 0.0;
-                // active (pressed)
-                v.widgets.active.fg_stroke = egui::Stroke::new(1.0, Color32::BLACK);
-                v.widgets.active.bg_fill = palette.fg;
-                v.widgets.active.weak_bg_fill = palette.fg;
-                v.widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
-
-                // Search input
-                let search_resp = ui.add(
-                    TextEdit::singleline(&mut self.spotlight_query)
-                        .desired_width(box_width - 48.0)
-                        .hint_text("Search apps, documents, files…")
-                        .font(egui::TextStyle::Body),
-                );
-                // Auto-focus
-                if search_resp.gained_focus() || !search_resp.has_focus() {
-                    search_resp.request_focus();
-                }
-
-                ui.add_space(6.0);
-
-                // Tab buttons
-                ui.horizontal(|ui| {
-                    let tabs = ["All", "Apps", "Documents", "Files"];
-                    for (i, label) in tabs.iter().enumerate() {
-                        let selected = self.spotlight_tab == i as u8;
-                        let text = if selected {
-                            RichText::new(*label).color(Color32::BLACK).strong()
-                        } else {
-                            RichText::new(*label).color(palette.fg)
-                        };
-                        let btn = egui::Button::new(text);
-                        let btn = if selected {
-                            btn.fill(palette.fg)
-                        } else {
-                            btn.fill(palette.panel)
-                        };
-                        if ui.add(btn).clicked() {
-                            self.set_spotlight_tab(i as u8);
-                        }
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // Results
-                let results_height = ui.available_height();
-                egui::ScrollArea::vertical()
-                    .max_height(results_height)
-                    .auto_shrink(false)
-                    .show(ui, |ui| {
-                        if self.spotlight_results.is_empty() {
-                            if self.spotlight_query.is_empty() {
-                                ui.label(RichText::new("Type to search…").color(palette.dim));
-                            } else {
-                                ui.label(RichText::new("No results found.").color(palette.dim));
-                            }
-                        } else {
-                            for (i, result) in self.spotlight_results.iter().enumerate() {
-                                let selected = i == self.spotlight_selected;
-                                let cat_label = spotlight_category_tag(&result.category);
-                                let display = format!("[{cat_label}]  {}", result.name);
-                                let text_color = if selected { Color32::BLACK } else { palette.fg };
-                                let resp = ui.add(egui::SelectableLabel::new(
-                                    selected,
-                                    RichText::new(display).color(text_color),
-                                ));
-                                if resp.clicked() {
-                                    activate_idx = Some(i);
-                                }
-                                if selected && scroll_selected_into_view {
-                                    resp.scroll_to_me(None);
-                                }
-                            }
-                        }
-                    });
-            });
-
-        // Activate after UI is done (deferred to avoid borrow issues)
-        if let Some(idx) = activate_idx {
-            if idx < self.spotlight_results.len() {
-                let result = self.spotlight_results[idx].clone();
-                self.spotlight_activate_result(&result);
-            }
-        }
-    }
 
     fn draw_shortcut_properties_window(&mut self, ctx: &egui::Context) {
         let Some(props) = self.shortcut_properties.clone() else {
@@ -4417,220 +2769,12 @@ impl RobcoNativeApp {
         }
     }
 
-    fn open_start_menu(&mut self) {
-        self.close_spotlight();
-        self.start_open = true;
-        self.start_selected_root = 0;
-        self.start_system_selected = 0;
-        self.start_leaf_selected = 0;
-        self.start_open_submenu = None;
-        self.start_open_leaf = None;
-    }
 
-    fn close_start_menu(&mut self) {
-        self.start_open = false;
-        self.start_open_submenu = None;
-        self.start_open_leaf = None;
-    }
 
-    fn close_start_menu_panel(&mut self) {
-        self.start_open_submenu = None;
-        self.start_open_leaf = None;
-        self.start_system_selected = 0;
-        self.start_leaf_selected = 0;
-    }
 
-    fn open_spotlight(&mut self) {
-        self.close_start_menu();
-        self.spotlight_open = true;
-        self.spotlight_tab = 0;
-        self.spotlight_query.clear();
-        self.spotlight_selected = 0;
-        self.spotlight_results.clear();
-        self.spotlight_last_query.clear();
-        self.spotlight_last_tab = u8::MAX;
-    }
 
-    fn close_spotlight(&mut self) {
-        self.spotlight_open = false;
-    }
 
-    fn set_spotlight_tab(&mut self, tab: u8) {
-        let next = tab.min(3);
-        if self.spotlight_tab == next {
-            return;
-        }
-        self.spotlight_tab = next;
-        self.spotlight_selected = 0;
-        self.spotlight_last_tab = u8::MAX;
-    }
 
-    fn move_spotlight_tab(&mut self, delta: i8) {
-        let current = self.spotlight_tab as i8;
-        let next = (current + delta).clamp(0, 3) as u8;
-        self.set_spotlight_tab(next);
-    }
-
-    fn close_desktop_overlays(&mut self) {
-        self.close_start_menu();
-        self.close_spotlight();
-    }
-
-    fn start_menu_open_current_panel(&mut self) {
-        let idx = self.start_selected_root;
-        if start_root_leaf_for_idx(idx).is_some() || start_root_submenu_for_idx(idx).is_some() {
-            self.set_start_panel_for_root(idx);
-        }
-    }
-
-    fn start_menu_move_root_selection(&mut self, delta: isize) {
-        let max_idx = START_ROOT_ITEMS.len().saturating_sub(1) as isize;
-        let next = (self.start_selected_root as isize + delta).clamp(0, max_idx) as usize;
-        if next == self.start_selected_root {
-            return;
-        }
-        if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
-            self.set_start_panel_for_root(next);
-        } else {
-            self.start_selected_root = next;
-        }
-    }
-
-    fn start_menu_move_panel_selection(&mut self, delta: isize) {
-        if let Some(StartSubmenu::System) = self.start_open_submenu {
-            let items_len = self.start_system_items().len();
-            if items_len > 0 {
-                let max_idx = items_len.saturating_sub(1) as isize;
-                self.start_system_selected =
-                    (self.start_system_selected as isize + delta).clamp(0, max_idx) as usize;
-            }
-        } else if let Some(leaf) = self.start_open_leaf {
-            let items_len = self.start_leaf_items(leaf).len();
-            if items_len > 0 {
-                let max_idx = items_len.saturating_sub(1) as isize;
-                self.start_leaf_selected =
-                    (self.start_leaf_selected as isize + delta).clamp(0, max_idx) as usize;
-            }
-        } else {
-            self.start_menu_move_root_selection(delta);
-        }
-    }
-
-    fn activate_start_menu_selection(&mut self) {
-        if let Some(StartSubmenu::System) = self.start_open_submenu {
-            let items = self.start_system_items();
-            if let Some((_, action)) = items.get(self.start_system_selected) {
-                self.run_start_system_action(*action);
-            }
-            return;
-        }
-
-        if let Some(leaf) = self.start_open_leaf {
-            let items = self.start_leaf_items(leaf);
-            if let Some(item) = items.get(self.start_leaf_selected) {
-                self.run_start_leaf_action(item.action.clone());
-            }
-            return;
-        }
-
-        if let Some(action) = start_root_action_for_idx(self.start_selected_root) {
-            self.run_start_root_action(action);
-        } else {
-            self.start_menu_open_current_panel();
-        }
-    }
-
-    fn handle_start_menu_keyboard(&mut self, ctx: &Context) {
-        if !self.start_open {
-            return;
-        }
-
-        let mut handled = false;
-        ctx.input_mut(|i| {
-            if i.key_pressed(Key::ArrowUp) {
-                self.start_menu_move_panel_selection(-1);
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
-                handled = true;
-            } else if i.key_pressed(Key::ArrowDown) {
-                self.start_menu_move_panel_selection(1);
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
-                handled = true;
-            } else if i.key_pressed(Key::ArrowRight) {
-                if self.start_open_leaf.is_none() && self.start_open_submenu.is_none() {
-                    self.start_menu_open_current_panel();
-                }
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
-                handled = true;
-            } else if i.key_pressed(Key::ArrowLeft) {
-                if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
-                    self.close_start_menu_panel();
-                } else {
-                    self.close_start_menu();
-                }
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft);
-                handled = true;
-            } else if i.key_pressed(Key::Enter) {
-                self.activate_start_menu_selection();
-                i.consume_key(egui::Modifiers::NONE, Key::Enter);
-                handled = true;
-            }
-        });
-
-        if handled {
-            self.close_spotlight();
-        }
-    }
-
-    fn set_start_panel_for_root(&mut self, root_idx: usize) {
-        self.start_selected_root = root_idx.min(START_ROOT_ITEMS.len().saturating_sub(1));
-        self.start_open_leaf = start_root_leaf_for_idx(self.start_selected_root);
-        self.start_open_submenu = start_root_submenu_for_idx(self.start_selected_root);
-        self.start_leaf_selected = 0;
-        self.start_system_selected = 0;
-    }
-
-    fn start_system_items(&self) -> Vec<(&'static str, StartSystemAction)> {
-        START_SYSTEM_ITEMS
-            .iter()
-            .copied()
-            .filter(|(_, action)| {
-                !matches!(action, StartSystemAction::Connections) || !connections_macos_disabled()
-            })
-            .collect()
-    }
-
-    fn start_leaf_menu_target(action: &NativeStartLeafAction) -> Option<(EditMenuTarget, String)> {
-        match action {
-            NativeStartLeafAction::LaunchConfiguredApp(name) => {
-                Some((EditMenuTarget::Applications, name.clone()))
-            }
-            NativeStartLeafAction::LaunchNetworkProgram(name) => {
-                Some((EditMenuTarget::Network, name.clone()))
-            }
-            NativeStartLeafAction::LaunchGameProgram(name) if name != BUILTIN_DONKEY_KONG_GAME => {
-                Some((EditMenuTarget::Games, name.clone()))
-            }
-            _ => None,
-        }
-    }
-
-    fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<NativeStartLeafEntry> {
-        match leaf {
-            StartLeaf::Applications => start_application_entries(
-                self.settings.draft.builtin_menu_visibility.nuke_codes,
-                self.settings.draft.builtin_menu_visibility.text_editor,
-                BUILTIN_TEXT_EDITOR_APP,
-                BUILTIN_NUKE_CODES_APP,
-            ),
-            StartLeaf::Documents => start_document_entries(
-                self.session
-                    .as_ref()
-                    .map(|session| session.username.as_str()),
-            ),
-            StartLeaf::Network => start_network_entries(),
-            StartLeaf::Games => start_game_entries(BUILTIN_DONKEY_KONG_GAME),
-        }
-    }
 
     fn open_file_manager_at(&mut self, path: PathBuf) {
         self.launch_standalone_file_manager(Some(path));
@@ -4643,7 +2787,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn launch_standalone_file_manager(&mut self, path: Option<PathBuf>) {
+    pub(super) fn launch_standalone_file_manager(&mut self, path: Option<PathBuf>) {
         let start_path = path.unwrap_or_else(|| self.file_manager.cwd.clone());
         let current_user = get_current_user();
         let session_username = self
@@ -4674,7 +2818,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn launch_standalone_applications(&mut self) {
+    pub(super) fn launch_standalone_applications(&mut self) {
         let current_user = get_current_user();
         let session_username = self
             .session
@@ -4713,7 +2857,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
+    pub(super) fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
         let current_user = get_current_user();
         let session_username = self
             .session
@@ -4833,7 +2977,7 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::NukeCodes);
     }
 
-    fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
+    pub(super) fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
         match action {
             DesktopShellAction::OpenWindow(window) => match window {
                 DesktopWindow::FileManager => self.launch_standalone_file_manager(None),
@@ -4878,97 +3022,9 @@ impl RobcoNativeApp {
         }
     }
 
-    fn run_start_root_action(&mut self, action: StartRootAction) {
-        match action {
-            StartRootAction::ReturnToTerminal => {
-                self.close_start_menu();
-                crate::sound::play_logout();
-                self.desktop_mode_open = false;
-            }
-            StartRootAction::Logout => {
-                self.close_start_menu();
-                self.begin_logout();
-            }
-            StartRootAction::Shutdown => {
-                self.close_start_menu();
-                self.queue_terminal_flash("Shutting down...", 800, FlashAction::ExitApp);
-            }
-        }
-    }
 
-    fn run_start_system_action(&mut self, action: StartSystemAction) {
-        self.close_start_menu();
-        let action = match action {
-            StartSystemAction::ProgramInstaller => {
-                DesktopShellAction::OpenWindow(DesktopWindow::Installer)
-            }
-            StartSystemAction::Terminal => DesktopShellAction::OpenDesktopTerminalShell,
-            StartSystemAction::FileManager => {
-                DesktopShellAction::OpenWindow(DesktopWindow::FileManager)
-            }
-            StartSystemAction::Settings => DesktopShellAction::OpenWindow(DesktopWindow::Settings),
-            StartSystemAction::Connections => DesktopShellAction::OpenConnectionsSettings,
-        };
-        self.execute_desktop_shell_action(action);
-    }
 
-    fn run_start_leaf_action(&mut self, action: NativeStartLeafAction) {
-        let action = match action {
-            NativeStartLeafAction::None => return,
-            NativeStartLeafAction::LaunchNukeCodes => DesktopShellAction::OpenNukeCodes,
-            NativeStartLeafAction::OpenTextEditor => DesktopShellAction::OpenTextEditor,
-            NativeStartLeafAction::LaunchConfiguredApp(name) => {
-                DesktopShellAction::LaunchConfiguredApp(name)
-            }
-            NativeStartLeafAction::OpenDocumentCategory(path) => {
-                DesktopShellAction::OpenFileManagerAt(path)
-            }
-            NativeStartLeafAction::LaunchNetworkProgram(name) => {
-                DesktopShellAction::LaunchNetworkProgram(name)
-            }
-            NativeStartLeafAction::LaunchGameProgram(name) => {
-                DesktopShellAction::LaunchGameProgram(name)
-            }
-        };
-        self.execute_desktop_shell_action(action);
-    }
-
-    fn spotlight_action_for_result(
-        &self,
-        result: &NativeSpotlightResult,
-    ) -> Option<DesktopShellAction> {
-        match &result.category {
-            NativeSpotlightCategory::System => match result.name.as_str() {
-                "File Manager" => Some(DesktopShellAction::OpenWindow(DesktopWindow::FileManager)),
-                "Settings" => Some(DesktopShellAction::OpenWindow(DesktopWindow::Settings)),
-                "Terminal" => Some(DesktopShellAction::OpenWindow(DesktopWindow::TerminalMode)),
-                n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::OpenTextEditor),
-                n if n == BUILTIN_NUKE_CODES_APP => {
-                    Some(DesktopShellAction::OpenWindow(DesktopWindow::NukeCodes))
-                }
-                _ => None,
-            },
-            NativeSpotlightCategory::App => {
-                Some(DesktopShellAction::LaunchConfiguredApp(result.name.clone()))
-            }
-            NativeSpotlightCategory::Game => {
-                Some(DesktopShellAction::LaunchGameProgram(result.name.clone()))
-            }
-            NativeSpotlightCategory::Network => Some(DesktopShellAction::LaunchNetworkProgram(
-                result.name.clone(),
-            )),
-            NativeSpotlightCategory::Document => result
-                .path
-                .clone()
-                .map(DesktopShellAction::OpenPathInEditor),
-            NativeSpotlightCategory::File => result
-                .path
-                .clone()
-                .map(DesktopShellAction::RevealPathInFileManager),
-        }
-    }
-
-    fn open_manual_file(&mut self, path: &str, status_label: &str) {
+    pub(super) fn open_manual_file(&mut self, path: &str, status_label: &str) {
         let manual = PathBuf::from(path);
         match load_text_document(manual) {
             Ok(document) => {
@@ -4984,32 +3040,6 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_desktop_window_by_kind(&mut self, ctx: &Context, window: DesktopWindow) {
-        (desktop_component_binding(window).draw)(self, ctx);
-    }
-
-    fn draw_desktop_windows(&mut self, ctx: &Context) {
-        self.sync_desktop_active_window();
-        let active = self.desktop_active_window;
-        for window in desktop_components()
-            .iter()
-            .map(|component| component.spec.window)
-        {
-            if Some(window) == active {
-                continue;
-            }
-            if self.desktop_window_is_minimized(window) {
-                continue;
-            }
-            self.draw_desktop_window_by_kind(ctx, window);
-        }
-        if let Some(window) = active {
-            if !self.desktop_window_is_minimized(window) {
-                self.draw_desktop_window_by_kind(ctx, window);
-            }
-        }
-        self.sync_desktop_active_window();
-    }
 
     fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
         let settings = reload_settings_snapshot();
@@ -5184,7 +3214,7 @@ impl RobcoNativeApp {
         load_login_usernames()
     }
 
-    fn queue_terminal_flash(&mut self, message: impl Into<String>, ms: u64, action: FlashAction) {
+    pub(super) fn queue_terminal_flash(&mut self, message: impl Into<String>, ms: u64, action: FlashAction) {
         self.terminal_flash = Some(TerminalFlash {
             message: message.into(),
             until: Instant::now() + Duration::from_millis(ms),
@@ -5216,7 +3246,7 @@ impl RobcoNativeApp {
         });
     }
 
-    fn begin_logout(&mut self) {
+    pub(super) fn begin_logout(&mut self) {
         let already_logging_out = self
             .terminal_flash
             .as_ref()
@@ -5323,7 +3353,7 @@ impl RobcoNativeApp {
         });
     }
 
-    fn open_file_manager_prompt(&mut self, request: FileManagerPromptRequest) {
+    pub(super) fn open_file_manager_prompt(&mut self, request: FileManagerPromptRequest) {
         self.terminal_prompt = Some(request.to_terminal_prompt());
     }
 
@@ -5451,7 +3481,7 @@ impl RobcoNativeApp {
         self.apply_terminal_pty_launch_plan(plan, false);
     }
 
-    fn open_desktop_pty(&mut self, title: &str, cmd: &[String]) {
+    pub(super) fn open_desktop_pty(&mut self, title: &str, cmd: &[String]) {
         let plan = terminal_command_launch_plan(
             TerminalShellSurface::Desktop,
             title,
@@ -5473,7 +3503,7 @@ impl RobcoNativeApp {
         self.apply_terminal_pty_launch_plan(plan, false);
     }
 
-    fn open_desktop_terminal_shell(&mut self) {
+    pub(super) fn open_desktop_terminal_shell(&mut self) {
         let requested_shell = std::env::var("SHELL").ok();
         let bash_exists = std::path::Path::new("/bin/bash").exists();
         let plan = terminal_shell_launch_plan(
@@ -5484,7 +3514,7 @@ impl RobcoNativeApp {
         self.apply_terminal_pty_launch_plan(plan, true);
     }
 
-    fn open_path_in_editor(&mut self, path: PathBuf) {
+    pub(super) fn open_path_in_editor(&mut self, path: PathBuf) {
         self.launch_standalone_editor(Some(path));
     }
 
@@ -5558,7 +3588,7 @@ impl RobcoNativeApp {
         self.activate_file_manager_selection();
     }
 
-    fn new_document(&mut self) {
+    pub(super) fn new_document(&mut self) {
         if self.desktop_mode_open {
             self.editor.reset_for_desktop_new_document();
             self.open_desktop_window(DesktopWindow::Editor);
@@ -5578,7 +3608,7 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::Editor);
     }
 
-    fn run_editor_command(&mut self, command: EditorCommand) {
+    pub(super) fn run_editor_command(&mut self, command: EditorCommand) {
         match command {
             EditorCommand::Save => self.save_editor(),
             EditorCommand::SaveAs => self.open_editor_save_as_picker(),
@@ -5607,7 +3637,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn run_editor_text_command(
+    pub(super) fn run_editor_text_command(
         &mut self,
         ctx: &Context,
         text_edit_id: Id,
@@ -5812,7 +3842,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn delete_program_entry(&mut self, target: EditMenuTarget, name: &str) {
+    pub(super) fn delete_program_entry(&mut self, target: EditMenuTarget, name: &str) {
         match target {
             EditMenuTarget::Documents => {
                 self.delete_document_category(name);
@@ -5829,7 +3859,7 @@ impl RobcoNativeApp {
         }
     }
 
-    fn rename_program_entry(&mut self, target: EditMenuTarget, old_name: &str, new_name: &str) {
+    pub(super) fn rename_program_entry(&mut self, target: EditMenuTarget, old_name: &str, new_name: &str) {
         let new_name = new_name.trim();
         if new_name.is_empty() {
             self.shell_status = "Name cannot be empty.".to_string();
@@ -5949,7 +3979,7 @@ impl RobcoNativeApp {
         self.shell_status = "Opened log editor.".to_string();
     }
 
-    fn persist_native_settings(&mut self) {
+    pub(super) fn persist_native_settings(&mut self) {
         let settings = persist_settings_draft(&self.settings.draft);
         self.replace_settings_draft(settings);
         self.apply_status_update(saved_shell_status());
@@ -6642,707 +4672,18 @@ impl RobcoNativeApp {
         }
     }
 
-    fn draw_top_bar_app_menu(&mut self, ui: &mut egui::Ui, ctx: &Context, app_menu_name: &str) {
-        let menu = ui.menu_button(
-            RichText::new(app_menu_name).strong().color(Color32::BLACK),
-            |ui| {
-                Self::apply_top_dropdown_menu_style(ui);
-                let items = build_app_control_menu(self.desktop_active_window.is_some());
-                self.draw_desktop_menu_items(ui, ctx, &items);
-            },
-        );
-        if menu.response.clicked() {
-            self.close_desktop_overlays();
-        }
-    }
 
-    fn active_editor_text_edit_id(&self) -> Id {
-        let generation = self.desktop_window_generation(DesktopWindow::Editor);
-        Id::new(("editor_text_edit", generation))
-    }
 
-    fn apply_desktop_menu_action(&mut self, ctx: &Context, action: &DesktopMenuAction) {
-        match action {
-            DesktopMenuAction::EditorCommand(command) => self.run_editor_command(*command),
-            DesktopMenuAction::EditorTextCommand(command) => {
-                self.run_editor_text_command(ctx, self.active_editor_text_edit_id(), *command);
-            }
-            DesktopMenuAction::OpenRecentEditorFile(path) => {
-                self.open_path_in_editor(path.clone());
-            }
-            DesktopMenuAction::FileManagerCommand(command) => {
-                self.run_file_manager_command(*command);
-            }
-            DesktopMenuAction::OpenFileManagerPrompt(request) => {
-                self.open_file_manager_prompt(request.clone());
-            }
-            DesktopMenuAction::FileManagerLaunchOpenWithCommand {
-                path,
-                ext_key,
-                command,
-            } => match self.launch_open_with_command(path, command) {
-                Ok(message) => {
-                    self.apply_file_manager_settings_update(
-                        FileManagerSettingsUpdate::RecordOpenWithCommand {
-                            ext_key: ext_key.clone(),
-                            command: command.clone(),
-                        },
-                    );
-                    self.shell_status = message;
-                }
-                Err(err) => {
-                    self.shell_status = format!("Open failed: {err}");
-                }
-            },
-            DesktopMenuAction::FileManagerSetOpenWithDefault { ext_key, command } => {
-                self.apply_file_manager_settings_update(
-                    FileManagerSettingsUpdate::SetOpenWithDefaultCommand {
-                        ext_key: ext_key.clone(),
-                        command: command.clone(),
-                    },
-                );
-                self.shell_status = if let Some(command) = command {
-                    file_manager_app::open_with_set_default_status(command, ext_key)
-                } else {
-                    file_manager_app::open_with_cleared_default_status(ext_key)
-                };
-            }
-            DesktopMenuAction::FileManagerRemoveOpenWithCommand { ext_key, command } => {
-                self.apply_file_manager_settings_update(
-                    FileManagerSettingsUpdate::RemoveOpenWithCommand {
-                        ext_key: ext_key.clone(),
-                        command: command.clone(),
-                    },
-                );
-                self.shell_status = file_manager_app::open_with_removed_saved_status(ext_key);
-            }
-            DesktopMenuAction::OpenFileManager => {
-                self.launch_standalone_file_manager(None);
-            }
-            DesktopMenuAction::OpenApplications => {
-                self.launch_standalone_applications();
-            }
-            DesktopMenuAction::OpenSettings => {
-                self.open_standalone_settings(None);
-            }
-            DesktopMenuAction::ToggleStartMenu => {
-                if self.start_open {
-                    self.close_start_menu();
-                } else {
-                    self.open_start_menu();
-                }
-            }
-            DesktopMenuAction::CloseActiveDesktopWindow => {
-                if let Some(window) = self.desktop_active_window {
-                    self.close_desktop_window(window);
-                }
-            }
-            DesktopMenuAction::MinimizeActiveDesktopWindow => {
-                if let Some(window) = self.desktop_active_window {
-                    self.set_desktop_window_minimized(window, true);
-                }
-            }
-            DesktopMenuAction::ActivateDesktopWindow(window) => {
-                if *window == DesktopWindow::Editor
-                    && !self.desktop_window_is_open(DesktopWindow::Editor)
-                    && self.editor.path.is_none()
-                {
-                    self.new_document();
-                } else if !self.desktop_window_is_open(*window) {
-                    self.open_desktop_window(*window);
-                } else {
-                    self.focus_desktop_window(Some(ctx), *window);
-                    self.close_desktop_overlays();
-                }
-            }
-            DesktopMenuAction::ActivateTaskbarWindow(window) => {
-                if !self.desktop_window_is_open(*window) {
-                    self.open_desktop_window(*window);
-                } else if self.desktop_window_is_minimized(*window) {
-                    self.set_desktop_window_minimized(*window, false);
-                    self.close_desktop_overlays();
-                } else if self.desktop_active_window == Some(*window) {
-                    self.set_desktop_window_minimized(*window, true);
-                    self.close_desktop_overlays();
-                } else {
-                    self.focus_desktop_window(Some(ctx), *window);
-                    self.close_desktop_overlays();
-                }
-            }
-            DesktopMenuAction::OpenManual { path, status_label } => {
-                self.open_manual_file(path, status_label);
-            }
-        }
-    }
 
-    fn draw_desktop_menu_items(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &Context,
-        items: &[DesktopMenuItem],
-    ) {
-        for item in items {
-            match item {
-                DesktopMenuItem::Action { label, action } => {
-                    if ui.button(label).clicked() {
-                        self.apply_desktop_menu_action(ctx, action);
-                        ui.close_menu();
-                    }
-                }
-                DesktopMenuItem::Disabled { label } => {
-                    let _ = Self::retro_disabled_button(ui, label);
-                }
-                DesktopMenuItem::Label { label } => {
-                    ui.label(RichText::new(label).small());
-                }
-                DesktopMenuItem::Separator => Self::retro_separator(ui),
-                DesktopMenuItem::Submenu { label, items } => {
-                    ui.menu_button(label, |ui| {
-                        Self::apply_top_dropdown_menu_style(ui);
-                        self.draw_desktop_menu_items(ui, ctx, items);
-                    });
-                }
-            }
-        }
-    }
 
-    fn draw_top_bar_standard_menu(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &Context,
-        section: DesktopMenuSection,
-    ) {
-        let menu = ui.menu_button(section.label(), |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            if section == DesktopMenuSection::Format {
-                ui.set_min_width(160.0);
-                ui.set_max_width(220.0);
-            }
-            let active_app = self.active_desktop_app();
-            let menu_context = DesktopMenuBuildContext {
-                editor: &self.editor,
-                editor_recent_files: &self.settings.draft.editor_recent_files,
-                file_manager: &self.file_manager,
-                file_manager_runtime: &self.file_manager_runtime,
-                file_manager_settings: &self.live_desktop_file_manager_settings,
-            };
-            let items = build_active_desktop_menu_section(active_app, section, &menu_context);
-            if !items.is_empty() {
-                self.draw_desktop_menu_items(ui, ctx, &items);
-            }
-            let shared_items = build_shared_desktop_menu_section(section);
-            if !shared_items.is_empty() {
-                self.draw_desktop_menu_items(ui, ctx, &shared_items);
-            }
-        });
-        if menu.response.clicked() {
-            self.close_desktop_overlays();
-        }
-    }
 
-    fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
-        let menu = ui.menu_button("Window", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            let entries: Vec<DesktopWindowMenuEntry> = desktop_components()
-                .iter()
-                .filter(|component| component.spec.show_in_window_menu)
-                .map(|component| DesktopWindowMenuEntry {
-                    window: component.spec.window,
-                    open: self.desktop_window_is_open(component.spec.window),
-                    active: self.desktop_active_window == Some(component.spec.window),
-                })
-                .collect();
-            let items = build_window_menu_section(
-                &entries,
-                self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-            );
-            self.draw_desktop_menu_items(ui, ctx, &items);
-        });
-        if menu.response.clicked() {
-            self.close_desktop_overlays();
-        }
-    }
 
-    fn draw_top_bar_help_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
-        let menu = ui.menu_button("Help", |ui| {
-            Self::apply_top_dropdown_menu_style(ui);
-            let items = build_shared_desktop_menu_section(DesktopMenuSection::Help);
-            self.draw_desktop_menu_items(ui, ctx, &items);
-        });
-        if menu.response.clicked() {
-            self.close_desktop_overlays();
-        }
-    }
 
-    fn draw_top_bar_menu_section(
-        &mut self,
-        ctx: &Context,
-        ui: &mut egui::Ui,
-        section: DesktopMenuSection,
-    ) {
-        match section {
-            DesktopMenuSection::File
-            | DesktopMenuSection::Edit
-            | DesktopMenuSection::Format
-            | DesktopMenuSection::View => self.draw_top_bar_standard_menu(ui, ctx, section),
-            DesktopMenuSection::Window => self.draw_top_bar_window_menu(ui, ctx),
-            DesktopMenuSection::Help => self.draw_top_bar_help_menu(ui, ctx),
-        }
-    }
 
-    fn draw_top_bar(&mut self, ctx: &Context) {
-        let palette = current_palette();
-        Self::apply_global_retro_menu_chrome(ctx, &palette);
-        let app_menu_name = desktop_app_menu_name(
-            self.desktop_active_window,
-            self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-        );
-        let active_app = self.active_desktop_app();
-        TopBottomPanel::top("native_top_bar")
-            .exact_height(30.0)
-            .show_separator_line(false)
-            .show(ctx, |ui| {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
-                ui.horizontal(|ui| {
-                    Self::apply_top_bar_menu_button_style(ui);
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    self.draw_top_bar_app_menu(ui, ctx, &app_menu_name);
-                    ui.add_space(10.0);
-                    for section in active_app.menu_sections() {
-                        self.draw_top_bar_menu_section(ctx, ui, *section);
-                    }
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        let batt = crate::status::battery_status_string();
-                        if !batt.is_empty() {
-                            ui.label(RichText::new(batt).color(Color32::BLACK));
-                            ui.add_space(10.0);
-                        }
-                        let now = Local::now().format("%a %d %b %H:%M").to_string();
-                        ui.label(RichText::new(now).color(Color32::BLACK));
-                        ui.add_space(10.0);
-                        if ui
-                            .button(RichText::new("Search").color(Color32::BLACK))
-                            .clicked()
-                            || ctx.input(|i| i.key_pressed(Key::Space) && i.modifiers.command)
-                        {
-                            if self.spotlight_open {
-                                self.close_spotlight();
-                            } else {
-                                self.open_spotlight();
-                            }
-                        }
-                    });
-                });
-            });
-    }
 
-    fn draw_start_panel(&mut self, ctx: &Context) {
-        if !self.start_open {
-            return;
-        }
-        const ROOT_W: f32 = 270.0;
-        const SUB_W: f32 = 250.0;
-        const LEAF_W: f32 = 270.0;
-        const ROW_H: f32 = 24.0;
-        const PANEL_PAD_H: f32 = 16.0;
-        const TASKBAR_H: f32 = 32.0;
-        const ROOT_LEFT: f32 = 8.0;
-        const EDGE_PAD: f32 = 8.0;
 
-        let palette = current_palette();
-        let screen = ctx.screen_rect();
-        let taskbar_top = screen.bottom() - TASKBAR_H;
-        let root_x = self
-            .desktop_start_button_rect
-            .map(|rect| rect.left().max(screen.left() + ROOT_LEFT))
-            .unwrap_or(screen.left() + ROOT_LEFT);
-        let root_y = (taskbar_top - self.start_root_panel_height).max(screen.top() + EDGE_PAD);
-        let mut branch_anchor_y = screen.top() + EDGE_PAD;
-        let mut branch_x = root_x + ROOT_W - 2.0;
-        let mut root_rect: Option<egui::Rect> = None;
 
-        egui::Area::new(Id::new("native_start_root_panel"))
-            .fixed_pos([root_x, root_y])
-            .interactable(true)
-            .show(ctx, |ui| {
-                let frame = egui::Frame::none()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(8.0));
-                let frame_response = frame.show(ui, |ui| {
-                    Self::apply_start_menu_highlight_style(ui);
-                    ui.set_min_width(ROOT_W);
-                    ui.set_max_width(ROOT_W);
-                    ui.label(RichText::new("Start").strong().color(palette.fg));
-                    Self::retro_separator(ui);
 
-                    for row in START_ROOT_VIS_ROWS {
-                        match row {
-                            Some(idx) => {
-                                let label = START_ROOT_ITEMS[idx];
-                                let has_panel = start_root_leaf_for_idx(idx).is_some()
-                                    || start_root_submenu_for_idx(idx).is_some();
-                                let suffix = if has_panel { " >" } else { "" };
-                                let selected = self.start_selected_root == idx;
-                                let response = Self::start_menu_row(
-                                    ui,
-                                    &format!("{label}{suffix}"),
-                                    selected,
-                                    ROOT_W - 16.0,
-                                );
-                                if response.hovered() {
-                                    self.set_start_panel_for_root(idx);
-                                }
-                                if response.clicked() {
-                                    if let Some(action) = start_root_action_for_idx(idx) {
-                                        self.run_start_root_action(action);
-                                    } else if has_panel {
-                                        self.set_start_panel_for_root(idx);
-                                    }
-                                }
-                                if self.start_selected_root == idx {
-                                    branch_anchor_y = response.rect.top() - 2.0;
-                                }
-                            }
-                            None => {
-                                Self::retro_separator(ui);
-                            }
-                        }
-                    }
-                });
-                root_rect = Some(frame_response.response.rect);
-                self.start_root_panel_height = frame_response.response.rect.height();
-                branch_x = frame_response.response.rect.right() - 2.0;
-            });
-        let Some(root_rect) = root_rect else {
-            return;
-        };
-
-        if let Some(submenu) = self.start_open_submenu {
-            if submenu == StartSubmenu::System {
-                let items = self.start_system_items();
-                self.start_system_selected = self
-                    .start_system_selected
-                    .min(items.len().saturating_sub(1));
-                let sub_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
-                let sub_y =
-                    branch_anchor_y.clamp(screen.top() + EDGE_PAD, root_rect.bottom() - sub_h);
-                egui::Area::new(Id::new("native_start_submenu_panel"))
-                    .fixed_pos([branch_x, sub_y])
-                    .interactable(true)
-                    .show(ctx, |ui| {
-                        egui::Frame::none()
-                            .fill(palette.panel)
-                            .stroke(egui::Stroke::new(2.0, palette.fg))
-                            .inner_margin(egui::Margin::same(8.0))
-                            .show(ui, |ui| {
-                                Self::apply_start_menu_highlight_style(ui);
-                                ui.set_min_width(SUB_W);
-                                ui.set_max_width(SUB_W);
-                                for (idx, (label, action)) in items.iter().enumerate() {
-                                    let selected = self.start_system_selected == idx;
-                                    let response =
-                                        Self::start_menu_row(ui, label, selected, SUB_W - 16.0);
-                                    if response.hovered() {
-                                        self.start_system_selected = idx;
-                                    }
-                                    if response.clicked() {
-                                        self.run_start_system_action(*action);
-                                    }
-                                }
-                            });
-                    });
-            }
-        } else if let Some(leaf) = self.start_open_leaf {
-            let items = self.start_leaf_items(leaf);
-            self.start_leaf_selected = self.start_leaf_selected.min(items.len().saturating_sub(1));
-            let leaf_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
-            let leaf_y =
-                branch_anchor_y.clamp(screen.top() + EDGE_PAD, root_rect.bottom() - leaf_h);
-            let mut leaf_context_action: Option<ContextMenuAction> = None;
-            egui::Area::new(Id::new("native_start_leaf_panel"))
-                .fixed_pos([branch_x, leaf_y])
-                .interactable(true)
-                .show(ctx, |ui| {
-                    egui::Frame::none()
-                        .fill(palette.panel)
-                        .stroke(egui::Stroke::new(2.0, palette.fg))
-                        .inner_margin(egui::Margin::same(8.0))
-                        .show(ui, |ui| {
-                            Self::apply_start_menu_highlight_style(ui);
-                            ui.set_min_width(LEAF_W);
-                            ui.set_max_width(LEAF_W);
-                            for (idx, item) in items.iter().enumerate() {
-                                let selected = self.start_leaf_selected == idx;
-                                let response =
-                                    Self::start_menu_row(ui, &item.label, selected, LEAF_W - 16.0);
-                                if response.hovered() {
-                                    self.start_leaf_selected = idx;
-                                }
-                                if response.clicked() {
-                                    self.run_start_leaf_action(item.action.clone());
-                                }
-                                if matches!(
-                                    leaf,
-                                    StartLeaf::Applications | StartLeaf::Games | StartLeaf::Network
-                                ) && !matches!(item.action, NativeStartLeafAction::None)
-                                {
-                                    let item_label = item.label.clone();
-                                    let item_action = item.action.clone();
-                                    let removable_item = Self::start_leaf_menu_target(&item_action);
-                                    response.context_menu(|ui| {
-                                        Self::apply_context_menu_style(ui);
-                                        ui.set_min_width(136.0);
-                                        ui.set_max_width(180.0);
-                                        if let Some((target, name)) = removable_item.as_ref() {
-                                            if ui.button("Rename").clicked() {
-                                                leaf_context_action =
-                                                    Some(ContextMenuAction::RenameStartMenuEntry {
-                                                        target: *target,
-                                                        name: name.clone(),
-                                                    });
-                                                ui.close_menu();
-                                            }
-                                            Self::retro_separator(ui);
-                                        }
-                                        if ui.button("Create Shortcut").clicked() {
-                                            leaf_context_action =
-                                                Some(ContextMenuAction::CreateShortcut {
-                                                    label: item_label.clone(),
-                                                    action: item_action.clone(),
-                                                });
-                                            ui.close_menu();
-                                        }
-                                        if let Some((target, name)) = removable_item.as_ref() {
-                                            Self::retro_separator(ui);
-                                            if ui
-                                                .button(format!("Remove from {}", target.title()))
-                                                .clicked()
-                                            {
-                                                leaf_context_action =
-                                                    Some(ContextMenuAction::RemoveStartMenuEntry {
-                                                        target: *target,
-                                                        name: name.clone(),
-                                                    });
-                                                ui.close_menu();
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                        });
-                });
-            if let Some(action) = leaf_context_action {
-                self.context_menu_action = Some(action);
-            }
-        }
-    }
-
-    fn draw_start_menu_rename_window(&mut self, ctx: &Context) {
-        let Some(rename) = self.start_menu_rename.clone() else {
-            return;
-        };
-
-        let palette = current_palette();
-        let mut close = false;
-        let mut apply = false;
-        let mut name_input = rename.name_input.clone();
-
-        egui::Window::new("start_menu_rename_window")
-            .title_bar(false)
-            .collapsible(false)
-            .resizable(false)
-            .fixed_size(egui::vec2(320.0, 124.0))
-            .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(12.0)),
-            )
-            .show(ctx, |ui| {
-                Self::apply_context_menu_style(ui);
-                ui.label(
-                    RichText::new(format!("Rename {}", rename.target.singular()))
-                        .strong()
-                        .color(palette.fg),
-                );
-                ui.add_space(8.0);
-                ui.label(RichText::new(&rename.original_name).color(palette.dim));
-                ui.add_space(6.0);
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut name_input)
-                        .desired_width(f32::INFINITY)
-                        .text_color(palette.fg)
-                        .cursor_at_end(true),
-                );
-                if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    apply = true;
-                }
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Rename").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                });
-            });
-
-        if let Some(rename_state) = &mut self.start_menu_rename {
-            rename_state.name_input = name_input;
-        }
-        if apply {
-            if let Some(rename_state) = self.start_menu_rename.take() {
-                self.rename_program_entry(
-                    rename_state.target,
-                    &rename_state.original_name,
-                    &rename_state.name_input,
-                );
-            }
-            self.close_start_menu();
-        } else if close {
-            self.start_menu_rename = None;
-        }
-    }
-
-    fn draw_desktop(&mut self, ctx: &Context) {
-        if self.asset_cache.is_none() {
-            self.asset_cache = Some(Self::build_asset_cache(ctx));
-        }
-        self.sync_wallpaper(ctx);
-        let palette = current_palette();
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(palette.bg).inner_margin(0.0))
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                let response = ui.allocate_rect(rect, egui::Sense::click());
-                let desktop_dir = robco_desktop_dir();
-                let file_manager_drop_hover = response
-                    .dnd_hover_payload::<NativeFileManagerDragPayload>()
-                    .is_some_and(|payload| {
-                        Self::file_manager_drop_allowed(&payload.paths, &desktop_dir)
-                    });
-                if !self.draw_wallpaper(ui.painter(), rect, &palette) {
-                    ui.painter().rect_filled(rect, 0.0, palette.bg);
-                }
-                if file_manager_drop_hover {
-                    ui.painter().rect_stroke(
-                        rect.shrink(6.0),
-                        0.0,
-                        egui::Stroke::new(2.0, palette.fg),
-                    );
-                }
-                if !matches!(
-                    self.settings.draft.desktop_icon_style,
-                    DesktopIconStyle::NoIcons
-                ) {
-                    self.draw_desktop_icons(ui);
-                }
-                if let Some(payload) =
-                    response.dnd_release_payload::<NativeFileManagerDragPayload>()
-                {
-                    if Self::file_manager_drop_allowed(&payload.paths, &desktop_dir) {
-                        self.file_manager_handle_drop_to_dir(payload.paths.clone(), desktop_dir);
-                    }
-                }
-                Self::attach_desktop_empty_context_menu(
-                    &mut self.context_menu_action,
-                    &response,
-                    self.settings.draft.desktop_snap_to_grid,
-                    self.settings.draft.desktop_icon_sort,
-                );
-                let dropped_paths: Vec<PathBuf> = ctx.input(|input| {
-                    let hovered = input
-                        .pointer
-                        .hover_pos()
-                        .is_some_and(|pos| rect.contains(pos));
-                    if !hovered {
-                        return Vec::new();
-                    }
-                    input
-                        .raw
-                        .dropped_files
-                        .iter()
-                        .filter_map(|file| file.path.clone())
-                        .collect()
-                });
-                if !dropped_paths.is_empty() {
-                    self.import_paths_to_desktop(dropped_paths);
-                }
-                if response.clicked() {
-                    self.close_desktop_overlays();
-                    self.desktop_selected_icon = None;
-                }
-            });
-    }
-
-    fn draw_desktop_taskbar(&mut self, ctx: &Context) {
-        self.sync_desktop_active_window();
-        TopBottomPanel::bottom("native_desktop_taskbar")
-            .exact_height(32.0)
-            .show_separator_line(false)
-            .show(ctx, |ui| {
-                let palette = current_palette();
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
-
-                ui.horizontal(|ui| {
-                    Self::apply_desktop_panel_button_style(ui);
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let start_response = ui.add(
-                        egui::Label::new(
-                            RichText::new("[Start]")
-                                .strong()
-                                .monospace()
-                                .color(Color32::BLACK),
-                        )
-                        .sense(egui::Sense::click()),
-                    );
-                    self.desktop_start_button_rect = Some(start_response.rect);
-                    if start_response.clicked() {
-                        if self.start_open {
-                            self.close_start_menu();
-                        } else {
-                            self.open_start_menu();
-                        }
-                    }
-                    ui.label(RichText::new("|").monospace().color(Color32::BLACK));
-                    ui.add_space(8.0);
-                    let open_windows: Vec<DesktopWindow> = desktop_components()
-                        .iter()
-                        .filter(|component| component.spec.show_in_taskbar)
-                        .map(|component| component.spec.window)
-                        .filter(|window| self.desktop_window_is_open(*window))
-                        .collect();
-                    let entries = build_taskbar_entries(
-                        &open_windows,
-                        self.desktop_active_window,
-                        self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-                    );
-                    for entry in entries {
-                        if Self::desktop_bar_button(ui, entry.label, entry.inactive, false)
-                            .clicked()
-                        {
-                            self.apply_desktop_menu_action(
-                                ctx,
-                                &DesktopMenuAction::ActivateTaskbarWindow(entry.window),
-                            );
-                            if !self.desktop_window_is_minimized(entry.window) {
-                                // Bring the window to the top of the egui layer stack.
-                                let layer_id = egui::LayerId::new(
-                                    egui::Order::Middle,
-                                    self.desktop_window_egui_id(entry.window),
-                                );
-                                ctx.move_to_top(layer_id);
-                            }
-                        }
-                    }
-                });
-            });
-    }
 
     fn draw_terminal_main_menu(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
@@ -8342,75 +5683,10 @@ impl RobcoNativeApp {
             });
     }
 
-    fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
-        const TOP_BAR_H: f32 = 30.0;
-        const TASKBAR_H: f32 = 32.0;
-        let screen = ctx.screen_rect();
-        let top = screen.top() + TOP_BAR_H;
-        let bottom = (screen.bottom() - TASKBAR_H).max(top + 120.0);
-        egui::Rect::from_min_max(
-            egui::pos2(screen.left(), top),
-            egui::pos2(screen.right(), bottom),
-        )
-    }
 
-    fn desktop_window_frame() -> egui::Frame {
-        let palette = current_palette();
-        egui::Frame::none()
-            .fill(palette.bg)
-            .stroke(egui::Stroke::new(1.0, palette.fg))
-            .inner_margin(egui::Margin::same(1.0))
-    }
 
-    fn desktop_bar_button(
-        ui: &mut egui::Ui,
-        label: impl Into<String>,
-        active: bool,
-        bold: bool,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let label = label.into();
-        let fill = if active { palette.fg } else { palette.panel };
-        let text = if active {
-            RichText::new(label.clone()).color(Color32::BLACK)
-        } else {
-            RichText::new(label.clone()).color(palette.fg)
-        };
-        let text = if bold { text.strong() } else { text };
-        let response = ui.add(
-            egui::Button::new(text)
-                .fill(fill)
-                .stroke(egui::Stroke::new(2.0, palette.fg)),
-        );
-        if active {
-            let text = if bold {
-                RichText::new(label).strong()
-            } else {
-                RichText::new(label)
-            };
-            let font = egui::TextStyle::Button.resolve(ui.style());
-            ui.painter().text(
-                response.rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text.text(),
-                font,
-                Color32::BLACK,
-            );
-        }
-        response
-    }
 
-    fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-        ui.add(
-            egui::Button::new(RichText::new(label).color(Color32::BLACK).monospace())
-                .frame(false)
-                .fill(Color32::TRANSPARENT)
-                .stroke(egui::Stroke::NONE)
-                .min_size(egui::vec2(0.0, 0.0)),
-        )
-    }
-
-    fn retro_separator(ui: &mut egui::Ui) {
+    pub(super) fn retro_separator(ui: &mut egui::Ui) {
         let palette = current_palette();
         let desired = egui::vec2(ui.available_width().max(1.0), 2.0);
         let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
@@ -8418,7 +5694,7 @@ impl RobcoNativeApp {
         ui.add_space(2.0);
     }
 
-    fn retro_disabled_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
+    pub(super) fn retro_disabled_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
         let palette = current_palette();
         ui.add(
             egui::Button::new(egui::RichText::new(label.into()).color(palette.dim))
@@ -8426,92 +5702,9 @@ impl RobcoNativeApp {
         )
     }
 
-    fn apply_top_bar_menu_button_style(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let mut style = ui.style().as_ref().clone();
-        // Popup/window fill must be set HERE on the parent UI — menu_button
-        // reads these when creating the popup frame, before the inner closure runs.
-        style.visuals.panel_fill = palette.bg;
-        style.visuals.extreme_bg_color = palette.bg;
-        style.visuals.window_fill = palette.bg;
-        style.visuals.window_stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.button_frame = false;
-        style.visuals.override_text_color = Some(Color32::BLACK);
-        style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.noninteractive.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.inactive.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.inactive.expansion = 0.0;
-        for visuals in [
-            &mut style.visuals.widgets.hovered,
-            &mut style.visuals.widgets.active,
-            &mut style.visuals.widgets.open,
-        ] {
-            visuals.bg_fill = palette.selected_bg;
-            visuals.weak_bg_fill = palette.selected_bg;
-            visuals.bg_stroke = egui::Stroke::NONE;
-            visuals.fg_stroke.color = Color32::BLACK;
-            visuals.rounding = egui::Rounding::ZERO;
-            visuals.expansion = 0.0;
-        }
-        ui.set_style(style);
-    }
 
-    fn apply_top_dropdown_menu_style(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.button_frame = true;
-        style.visuals.panel_fill = palette.bg;
-        style.visuals.extreme_bg_color = palette.bg;
-        style.visuals.window_fill = palette.bg;
-        style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.override_text_color = None;
-        style.spacing.item_spacing.y = 0.0;
-        style.visuals.widgets.noninteractive.bg_fill = palette.bg;
-        style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.noninteractive.fg_stroke.color = palette.fg;
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = palette.bg;
-        style.visuals.widgets.inactive.weak_bg_fill = palette.bg;
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.inactive.fg_stroke.color = palette.fg;
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.inactive.expansion = 0.0;
-        for visuals in [
-            &mut style.visuals.widgets.hovered,
-            &mut style.visuals.widgets.active,
-            &mut style.visuals.widgets.open,
-        ] {
-            visuals.bg_fill = palette.fg;
-            visuals.weak_bg_fill = palette.fg;
-            visuals.bg_stroke = egui::Stroke::NONE;
-            visuals.fg_stroke.color = Color32::BLACK;
-            visuals.rounding = egui::Rounding::ZERO;
-            visuals.expansion = 0.0;
-        }
-        ui.set_style(style);
-        ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
-    }
 
-    fn apply_context_menu_style(ui: &mut egui::Ui) {
+    pub(super) fn apply_context_menu_style(ui: &mut egui::Ui) {
         let palette = current_palette();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
@@ -8554,111 +5747,8 @@ impl RobcoNativeApp {
         ui.set_style(style);
     }
 
-    fn apply_desktop_panel_button_style(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.override_text_color = None;
-        style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.selection.bg_fill = palette.panel;
-        style.visuals.selection.stroke = stroke;
-        style.visuals.widgets.noninteractive.bg_fill = palette.panel;
-        style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
-        style.visuals.widgets.noninteractive.bg_stroke = stroke;
-        style.visuals.widgets.noninteractive.fg_stroke = stroke;
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = palette.panel;
-        style.visuals.widgets.inactive.weak_bg_fill = palette.panel;
-        style.visuals.widgets.inactive.bg_stroke = stroke;
-        style.visuals.widgets.inactive.fg_stroke = stroke;
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.inactive.expansion = 0.0;
-        for visuals in [
-            &mut style.visuals.widgets.hovered,
-            &mut style.visuals.widgets.active,
-            &mut style.visuals.widgets.open,
-        ] {
-            visuals.bg_fill = palette.panel;
-            visuals.weak_bg_fill = palette.panel;
-            visuals.bg_stroke = stroke;
-            visuals.fg_stroke = stroke;
-            visuals.rounding = egui::Rounding::ZERO;
-            visuals.expansion = 0.0;
-        }
-        ui.set_style(style);
-    }
 
-    fn apply_start_menu_highlight_style(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.selection.bg_fill = palette.fg;
-        style.visuals.selection.stroke = stroke;
-        style.visuals.widgets.noninteractive.bg_fill = palette.panel;
-        style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
-        style.visuals.widgets.noninteractive.bg_stroke = stroke;
-        style.visuals.widgets.noninteractive.fg_stroke = stroke;
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = palette.panel;
-        style.visuals.widgets.inactive.weak_bg_fill = palette.panel;
-        style.visuals.widgets.inactive.bg_stroke = stroke;
-        style.visuals.widgets.inactive.fg_stroke = stroke;
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.inactive.expansion = 0.0;
-        style.visuals.widgets.hovered.bg_fill = palette.fg;
-        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
-        style.visuals.widgets.hovered.bg_stroke = stroke;
-        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.hovered.expansion = 0.0;
-        style.visuals.widgets.active.bg_fill = palette.fg;
-        style.visuals.widgets.active.weak_bg_fill = palette.fg;
-        style.visuals.widgets.active.bg_stroke = stroke;
-        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.active.expansion = 0.0;
-        style.visuals.widgets.open.bg_fill = palette.fg;
-        style.visuals.widgets.open.weak_bg_fill = palette.fg;
-        style.visuals.widgets.open.bg_stroke = stroke;
-        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.open.expansion = 0.0;
-        ui.set_style(style);
-    }
 
-    fn start_menu_row(
-        ui: &mut egui::Ui,
-        label: &str,
-        selected: bool,
-        width: f32,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click());
-        let active = selected || response.hovered();
-        let fill = if active { palette.fg } else { palette.panel };
-        let text_color = if active { Color32::BLACK } else { palette.fg };
-        ui.painter().rect_filled(rect, 0.0, fill);
-        ui.painter().text(
-            egui::pos2(rect.left() + 8.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::new(20.0, FontFamily::Monospace),
-            text_color,
-        );
-        response
-    }
 
     fn apply_settings_control_style(ui: &mut egui::Ui) {
         let palette = current_palette();
@@ -8849,43 +5939,6 @@ impl RobcoNativeApp {
             .inner
     }
 
-    fn draw_desktop_window_header(
-        ui: &mut egui::Ui,
-        _title: &str,
-        maximized: bool,
-    ) -> DesktopHeaderAction {
-        let palette = current_palette();
-        let mut action = DesktopHeaderAction::None;
-        // egui::Frame handles background fill + margin in a single allocation.
-        // No manual allocate_exact_size/child_ui, so no "double use of widget".
-        egui::Frame::none()
-            .fill(palette.fg)
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-            .show(ui, |ui| {
-                ui.set_min_height(20.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(8.0);
-                        if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
-                            action = DesktopHeaderAction::Close;
-                        }
-                        if Self::desktop_header_glyph_button(
-                            ui,
-                            if maximized { "[R]" } else { "[+]" },
-                        )
-                        .clicked()
-                        {
-                            action = DesktopHeaderAction::ToggleMaximize;
-                        }
-                        if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
-                            action = DesktopHeaderAction::Minimize;
-                        }
-                    });
-                });
-            });
-        ui.add_space(2.0);
-        action
-    }
 
     fn apply_file_manager_picker_commit(&mut self, commit: FileManagerPickerCommit) {
         match commit {
@@ -12635,6 +9688,7 @@ impl eframe::App for RobcoNativeApp {
 mod tests {
     use super::*;
     use crate::config::{FileManagerSortMode, FileManagerViewMode};
+    use crate::native::desktop_start_menu::START_ROOT_ITEMS;
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
     use crate::native::file_manager_app::FileManagerClipboardMode;
     use std::collections::HashMap;
