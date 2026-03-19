@@ -173,78 +173,119 @@ iced = { version = "0.13", features = ["advanced", "canvas", "image", "tokio"] }
 
 ---
 
-## Phase 3g — Terminal Mode (next priority)
+## Phase 3g — Terminal UI Mode (next priority, core foundation)
 
-Terminal mode is a PTY-backed canvas that renders a VT100 cell grid. In the egui version this already works via `pty_screen.rs`. For iced, the approach is:
+**This is NOT the PTY terminal app.** It is the full-screen Fallout-style retro shell that is
+the heart of RobCoOS — login screen, main menu, Applications / Documents / Network / Games
+sub-screens, hacking screen, settings, etc. The user said: *"terminal mode is an essential part
+of the project, it is the core foundation."*
 
-### Architecture
+In the egui binary this is driven by `TerminalNavigationState.screen: TerminalScreen` (see
+`crates/native-terminal-app/src/lib.rs:346`) and rendered by `shell_screen.rs`, `prompt.rs`,
+`prompt_flow.rs`, and all the `*_screen.rs` files.
 
-```
-Message::PtyInput(bytes) → write to PTY stdin
-Message::PtyOutput(bytes) → feed to vt100::Parser → refresh terminal state
-Message::PtyExited → show exit message, await keypress to return to desktop
-Message::DesktopModeToggled → flip self.desktop_mode
-```
+### What terminal mode looks like
 
-### Subscription
+- Full-screen black background, green text, monospace font
+- Header with ROBCO INDUSTRIES ASCII art
+- A `TerminalScreen` state machine — current values: `MainMenu, Applications, Documents,
+  Network, Games, DonkeyKong, NukeCodes, PtyApp, ProgramInstaller, Logs, DocumentBrowser,
+  Settings, EditMenus, Connections, DefaultApps, About, UserManagement`
+- Arrow-key navigation, Enter to activate
+- Prompt overlays for password entry, rename dialogs, etc.
+- `desktop_mode: false` → show terminal UI; `desktop_mode: true` → show desktop
+
+### State to add to RobcoShell
 
 ```rust
-// In shell.rs subscription(), alongside tick + hotkeys:
-if self.desktop_mode == false {
-    // Stream PTY stdout bytes as Message::PtyOutput
-    iced::subscription::channel(PTY_SUB_ID, 256, |mut tx| async move {
-        // read from pty_master fd → tx.send(Message::PtyOutput(bytes)).await
-    })
-}
+// Add to RobcoShell struct:
+pub terminal_nav: TerminalNavigationState,   // from crates/native-terminal-app
+pub login_rows: Vec<LoginMenuRow>,           // from crates/native-terminal-app
+pub terminal_prompt: Option<TerminalPrompt>, // password / text overlay
 ```
 
-### View
+Import from `robcos_native_terminal_app::{TerminalNavigationState, LoginMenuRow, TerminalPrompt}`.
 
-When `!self.desktop_mode`:
-- Replace the entire `view()` with a full-screen Canvas widget
-- Canvas renders the VT100 cell buffer (monospace grid, fg/bg per cell)
-- Keyboard events → `Message::PtyInput(bytes)`
+### view() switch
 
-### PTY State
-
-Add to `RobcoShell`:
 ```rust
-pub pty: Option<RobcosPty>,   // existing type from pty_screen.rs or create new
-pub vt_parser: vt100::Parser,
-```
-
-The `vt100` crate is already a workspace dependency. `RobcosPty` wraps a `pty::fork()` + master fd.
-
-### Canvas Widget for Terminal
-
-Create `src/native/terminal_canvas.rs`:
-```rust
-struct TerminalCanvas<'a> {
-    parser: &'a vt100::Parser,
-    palette: RetroColors,
-}
-
-impl canvas::Program<Message> for TerminalCanvas<'_> {
-    type State = ();
-    fn draw(&self, _state, renderer, _theme, bounds, _cursor) -> Vec<Geometry> {
-        // Iterate vt100 screen cells → fill_quad for bg, fill_text for char
+pub fn view(&self) -> Element<'_, Message> {
+    if !self.desktop_mode {
+        return self.view_terminal_mode();
     }
-    fn update(&self, _state, event, _bounds, _cursor) -> (Status, Option<Message>) {
-        // keyboard::Event → Message::PtyInput(bytes)
+    // … existing desktop stack …
+}
+```
+
+### view_terminal_mode()
+
+Create `src/native/shell_view_terminal.rs` (or add method to shell.rs).
+
+```rust
+fn view_terminal_mode(&self) -> Element<'_, Message> {
+    use iced::widget::{column, container, text};
+    use iced::{Font, Length};
+    let palette = current_retro_colors();
+    let fg = palette.fg.to_iced();
+    let bg = palette.bg.to_iced();
+
+    // Full-screen retro layout matching the egui version:
+    // • ROBCO INDUSTRIES header lines (from crate::config::HEADER_LINES)
+    // • Separator line
+    // • Per-screen content (menu items, or sub-screen list)
+    // • Status bar at bottom
+
+    match self.terminal_nav.screen {
+        TerminalScreen::MainMenu => self.view_terminal_main_menu(),
+        TerminalScreen::Applications => self.view_terminal_app_list(),
+        // … etc
+        _ => container(text("TODO screen").color(fg))
+                .width(Length::Fill).height(Length::Fill)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    ..Default::default()
+                }).into(),
     }
 }
 ```
+
+### Keyboard navigation
+
+Add to the hotkeys subscription in `subscription()`:
+
+```rust
+Key::Named(Named::ArrowUp) if !self.desktop_mode => Some(Message::TerminalSelectionActivated(/* up */)),
+Key::Named(Named::ArrowDown) if !self.desktop_mode => Some(Message::TerminalSelectionActivated(/* down */)),
+Key::Named(Named::Enter) if !self.desktop_mode => Some(Message::TerminalSelectionActivated(/* activate */)),
+```
+
+Or use a dedicated `Message::TerminalNavigate(NavDirection)` variant (already defined).
+
+### Login screen
+
+When `session_username.is_none()`, show login screen instead of main menu:
+- List of usernames (from `desktop_user_service::list_users()`)
+- Password prompt overlay
+- On success → set `session_username`, `session_is_admin`, navigate to `TerminalScreen::MainMenu`
+
+### "Return to Terminal" from desktop
+
+`Message::DesktopModeToggled` in `update()` already flips `self.desktop_mode`. The [Start] menu
+"Return To Terminal Mode" item should dispatch this. Wire it up in the `StartMenuSelectRoot`
+handler: when `start_root_action_for_idx(idx)` returns `StartRootAction::ReturnToTerminal`,
+publish `Message::DesktopModeToggled`.
 
 ---
 
-## Phase 3h — Hosted Apps (after terminal)
+## Phase 3h — Hosted Desktop Apps (after terminal mode)
 
-Replace placeholder content in windows with real app views.
+Replace placeholder content in windows with real app views. Also includes the PTY terminal
+app (a bash/zsh terminal emulator running inside a desktop window via `vt100` crate).
 
 ### For each window kind, implement `DesktopApp` trait
 
 ```rust
-// In a new file, e.g. src/native/apps/file_manager_app_iced.rs
+// e.g. src/native/apps/file_manager_app_iced.rs
 struct FileManagerDesktopApp {
     state: NativeFileManagerState,
 }
@@ -258,7 +299,8 @@ impl DesktopApp for FileManagerDesktopApp {
 }
 ```
 
-Then in `view_desktop()`, replace the placeholder `column![text(id), text("placeholder")]` with the actual `app.view()` call.
+Replace placeholder `column![text(id), text("placeholder")]` in `view_desktop()` with
+`app.view()`.
 
 ### RobcoShell holds apps
 
@@ -267,7 +309,22 @@ Then in `view_desktop()`, replace the placeholder `column![text(id), text("place
 pub apps: HashMap<DesktopWindow, Box<dyn DesktopApp>>,
 ```
 
-Populate in `new()`. Route messages in `update()` by forwarding to the active app.
+Populate in `new()`. Route messages in `update()` by forwarding to the active window's app.
+
+### PTY terminal app (part of 3h)
+
+The PTY terminal is one hosted app (`DesktopWindow::PtyApp`). Its content widget is a Canvas
+that renders a `vt100::Parser` cell grid. The `vt100` crate is already a workspace dependency.
+
+```rust
+// Subscription addition for PTY output stream:
+iced::subscription::channel("pty-output", 256, |mut tx| async move {
+    loop {
+        let bytes = read_from_pty_master_fd().await;
+        let _ = tx.send(Message::PtyOutput(bytes)).await;
+    }
+})
+```
 
 ---
 
