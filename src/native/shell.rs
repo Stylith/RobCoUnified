@@ -1125,6 +1125,16 @@ impl RobcoShell {
                 let _ = self.installer.poll_search();
                 self.sync_desktop_pty();
             }
+
+            // Push-based terminal frame delivery: reader thread incremented the
+            // output epoch — redraw.  Exit detection still happens on the 200ms
+            // heartbeat Tick above; this message only drives the render path.
+            Message::TerminalFrame => {
+                // iced re-renders view() automatically on any message; nothing
+                // more to do here.  sync_desktop_pty() is NOT called here
+                // because it is called on the 200ms Tick; that keeps exit
+                // detection separated from the hot render path.
+            }
             Message::PersistSnapshotRequested => {
                 // Phase 3: call persist_native_shell_snapshot()
             }
@@ -4281,8 +4291,10 @@ impl RobcoShell {
 
     /// Return active subscriptions.
     ///
-    /// Phase 3b/3e: clock tick + global keyboard shortcuts (Cmd+Space, Escape).
-    /// Phase 3g: also add PTY output stream.
+    /// When a PTY is open, a push-based subscription watches the reader
+    /// thread's `output_epoch` counter and fires `Message::TerminalFrame`
+    /// the moment a new frame is committed — no more 33ms polling lag.
+    /// A 200ms heartbeat keeps exit-detection responsive without spin-waiting.
     pub fn subscription(&self) -> Subscription<Message> {
         use iced::keyboard;
 
@@ -4291,7 +4303,12 @@ impl RobcoShell {
         let hotkeys = keyboard::on_key_press(map_global_key_press);
 
         let mut subs = vec![clock_tick, hotkeys];
-        if self.desktop_pty.is_some() || self.installer.search_in_flight() {
+        if let Some(pty) = &self.desktop_pty {
+            subs.push(pty_output_subscription(pty.session.output_epoch_arc()));
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(200)).map(Message::Tick),
+            );
+        } else if self.installer.search_in_flight() {
             subs.push(
                 iced::time::every(std::time::Duration::from_millis(33)).map(Message::Tick),
             );
@@ -4299,6 +4316,36 @@ impl RobcoShell {
 
         Subscription::batch(subs)
     }
+}
+
+/// Subscription that watches the PTY reader thread's `output_epoch` counter
+/// and yields `Message::TerminalFrame` whenever a new frame is committed.
+///
+/// This replaces the 33ms polling timer: instead of waking up 30 times/second
+/// regardless of terminal activity, the shell now only re-renders when the
+/// reader thread actually wrote new bytes.
+fn pty_output_subscription(epoch: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Subscription<Message> {
+    use std::sync::atomic::Ordering;
+
+    // Use the epoch pointer address as the subscription ID so that each new
+    // PtySession gets a distinct subscription (old one is automatically dropped).
+    let id = epoch.as_ptr() as usize;
+
+    Subscription::run_with_id(
+        id,
+        iced::stream::channel(1, move |mut sender| async move {
+            use iced::futures::SinkExt;
+            let mut last = epoch.load(Ordering::Relaxed);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+                let current = epoch.load(Ordering::Relaxed);
+                if current != last {
+                    last = current;
+                    let _ = sender.send(Message::TerminalFrame).await;
+                }
+            }
+        }),
+    )
 }
 
 fn map_global_key_press(key: Key, mods: Modifiers) -> Option<Message> {

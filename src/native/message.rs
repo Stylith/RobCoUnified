@@ -225,6 +225,9 @@ pub enum Message {
     PtyTitleChanged(String),
     /// Async: PTY child process exited.
     PtyExited,
+    /// PTY reader thread committed a new display frame — redraw the terminal.
+    /// Sent by the `pty_output_subscription` when `output_epoch` increments.
+    TerminalFrame,
     /// Activate a specific selectable row in the full-screen terminal UI.
     TerminalSelectionActivated(usize),
 

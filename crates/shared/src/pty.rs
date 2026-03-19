@@ -370,10 +370,8 @@ pub struct PtySession {
     /// Master — kept alive so the PTY stays open; also used for resize
     master: Box<dyn portable_pty::MasterPty + Send>,
     /// Monotonic counter incremented by reader thread when new PTY output arrives.
-    #[allow(dead_code)]
     output_epoch: Arc<AtomicU64>,
     /// Last observed output epoch on UI/render side.
-    #[allow(dead_code)]
     last_seen_output_epoch: u64,
     /// Committed display buffer — updated by reader thread after each
     /// coalesced I/O batch.  The renderer reads from this, never from
@@ -1002,7 +1000,6 @@ impl PtySession {
     }
 
     /// Returns true if new PTY output arrived since the last check.
-    #[allow(dead_code)]
     pub fn take_output_activity(&mut self) -> bool {
         let epoch = self.output_epoch.load(Ordering::Relaxed);
         if epoch != self.last_seen_output_epoch {
@@ -1019,11 +1016,17 @@ impl PtySession {
         matches!(self.render_mode, PtyRenderMode::Plain)
     }
 
+    /// Returns a clone of the output epoch counter for subscription use.
+    /// The iced renderer watches this to know when a new frame is available
+    /// without polling `committed_frame()` on every animation tick.
+    pub fn output_epoch_arc(&self) -> Arc<AtomicU64> {
+        self.output_epoch.clone()
+    }
+
     /// Get the latest committed display frame.
     /// This is the primary API for renderers — it returns a snapshot that
     /// was built by the reader thread after a complete coalesced I/O batch,
     /// so it's guaranteed to be in a consistent (non-mid-update) state.
-    #[allow(dead_code)]
     pub fn committed_frame(&self) -> CommittedFrame {
         self.display
             .lock()
