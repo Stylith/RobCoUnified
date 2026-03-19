@@ -643,11 +643,27 @@ impl RobcoShell {
             }
 
             // ── Desktop surface ──────────────────────────────────────────────
-            Message::DesktopSelectionCleared => {
-                self.surface.selected_icon = None;
-            }
             Message::DesktopIconClicked { id, .. } => {
                 self.surface.selected_icon = Some(id);
+            }
+            Message::DesktopIconDoubleClicked(id) => {
+                use super::desktop_surface_service::{desktop_builtin_icons, DesktopBuiltinIconKind};
+                use super::message::DesktopIconId;
+                self.surface.selected_icon = None;
+                if let DesktopIconId::Builtin(key) = &id {
+                    if let Some(entry) = desktop_builtin_icons().iter().find(|e| e.key == *key) {
+                        if let Some(w) = entry.target_window {
+                            return self.update(Message::OpenWindow(w));
+                        }
+                        // Terminal mode has no target_window — toggle desktop mode.
+                        if entry.kind == DesktopBuiltinIconKind::Terminal {
+                            self.desktop_mode = !self.desktop_mode;
+                        }
+                    }
+                }
+            }
+            Message::DesktopSelectionCleared => {
+                self.surface.selected_icon = None;
             }
 
             // ── System ───────────────────────────────────────────────────────
@@ -755,7 +771,7 @@ impl RobcoShell {
     }
 
     fn view_desktop(&self) -> Element<'_, Message> {
-        use iced::widget::{column, container, text};
+        use iced::widget::{column, container, stack, text};
         use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
@@ -792,14 +808,82 @@ impl RobcoShell {
             })
             .collect();
 
-        container(Element::from(DesktopWindowHost::new(wm_children)))
+        let wm_layer = Element::from(DesktopWindowHost::new(wm_children));
+
+        // Stack: surface icons behind windows.
+        stack![self.view_surface_icons(), wm_layer]
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..container::Style::default()
-            })
             .into()
+    }
+
+    /// Render the desktop surface: black background with builtin icon column on the left.
+    fn view_surface_icons(&self) -> Element<'_, Message> {
+        use super::desktop_surface_service::desktop_builtin_icons;
+        use super::message::DesktopIconId;
+        use iced::widget::{button, column, container, row, text};
+        use iced::{Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let panel_bg = palette.panel.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+
+        let mut icon_col = column![].spacing(4).padding([8, 4]);
+
+        for entry in desktop_builtin_icons() {
+            let icon_id = DesktopIconId::Builtin(entry.key);
+            let is_selected = self.surface.selected_icon.as_ref() == Some(&icon_id);
+
+            let (lbl_bg, lbl_fg) = if is_selected {
+                (selected_bg, selected_fg)
+            } else {
+                (bg, fg)
+            };
+
+            let id_clone = icon_id.clone();
+            let icon_btn = button(
+                column![
+                    // ASCII art glyph as icon proxy
+                    container(
+                        text(entry.ascii).size(10).color(lbl_fg)
+                    )
+                    .width(64)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(lbl_bg)),
+                        border: Border { color: fg, width: 1.0, radius: 0.0.into() },
+                        ..container::Style::default()
+                    })
+                    .padding(4),
+                    // Label below
+                    text(entry.label).size(10).color(lbl_fg),
+                ]
+                .spacing(2)
+                .width(68)
+            )
+            .on_press(Message::DesktopIconClicked { id: id_clone, shift: false })
+            .style(move |_t, _s| button::Style {
+                background: None,
+                ..button::Style::default()
+            })
+            .padding(2);
+
+            icon_col = icon_col.push(icon_btn);
+        }
+
+        // Full-screen black background with icons pinned left.
+        container(
+            row![icon_col]
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            ..container::Style::default()
+        })
+        .into()
     }
 
     fn view_taskbar(&self) -> Element<'_, Message> {
