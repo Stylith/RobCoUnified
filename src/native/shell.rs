@@ -674,7 +674,9 @@ impl RobcoShell {
         ]
         .into();
 
-        if self.start_menu.open {
+        if self.spotlight.open {
+            stack![shell_ui, self.view_spotlight()].into()
+        } else if self.start_menu.open {
             stack![shell_ui, self.view_start_menu()].into()
         } else {
             shell_ui
@@ -873,6 +875,158 @@ impl RobcoShell {
                 ..container::Style::default()
             })
             .into()
+    }
+
+    /// Render the spotlight / search overlay, centered on screen.
+    fn view_spotlight(&self) -> Element<'_, Message> {
+        use iced::widget::{
+            button, column, container, mouse_area, row, scrollable, text, text_input, Space,
+        };
+        use iced::{Alignment, Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+        let panel_bg = palette.panel.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let hovered_bg = palette.hovered_bg.to_iced();
+
+        // ── Search input ──────────────────────────────────────────────────────
+        let search_input = text_input("> Search…", &self.spotlight.query)
+            .on_input(Message::SpotlightQueryChanged)
+            .on_submit(Message::SpotlightActivateSelected)
+            .size(18)
+            .style(move |_t, _s| iced::widget::text_input::Style {
+                background: iced::Background::Color(bg),
+                border: Border { color: fg, width: 2.0, radius: 0.0.into() },
+                icon: fg,
+                placeholder: dim,
+                value: fg,
+                selection: selected_bg,
+            })
+            .padding([8, 12]);
+
+        // ── Tab bar ───────────────────────────────────────────────────────────
+        let tabs = ["All", "Apps", "Documents", "Files"];
+        let mut tab_row = row![].spacing(0);
+        for (i, tab_label) in tabs.iter().enumerate() {
+            let is_sel = self.spotlight.tab == i as u8;
+            let (tab_bg, tab_fg) = if is_sel {
+                (selected_bg, selected_fg)
+            } else {
+                (panel_bg, fg)
+            };
+            tab_row = tab_row.push(
+                button(text(*tab_label).size(12).color(tab_fg))
+                    .on_press(Message::SpotlightTabChanged(i as u8))
+                    .style(move |_t, _s| button::Style {
+                        background: Some(iced::Background::Color(tab_bg)),
+                        text_color: tab_fg,
+                        border: Border { color: fg, width: 1.0, radius: 0.0.into() },
+                        ..button::Style::default()
+                    })
+                    .padding([4, 12])
+            );
+        }
+
+        // ── Results list ──────────────────────────────────────────────────────
+        let selected = self.spotlight.selected;
+        let mut results_col = column![].spacing(0);
+
+        if self.spotlight.results.is_empty() {
+            let hint = if self.spotlight.query.is_empty() {
+                "Type to search…"
+            } else {
+                "No results"
+            };
+            results_col = results_col.push(
+                container(text(hint).size(13).color(dim))
+                    .padding([12, 12])
+                    .width(Length::Fill)
+            );
+        } else {
+            for (i, result) in self.spotlight.results.iter().enumerate() {
+                let is_sel = i == selected;
+                let (item_bg, item_fg) = if is_sel {
+                    (selected_bg, selected_fg)
+                } else {
+                    (bg, fg)
+                };
+                let category_str = format!("[{:?}]", result.category);
+                results_col = results_col.push(
+                    button(
+                        row![
+                            text(result.name.as_str()).size(13).color(item_fg).width(Length::Fill),
+                            text(category_str).size(11).color(if is_sel { selected_fg } else { dim }),
+                        ]
+                        .spacing(8)
+                        .padding([4, 10])
+                    )
+                    .on_press(Message::SpotlightActivateSelected)
+                    .width(Length::Fill)
+                    .style(move |_t, status| {
+                        use iced::widget::button::Status;
+                        let bg_color = match status {
+                            Status::Hovered => hovered_bg,
+                            _ => item_bg,
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg_color)),
+                            text_color: item_fg,
+                            border: Border::default(),
+                            ..button::Style::default()
+                        }
+                    })
+                    .padding(0)
+                );
+            }
+        }
+
+        let results_scroll = scrollable(results_col)
+            .height(300);
+
+        // ── Compose panel ─────────────────────────────────────────────────────
+        let panel = container(
+            column![
+                search_input,
+                tab_row,
+                container(Space::with_height(1))
+                    .width(Length::Fill)
+                    .style(move |_t| container::Style {
+                        background: Some(iced::Background::Color(dim)),
+                        ..container::Style::default()
+                    }),
+                results_scroll,
+            ]
+            .spacing(0)
+            .width(600)
+        )
+        .style(move |_t| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            border: Border { color: fg, width: 2.0, radius: 0.0.into() },
+            ..container::Style::default()
+        });
+
+        // Centre the panel with an outer dismiss-on-click backdrop.
+        let backdrop = mouse_area(
+            column![
+                Space::with_height(Length::Fill),
+                row![
+                    Space::with_width(Length::Fill),
+                    panel,
+                    Space::with_width(Length::Fill),
+                ]
+                .align_y(Alignment::Center),
+                Space::with_height(Length::Fill),
+            ]
+            .width(Length::Fill)
+            .height(Length::Fill)
+        )
+        .on_press(Message::CloseSpotlight);
+
+        backdrop.into()
     }
 
     /// Render the start menu panel, anchored to the bottom-left of the screen.
@@ -1103,10 +1257,24 @@ impl RobcoShell {
 
     /// Return active subscriptions.
     ///
-    /// Phase 3b: clock tick every 30 seconds.
+    /// Phase 3b/3e: clock tick + global keyboard shortcuts (Cmd+Space, Escape).
     /// Phase 3g: also add PTY output stream.
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(std::time::Duration::from_secs(30))
-            .map(Message::Tick)
+        use iced::keyboard::{self, key::Named, Key, Modifiers};
+
+        let tick = iced::time::every(std::time::Duration::from_secs(30))
+            .map(Message::Tick);
+
+        let hotkeys = keyboard::on_key_press(|key, mods| {
+            match key {
+                Key::Named(Named::Space) if mods.contains(Modifiers::COMMAND) => {
+                    Some(Message::OpenSpotlight)
+                }
+                Key::Named(Named::Escape) => Some(Message::CloseSpotlight),
+                _ => None,
+            }
+        });
+
+        Subscription::batch([tick, hotkeys])
     }
 }
