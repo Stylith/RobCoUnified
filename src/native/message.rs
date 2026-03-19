@@ -7,9 +7,9 @@
 #![allow(dead_code)]
 
 use super::desktop_app::{DesktopMenuAction, DesktopShellAction};
-use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_search_service::NativeSpotlightResult;
 use super::desktop_surface_service::DesktopSurfaceEntry;
+use super::start_menu_model::{StartLeaf, StartSubmenu};
 use super::shared_types::DesktopWindow;
 use crate::config::{CliAcsMode, DesktopIconSortMode, NativeStartupWindowMode, OpenMode};
 use robcos_native_editor_app::{EditorCommand, EditorTextCommand};
@@ -58,8 +58,7 @@ pub enum FileOpResult {
 
 /// All right-click context-menu actions on the desktop surface and start menu.
 ///
-/// This mirrors `app::ContextMenuAction` (which is `pub(super)` on `RobcoNativeApp`).
-/// During Phase 3 the duplicate in `app.rs` will be removed in favour of this one.
+/// This supersedes the old egui-only desktop context-menu action enum removed in Phase 5.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuAction {
     // Desktop icon actions

@@ -14,12 +14,12 @@ use super::desktop_settings_service::{
     pty_force_render_mode as desktop_pty_force_render_mode,
     pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
 };
-use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_surface_service::DesktopSurfaceEntry;
 use super::terminal_canvas::{PtyCanvas, TERMINAL_CELL_HEIGHT, TERMINAL_CELL_WIDTH};
 use super::desktop_wm_widget::{DesktopWindowHost, WindowChild};
 use super::message::{ContextMenuAction, DesktopIconId, Message, NavDirection};
 use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
+use super::start_menu_model::{StartLeaf, StartSubmenu};
 use super::shared_types::DesktopWindow;
 use crate::config::{
     base_dir, set_current_user, CliAcsMode, NativeStartupWindowMode, OpenMode, Settings,
@@ -839,7 +839,7 @@ impl RobcoShell {
                 self.start_menu.close();
             }
             Message::StartMenuSelectRoot(idx) => {
-                use super::desktop_start_menu::{
+                use super::start_menu_model::{
                     start_root_action_for_idx, start_root_leaf_for_idx, start_root_submenu_for_idx,
                     StartRootAction,
                 };
@@ -3777,7 +3777,7 @@ impl RobcoShell {
     /// - Left column: root menu items (Applications, Documents, Network, Games, System, …)
     /// - Right panel: submenu or leaf entries for the selected root item
     fn view_start_menu(&self) -> Element<'_, Message> {
-        use super::desktop_start_menu::{
+        use super::start_menu_model::{
             start_root_leaf_for_idx, start_root_submenu_for_idx, StartLeaf, START_ROOT_ITEMS,
             START_ROOT_VIS_ROWS,
         };
@@ -3863,7 +3863,7 @@ impl RobcoShell {
 
         let right_panel: Option<Element<'_, Message>> = if let Some(sub) = submenu {
             // System submenu.
-            use super::desktop_start_menu::START_SYSTEM_ITEMS;
+            use super::start_menu_model::START_SYSTEM_ITEMS;
             let mut sub_col = column![].spacing(0).width(180);
             for (label, _action) in START_SYSTEM_ITEMS.iter() {
                 sub_col = sub_col.push(
