@@ -7,5 +7,3 @@ pub mod launcher;
 pub mod pty;
 pub mod session;
 pub mod sound;
-pub mod status;
-pub mod ui;

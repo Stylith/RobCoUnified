@@ -5,7 +5,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::config::{
     get_settings, persist_settings, update_settings, ConnectionKind, SavedConnection, Settings,
 };
-use crate::ui::{input_prompt, run_menu, MenuResult, Term};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredConnection {
@@ -262,54 +261,6 @@ pub fn filter_discovered_connections(
         .collect()
 }
 
-pub fn choose_discovered_connection(
-    terminal: &mut Term,
-    kind: ConnectionKind,
-    title: &str,
-    discovered: &[DiscoveredConnection],
-    allow_manual: bool,
-) -> Result<Option<DiscoveredConnection>> {
-    let mut rows: Vec<String> = discovered
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| format!("{}. {}", idx + 1, discovered_row_label(item)))
-        .collect();
-    if allow_manual {
-        rows.push("Manual Entry...".to_string());
-    }
-    rows.push("---".to_string());
-    rows.push("Back".to_string());
-    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-
-    match run_menu(terminal, title, &refs, Some("Search, select, then connect"))? {
-        MenuResult::Back => Ok(None),
-        MenuResult::Selected(sel) if sel == "Back" => Ok(None),
-        MenuResult::Selected(sel) if allow_manual && sel == "Manual Entry..." => {
-            let prompt = format!("{} name:", kind_label(kind));
-            let Some(raw) = input_prompt(terminal, &prompt)? else {
-                return Ok(None);
-            };
-            let manual = raw.trim();
-            if manual.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(DiscoveredConnection {
-                name: manual.to_string(),
-                detail: "Manual".to_string(),
-            }))
-        }
-        MenuResult::Selected(sel) => {
-            let Some((idx, _)) = discovered
-                .iter()
-                .enumerate()
-                .find(|(idx, item)| format!("{}. {}", idx + 1, discovered_row_label(item)) == sel)
-            else {
-                return Ok(None);
-            };
-            Ok(discovered.get(idx).cloned())
-        }
-    }
-}
 
 pub fn refresh_discovered_connections(kind: ConnectionKind) -> Vec<DiscoveredConnection> {
     let mut out = Vec::new();

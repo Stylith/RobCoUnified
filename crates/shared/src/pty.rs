@@ -1,194 +1,21 @@
-//! PTY session — runs a child process in a pseudo-terminal and renders its
-//! output inside the ratatui TUI using vt100 for terminal emulation.
-//!
-//! The child process thinks it has a real terminal: correct size, SIGWINCH on
-//! resize, readline/colors/cursor movement all work. Output is captured into a
-//! vt100::Parser on a background reader thread and rendered each frame.
-//!
-//! Usage:
-//!   run_pty_session(terminal, "/bin/bash", &[])
-//!   launch_in_pty(terminal, &["vim", "file.txt"])
+//! PTY session — runs a child process in a pseudo-terminal using vt100 for
+//! terminal emulation. Output is captured into a vt100::Parser on a background
+//! reader thread and exposed via `committed_frame()` / `snapshot_styled()` for
+//! the iced renderer.
 
 use anyhow::Result;
-use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, PtySize};
-use ratatui::{
-    layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-};
-use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-use crate::status::render_status_bar;
-use crate::ui::Term;
 
 #[derive(Debug, Clone, Default)]
 pub struct PtyLaunchOptions {
     pub env: Vec<(String, String)>,
     pub top_bar: Option<String>,
     pub force_render_mode: Option<bool>, // Some(true)=plain, Some(false)=styled
-}
-
-static SUSPENDED_PTY: OnceLock<Mutex<HashMap<usize, PtySession>>> = OnceLock::new();
-
-fn suspended_pty_map() -> &'static Mutex<HashMap<usize, PtySession>> {
-    SUSPENDED_PTY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn park_active_session_pty(session: PtySession) {
-    let idx = crate::session::active_idx();
-    if let Ok(mut map) = suspended_pty_map().lock() {
-        if let Some(mut old) = map.insert(idx, session) {
-            old.terminate();
-        }
-    }
-}
-
-fn take_active_session_pty() -> Option<PtySession> {
-    let idx = crate::session::active_idx();
-    suspended_pty_map().lock().ok()?.remove(&idx)
-}
-
-pub fn has_suspended_for_active() -> bool {
-    let idx = crate::session::active_idx();
-    suspended_pty_map()
-        .lock()
-        .map(|map| map.contains_key(&idx))
-        .unwrap_or(false)
-}
-
-pub fn clear_all_suspended() {
-    if let Ok(mut map) = suspended_pty_map().lock() {
-        for (_, mut session) in map.drain() {
-            session.terminate();
-        }
-    }
-}
-
-fn key_debug_path() -> std::path::PathBuf {
-    std::env::var_os("ROBCOS_KEY_DEBUG_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/robcos_keys.log"))
-}
-
-fn open_key_debug_file() -> Option<std::fs::File> {
-    let primary = key_debug_path();
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&primary)
-    {
-        Ok(f) => Some(f),
-        Err(_) => std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("robcos_keys.log")
-            .ok(),
-    }
-}
-
-fn append_marker_line(line: &str) {
-    let Some(mut file) = open_key_debug_file() else {
-        return;
-    };
-    let _ = writeln!(file, "{line}");
-}
-
-fn append_key_debug_line(line: &str) {
-    if std::env::var_os("ROBCOS_KEY_DEBUG").is_none() {
-        return;
-    }
-    let Some(mut file) = open_key_debug_file() else {
-        return;
-    };
-    let _ = writeln!(file, "{line}");
-}
-
-fn init_key_debug_log() {
-    append_marker_line(&format!(
-        "--- pty session start pid={} path={} ---",
-        std::process::id(),
-        key_debug_path().display()
-    ));
-}
-
-fn debug_log_key(code: KeyCode, mods: KeyModifiers, kind: KeyEventKind) {
-    append_key_debug_line(&format!("kind={kind:?} code={code:?} mods={mods:?}"));
-}
-
-const TILDE_CHORD_WINDOW: Duration = Duration::from_millis(1200);
-
-#[derive(Debug, Clone, Copy)]
-enum TildeChordState {
-    None,
-    One(Instant),
-    Two(Instant),
-}
-
-fn flush_tilde_state(state: &mut TildeChordState, session: &mut PtySession) {
-    match *state {
-        TildeChordState::None => {}
-        TildeChordState::One(_) => session.write(b"~"),
-        TildeChordState::Two(_) => session.write(b"~~"),
-    }
-    *state = TildeChordState::None;
-}
-
-fn try_tilde_session_chord(code: KeyCode, mods: KeyModifiers, state: &mut TildeChordState) -> bool {
-    let plain_or_shift = mods.is_empty() || mods == KeyModifiers::SHIFT;
-    let now = Instant::now();
-    match code {
-        KeyCode::Char('~') if plain_or_shift => {
-            *state = match *state {
-                TildeChordState::None => TildeChordState::One(now),
-                TildeChordState::One(t) if now.duration_since(t) <= TILDE_CHORD_WINDOW => {
-                    TildeChordState::Two(now)
-                }
-                _ => TildeChordState::One(now),
-            };
-            true
-        }
-        KeyCode::Char(c @ '1'..='9') if mods.is_empty() => {
-            if let TildeChordState::Two(t) = *state {
-                if now.duration_since(t) <= TILDE_CHORD_WINDOW {
-                    *state = TildeChordState::None;
-                    let idx = (c as usize) - ('1' as usize);
-                    let count = crate::session::session_count();
-                    if idx < count || (idx == count && count < crate::session::MAX_SESSIONS) {
-                        crate::session::request_switch(idx);
-                    }
-                    return true;
-                }
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
-fn maybe_flush_expired_tilde_state(state: &mut TildeChordState, session: &mut PtySession) {
-    let now = Instant::now();
-    let expired = match *state {
-        TildeChordState::None => false,
-        TildeChordState::One(t) | TildeChordState::Two(t) => {
-            now.duration_since(t) > TILDE_CHORD_WINDOW
-        }
-    };
-    if expired {
-        flush_tilde_state(state, session);
-    }
-}
-
-enum PtyLoopOutcome {
-    ProcessExited,
-    SuspendedForSwitch,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -768,34 +595,82 @@ fn ansi_idx_to_cell(i: u8) -> CellColor {
 }
 
 fn palette_map_vt100_color_to_cell(c: vt100::Color, is_background: bool) -> CellColor {
-    // Use the existing palette_map_vt100_color which returns a ratatui Color,
-    // then convert to CellColor. This keeps the complex luma math in one place.
-    ratatui_to_cell_color(palette_map_vt100_color(c, is_background))
+    let Some((r, g, b)) = vt100_color_to_rgb(c) else {
+        return if is_background { CellColor::Black } else { CellColor::Reset };
+    };
+    let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
+    let scale = if is_background {
+        if luma < 0.25 { 0.12 } else if luma < 0.50 { 0.18 } else if luma < 0.75 { 0.24 } else { 0.32 }
+    } else if luma < 0.20 { 0.90 } else if luma < 0.40 { 0.95 } else if luma < 0.60 { 1.00 } else if luma < 0.80 { 1.05 } else { 1.10 };
+    let (tr, tg, tb) = theme_color_to_rgb(crate::config::current_theme_color());
+    CellColor::Rgb(
+        (tr as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tg as f32 * scale).round().clamp(1.0, 255.0) as u8,
+        (tb as f32 * scale).round().clamp(1.0, 255.0) as u8,
+    )
 }
 
-/// Convert a ratatui Color to a CellColor. Used internally where the legacy
-/// ratatui pipeline is still in use (TUI render loop, palette map calculations).
-fn ratatui_to_cell_color(c: Color) -> CellColor {
+fn vt100_color_to_rgb(c: vt100::Color) -> Option<(u8, u8, u8)> {
     match c {
-        Color::Reset => CellColor::Reset,
-        Color::Black => CellColor::Black,
-        Color::DarkGray => CellColor::DarkGray,
-        Color::Gray => CellColor::Gray,
-        Color::White => CellColor::White,
-        Color::Red => CellColor::Red,
-        Color::LightRed => CellColor::LightRed,
-        Color::Green => CellColor::Green,
-        Color::LightGreen => CellColor::LightGreen,
-        Color::Yellow => CellColor::Yellow,
-        Color::LightYellow => CellColor::LightYellow,
-        Color::Blue => CellColor::Blue,
-        Color::LightBlue => CellColor::LightBlue,
-        Color::Magenta => CellColor::Magenta,
-        Color::LightMagenta => CellColor::LightMagenta,
-        Color::Cyan => CellColor::Cyan,
-        Color::LightCyan => CellColor::LightCyan,
-        Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
-        Color::Indexed(n) => CellColor::Indexed(n),
+        vt100::Color::Default => None,
+        vt100::Color::Rgb(r, g, b) => Some((r, g, b)),
+        vt100::Color::Idx(i) => ansi_idx_to_rgb(i),
+    }
+}
+
+fn ansi_idx_to_rgb(i: u8) -> Option<(u8, u8, u8)> {
+    Some(match i {
+        0 => (0, 0, 0),
+        1 => (205, 0, 0),
+        2 => (0, 205, 0),
+        3 => (205, 205, 0),
+        4 => (0, 0, 238),
+        5 => (205, 0, 205),
+        6 => (0, 205, 205),
+        7 => (180, 180, 180),
+        8 => (120, 120, 120),
+        9 => (255, 85, 85),
+        10 => (85, 255, 85),
+        11 => (255, 255, 85),
+        12 => (85, 85, 255),
+        13 => (255, 85, 255),
+        14 => (85, 255, 255),
+        15 => (245, 245, 245),
+        n if n < 232 => {
+            let n = n - 16;
+            let r = n / 36;
+            let g = (n % 36) / 6;
+            let b = n % 6;
+            let step = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            (step(r), step(g), step(b))
+        }
+        n => {
+            let g = 8 + (n.saturating_sub(232) * 10);
+            (g, g, g)
+        }
+    })
+}
+
+fn theme_color_to_rgb(c: crate::config::ThemeColor) -> (u8, u8, u8) {
+    use crate::config::ThemeColor as T;
+    match c {
+        T::Black => (0, 0, 0),
+        T::DarkGray => (120, 120, 120),
+        T::Gray => (180, 180, 180),
+        T::White => (245, 245, 245),
+        T::Red => (205, 0, 0),
+        T::LightRed => (255, 85, 85),
+        T::Green => (0, 205, 0),
+        T::LightGreen => (85, 255, 85),
+        T::Yellow => (205, 205, 0),
+        T::LightYellow => (255, 255, 85),
+        T::Blue => (0, 0, 238),
+        T::LightBlue => (85, 85, 255),
+        T::Magenta => (205, 0, 205),
+        T::LightMagenta => (255, 85, 255),
+        T::Cyan => (0, 205, 205),
+        T::LightCyan => (85, 255, 255),
+        T::Rgb(r, g, b) => (r, g, b),
     }
 }
 
@@ -1232,65 +1107,6 @@ impl PtySession {
         }
     }
 
-    /// Render the current vt100 screen into `area` of the ratatui frame.
-    pub fn render(&self, f: &mut ratatui::Frame, area: Rect) {
-        self.render_with_hint(f, area, false);
-    }
-
-    /// Render with a caller-provided performance hint.
-    /// `force_plain=true` bypasses per-cell styling and uses faster line rendering.
-    pub fn render_with_hint(&self, f: &mut ratatui::Frame, area: Rect, force_plain: bool) {
-        let Ok(parser) = self.parser.lock() else {
-            return;
-        };
-        let screen = parser.screen();
-
-        let rows = area.height as usize;
-        let cols = area.width as usize;
-
-        if force_plain || matches!(self.render_mode, PtyRenderMode::Plain) {
-            let mut lines: Vec<Line> = screen
-                .rows(0, area.width)
-                .take(rows)
-                .map(Line::from)
-                .collect();
-            while lines.len() < rows {
-                lines.push(Line::from(""));
-            }
-            let para = Paragraph::new(lines).style(vt100_default_style(self.color_mode));
-            f.render_widget(para, area);
-            return;
-        }
-
-        let lines: Vec<Line> = (0..rows)
-            .map(|row| {
-                let spans: Vec<Span> = (0..cols)
-                    .map(|col| {
-                        let row_u16 = row as u16;
-                        let col_u16 = col as u16;
-                        let cell = screen.cell(row_u16, col_u16);
-                        let ch = cell
-                            .and_then(|c| c.contents().chars().next())
-                            .unwrap_or(' ');
-                        let ch = if matches!(self.acs_mode, AcsGlyphMode::Unicode) {
-                            smooth_ascii_border_char(screen, row_u16, col_u16, ch)
-                        } else {
-                            ch
-                        };
-                        let text = ch.to_string();
-
-                        let style = cell
-                            .map(|c| vt100_style(c, self.color_mode))
-                            .unwrap_or_else(|| vt100_default_style(self.color_mode));
-                        Span::styled(text, style)
-                    })
-                    .collect();
-                Line::from(spans)
-            })
-            .collect();
-
-        f.render_widget(Paragraph::new(lines), area);
-    }
 }
 
 #[allow(dead_code)]
@@ -1457,213 +1273,6 @@ fn is_ranger_program(program: &str) -> bool {
     command_basename(program)
         .map(|name| name.starts_with("ranger"))
         .unwrap_or(false)
-}
-
-// ── vt100 cell → ratatui Style (TUI render loop only) ────────────────────────
-
-/// Convert a ThemeColor to a ratatui Color. Used only in the legacy
-/// crossterm/ratatui TUI render path; the iced renderer uses CellColor.
-fn theme_to_ratatui(c: crate::config::ThemeColor) -> Color {
-    use crate::config::ThemeColor as T;
-    match c {
-        T::Black => Color::Black,
-        T::DarkGray => Color::DarkGray,
-        T::Gray => Color::Gray,
-        T::White => Color::White,
-        T::Red => Color::Red,
-        T::LightRed => Color::LightRed,
-        T::Green => Color::Green,
-        T::LightGreen => Color::LightGreen,
-        T::Yellow => Color::Yellow,
-        T::LightYellow => Color::LightYellow,
-        T::Blue => Color::Blue,
-        T::LightBlue => Color::LightBlue,
-        T::Magenta => Color::Magenta,
-        T::LightMagenta => Color::LightMagenta,
-        T::Cyan => Color::Cyan,
-        T::LightCyan => Color::LightCyan,
-        T::Rgb(r, g, b) => Color::Rgb(r, g, b),
-    }
-}
-
-fn vt100_default_style(mode: PtyColorMode) -> Style {
-    let fg = match mode {
-        PtyColorMode::Ansi
-        | PtyColorMode::ThemeLock
-        | PtyColorMode::PaletteMap
-        | PtyColorMode::Monochrome => theme_to_ratatui(crate::config::current_theme_color()),
-    };
-    Style::default().fg(fg).bg(Color::Black)
-}
-
-fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
-    let mut style = vt100_default_style(mode);
-
-    match mode {
-        PtyColorMode::Ansi => {
-            style = style.fg(vt100_color(
-                cell.fgcolor(),
-                theme_to_ratatui(crate::config::current_theme_color()),
-            ));
-            style = style.bg(vt100_color(cell.bgcolor(), Color::Black));
-        }
-        PtyColorMode::PaletteMap => {
-            if !matches!(cell.fgcolor(), vt100::Color::Default) {
-                style = style.fg(palette_map_vt100_color(cell.fgcolor(), false));
-            }
-            if !matches!(cell.bgcolor(), vt100::Color::Default) {
-                style = style.bg(palette_map_vt100_color(cell.bgcolor(), true));
-            }
-        }
-        PtyColorMode::ThemeLock | PtyColorMode::Monochrome => {}
-    }
-
-    if cell.bold() {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if cell.italic() {
-        style = style.add_modifier(Modifier::ITALIC);
-    }
-    if cell.underline() {
-        style = style.add_modifier(Modifier::UNDERLINED);
-    }
-    if cell.inverse() {
-        match mode {
-            PtyColorMode::ThemeLock => {
-                style = style
-                    .fg(Color::Black)
-                    .bg(theme_to_ratatui(crate::config::current_theme_color()));
-            }
-            PtyColorMode::PaletteMap | PtyColorMode::Monochrome | PtyColorMode::Ansi => {
-                style = style.add_modifier(Modifier::REVERSED);
-            }
-        }
-    }
-
-    style
-}
-
-fn vt100_color(c: vt100::Color, default: Color) -> Color {
-    match c {
-        vt100::Color::Default => default,
-        vt100::Color::Idx(i) => ansi_idx(i),
-        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
-    }
-}
-
-fn ansi_idx(i: u8) -> Color {
-    match i {
-        0 => Color::Black,
-        1 => Color::Red,
-        2 => Color::Green,
-        3 => Color::Yellow,
-        4 => Color::Blue,
-        5 => Color::Magenta,
-        6 => Color::Cyan,
-        7 => Color::White,
-        8 => Color::DarkGray,
-        9 => Color::LightRed,
-        10 => Color::LightGreen,
-        11 => Color::LightYellow,
-        12 => Color::LightBlue,
-        13 => Color::LightMagenta,
-        14 => Color::LightCyan,
-        15 => Color::White,
-        n => Color::Indexed(n),
-    }
-}
-
-fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
-    let Some((r, g, b)) = vt100_color_rgb(c) else {
-        return if is_background {
-            Color::Black
-        } else {
-            theme_to_ratatui(crate::config::current_theme_color())
-        };
-    };
-
-    let luma = (0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32)) / 255.0;
-    let scale = if is_background {
-        if luma < 0.25 {
-            0.12
-        } else if luma < 0.50 {
-            0.18
-        } else if luma < 0.75 {
-            0.24
-        } else {
-            0.32
-        }
-    } else if luma < 0.20 {
-        0.90
-    } else if luma < 0.40 {
-        0.95
-    } else if luma < 0.60 {
-        1.00
-    } else if luma < 0.80 {
-        1.05
-    } else {
-        1.10
-    };
-
-    let (tr, tg, tb) = theme_base_rgb();
-    Color::Rgb(
-        (tr as f32 * scale).round().clamp(1.0, 255.0) as u8,
-        (tg as f32 * scale).round().clamp(1.0, 255.0) as u8,
-        (tb as f32 * scale).round().clamp(1.0, 255.0) as u8,
-    )
-}
-
-fn vt100_color_rgb(c: vt100::Color) -> Option<(u8, u8, u8)> {
-    match c {
-        vt100::Color::Default => None,
-        vt100::Color::Rgb(r, g, b) => Some((r, g, b)),
-        vt100::Color::Idx(i) => color_to_rgb(ansi_idx(i)),
-    }
-}
-
-fn theme_base_rgb() -> (u8, u8, u8) {
-    color_to_rgb(theme_to_ratatui(crate::config::current_theme_color())).unwrap_or((0, 255, 0))
-}
-
-fn color_to_rgb(c: Color) -> Option<(u8, u8, u8)> {
-    Some(match c {
-        Color::Reset => return None,
-        Color::Black => (0, 0, 0),
-        Color::Red => (205, 0, 0),
-        Color::Green => (0, 205, 0),
-        Color::Yellow => (205, 205, 0),
-        Color::Blue => (0, 0, 238),
-        Color::Magenta => (205, 0, 205),
-        Color::Cyan => (0, 205, 205),
-        Color::Gray => (180, 180, 180),
-        Color::DarkGray => (120, 120, 120),
-        Color::LightRed => (255, 85, 85),
-        Color::LightGreen => (85, 255, 85),
-        Color::LightYellow => (255, 255, 85),
-        Color::LightBlue => (85, 85, 255),
-        Color::LightMagenta => (255, 85, 255),
-        Color::LightCyan => (85, 255, 255),
-        Color::White => (245, 245, 245),
-        Color::Rgb(r, g, b) => (r, g, b),
-        Color::Indexed(i) => indexed_ansi_rgb(i),
-    })
-}
-
-fn indexed_ansi_rgb(i: u8) -> (u8, u8, u8) {
-    if i < 16 {
-        return color_to_rgb(ansi_idx(i)).unwrap_or((255, 255, 255));
-    }
-    if (16..=231).contains(&i) {
-        let n = i - 16;
-        let r = n / 36;
-        let g = (n % 36) / 6;
-        let b = n % 6;
-        let step = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
-        return (step(r), step(g), step(b));
-    }
-    // 232..=255 grayscale ramp
-    let g = 8 + (i.saturating_sub(232) * 10);
-    (g, g, g)
 }
 
 // ── Key → bytes ───────────────────────────────────────────────────────────────
@@ -1891,213 +1500,6 @@ pub fn key_to_bytes(
         KeyCode::F(n) => format!("\x1b[{}~", n + 10).into_bytes(),
         _ => return None,
     })
-}
-
-// ── Interactive run loop ──────────────────────────────────────────────────────
-
-fn pty_content_rows(total_height: u16, has_top_bar: bool) -> u16 {
-    let reserved = 1 + u16::from(has_top_bar); // bottom status + optional top bar
-    total_height.saturating_sub(reserved).max(1)
-}
-
-fn render_top_bar(f: &mut ratatui::Frame, area: Rect, label: &str) {
-    let text = format!(" {label} ");
-    let style = Style::default()
-        .fg(Color::Black)
-        .bg(theme_to_ratatui(crate::config::current_theme_color()))
-        .add_modifier(Modifier::BOLD);
-    f.render_widget(
-        Paragraph::new(text)
-            .alignment(Alignment::Center)
-            .style(style),
-        area,
-    );
-}
-
-/// Run a program in a PTY inside the ratatui TUI.
-/// Exits when the child process exits, shell exits, or a global session switch is requested.
-pub fn run_pty_session(terminal: &mut Term, program: &str, args: &[&str]) -> Result<()> {
-    run_pty_session_with_options(terminal, program, args, PtyLaunchOptions::default())
-}
-
-/// Run a PTY session with custom environment and optional top banner.
-pub fn run_pty_session_with_options(
-    terminal: &mut Term,
-    program: &str,
-    args: &[&str],
-    options: PtyLaunchOptions,
-) -> Result<()> {
-    let size = terminal.size()?;
-    let pty_rows = pty_content_rows(size.height, options.top_bar.is_some());
-    let pty_cols = size.width;
-
-    let mut session = PtySession::spawn(program, args, pty_cols, pty_rows, &options)?;
-    init_key_debug_log();
-    let outcome = run_pty_loop(terminal, &mut session)?;
-    if matches!(outcome, PtyLoopOutcome::SuspendedForSwitch) {
-        park_active_session_pty(session);
-    }
-    Ok(())
-}
-
-/// Convenience wrapper: launch an arbitrary command in a PTY session.
-pub fn launch_in_pty(terminal: &mut Term, cmd: &[String]) -> Result<()> {
-    if cmd.is_empty() {
-        return Ok(());
-    }
-    let cmd = rewrite_legacy_command(cmd);
-    if cmd.is_empty() {
-        return Ok(());
-    }
-    let cmdline = cmd.join(" ");
-    if crate::launcher::is_shell_preferred(&cmd) {
-        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(&cmd) {
-            let shell_program = &shell_cmd[0];
-            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            crate::diag::log(
-                "pty-cli",
-                &format!("Using saved shell launch preference for command: {cmdline}"),
-            );
-            return run_pty_session(terminal, shell_program, &shell_args);
-        }
-    }
-    let program = &cmd[0];
-    let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
-    crate::diag::log(
-        "pty-cli",
-        &format!("Launching command directly in PTY: {cmdline}"),
-    );
-    let started = Instant::now();
-    run_pty_session(terminal, program, &args)?;
-    let elapsed = started.elapsed();
-
-    if crate::launcher::should_retry_with_shell_after_fast_exit(&cmd, elapsed) {
-        if let Some(shell_cmd) = crate::launcher::build_shell_fallback_command(&cmd) {
-            let shell_program = &shell_cmd[0];
-            let shell_args: Vec<&str> = shell_cmd[1..].iter().map(String::as_str).collect();
-            crate::diag::log(
-                "pty-cli",
-                &format!("Fast-exit retry via shell for command: {cmdline}"),
-            );
-            let retried = run_pty_session(terminal, shell_program, &shell_args);
-            if retried.is_ok() {
-                crate::launcher::remember_shell_preferred(&cmd);
-            }
-            return retried;
-        }
-    }
-
-    Ok(())
-}
-
-fn rewrite_legacy_command(cmd: &[String]) -> Vec<String> {
-    crate::launcher::normalize_command_aliases(cmd)
-}
-
-pub fn resume_suspended_for_active(terminal: &mut Term) -> Result<bool> {
-    let Some(mut session) = take_active_session_pty() else {
-        return Ok(false);
-    };
-    append_marker_line(&format!(
-        "--- pty session resume pid={} ---",
-        std::process::id()
-    ));
-    let outcome = run_pty_loop(terminal, &mut session)?;
-    if matches!(outcome, PtyLoopOutcome::SuspendedForSwitch) {
-        park_active_session_pty(session);
-    }
-    Ok(true)
-}
-
-fn run_pty_loop(terminal: &mut Term, session: &mut PtySession) -> Result<PtyLoopOutcome> {
-    let mut tilde_state = TildeChordState::None;
-
-    loop {
-        maybe_flush_expired_tilde_state(&mut tilde_state, session);
-
-        // Resize if terminal changed
-        let sz = terminal.size()?;
-        let pr = pty_content_rows(sz.height, session.top_bar.is_some());
-        let pc = sz.width;
-        session.resize(pc, pr);
-
-        // Render
-        terminal.draw(|f| {
-            let area = f.area();
-            let show_top_bar = session.top_bar.is_some() && area.height > 1;
-            let top_h = if show_top_bar { 1 } else { 0 };
-            let pty_area = Rect {
-                x: 0,
-                y: top_h,
-                width: area.width,
-                height: pty_content_rows(area.height, show_top_bar),
-            };
-            let status_area = Rect {
-                x: 0,
-                y: area.height.saturating_sub(1),
-                width: area.width,
-                height: 1,
-            };
-
-            if let Some(label) = session.top_bar.as_deref() {
-                render_top_bar(
-                    f,
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        width: area.width,
-                        height: 1,
-                    },
-                    label,
-                );
-            }
-            session.render(f, pty_area);
-            render_status_bar(f, status_area);
-        })?;
-
-        // Check if child exited
-        if !session.is_alive() {
-            return Ok(PtyLoopOutcome::ProcessExited);
-        }
-
-        // Input
-        if event::poll(Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
-                debug_log_key(key.code, key.modifiers, key.kind);
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
-
-                if !matches!(tilde_state, TildeChordState::None)
-                    && !matches!(key.code, KeyCode::Char('~') | KeyCode::Char('1'..='9'))
-                {
-                    flush_tilde_state(&mut tilde_state, session);
-                }
-
-                if try_tilde_session_chord(key.code, key.modifiers, &mut tilde_state) {
-                    if crate::session::has_switch_request() {
-                        return Ok(PtyLoopOutcome::SuspendedForSwitch);
-                    }
-                    continue;
-                }
-
-                if crate::ui::check_session_switch_pty_pub(key.code, key.modifiers) {
-                    if crate::session::has_switch_request() {
-                        return Ok(PtyLoopOutcome::SuspendedForSwitch);
-                    }
-                    continue;
-                }
-                let application_cursor = session
-                    .parser
-                    .lock()
-                    .map(|p| p.screen().application_cursor())
-                    .unwrap_or(false);
-                if let Some(bytes) = key_to_bytes(key.code, key.modifiers, application_cursor) {
-                    session.write(&bytes);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
