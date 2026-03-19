@@ -416,6 +416,16 @@ impl WindowManager {
         self.active = Some(window);
     }
 
+    /// Compute a cascaded default position for the next window.
+    /// Each open window offsets by 28px so title bars don't stack perfectly.
+    pub fn next_cascade_rect(&self, w: f32, h: f32) -> WindowRect {
+        const STEP: f32 = 28.0;
+        let n = self.windows.len() as f32;
+        let x = 60.0 + n * STEP;
+        let y = 40.0 + n * STEP;
+        WindowRect::new(x, y, w, h)
+    }
+
     pub fn open(&mut self, window: DesktopWindow, rect: WindowRect, min_size: (f32, f32), resizable: bool) {
         self.generation_seed += 1;
         let managed = ManagedWindow {
@@ -718,20 +728,7 @@ impl RobcoShell {
         let settings = load_settings_snapshot();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let login_rows = login_menu_rows_from_users(login_usernames());
-        let mut windows = WindowManager::new();
-        // Open two demo windows so the WM widget is testable on launch.
-        windows.open(
-            DesktopWindow::FileManager,
-            WindowRect::new(60.0, 40.0, 640.0, 420.0),
-            (400.0, 300.0),
-            true,
-        );
-        windows.open(
-            DesktopWindow::Editor,
-            WindowRect::new(200.0, 80.0, 600.0, 400.0),
-            (400.0, 300.0),
-            true,
-        );
+        let windows = WindowManager::new();
         let mut installer = DesktopInstallerState::default();
         installer.ensure_available_pms();
 
@@ -904,8 +901,8 @@ impl RobcoShell {
                     _ => {}
                 }
                 if !self.windows.is_open(w) {
-                    // Default size/position — will come from WindowManager in Phase 3
-                    self.windows.open(w, WindowRect::new(100.0, 60.0, 800.0, 560.0), (400.0, 300.0), true);
+                    let rect = self.windows.next_cascade_rect(800.0, 560.0);
+                    self.windows.open(w, rect, (400.0, 300.0), true);
                 } else {
                     self.windows.bring_to_front(w);
                 }
@@ -957,6 +954,9 @@ impl RobcoShell {
                 if let Some(win) = self.windows.get_mut(window) {
                     win.rect.w = w;
                     win.rect.h = h;
+                }
+                if window == DesktopWindow::PtyApp {
+                    self.resize_desktop_pty_to_window();
                 }
             }
 
@@ -1541,11 +1541,15 @@ impl RobcoShell {
         plan: TerminalLoginPasswordPlan<UserRecord>,
     ) -> Task<Message> {
         let follow_up = self.apply_terminal_login_submit_action(plan.action, true);
-        if let Some(prompt) = plan.reopen_prompt {
-            self.open_password_prompt(prompt.title, prompt.prompt)
-        } else {
-            follow_up
+        // `plan.reopen_prompt` is computed before authentication runs, so it can't
+        // know whether the password will be accepted.  Only reopen if auth actually
+        // failed — i.e. the session is still not established after applying the action.
+        if self.session_username.is_none() {
+            if let Some(prompt) = plan.reopen_prompt {
+                return self.open_password_prompt(prompt.title, prompt.prompt);
+            }
         }
+        follow_up
     }
 
     fn apply_terminal_login_submit_action(
