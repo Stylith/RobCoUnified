@@ -11,8 +11,9 @@ use super::desktop_app::DesktopMenuSection;
 use super::desktop_launcher_service::{catalog_names, resolve_catalog_launch, ProgramCatalog};
 use super::desktop_search_service::NativeSpotlightResult;
 use super::desktop_settings_service::{
-    load_settings_snapshot, pty_force_render_mode as desktop_pty_force_render_mode,
-    pty_profile_for_command as desktop_pty_profile_for_command,
+    load_settings_snapshot, persist_settings_draft,
+    pty_force_render_mode as desktop_pty_force_render_mode,
+    pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
 };
 use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_surface_service::DesktopSurfaceEntry;
@@ -21,7 +22,11 @@ use super::desktop_wm_widget::{DesktopWindowHost, WindowChild};
 use super::message::{ContextMenuAction, DesktopIconId, Message, NavDirection};
 use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use super::shared_types::DesktopWindow;
-use crate::config::{set_current_user, Settings, HEADER_LINES};
+use crate::config::{
+    base_dir, set_current_user, CliAcsMode, NativeStartupWindowMode, OpenMode, Settings,
+    CUSTOM_THEME_NAME, HEADER_LINES, THEMES,
+};
+use crate::connections::macos_connections_disabled;
 use crate::core::auth::{clear_session, UserRecord};
 use crate::pty::{PtyLaunchOptions, PtySession};
 use chrono::Local;
@@ -30,7 +35,10 @@ use iced::keyboard::{key::Named, Key, Modifiers};
 use iced::widget::{canvas, text_input};
 use iced::{Element, Subscription, Task, Theme};
 use robcos_native_editor_app::EditorWindow;
-use robcos_native_file_manager_app::NativeFileManagerState;
+use robcos_native_file_manager_app::{
+    open_target_for_file_manager_action, FileManagerOpenTarget,
+    NativeFileManagerState, OpenWithLaunchRequest,
+};
 use robcos_native_installer_app::{
     available_runtime_tools, runtime_tool_description, runtime_tool_pkg, runtime_tool_title,
     DesktopInstallerConfirm, DesktopInstallerNotice, DesktopInstallerState,
@@ -42,7 +50,16 @@ use robcos_native_programs_app::{
     build_desktop_applications_sections, resolve_desktop_applications_request,
     DesktopProgramRequest,
 };
-use robcos_native_settings_app::NativeSettingsPanel;
+use robcos_native_services::desktop_default_apps_service::{
+    binding_label_for_slot, default_app_slot_label, DefaultAppSlot,
+};
+use robcos_native_services::desktop_user_service::sorted_usernames;
+use robcos_native_settings_app::{
+    desktop_settings_back_target, desktop_settings_connections_nav_items,
+    desktop_settings_default_panel, desktop_settings_home_rows,
+    desktop_settings_user_management_nav_items, settings_panel_title, NativeSettingsPanel,
+    SettingsHomeTileAction,
+};
 use robcos_native_terminal_app::{
     entry_for_selectable_idx, login_menu_rows_from_users, resolve_login_password_submission,
     resolve_desktop_pty_exit,
@@ -879,6 +896,9 @@ impl RobcoShell {
                         self.installer.ensure_available_pms();
                         self.refresh_installer_runtime_cache();
                     }
+                    DesktopWindow::Settings => {
+                        self.settings = load_settings_snapshot();
+                    }
                     _ => {}
                 }
                 if !self.windows.is_open(w) {
@@ -1113,6 +1133,80 @@ impl RobcoShell {
                 self.editor.dirty = true;
             }
 
+            Message::SettingsPanelChanged(panel) => {
+                self.settings_panel = Some(panel);
+            }
+            Message::SettingsThemeChanged(theme_name) => {
+                self.persist_settings_change(|settings| {
+                    settings.theme = theme_name.clone();
+                });
+            }
+            Message::SettingsCustomThemeAdjusted { channel, delta } => {
+                self.persist_settings_change(|settings| {
+                    if settings.theme != CUSTOM_THEME_NAME {
+                        settings.theme = CUSTOM_THEME_NAME.to_string();
+                    }
+                    if let Some(value) = settings.custom_theme_rgb.get_mut(channel) {
+                        adjust_u8_clamped(value, delta);
+                    }
+                });
+            }
+            Message::SettingsOpenModeChanged(mode) => {
+                self.persist_settings_change(|settings| {
+                    settings.default_open_mode = mode;
+                });
+            }
+            Message::SettingsWindowModeChanged(mode) => {
+                self.persist_settings_change(|settings| {
+                    settings.native_startup_window_mode = mode;
+                });
+            }
+            Message::SettingsCliAcsModeChanged(mode) => {
+                self.persist_settings_change(|settings| {
+                    settings.cli_acs_mode = mode;
+                });
+            }
+            Message::SettingsSoundToggled => {
+                self.persist_settings_change(|settings| {
+                    settings.sound = !settings.sound;
+                });
+            }
+            Message::SettingsBootupToggled => {
+                self.persist_settings_change(|settings| {
+                    settings.bootup = !settings.bootup;
+                });
+            }
+            Message::SettingsNavigationHintsToggled => {
+                self.persist_settings_change(|settings| {
+                    settings.show_navigation_hints = !settings.show_navigation_hints;
+                });
+            }
+            Message::SettingsSystemSoundVolumeAdjusted(delta) => {
+                self.persist_settings_change(|settings| {
+                    adjust_u8_clamped(&mut settings.system_sound_volume, delta);
+                });
+            }
+            Message::SettingsBuiltinMenuVisibilityToggled { text_editor } => {
+                self.persist_settings_change(|settings| {
+                    let visibility = &mut settings.builtin_menu_visibility;
+                    if text_editor {
+                        visibility.text_editor = !visibility.text_editor;
+                    } else {
+                        visibility.nuke_codes = !visibility.nuke_codes;
+                    }
+                });
+            }
+            Message::SettingsSaveRequested => {
+                self.settings = persist_settings_draft(&self.settings);
+                self.file_manager.refresh_contents();
+                self.shell_status = "Settings saved.".to_string();
+            }
+            Message::SettingsCancelRequested => {
+                self.settings = reload_settings_snapshot();
+                self.file_manager.refresh_contents();
+                self.shell_status = "Reloaded settings from disk.".to_string();
+            }
+
             Message::FileManagerCommand(cmd) => {
                 use robcos_native_file_manager_app::FileManagerCommand;
                 match cmd {
@@ -1120,10 +1214,13 @@ impl RobcoShell {
                         self.file_manager.up();
                     }
                     FileManagerCommand::OpenSelected => {
-                        let action = self.file_manager.activate_selected();
-                        use robcos_native_file_manager_app::FileManagerAction;
-                        if let FileManagerAction::ChangedDir = action {
-                            // directory was entered; view cache already refreshed
+                        let settings = load_settings_snapshot();
+                        match open_target_for_file_manager_action(
+                            self.file_manager.activate_selected(),
+                            &settings.desktop_file_manager,
+                        ) {
+                            Ok(target) => return self.handle_file_manager_open_target(target),
+                            Err(status) => self.shell_status = status,
                         }
                     }
                     FileManagerCommand::ToggleHiddenFiles => {
@@ -1131,6 +1228,23 @@ impl RobcoShell {
                     }
                     _ => {}
                 }
+            }
+            Message::FileManagerRowPressed(path) => {
+                if self.file_manager.selected.as_ref() == Some(&path) {
+                    let settings = load_settings_snapshot();
+                    match open_target_for_file_manager_action(
+                        self.file_manager.activate_selected(),
+                        &settings.desktop_file_manager,
+                    ) {
+                        Ok(target) => return self.handle_file_manager_open_target(target),
+                        Err(status) => self.shell_status = status,
+                    }
+                } else {
+                    self.file_manager.select(Some(path));
+                }
+            }
+            Message::FileManagerSearchChanged(query) => {
+                self.file_manager.update_search_query(query);
             }
             Message::NukeCodesRefreshRequested => {
                 self.nuke_codes = fetch_nuke_codes();
@@ -1889,28 +2003,19 @@ impl RobcoShell {
         use iced::widget::{column, container, text, Space};
         use iced::Length;
 
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-
         let mut header = column![].spacing(0);
         for line in HEADER_LINES {
             header = header.push(
                 text(*line)
                     .font(iced::Font::MONOSPACE)
-                    .size(20)
-                    .color(fg),
+                    .size(20),
             );
         }
 
         let separator = || {
             container(Space::with_height(1))
                 .width(Length::Fill)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(dim)),
-                    ..container::Style::default()
-                })
+                .style(super::retro_iced_theme::separator)
         };
 
         let mut layout = column![
@@ -1920,8 +2025,7 @@ impl RobcoShell {
             Space::with_height(8),
             text(title)
                 .font(iced::Font::MONOSPACE)
-                .size(22)
-                .color(fg),
+                .size(22),
             Space::with_height(8),
             separator(),
         ]
@@ -1933,8 +2037,7 @@ impl RobcoShell {
             layout = layout.push(Space::with_height(8)).push(
                 text(subtitle)
                     .font(iced::Font::MONOSPACE)
-                    .size(14)
-                    .color(fg),
+                    .size(14),
             );
         }
 
@@ -1955,10 +2058,7 @@ impl RobcoShell {
             .width(Length::Fill)
             .height(Length::Fill)
             .padding([20, 28])
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..container::Style::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -2214,17 +2314,11 @@ impl RobcoShell {
 
     fn view_terminal_prompt_overlay(&self) -> Element<'_, Message> {
         use iced::widget::{column, container, row, text, text_input, Space};
-        use iced::{Alignment, Border, Length};
+        use iced::{Alignment, Length};
 
         let Some(prompt) = self.terminal_prompt.as_ref() else {
             return Space::with_width(Length::Shrink).into();
         };
-
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
 
         let input = text_input("", &prompt.buffer)
             .id(Self::terminal_prompt_id())
@@ -2233,49 +2327,28 @@ impl RobcoShell {
             .secure(matches!(prompt.kind, TerminalPromptKind::Password))
             .font(iced::Font::MONOSPACE)
             .size(16)
-            .style(move |_t, _s| iced::widget::text_input::Style {
-                background: iced::Background::Color(bg),
-                border: Border {
-                    color: fg,
-                    width: 2.0,
-                    radius: 0.0.into(),
-                },
-                icon: fg,
-                placeholder: dim,
-                value: fg,
-                selection: selected_bg,
-            })
+            .style(super::retro_iced_theme::terminal_text_input)
             .padding([8, 10]);
 
         let panel = container(
             column![
                 text(prompt.title.as_str())
                     .font(iced::Font::MONOSPACE)
-                    .size(18)
-                    .color(fg),
+                    .size(18),
                 text(prompt.prompt.as_str())
                     .font(iced::Font::MONOSPACE)
-                    .size(14)
-                    .color(fg),
+                    .size(14),
                 input,
                 text("Enter apply | Esc cancel")
                     .font(iced::Font::MONOSPACE)
                     .size(12)
-                    .color(dim),
+                    .style(iced::widget::text::secondary),
             ]
             .spacing(12)
             .width(420)
         )
         .padding(18)
-        .style(move |_t| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            border: Border {
-                color: fg,
-                width: 2.0,
-                radius: 0.0.into(),
-            },
-            ..container::Style::default()
-        });
+        .style(super::retro_iced_theme::overlay_panel);
 
         container(
             column![
@@ -2302,7 +2375,6 @@ impl RobcoShell {
 
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
-        let panel_bg = palette.panel.to_iced();
         let selected_fg = palette.selected_fg.to_iced();
         let selected_bg = palette.selected_bg.to_iced();
         let dim = palette.dim.to_iced();
@@ -2360,10 +2432,7 @@ impl RobcoShell {
 
         container(top_row)
             .width(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(panel_bg)),
-                ..container::Style::default()
-            })
+            .style(super::retro_iced_theme::panel_background)
             .into()
     }
 
@@ -2444,30 +2513,34 @@ impl RobcoShell {
 
     /// File manager window content.
     fn view_file_manager(&self) -> Element<'_, Message> {
-        use iced::widget::{button, column, container, row, scrollable, text};
+        use iced::widget::{button, column, container, row, scrollable, text, text_input};
         use iced::{Alignment, Length};
         use robcos_native_file_manager_app::FileManagerCommand;
 
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-
-        // Toolbar: Up button + current path
         let cwd_str = self.file_manager.cwd.display().to_string();
+        let selected_label = self
+            .file_manager
+            .selected_row()
+            .map(|row| {
+                let state = if row.is_dir { "Folder" } else { "File" };
+                format!("Selected: {} ({state})", row.label)
+            })
+            .unwrap_or_else(|| "Nothing selected.".to_string());
+
         let toolbar = row![
-            button(text("↑ Up").size(12).color(fg))
+            button(text("↑ Up").size(12))
                 .padding([2, 8])
-                .style(move |_t, _s| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    text_color: fg,
-                    border: iced::Border { color: dim, width: 1.0, radius: 2.0.into() },
-                    ..Default::default()
-                })
+                .style(iced::widget::button::secondary)
                 .on_press(Message::FileManagerCommand(FileManagerCommand::GoUp)),
-            text(cwd_str).size(12).color(fg),
+            button(text("Open").size(12))
+                .padding([2, 8])
+                .style(iced::widget::button::secondary)
+                .on_press(Message::FileManagerCommand(FileManagerCommand::OpenSelected)),
+            text_input("Search files", &self.file_manager.search_query)
+                .on_input(Message::FileManagerSearchChanged)
+                .padding([4, 8])
+                .width(Length::FillPortion(2)),
+            text(cwd_str).size(12),
         ]
         .spacing(8)
         .padding([4, 8])
@@ -2486,21 +2559,21 @@ impl RobcoShell {
                     .to_string();
                 let icon = row.icon();
                 let is_selected = selected.as_deref() == Some(row.path.as_path());
-                let (row_bg, row_fg) = if is_selected {
-                    (selected_bg, selected_fg)
+                let style: fn(
+                    &iced::Theme,
+                    iced::widget::button::Status,
+                ) -> iced::widget::button::Style = if is_selected {
+                    iced::widget::button::primary
                 } else {
-                    (bg, fg)
+                    iced::widget::button::secondary
                 };
-                let label = format!("{} {}", icon, name);
-                button(text(label).size(12).color(row_fg))
+                let prefix = if is_selected { "> " } else { "  " };
+                let label = format!("{prefix}{icon} {name}");
+                button(text(label).size(12))
                     .padding([2, 12])
                     .width(Length::Fill)
-                    .style(move |_t, _s| iced::widget::button::Style {
-                        background: Some(iced::Background::Color(row_bg)),
-                        text_color: row_fg,
-                        ..Default::default()
-                    })
-                    .on_press(Message::FileManagerCommand(FileManagerCommand::OpenSelected))
+                    .style(style)
+                    .on_press(Message::FileManagerRowPressed(row.path.clone()))
                     .into()
             })
             .collect();
@@ -2511,17 +2584,26 @@ impl RobcoShell {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let body = column![toolbar, file_list]
+        let footer = container(
+            text(format!(
+                "{} item(s) | {} | Click once to select, again to open",
+                rows.len(),
+                selected_label
+            ))
+            .size(11)
+            .style(iced::widget::text::secondary)
+        )
+        .padding([2, 8])
+        .width(Length::Fill);
+
+        let body = column![toolbar, file_list, footer]
             .width(Length::Fill)
             .height(Length::Fill);
 
         container(body)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -2530,13 +2612,10 @@ impl RobcoShell {
         use iced::widget::{column, container, text, text_editor};
         use iced::{Font, Length};
 
-        let palette = super::retro_theme::current_retro_colors();
-        let dim = palette.dim.to_iced();
-
         // Status bar: path + dirty indicator
         let status_str = if self.editor.dirty { "● Modified" } else { "" };
         let status = container(
-            text(status_str).size(11).color(dim)
+            text(status_str).size(11).style(iced::widget::text::secondary)
         )
         .padding([2, 8])
         .width(Length::Fill);
@@ -2555,46 +2634,471 @@ impl RobcoShell {
 
     /// Settings window content — scrollable settings panel list.
     fn view_settings_app(&self) -> Element<'_, Message> {
-        use iced::widget::{column, container, scrollable, text};
-        use iced::Length;
-        use robcos_native_settings_app::{desktop_settings_home_rows, settings_panel_title};
+        use iced::widget::{button, column, container, row, scrollable, text};
+        use iced::{Alignment, Length};
 
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-
-        let current_panel = self.settings_panel.unwrap_or(
-            robcos_native_settings_app::desktop_settings_default_panel()
-        );
+        let current_panel = self.settings_panel.unwrap_or(desktop_settings_default_panel());
         let title_str = settings_panel_title(current_panel);
+        let nav_button = |label: &'static str, msg: Message| {
+            button(text(label).size(12))
+                .padding([3, 10])
+                .style(iced::widget::button::secondary)
+                .on_press(msg)
+        };
+        let option_button = |label: String, selected: bool, msg: Message| {
+            let style: fn(
+                &iced::Theme,
+                iced::widget::button::Status,
+            ) -> iced::widget::button::Style = if selected {
+                iced::widget::button::primary
+            } else {
+                iced::widget::button::secondary
+            };
+            button(text(label).size(12))
+                .padding([4, 12])
+                .style(style)
+                .on_press(msg)
+        };
+
+        let mut header_row = row![text(title_str).size(14),]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(iced::widget::Space::with_width(Length::Fill))
+            .push(nav_button("Reload", Message::SettingsCancelRequested));
+        if current_panel != NativeSettingsPanel::Home {
+            header_row = header_row
+                .push(nav_button(
+                    "Back",
+                    Message::SettingsPanelChanged(desktop_settings_back_target(current_panel)),
+                ))
+                .push(nav_button(
+                    "Home",
+                    Message::SettingsPanelChanged(NativeSettingsPanel::Home),
+                ));
+        }
 
         let header = container(
-            text(title_str).size(14).color(fg)
+            header_row
         )
         .padding([8, 12])
-        .width(iced::Length::Fill);
+        .width(Length::Fill)
+        .style(super::retro_iced_theme::panel_background);
 
-        let rows = desktop_settings_home_rows(self.session_is_admin);
         let mut items: Vec<iced::Element<'_, Message>> = Vec::new();
-        for tile_row in &rows {
-            for tile in tile_row {
-                let label = tile.label;
-                items.push(
-                    container(text(label).size(12).color(fg))
-                        .padding([4, 12])
-                        .width(iced::Length::Fill)
-                        .style(move |_t| container::Style {
-                            border: iced::Border { color: dim, width: 0.0, radius: 0.0.into() },
-                            ..Default::default()
-                        })
-                        .into()
-                );
+        match current_panel {
+            NativeSettingsPanel::Home => {
+                for tile_row in desktop_settings_home_rows(self.session_is_admin) {
+                    for tile in tile_row {
+                        let label = format!("{} {}", tile.icon, tile.label);
+                        let body = if tile.enabled {
+                            match tile.action {
+                                SettingsHomeTileAction::OpenPanel(panel) => {
+                                    option_button(
+                                        label,
+                                        false,
+                                        Message::SettingsPanelChanged(panel),
+                                    )
+                                    .width(Length::Fill)
+                                    .into()
+                                }
+                                SettingsHomeTileAction::CloseWindow => option_button(
+                                    label,
+                                    false,
+                                    Message::CloseWindow(DesktopWindow::Settings),
+                                )
+                                .width(Length::Fill)
+                                .into(),
+                            }
+                        } else {
+                            container(
+                                text(format!("{label} (admin required)"))
+                                    .size(12)
+                                    .style(iced::widget::text::secondary)
+                            )
+                            .padding([4, 12])
+                            .width(Length::Fill)
+                            .into()
+                        };
+                        items.push(settings_card(tile.label.to_string(), body));
+                    }
+                }
+            }
+            NativeSettingsPanel::General => {
+                items.push(settings_card(
+                    "Default Open Mode".to_string(),
+                    row![
+                        option_button(
+                            "Terminal".to_string(),
+                            self.settings.default_open_mode == OpenMode::Terminal,
+                            Message::SettingsOpenModeChanged(OpenMode::Terminal),
+                        ),
+                        option_button(
+                            "Desktop".to_string(),
+                            self.settings.default_open_mode == OpenMode::Desktop,
+                            Message::SettingsOpenModeChanged(OpenMode::Desktop),
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+                items.push(settings_card(
+                    "System Sound".to_string(),
+                    row![
+                        option_button(
+                            if self.settings.sound {
+                                "Enabled".to_string()
+                            } else {
+                                "Disabled".to_string()
+                            },
+                            self.settings.sound,
+                            Message::SettingsSoundToggled,
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+                items.push(settings_card(
+                    format!("System Sound Volume: {}%", self.settings.system_sound_volume),
+                    row![
+                        option_button(
+                            "-5".to_string(),
+                            false,
+                            Message::SettingsSystemSoundVolumeAdjusted(-5),
+                        ),
+                        option_button(
+                            "+5".to_string(),
+                            false,
+                            Message::SettingsSystemSoundVolumeAdjusted(5),
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+                items.push(settings_card(
+                    "Bootup".to_string(),
+                    row![
+                        option_button(
+                            if self.settings.bootup {
+                                "Enabled".to_string()
+                            } else {
+                                "Disabled".to_string()
+                            },
+                            self.settings.bootup,
+                            Message::SettingsBootupToggled,
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+                items.push(settings_card(
+                    "Navigation Hints".to_string(),
+                    row![
+                        option_button(
+                            if self.settings.show_navigation_hints {
+                                "Enabled".to_string()
+                            } else {
+                                "Disabled".to_string()
+                            },
+                            self.settings.show_navigation_hints,
+                            Message::SettingsNavigationHintsToggled,
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+            }
+            NativeSettingsPanel::Appearance => {
+                let window_mode_row = row![
+                    option_button(
+                        "Windowed".to_string(),
+                        self.settings.native_startup_window_mode
+                            == NativeStartupWindowMode::Windowed,
+                        Message::SettingsWindowModeChanged(NativeStartupWindowMode::Windowed),
+                    ),
+                    option_button(
+                        "Maximized".to_string(),
+                        self.settings.native_startup_window_mode
+                            == NativeStartupWindowMode::Maximized,
+                        Message::SettingsWindowModeChanged(NativeStartupWindowMode::Maximized),
+                    ),
+                    option_button(
+                        "Borderless".to_string(),
+                        self.settings.native_startup_window_mode
+                            == NativeStartupWindowMode::BorderlessFullscreen,
+                        Message::SettingsWindowModeChanged(
+                            NativeStartupWindowMode::BorderlessFullscreen,
+                        ),
+                    ),
+                    option_button(
+                        "Fullscreen".to_string(),
+                        self.settings.native_startup_window_mode
+                            == NativeStartupWindowMode::Fullscreen,
+                        Message::SettingsWindowModeChanged(NativeStartupWindowMode::Fullscreen),
+                    ),
+                ]
+                .spacing(8);
+                items.push(settings_card(
+                    "Window Mode".to_string(),
+                    window_mode_row.wrap().into(),
+                ));
+                let mut theme_choices = row![].spacing(8);
+                for (name, _) in THEMES {
+                    theme_choices = theme_choices.push(option_button(
+                        (*name).to_string(),
+                        self.settings.theme == *name,
+                        Message::SettingsThemeChanged((*name).to_string()),
+                    ));
+                }
+                items.push(settings_card("Theme".to_string(), theme_choices.wrap().into()));
+                if self.settings.theme == CUSTOM_THEME_NAME {
+                    let [r, g, b] = self.settings.custom_theme_rgb;
+                    for (label, value, channel) in [
+                        ("Custom Red", r, 0usize),
+                        ("Custom Green", g, 1usize),
+                        ("Custom Blue", b, 2usize),
+                    ] {
+                        items.push(settings_card(
+                            format!("{label}: {value}"),
+                            row![
+                                option_button(
+                                    "-1".to_string(),
+                                    false,
+                                    Message::SettingsCustomThemeAdjusted {
+                                        channel,
+                                        delta: -1,
+                                    },
+                                ),
+                                option_button(
+                                    "+1".to_string(),
+                                    false,
+                                    Message::SettingsCustomThemeAdjusted {
+                                        channel,
+                                        delta: 1,
+                                    },
+                                ),
+                            ]
+                            .spacing(8)
+                            .into(),
+                        ));
+                    }
+                }
+                items.push(settings_card(
+                    "Border Glyphs".to_string(),
+                    row![
+                        option_button(
+                            "ASCII".to_string(),
+                            self.settings.cli_acs_mode == CliAcsMode::Ascii,
+                            Message::SettingsCliAcsModeChanged(CliAcsMode::Ascii),
+                        ),
+                        option_button(
+                            "Unicode".to_string(),
+                            self.settings.cli_acs_mode == CliAcsMode::Unicode,
+                            Message::SettingsCliAcsModeChanged(CliAcsMode::Unicode),
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+            }
+            NativeSettingsPanel::Connections => {
+                if macos_connections_disabled() {
+                    items.push(settings_card(
+                        "Platform".to_string(),
+                        text("Connections management is limited on this platform.")
+                            .size(12)
+                            .style(iced::widget::text::secondary)
+                            .into(),
+                    ));
+                }
+                for item in desktop_settings_connections_nav_items() {
+                    items.push(settings_card(
+                        item.label.to_string(),
+                        option_button(
+                            format!("Open {}", item.label),
+                            false,
+                            Message::SettingsPanelChanged(item.panel),
+                        )
+                        .width(Length::Fill)
+                        .into(),
+                    ));
+                }
+            }
+            NativeSettingsPanel::ConnectionsNetwork => {
+                items.push(settings_card(
+                    "Network".to_string(),
+                    text("Network controls are not surfaced in the iced shell yet.")
+                        .size(12)
+                        .style(iced::widget::text::secondary)
+                        .into(),
+                ));
+            }
+            NativeSettingsPanel::ConnectionsBluetooth => {
+                items.push(settings_card(
+                    "Bluetooth".to_string(),
+                    text("Bluetooth controls are not surfaced in the iced shell yet.")
+                        .size(12)
+                        .style(iced::widget::text::secondary)
+                        .into(),
+                ));
+            }
+            NativeSettingsPanel::DefaultApps => {
+                for slot in [DefaultAppSlot::TextCode, DefaultAppSlot::Ebook] {
+                    items.push(settings_card(
+                        default_app_slot_label(slot).to_string(),
+                        text(binding_label_for_slot(&self.settings, slot))
+                            .size(12)
+                            .into(),
+                    ));
+                }
+                items.push(settings_card(
+                    "Editing".to_string(),
+                    text("Default-app editing remains in the dedicated app flows.")
+                        .size(12)
+                        .style(iced::widget::text::secondary)
+                        .into(),
+                ));
+            }
+            NativeSettingsPanel::CliProfiles => {
+                let profiles = &self.settings.desktop_cli_profiles;
+                for (label, profile) in [
+                    ("Default", &profiles.default),
+                    ("Calcurse", &profiles.calcurse),
+                    ("Spotify Player", &profiles.spotify_player),
+                    ("Ranger", &profiles.ranger),
+                    ("Reddit", &profiles.reddit),
+                ] {
+                    items.push(settings_card(
+                        label.to_string(),
+                        column![
+                            text(format!(
+                                "Size: {}x{}",
+                                profile.preferred_w.unwrap_or(0),
+                                profile.preferred_h.unwrap_or(0)
+                            ))
+                            .size(12),
+                            text(format!("Live resize: {}", profile.live_resize))
+                                .size(12)
+                                .style(iced::widget::text::secondary),
+                        ]
+                        .spacing(4)
+                        .into(),
+                    ));
+                }
+                items.push(settings_card(
+                    "Custom Profiles".to_string(),
+                    text(format!(
+                        "{} custom profile(s) configured.",
+                        self.settings.desktop_cli_profiles.custom.len()
+                    ))
+                    .size(12)
+                    .into(),
+                ));
+            }
+            NativeSettingsPanel::EditMenus => {
+                items.push(settings_card(
+                    "Text Editor".to_string(),
+                    row![
+                        option_button(
+                            if self.settings.builtin_menu_visibility.text_editor {
+                                "Visible".to_string()
+                            } else {
+                                "Hidden".to_string()
+                            },
+                            self.settings.builtin_menu_visibility.text_editor,
+                            Message::SettingsBuiltinMenuVisibilityToggled { text_editor: true },
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+                items.push(settings_card(
+                    "Nuke Codes".to_string(),
+                    row![
+                        option_button(
+                            if self.settings.builtin_menu_visibility.nuke_codes {
+                                "Visible".to_string()
+                            } else {
+                                "Hidden".to_string()
+                            },
+                            self.settings.builtin_menu_visibility.nuke_codes,
+                            Message::SettingsBuiltinMenuVisibilityToggled { text_editor: false },
+                        ),
+                    ]
+                    .spacing(8)
+                    .into(),
+                ));
+            }
+            NativeSettingsPanel::UserManagement => {
+                for item in desktop_settings_user_management_nav_items() {
+                    items.push(settings_card(
+                        item.label.to_string(),
+                        option_button(
+                            format!("Open {}", item.label),
+                            false,
+                            Message::SettingsPanelChanged(item.panel),
+                        )
+                        .width(Length::Fill)
+                        .into(),
+                    ));
+                }
+            }
+            NativeSettingsPanel::UserManagementViewUsers => {
+                for username in sorted_usernames() {
+                    items.push(settings_card(
+                        username.clone(),
+                        text("Configured user account").size(12).into(),
+                    ));
+                }
+            }
+            NativeSettingsPanel::UserManagementCreateUser => {
+                items.push(settings_card(
+                    "Create User".to_string(),
+                    text("User creation stays in the dedicated user-management flows.")
+                        .size(12)
+                        .style(iced::widget::text::secondary)
+                        .into(),
+                ));
+            }
+            NativeSettingsPanel::UserManagementEditUsers => {
+                items.push(settings_card(
+                    "Edit Users".to_string(),
+                    text("Bulk user editing is not yet surfaced in the iced shell.")
+                        .size(12)
+                        .style(iced::widget::text::secondary)
+                        .into(),
+                ));
+            }
+            NativeSettingsPanel::UserManagementEditCurrentUser => {
+                items.push(settings_card(
+                    "Current User".to_string(),
+                    text(
+                        self.session_username
+                            .as_deref()
+                            .unwrap_or("No active session")
+                            .to_string()
+                    )
+                    .size(12)
+                    .into(),
+                ));
+            }
+            NativeSettingsPanel::About => {
+                items.push(settings_card(
+                    "RobCoOS".to_string(),
+                    column![
+                        text("iced shell desktop").size(12),
+                        text(format!("Runtime dir: {}", base_dir().display())).size(12),
+                        text(format!("Theme: {}", self.settings.theme))
+                            .size(12)
+                            .style(iced::widget::text::secondary),
+                    ]
+                    .spacing(4)
+                    .into(),
+                ));
             }
         }
 
         let body = scrollable(
-            column(items).width(Length::Fill).spacing(2)
+            column(items).width(Length::Fill).spacing(8).padding(12)
         )
         .width(Length::Fill)
         .height(Length::Fill);
@@ -2602,23 +3106,13 @@ impl RobcoShell {
         container(column![header, body].width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
     fn view_applications_app(&self) -> Element<'_, Message> {
         use iced::widget::{button, column, container, scrollable, text};
         use iced::Length;
-
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
 
         let configured = catalog_names(ProgramCatalog::Applications);
         let sections = build_desktop_applications_sections(
@@ -2630,20 +3124,15 @@ impl RobcoShell {
         );
 
         let app_button = |label: String, msg: Message| {
-            button(text(label).size(12).color(selected_fg))
+            button(text(label).size(12))
                 .padding([4, 12])
                 .width(Length::Fill)
-                .style(move |_t, _s| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(selected_bg)),
-                    text_color: selected_fg,
-                    ..Default::default()
-                })
                 .on_press(msg)
                 .into()
         };
 
         let mut rows: Vec<Element<'_, Message>> = vec![
-            text("Built-in").size(13).color(fg).into(),
+            text("Built-in").size(13).into(),
         ];
         for entry in &sections.builtins {
             let request = resolve_desktop_applications_request(&entry.action);
@@ -2666,9 +3155,14 @@ impl RobcoShell {
             rows.push(app_button(entry.label.clone(), msg));
         }
 
-        rows.push(text("Configured Apps").size(13).color(fg).into());
+        rows.push(text("Configured Apps").size(13).into());
         if sections.configured.is_empty() {
-            rows.push(text("No configured desktop apps found.").size(11).color(dim).into());
+            rows.push(
+                text("No configured desktop apps found.")
+                    .size(11)
+                    .style(iced::widget::text::secondary)
+                    .into(),
+            );
         } else {
             for entry in &sections.configured {
                 let request = resolve_desktop_applications_request(&entry.action);
@@ -2693,16 +3187,18 @@ impl RobcoShell {
         }
 
         if !self.applications_status.is_empty() {
-            rows.push(text(&self.applications_status).size(11).color(dim).into());
+            rows.push(
+                text(&self.applications_status)
+                    .size(11)
+                    .style(iced::widget::text::secondary)
+                    .into(),
+            );
         }
 
         container(scrollable(column(rows).spacing(6).padding(12)).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -2710,34 +3206,17 @@ impl RobcoShell {
         use iced::widget::{button, column, container, row, scrollable, text, text_input};
         use iced::Length;
 
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
-
         let nav_button = |label: &'static str, msg: Message| {
-            button(text(label).size(12).color(fg))
+            button(text(label).size(12))
                 .padding([3, 10])
-                .style(move |_t, _s| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(hovered_bg)),
-                    text_color: fg,
-                    ..Default::default()
-                })
+                .style(iced::widget::button::secondary)
                 .on_press(msg)
         };
 
         let primary_button = |label: String, msg: Message| {
-            button(text(label).size(12).color(selected_fg))
+            button(text(label).size(12))
                 .padding([4, 12])
                 .width(Length::Fill)
-                .style(move |_t, _s| iced::widget::button::Style {
-                    background: Some(iced::Background::Color(selected_bg)),
-                    text_color: selected_fg,
-                    ..Default::default()
-                })
                 .on_press(msg)
                 .into()
         };
@@ -2754,7 +3233,9 @@ impl RobcoShell {
             nav_button("Search", Message::InstallerSearchRequested),
             nav_button("Installed", Message::InstallerInstalledRequested),
             nav_button("Runtime", Message::InstallerRuntimeToolsRequested),
-            text(format!("PM: {pm_label}")).size(11).color(dim),
+            text(format!("PM: {pm_label}"))
+                .size(11)
+                .style(iced::widget::text::secondary),
         ]
         .spacing(8)
         .padding([6, 10]);
@@ -2770,18 +3251,14 @@ impl RobcoShell {
                         } else {
                             "Operation Failed"
                         })
-                        .size(13)
-                        .color(fg),
-                        text(&notice.message).size(11).color(fg),
+                        .size(13),
+                        text(&notice.message).size(11),
                         nav_button("Dismiss", Message::InstallerNoticeDismissed),
                     ]
                     .spacing(6),
                 )
                 .padding(10)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(hovered_bg)),
-                    ..Default::default()
-                })
+                .style(super::retro_iced_theme::bordered_panel)
                 .into(),
             );
         }
@@ -2791,8 +3268,7 @@ impl RobcoShell {
                 container(
                     column![
                         text(format!("{:?} {}?", confirm.action, confirm.pkg))
-                            .size(13)
-                            .color(fg),
+                            .size(13),
                         row![
                             nav_button("Yes", Message::InstallerConfirmAccepted),
                             nav_button("No", Message::InstallerConfirmCancelled),
@@ -2802,10 +3278,7 @@ impl RobcoShell {
                     .spacing(6),
                 )
                 .padding(10)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(hovered_bg)),
-                    ..Default::default()
-                })
+                .style(super::retro_iced_theme::bordered_panel)
                 .into(),
             );
         }
@@ -2831,7 +3304,7 @@ impl RobcoShell {
                     "Runtime Tools".to_string(),
                     Message::InstallerRuntimeToolsRequested,
                 ));
-                body.push(text("Detected Package Managers").size(13).color(fg).into());
+                body.push(text("Detected Package Managers").size(13).into());
                 for (idx, pm) in self.installer.available_pms.iter().enumerate() {
                     let label = if idx == self.installer.selected_pm_idx {
                         format!("> {}", pm.name())
@@ -2844,7 +3317,12 @@ impl RobcoShell {
                     ));
                 }
                 if self.installer.available_pms.is_empty() {
-                    body.push(text("No supported package manager found.").size(11).color(dim).into());
+                    body.push(
+                        text("No supported package manager found.")
+                            .size(11)
+                            .style(iced::widget::text::secondary)
+                            .into(),
+                    );
                 }
             }
             DesktopInstallerView::SearchResults => {
@@ -2888,9 +3366,14 @@ impl RobcoShell {
                 }
             }
             DesktopInstallerView::PackageActions { pkg, installed } => {
-                body.push(text(pkg).size(14).color(fg).into());
+                body.push(text(pkg).size(14).into());
                 if let Some(description) = self.installer.cached_package_description(pkg) {
-                    body.push(text(description).size(11).color(dim).into());
+                    body.push(
+                        text(description)
+                            .size(11)
+                            .style(iced::widget::text::secondary)
+                            .into(),
+                    );
                 }
                 if *installed {
                     for action in [
@@ -2915,7 +3398,7 @@ impl RobcoShell {
                 }
             }
             DesktopInstallerView::AddToMenu { pkg } => {
-                body.push(text(format!("Add {pkg} to menu")).size(14).color(fg).into());
+                body.push(text(format!("Add {pkg} to menu")).size(14).into());
                 body.push(
                     text_input("Display name", &self.installer.display_name_input)
                         .on_input(Message::InstallerDisplayNameChanged)
@@ -2945,8 +3428,13 @@ impl RobcoShell {
                         .copied()
                         .unwrap_or(false);
                     let state = if installed { "[installed]" } else { "[not installed]" };
-                    body.push(text(format!("{state} {}", runtime_tool_title(*tool))).size(13).color(fg).into());
-                    body.push(text(runtime_tool_description(*tool)).size(11).color(dim).into());
+                    body.push(text(format!("{state} {}", runtime_tool_title(*tool))).size(13).into());
+                    body.push(
+                        text(runtime_tool_description(*tool))
+                            .size(11)
+                            .style(iced::widget::text::secondary)
+                            .into(),
+                    );
                     let action = if installed {
                         InstallerPackageAction::Update
                     } else {
@@ -2963,16 +3451,18 @@ impl RobcoShell {
             }
         }
 
-        body.push(text(&self.installer.status).size(11).color(dim).into());
+        body.push(
+            text(&self.installer.status)
+                .size(11)
+                .style(iced::widget::text::secondary)
+                .into(),
+        );
 
         let content = column(body).spacing(8).padding(12);
         container(column![toolbar, scrollable(content).height(Length::Fill)])
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -2980,41 +3470,35 @@ impl RobcoShell {
         use iced::widget::{button, column, container, text};
         use iced::Length;
 
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-
-        let refresh = button(text("Refresh").size(12).color(selected_fg))
+        let refresh = button(text("Refresh").size(12))
             .padding([4, 10])
-            .style(move |_t, _s| iced::widget::button::Style {
-                background: Some(iced::Background::Color(selected_bg)),
-                text_color: selected_fg,
-                ..Default::default()
-            })
             .on_press(Message::NukeCodesRefreshRequested);
 
         let body = match &self.nuke_codes {
             NukeCodesView::Unloaded => column![
                 refresh,
-                text("Codes are not loaded yet.").size(12).color(dim),
+                text("Codes are not loaded yet.")
+                    .size(12)
+                    .style(iced::widget::text::secondary),
             ]
             .spacing(8),
             NukeCodesView::Error(err) => column![
                 refresh,
-                text("UNABLE TO FETCH LIVE CODES").size(13).color(fg),
-                text(err).size(11).color(dim),
+                text("UNABLE TO FETCH LIVE CODES").size(13),
+                text(err).size(11).style(iced::widget::text::secondary),
             ]
             .spacing(8),
             NukeCodesView::Data(codes) => column![
                 refresh,
-                text(format!("ALPHA   : {}", codes.alpha)).size(13).color(fg),
-                text(format!("BRAVO   : {}", codes.bravo)).size(13).color(fg),
-                text(format!("CHARLIE : {}", codes.charlie)).size(13).color(fg),
-                text(format!("Source: {}", codes.source)).size(11).color(dim),
-                text(format!("Fetched: {}", codes.fetched_at)).size(11).color(dim),
+                text(format!("ALPHA   : {}", codes.alpha)).size(13),
+                text(format!("BRAVO   : {}", codes.bravo)).size(13),
+                text(format!("CHARLIE : {}", codes.charlie)).size(13),
+                text(format!("Source: {}", codes.source))
+                    .size(11)
+                    .style(iced::widget::text::secondary),
+                text(format!("Fetched: {}", codes.fetched_at))
+                    .size(11)
+                    .style(iced::widget::text::secondary),
             ]
             .spacing(8),
         };
@@ -3022,10 +3506,7 @@ impl RobcoShell {
         container(body.padding(12))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -3034,18 +3515,16 @@ impl RobcoShell {
         use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let dim = palette.dim.to_iced();
 
         let Some(pty) = self.desktop_pty.as_ref() else {
-            return container(text("Launching terminal...").size(12).color(dim))
+            return container(
+                text("Launching terminal...")
+                    .size(12)
+                    .style(iced::widget::text::secondary),
+            )
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(bg)),
-                    ..Default::default()
-                })
+                .style(super::retro_iced_theme::window_background)
                 .into();
         };
 
@@ -3056,17 +3535,14 @@ impl RobcoShell {
         let footer = container(
             text(format!("{}x{}  {}", frame.cols, frame.rows, pty.title))
                 .size(11)
-                .color(fg),
+                .style(iced::widget::text::secondary),
         )
         .padding([2, 8]);
 
         container(column![viewport, footer].height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                ..Default::default()
-            })
+            .style(super::retro_iced_theme::window_background)
             .into()
     }
 
@@ -3076,7 +3552,7 @@ impl RobcoShell {
         id: DesktopWindow,
         fg: iced::Color,
         dim: iced::Color,
-        bg: iced::Color,
+        _bg: iced::Color,
     ) -> Element<'_, Message> {
         use iced::widget::{column, container, text};
         use iced::Length;
@@ -3090,10 +3566,7 @@ impl RobcoShell {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_t| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            ..container::Style::default()
-        })
+        .style(super::retro_iced_theme::window_background)
         .into()
     }
 
@@ -3158,10 +3631,7 @@ impl RobcoShell {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_t| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            ..container::Style::default()
-        })
+        .style(super::retro_iced_theme::window_background)
         .into()
     }
 
@@ -3233,10 +3703,7 @@ impl RobcoShell {
         container(task_row)
             .width(Length::Fill)
             .height(32)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(panel_bg)),
-                ..container::Style::default()
-            })
+            .style(super::retro_iced_theme::panel_background)
             .into()
     }
 
@@ -3261,14 +3728,7 @@ impl RobcoShell {
             .on_input(Message::SpotlightQueryChanged)
             .on_submit(Message::SpotlightActivateSelected)
             .size(18)
-            .style(move |_t, _s| iced::widget::text_input::Style {
-                background: iced::Background::Color(bg),
-                border: Border { color: fg, width: 2.0, radius: 0.0.into() },
-                icon: fg,
-                placeholder: dim,
-                value: fg,
-                selection: selected_bg,
-            })
+            .style(super::retro_iced_theme::terminal_text_input)
             .padding([8, 12]);
 
         // ── Tab bar ───────────────────────────────────────────────────────────
@@ -3357,20 +3817,13 @@ impl RobcoShell {
                 tab_row,
                 container(Space::with_height(1))
                     .width(Length::Fill)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(dim)),
-                        ..container::Style::default()
-                    }),
+                    .style(super::retro_iced_theme::separator),
                 results_scroll,
             ]
             .spacing(0)
             .width(600)
         )
-        .style(move |_t| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            border: Border { color: fg, width: 2.0, radius: 0.0.into() },
-            ..container::Style::default()
-        });
+        .style(super::retro_iced_theme::overlay_panel);
 
         // Centre the panel with an outer dismiss-on-click backdrop.
         let backdrop = mouse_area(
@@ -3408,7 +3861,6 @@ impl RobcoShell {
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
         let bg = palette.bg.to_iced();
-        let panel_bg = palette.panel.to_iced();
         let dim = palette.dim.to_iced();
         let selected_bg = palette.selected_bg.to_iced();
         let selected_fg = palette.selected_fg.to_iced();
@@ -3426,21 +3878,14 @@ impl RobcoShell {
             )
             .padding([6, 10])
             .width(Length::Fill)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(panel_bg)),
-                border: Border { color: fg, width: 0.0, radius: 0.0.into() },
-                ..container::Style::default()
-            })
+            .style(super::retro_iced_theme::panel_background)
         );
 
         // Separator
         root_col = root_col.push(
             container(Space::with_height(1))
                 .width(Length::Fill)
-                .style(move |_t| container::Style {
-                    background: Some(iced::Background::Color(dim)),
-                    ..container::Style::default()
-                })
+                .style(super::retro_iced_theme::separator)
         );
 
         for (vis_idx, root_slot) in START_ROOT_VIS_ROWS.iter().enumerate() {
@@ -3450,10 +3895,7 @@ impl RobcoShell {
                     root_col = root_col.push(
                         container(Space::with_height(1))
                             .width(Length::Fill)
-                            .style(move |_t| container::Style {
-                                background: Some(iced::Background::Color(dim)),
-                                ..container::Style::default()
-                            })
+                            .style(super::retro_iced_theme::separator)
                     );
                 }
                 Some(item_idx) => {
@@ -3501,11 +3943,7 @@ impl RobcoShell {
         }
 
         let root_panel = container(root_col)
-            .style(move |_t| container::Style {
-                background: Some(iced::Background::Color(bg)),
-                border: Border { color: fg, width: 2.0, radius: 0.0.into() },
-                ..container::Style::default()
-            });
+            .style(super::retro_iced_theme::overlay_panel);
 
         // ── Right panel (submenu / leaf) ──────────────────────────────────────
         let leaf = start_root_leaf_for_idx(selected_root);
@@ -3541,11 +3979,7 @@ impl RobcoShell {
             let _ = sub;
             Some(
                 container(sub_col)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        border: Border { color: fg, width: 2.0, radius: 0.0.into() },
-                        ..container::Style::default()
-                    })
+                    .style(super::retro_iced_theme::overlay_panel)
                     .into()
             )
         } else if let Some(lf) = leaf {
@@ -3559,27 +3993,17 @@ impl RobcoShell {
                 container(text(label).size(13).color(fg))
                     .padding([6, 10])
                     .width(Length::Fill)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(panel_bg)),
-                        ..container::Style::default()
-                    }),
+                    .style(super::retro_iced_theme::panel_background),
                 container(Space::with_height(1))
                     .width(Length::Fill)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(dim)),
-                        ..container::Style::default()
-                    }),
+                    .style(super::retro_iced_theme::separator),
             ].spacing(0).width(200);
             leaf_col = leaf_col.push(
                 text("(Loading…)").size(12).color(dim)
             );
             Some(
                 container(leaf_col)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        border: Border { color: fg, width: 2.0, radius: 0.0.into() },
-                        ..container::Style::default()
-                    })
+                    .style(super::retro_iced_theme::overlay_panel)
                     .into()
             )
         } else {
@@ -3826,6 +4250,42 @@ impl RobcoShell {
         }
     }
 
+    fn launch_open_with_request(&mut self, launch: OpenWithLaunchRequest) -> Task<Message> {
+        let plan = terminal_command_launch_plan(
+            TerminalShellSurface::Desktop,
+            &launch.title,
+            &launch.argv,
+            TerminalScreen::Documents,
+            desktop_pty_force_render_mode(&launch.argv),
+        );
+        let task = self.launch_desktop_pty_plan(plan, None);
+        self.shell_status = launch.status_message;
+        task
+    }
+
+    fn handle_file_manager_open_target(
+        &mut self,
+        target: FileManagerOpenTarget,
+    ) -> Task<Message> {
+        match target {
+            FileManagerOpenTarget::NoOp => Task::none(),
+            FileManagerOpenTarget::Launch(launch) => self.launch_open_with_request(launch),
+            FileManagerOpenTarget::OpenInEditor(path) => {
+                self.open_editor_path(path);
+                self.update(Message::OpenWindow(DesktopWindow::Editor))
+            }
+        }
+    }
+
+    fn persist_settings_change<F>(&mut self, apply: F)
+    where
+        F: FnOnce(&mut Settings),
+    {
+        apply(&mut self.settings);
+        self.settings = persist_settings_draft(&self.settings);
+        self.file_manager.refresh_contents();
+    }
+
     fn handle_global_key_press(&mut self, key: Key, mods: Modifiers) -> Task<Message> {
         if matches!(key.as_ref(), Key::Named(Named::Space)) && mods.command() {
             return self.update(Message::OpenSpotlight);
@@ -3916,7 +4376,7 @@ impl RobcoShell {
     /// Phase 2: uses iced's built-in Dark theme.
     /// Phase 4: replace with a custom `RetroTheme` that applies the full palette.
     pub fn theme(&self) -> Theme {
-        Theme::Dark
+        super::retro_iced_theme::retro_theme()
     }
 
     /// Return active subscriptions.
@@ -3978,6 +4438,28 @@ fn modifiers_to_pty(mods: Modifiers) -> PtyKeyModifiers {
         out |= PtyKeyModifiers::SHIFT;
     }
     out
+}
+
+fn settings_card<'a>(title: String, body: Element<'a, Message>) -> Element<'a, Message> {
+    use iced::widget::{column, container, text};
+    use iced::Length;
+
+    container(
+        column![
+            text(title).size(13),
+            body,
+        ]
+        .spacing(6),
+    )
+    .padding(10)
+    .width(Length::Fill)
+    .style(super::retro_iced_theme::bordered_panel)
+    .into()
+}
+
+fn adjust_u8_clamped(value: &mut u8, delta: i16) {
+    let next = (*value as i16 + delta).clamp(0, u8::MAX as i16);
+    *value = next as u8;
 }
 
 fn editor_content_to_string(content: &iced::widget::text_editor::Content) -> String {

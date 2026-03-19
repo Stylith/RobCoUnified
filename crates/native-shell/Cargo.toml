@@ -6,10 +6,6 @@ license = "GPL-3.0-only"
 publish = false
 
 [[bin]]
-name = "robcos-native"
-path = "src/main.rs"
-
-[[bin]]
 name = "robcos-file-manager"
 path = "src/file_manager_main.rs"
 

@@ -1,7 +1,4 @@
 //! Entry point for the iced-based RobCoOS binary (`robcos-iced`).
-//!
-//! The existing eframe binary (`robcos-native`) is not affected.
-//! This binary will eventually replace it once feature parity is reached.
 
 use robcos::native::shell::RobcoShell;
 use robcos::core::auth::ensure_default_admin;

@@ -1,6 +1,7 @@
 mod about_screen;
 pub mod desktop_wm_widget;
 pub mod message;
+pub mod retro_iced_theme;
 pub mod retro_theme;
 pub mod shell;
 pub mod terminal_canvas;

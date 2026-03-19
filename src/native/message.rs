@@ -11,7 +11,7 @@ use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_search_service::NativeSpotlightResult;
 use super::desktop_surface_service::DesktopSurfaceEntry;
 use super::shared_types::DesktopWindow;
-use crate::config::DesktopIconSortMode;
+use crate::config::{CliAcsMode, DesktopIconSortMode, NativeStartupWindowMode, OpenMode};
 use robcos_native_editor_app::{EditorCommand, EditorTextCommand};
 use robcos_native_file_manager_app::FileManagerCommand;
 use robcos_native_installer_app::{InstallerMenuTarget, InstallerPackageAction};
@@ -231,6 +231,16 @@ pub enum Message {
 
     // ── Settings ──────────────────────────────────────────────────────────────
     SettingsPanelChanged(NativeSettingsPanel),
+    SettingsThemeChanged(String),
+    SettingsCustomThemeAdjusted { channel: usize, delta: i16 },
+    SettingsOpenModeChanged(OpenMode),
+    SettingsWindowModeChanged(NativeStartupWindowMode),
+    SettingsCliAcsModeChanged(CliAcsMode),
+    SettingsSoundToggled,
+    SettingsBootupToggled,
+    SettingsNavigationHintsToggled,
+    SettingsSystemSoundVolumeAdjusted(i16),
+    SettingsBuiltinMenuVisibilityToggled { text_editor: bool },
     SettingsSaveRequested,
     SettingsCancelRequested,
 
@@ -244,6 +254,8 @@ pub enum Message {
 
     // ── File manager ─────────────────────────────────────────────────────────
     FileManagerCommand(FileManagerCommand),
+    FileManagerRowPressed(PathBuf),
+    FileManagerSearchChanged(String),
     /// Async: file drop received by the file manager.
     FileManagerDropReceived { paths: Vec<PathBuf>, target: Option<PathBuf> },
     NukeCodesRefreshRequested,
