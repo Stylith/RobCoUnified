@@ -14,7 +14,7 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad, Renderer as _};
 use iced::advanced::text::Renderer as _;
 use iced::advanced::widget::{self, Tree};
-use iced::advanced::{self, Clipboard, Shell, Widget};
+use iced::advanced::{Clipboard, Shell, Widget};
 use iced::event::{self, Event};
 use iced::mouse;
 use iced::{Border, Element, Length, Point, Rectangle, Size};
@@ -178,7 +178,7 @@ impl<'a> Widget<Message, iced::Theme, iced::Renderer> for DesktopWindowHost<'a> 
         style: &renderer::Style,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        viewport: &Rectangle,
+        _viewport: &Rectangle,
     ) {
         let palette = current_retro_colors();
         let fg = palette.fg.to_iced();

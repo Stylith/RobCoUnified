@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::file_manager::{FileEntryRow, FileManagerCommand, FileTreeItem, NativeFileManagerState};
 use crate::config::{DesktopFileManagerSettings, FileManagerViewMode};
 use std::path::PathBuf;

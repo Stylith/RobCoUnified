@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::desktop_app::{DesktopMenuAction, DesktopMenuItem, DesktopMenuSection};
 use super::editor_app::EditorCommand;
 use super::file_manager::{FileManagerCommand, NativeFileManagerState};

@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StartSubmenu {
+pub enum StartSubmenu {
     System,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StartLeaf {
+pub enum StartLeaf {
     Applications,
     Documents,
     Network,

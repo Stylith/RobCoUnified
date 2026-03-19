@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::editor_app::{build_editor_menu_section, EDITOR_APP_TITLE};
 use super::file_manager_menu::build_file_manager_menu_section;
 use super::file_manager_prompt::FileManagerPromptRequest;

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::prompt::TerminalPrompt;
 use crate::config::ConnectionKind;
 use crate::connections::NetworkMenuGroup;

@@ -1,3 +1,5 @@
+#![allow(unused_imports, dead_code)]
+
 #[cfg(test)]
 use super::file_manager::FileEntryRow;
 use super::file_manager::{FileManagerCommand, NativeFileManagerState};

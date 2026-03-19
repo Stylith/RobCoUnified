@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub use super::shared_types::FlashAction;
 use crate::config::ConnectionKind;
 use crate::connections::NetworkMenuGroup;

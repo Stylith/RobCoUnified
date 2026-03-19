@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
 use super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use super::prompt_flow::PromptOutcome;
