@@ -1,7 +1,10 @@
 [workspace]
-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/native-nuke-codes-app"]
-default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/native-nuke-codes-app"]
+members = [".", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/native-nuke-codes-app"]
+default-members = [".", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/native-nuke-codes-app"]
 resolver = "2"
+
+[workspace.dependencies]
+lru = "0.12"
 
 [package]
 name = "robcos"
@@ -31,6 +34,7 @@ eframe        = { version = "0.29", default-features = false, features = ["defau
 image         = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 fontdue       = "0.8"
 libc          = "0.2"
+lru           = { workspace = true }
 resvg         = "0.44"
 usvg          = "0.44"
 robcos-native-services = { path = "crates/native-services" }

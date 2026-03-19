@@ -1,6 +1,7 @@
 mod about_screen;
 mod applications_standalone;
 pub mod app;
+mod builtin_icons;
 mod connections_screen;
 mod data;
 mod default_apps_screen;
@@ -49,6 +50,7 @@ pub use robcos_native_settings_app::NativeSettingsPanel;
 
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
 pub use applications_standalone::RobcoNativeApplicationsApp;
+pub use builtin_icons::{builtin_icon, BUILTIN_ICON_NAMES, BUILTIN_ICON_SIZES};
 pub use editor_standalone::RobcoNativeEditorApp;
 pub use file_manager_standalone::RobcoNativeFileManagerApp;
 pub use installer_standalone::RobcoNativeInstallerApp;

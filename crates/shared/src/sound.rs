@@ -4,13 +4,14 @@
 //! Boot key clips are preprocessed to remove leading dead-space and keep
 //! a short click window, which reduces random perceived gaps.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lru::LruCache;
 use rand::seq::SliceRandom;
 
 use crate::config::get_settings;
@@ -46,7 +47,7 @@ struct SoundPaths {
 }
 
 static PATHS: OnceLock<SoundPaths> = OnceLock::new();
-static CLIP_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+static CLIP_CACHE: OnceLock<Mutex<LruCache<String, PathBuf>>> = OnceLock::new();
 
 struct SoundClip {
     name: &'static str,
@@ -61,6 +62,10 @@ struct BootShuffleState {
 }
 
 static BOOT_SHUFFLE: OnceLock<Mutex<BootShuffleState>> = OnceLock::new();
+
+fn sound_clip_cache_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(64).expect("sound clip cache size must be non-zero")
+}
 
 fn sound_enabled() -> bool {
     !SOUND_TEMP_DISABLED && get_settings().sound
@@ -176,8 +181,8 @@ fn scale_pcm16_wav(bytes: &[u8], volume: u8) -> Vec<u8> {
 fn clip_path(clip: &SoundClip) -> PathBuf {
     let volume = system_sound_volume();
     let key = format!("{}_{}", clip.name, volume);
-    let cache = CLIP_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock() {
+    let cache = CLIP_CACHE.get_or_init(|| Mutex::new(LruCache::new(sound_clip_cache_capacity())));
+    if let Ok(mut guard) = cache.lock() {
         if let Some(existing) = guard.get(&key) {
             return existing.clone();
         }
@@ -187,7 +192,7 @@ fn clip_path(clip: &SoundClip) -> PathBuf {
     let path = std::env::temp_dir().join(format!("robcos_{}_{}.wav", clip.name, volume));
     let _ = std::fs::write(&path, data);
     if let Ok(mut guard) = cache.lock() {
-        guard.insert(key, path.clone());
+        guard.put(key, path.clone());
     }
     path
 }

@@ -171,6 +171,7 @@ use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     Modifiers, RichText, TextEdit, TextStyle, TextureHandle, TopBottomPanel,
 };
+use lru::LruCache;
 use robcos_native_default_apps_app::{
     build_default_app_settings_choices, default_app_slot_description,
 };
@@ -189,9 +190,10 @@ use robcos_native_settings_app::{
     gui_cli_profile_slot_label, gui_cli_profile_slots, settings_panel_title, GuiCliProfileSlot,
     NativeSettingsPanel, SettingsHomeTile, SettingsHomeTileAction, TerminalSettingsPanel,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -408,6 +410,14 @@ const TERMINAL_STATUS_ROW: usize = 24;
 const TERMINAL_STATUS_ROW_ALT: usize = 26;
 const SESSION_LEADER_WINDOW: Duration = Duration::from_millis(1200);
 
+fn shortcut_icon_cache_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(256).expect("shortcut icon cache size must be non-zero")
+}
+
+fn shortcut_icon_missing_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(256).expect("shortcut icon miss cache size must be non-zero")
+}
+
 #[derive(Clone, Copy)]
 struct TerminalLayout {
     cols: usize,
@@ -573,8 +583,8 @@ pub struct RobcoNativeApp {
     pub(super) start_menu_rename: Option<StartMenuRenameState>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
-    pub(super) shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
-    pub(super) shortcut_icon_missing: HashSet<String>,
+    pub(super) shortcut_icon_cache: LruCache<String, egui::TextureHandle>,
+    pub(super) shortcut_icon_missing: LruCache<String, ()>,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
     desktop_surface_entries_cache: Option<DesktopSurfaceEntriesCache>,
     settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
@@ -719,8 +729,8 @@ impl Default for RobcoNativeApp {
             start_menu_rename: None,
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
-            shortcut_icon_cache: HashMap::new(),
-            shortcut_icon_missing: HashSet::new(),
+            shortcut_icon_cache: LruCache::new(shortcut_icon_cache_capacity()),
+            shortcut_icon_missing: LruCache::new(shortcut_icon_missing_capacity()),
             desktop_icon_layout_cache: None,
             desktop_surface_entries_cache: None,
             settings_home_rows_cache_admin: None,
@@ -2190,13 +2200,13 @@ impl RobcoNativeApp {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(_) => {
-                self.shortcut_icon_missing.insert(cache_key.to_string());
+                self.shortcut_icon_missing.put(cache_key.to_string(), ());
                 return None;
             }
         };
         let tex = Self::load_svg_icon(ctx, cache_key, &bytes, Some(size_px));
         self.shortcut_icon_cache
-            .insert(cache_key.to_string(), tex.clone());
+            .put(cache_key.to_string(), tex.clone());
         Some(tex)
     }
 
@@ -5946,8 +5956,8 @@ impl RobcoNativeApp {
                 if let Some(path_str) =
                     set_desktop_shortcut_icon(&mut self.settings.draft, shortcut_idx, &path)
                 {
-                    self.shortcut_icon_cache.remove(&path_str);
-                    self.shortcut_icon_missing.remove(&path_str);
+                    self.shortcut_icon_cache.pop(&path_str);
+                    self.shortcut_icon_missing.pop(&path_str);
                     if let Some(props) = &mut self.shortcut_properties {
                         if props.shortcut_idx == shortcut_idx {
                             props.icon_path_draft = Some(path_str);
@@ -9687,18 +9697,29 @@ impl eframe::App for RobcoNativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FileManagerSortMode, FileManagerViewMode};
+    use crate::config::{set_current_user, FileManagerSortMode, FileManagerViewMode};
+    use crate::native::desktop_app::DesktopMenuAction;
+    use crate::native::desktop_search_service::NativeSpotlightCategory;
     use crate::native::desktop_start_menu::START_ROOT_ITEMS;
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
     use crate::native::file_manager_app::FileManagerClipboardMode;
+    use crate::native::standalone_launcher::{
+        take_last_standalone_launch, StandaloneNativeApp,
+    };
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
     fn session_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        let guard = LOCK
+            .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("native app session test lock")
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        session::clear_sessions();
+        session::take_switch_request();
+        set_current_user(None);
+        let _ = take_last_standalone_launch();
+        guard
     }
 
     struct UsersRestore {
@@ -10443,15 +10464,17 @@ mod tests {
         let temp = TempDirGuard::new("shell_action_reveal");
         let file_path = temp.path.join("demo.txt");
         std::fs::write(&file_path, "demo").expect("write temp file");
+        let _ = take_last_standalone_launch();
 
         let mut app = RobcoNativeApp::default();
         app.execute_desktop_shell_action(DesktopShellAction::RevealPathInFileManager(
             file_path.clone(),
         ));
 
-        assert!(app.file_manager.open);
-        assert_eq!(app.file_manager.cwd, temp.path);
-        assert_eq!(app.file_manager.selected, Some(file_path));
+        let launch = take_last_standalone_launch().expect("file manager launch recorded");
+        assert_eq!(launch.app, StandaloneNativeApp::FileManager);
+        assert_eq!(launch.args, vec![file_path.into_os_string()]);
+        assert_eq!(launch.session_username, None);
     }
 
     #[test]
@@ -10749,6 +10772,7 @@ mod tests {
         let temp = TempDirGuard::new("spotlight_reveal");
         let file_path = temp.path.join("demo.txt");
         std::fs::write(&file_path, "demo").expect("write temp file");
+        let _ = take_last_standalone_launch();
 
         let mut app = RobcoNativeApp::default();
         app.spotlight_open = true;
@@ -10761,8 +10785,10 @@ mod tests {
         });
 
         assert!(!app.spotlight_open);
-        assert!(app.file_manager.open);
-        assert_eq!(app.file_manager.cwd, temp.path);
-        assert_eq!(app.file_manager.selected, Some(file_path));
+        assert!(app.spotlight_query.is_empty());
+        let launch = take_last_standalone_launch().expect("file manager launch recorded");
+        assert_eq!(launch.app, StandaloneNativeApp::FileManager);
+        assert_eq!(launch.args, vec![file_path.into_os_string()]);
+        assert_eq!(launch.session_username, None);
     }
 }

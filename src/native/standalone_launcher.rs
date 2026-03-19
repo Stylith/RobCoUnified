@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
 use std::process::Command;
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 pub const ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_USER";
 
@@ -15,6 +18,7 @@ pub enum StandaloneNativeApp {
 }
 
 impl StandaloneNativeApp {
+    #[cfg(not(test))]
     pub const fn binary_stem(self) -> &'static str {
         match self {
             Self::FileManager => "robcos-file-manager",
@@ -38,23 +42,71 @@ impl StandaloneNativeApp {
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandaloneLaunchRecord {
+    pub app: StandaloneNativeApp,
+    pub args: Vec<OsString>,
+    pub session_username: Option<String>,
+}
+
 pub fn launch_standalone_app(
     app: StandaloneNativeApp,
     args: &[OsString],
     session_username: Option<&str>,
 ) -> Result<(), String> {
-    let binary = sibling_binary_path(app)?;
-    let mut command = Command::new(binary);
-    command.args(args);
-    if let Some(username) = session_username.filter(|username| !username.is_empty()) {
-        command.env(ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
+    #[cfg(test)]
+    {
+        record_test_launch(app, args, session_username);
+        Ok(())
     }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("Could not open {}: {err}", app.label()))
+
+    #[cfg(not(test))]
+    {
+        let binary = sibling_binary_path(app)?;
+        let mut command = Command::new(binary);
+        command.args(args);
+        if let Some(username) = session_username.filter(|username| !username.is_empty()) {
+            command.env(ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
+        }
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Could not open {}: {err}", app.label()))
+    }
 }
 
+#[cfg(test)]
+fn launch_record_slot() -> &'static Mutex<Option<StandaloneLaunchRecord>> {
+    static SLOT: OnceLock<Mutex<Option<StandaloneLaunchRecord>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn record_test_launch(
+    app: StandaloneNativeApp,
+    args: &[OsString],
+    session_username: Option<&str>,
+) {
+    let mut slot = launch_record_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(StandaloneLaunchRecord {
+        app,
+        args: args.to_vec(),
+        session_username: session_username.map(str::to_string),
+    });
+}
+
+#[cfg(test)]
+pub fn take_last_standalone_launch() -> Option<StandaloneLaunchRecord> {
+    launch_record_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+}
+
+#[cfg(not(test))]
 fn sibling_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
     let current_exe = std::env::current_exe()
         .map_err(|err| format!("Could not resolve current executable: {err}"))?;
