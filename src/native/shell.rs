@@ -2,11 +2,10 @@
 //!
 //! This module defines the TARGET data model for the iced-based RobCoOS shell.
 //! Nothing here is wired into the running app yet — that happens in Phase 2.
-//! The existing [`super::app::RobcoNativeApp`] / egui code is untouched.
+//! The legacy egui implementation remains untouched here.
 
 #![allow(dead_code)]
 
-use super::app::StartMenuRenameState;
 use super::desktop_app::DesktopMenuSection;
 use super::desktop_launcher_service::{catalog_names, resolve_catalog_launch, ProgramCatalog};
 use super::desktop_search_service::NativeSpotlightResult;
@@ -544,6 +543,9 @@ pub struct StartMenuState {
     pub start_button_pos: Option<(f32, f32)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StartMenuRenameState;
+
 impl StartMenuState {
     pub fn close(&mut self) {
         self.open = false;
@@ -653,7 +655,7 @@ struct DesktopPtyState {
 
 /// Top-level shell state for the iced-based implementation.
 ///
-/// Replaces [`super::app::RobcoNativeApp`]. Fields are grouped by concern
+/// Replaces the legacy egui shell state. Fields are grouped by concern
 /// into focused sub-state structs.
 ///
 /// Instantiation and the iced `Application` impl arrive in Phase 2.
@@ -2064,15 +2066,10 @@ impl RobcoShell {
 
     fn view_terminal_login_rows(&self) -> Element<'_, Message> {
         use iced::widget::{button, column, container, scrollable, text};
-        use iced::{Border, Length};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
         let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
 
         let mut col = column![].spacing(2).width(Length::Fill);
         let mut selectable_idx = 0usize;
@@ -2094,8 +2091,14 @@ impl RobcoShell {
                 LoginMenuRow::User(user) => {
                     let idx = selectable_idx;
                     let selected = idx == self.login.selected_idx;
-                    let item_bg = if selected { selected_bg } else { bg };
-                    let item_fg = if selected { selected_fg } else { fg };
+                    let style: fn(
+                        &Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style = if selected {
+                        super::retro_iced_theme::retro_button_flat_selected
+                    } else {
+                        super::retro_iced_theme::retro_button_flat
+                    };
                     let label = if selected {
                         format!("> {user}")
                     } else {
@@ -2106,23 +2109,10 @@ impl RobcoShell {
                             text(label)
                                 .font(iced::Font::MONOSPACE)
                                 .size(16)
-                                .color(item_fg)
                         )
                         .on_press(Message::TerminalSelectionActivated(idx))
                         .width(Length::Fill)
-                        .style(move |_t, status| {
-                            use iced::widget::button::Status;
-                            let bg_color = match status {
-                                Status::Hovered => hovered_bg,
-                                _ => item_bg,
-                            };
-                            button::Style {
-                                background: Some(iced::Background::Color(bg_color)),
-                                text_color: item_fg,
-                                border: Border::default(),
-                                ..button::Style::default()
-                            }
-                        })
+                        .style(style)
                         .padding([4, 8]),
                     );
                     selectable_idx += 1;
@@ -2130,8 +2120,14 @@ impl RobcoShell {
                 LoginMenuRow::Exit => {
                     let idx = selectable_idx;
                     let selected = idx == self.login.selected_idx;
-                    let item_bg = if selected { selected_bg } else { bg };
-                    let item_fg = if selected { selected_fg } else { fg };
+                    let style: fn(
+                        &Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style = if selected {
+                        super::retro_iced_theme::retro_button_flat_selected
+                    } else {
+                        super::retro_iced_theme::retro_button_flat
+                    };
                     let label = if selected {
                         "> Exit".to_string()
                     } else {
@@ -2142,23 +2138,10 @@ impl RobcoShell {
                             text(label)
                                 .font(iced::Font::MONOSPACE)
                                 .size(16)
-                                .color(item_fg)
                         )
                         .on_press(Message::TerminalSelectionActivated(idx))
                         .width(Length::Fill)
-                        .style(move |_t, status| {
-                            use iced::widget::button::Status;
-                            let bg_color = match status {
-                                Status::Hovered => hovered_bg,
-                                _ => item_bg,
-                            };
-                            button::Style {
-                                background: Some(iced::Background::Color(bg_color)),
-                                text_color: item_fg,
-                                border: Border::default(),
-                                ..button::Style::default()
-                            }
-                        })
+                        .style(style)
                         .padding([4, 8]),
                     );
                     selectable_idx += 1;
@@ -2166,20 +2149,18 @@ impl RobcoShell {
             }
         }
 
-        scrollable(col).height(Length::Fill).into()
+        scrollable(col)
+            .height(Length::Fill)
+            .style(super::retro_iced_theme::retro_scrollable)
+            .into()
     }
 
     fn view_terminal_main_menu_entries(&self) -> Element<'_, Message> {
         use iced::widget::{button, column, container, scrollable, text};
-        use iced::{Border, Length};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
         let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
 
         let mut col = column![].spacing(2).width(Length::Fill);
         let mut selectable_idx = 0usize;
@@ -2201,8 +2182,14 @@ impl RobcoShell {
 
             let idx = selectable_idx;
             let selected = idx == self.terminal_nav.main_menu_idx;
-            let item_bg = if selected { selected_bg } else { bg };
-            let item_fg = if selected { selected_fg } else { fg };
+            let style: fn(
+                &Theme,
+                iced::widget::button::Status,
+            ) -> iced::widget::button::Style = if selected {
+                super::retro_iced_theme::retro_button_flat_selected
+            } else {
+                super::retro_iced_theme::retro_button_flat
+            };
             let label = if selected {
                 format!("> {}", entry.label)
             } else {
@@ -2213,29 +2200,19 @@ impl RobcoShell {
                     text(label)
                         .font(iced::Font::MONOSPACE)
                         .size(16)
-                        .color(item_fg)
                 )
                 .on_press(Message::TerminalSelectionActivated(idx))
                 .width(Length::Fill)
-                .style(move |_t, status| {
-                    use iced::widget::button::Status;
-                    let bg_color = match status {
-                        Status::Hovered => hovered_bg,
-                        _ => item_bg,
-                    };
-                    button::Style {
-                        background: Some(iced::Background::Color(bg_color)),
-                        text_color: item_fg,
-                        border: Border::default(),
-                        ..button::Style::default()
-                    }
-                })
+                .style(style)
                 .padding([4, 8]),
             );
             selectable_idx += 1;
         }
 
-        scrollable(col).height(iced::Length::Fill).into()
+        scrollable(col)
+            .height(iced::Length::Fill)
+            .style(super::retro_iced_theme::retro_scrollable)
+            .into()
     }
 
     fn view_terminal_menu_entries(
@@ -2244,15 +2221,10 @@ impl RobcoShell {
         selected_idx: usize,
     ) -> Element<'_, Message> {
         use iced::widget::{button, column, container, scrollable, text};
-        use iced::{Border, Length};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
         let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
 
         let mut col = column![].spacing(2).width(Length::Fill);
         let mut selectable_idx = 0usize;
@@ -2274,8 +2246,14 @@ impl RobcoShell {
 
             let idx = selectable_idx;
             let selected = idx == selected_idx;
-            let item_bg = if selected { selected_bg } else { bg };
-            let item_fg = if selected { selected_fg } else { fg };
+            let style: fn(
+                &Theme,
+                iced::widget::button::Status,
+            ) -> iced::widget::button::Style = if selected {
+                super::retro_iced_theme::retro_button_flat_selected
+            } else {
+                super::retro_iced_theme::retro_button_flat
+            };
             let label = if selected {
                 format!("> {}", entry.label)
             } else {
@@ -2286,30 +2264,20 @@ impl RobcoShell {
                     text(label)
                         .font(iced::Font::MONOSPACE)
                         .size(16)
-                        .color(item_fg)
                 )
                 .on_press(Message::TerminalSelectionActivated(idx))
                 .width(Length::Fill)
-                .style(move |_t, status| {
-                    use iced::widget::button::Status;
-                    let bg_color = match status {
-                        Status::Hovered => hovered_bg,
-                        _ => item_bg,
-                    };
-                    button::Style {
-                        background: Some(iced::Background::Color(bg_color)),
-                        text_color: item_fg,
-                        border: Border::default(),
-                        ..button::Style::default()
-                    }
-                })
+                .style(style)
                 .padding([4, 8]),
             );
             let _ = action;
             selectable_idx += 1;
         }
 
-        scrollable(col).height(Length::Fill).into()
+        scrollable(col)
+            .height(Length::Fill)
+            .style(super::retro_iced_theme::retro_scrollable)
+            .into()
     }
 
     fn view_terminal_prompt_overlay(&self) -> Element<'_, Message> {
@@ -2374,9 +2342,6 @@ impl RobcoShell {
         use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
         let dim = palette.dim.to_iced();
 
         // Active app name (bold, leftmost).
@@ -2385,37 +2350,17 @@ impl RobcoShell {
             .unwrap_or_else(|| "RobCoOS".to_string());
 
         let app_label = button(
-            text(active_app_name).size(14).color(selected_fg)
+            text(active_app_name).size(14)
         )
-        .style(move |_t, _s| button::Style {
-            background: Some(iced::Background::Color(selected_bg)),
-            text_color: selected_fg,
-            border: iced::Border::default(),
-            ..button::Style::default()
-        })
+        .style(super::retro_iced_theme::retro_button_flat_selected)
         .padding([3, 8]);
 
         // Standard menu sections.
         let menu_items = ["File", "Edit", "View", "Window", "Help"];
         let mut menu_row = row![app_label].spacing(0).padding([0, 4]);
         for label in menu_items {
-            let fg2 = fg;
-            let btn = button(text(label).size(13).color(fg2))
-                .style(move |_t, status| {
-                    use iced::widget::button::Status;
-                    let bg = match status {
-                        Status::Hovered | Status::Pressed => {
-                            Some(iced::Background::Color(palette.hovered_bg.to_iced()))
-                        }
-                        _ => None,
-                    };
-                    button::Style {
-                        background: bg,
-                        text_color: fg2,
-                        border: iced::Border::default(),
-                        ..button::Style::default()
-                    }
-                })
+            let btn = button(text(label).size(13))
+                .style(super::retro_iced_theme::retro_button_panel)
                 .padding([3, 8]);
             menu_row = menu_row.push(btn);
         }
@@ -2530,14 +2475,15 @@ impl RobcoShell {
         let toolbar = row![
             button(text("↑ Up").size(12))
                 .padding([2, 8])
-                .style(iced::widget::button::secondary)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(Message::FileManagerCommand(FileManagerCommand::GoUp)),
             button(text("Open").size(12))
                 .padding([2, 8])
-                .style(iced::widget::button::secondary)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(Message::FileManagerCommand(FileManagerCommand::OpenSelected)),
             text_input("Search files", &self.file_manager.search_query)
                 .on_input(Message::FileManagerSearchChanged)
+                .style(super::retro_iced_theme::terminal_text_input)
                 .padding([4, 8])
                 .width(Length::FillPortion(2)),
             text(cwd_str).size(12),
@@ -2563,9 +2509,9 @@ impl RobcoShell {
                     &iced::Theme,
                     iced::widget::button::Status,
                 ) -> iced::widget::button::Style = if is_selected {
-                    iced::widget::button::primary
+                    super::retro_iced_theme::retro_button_flat_selected
                 } else {
-                    iced::widget::button::secondary
+                    super::retro_iced_theme::retro_button_flat
                 };
                 let prefix = if is_selected { "> " } else { "  " };
                 let label = format!("{prefix}{icon} {name}");
@@ -2582,7 +2528,8 @@ impl RobcoShell {
             column(file_rows).width(Length::Fill)
         )
         .width(Length::Fill)
-        .height(Length::Fill);
+        .height(Length::Fill)
+        .style(super::retro_iced_theme::retro_scrollable);
 
         let footer = container(
             text(format!(
@@ -2624,6 +2571,7 @@ impl RobcoShell {
             .on_action(Message::TextEditorAction)
             .font(Font::MONOSPACE)
             .size(13.0)
+            .style(super::retro_iced_theme::retro_text_editor)
             .height(Length::Fill);
 
         column![editor_widget, status]
@@ -2642,7 +2590,7 @@ impl RobcoShell {
         let nav_button = |label: &'static str, msg: Message| {
             button(text(label).size(12))
                 .padding([3, 10])
-                .style(iced::widget::button::secondary)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(msg)
         };
         let option_button = |label: String, selected: bool, msg: Message| {
@@ -2650,9 +2598,9 @@ impl RobcoShell {
                 &iced::Theme,
                 iced::widget::button::Status,
             ) -> iced::widget::button::Style = if selected {
-                iced::widget::button::primary
+                super::retro_iced_theme::retro_button_selected
             } else {
-                iced::widget::button::secondary
+                super::retro_iced_theme::retro_button
             };
             button(text(label).size(12))
                 .padding([4, 12])
@@ -3101,7 +3049,8 @@ impl RobcoShell {
             column(items).width(Length::Fill).spacing(8).padding(12)
         )
         .width(Length::Fill)
-        .height(Length::Fill);
+        .height(Length::Fill)
+        .style(super::retro_iced_theme::retro_scrollable);
 
         container(column![header, body].width(Length::Fill).height(Length::Fill))
             .width(Length::Fill)
@@ -3127,6 +3076,7 @@ impl RobcoShell {
             button(text(label).size(12))
                 .padding([4, 12])
                 .width(Length::Fill)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(msg)
                 .into()
         };
@@ -3195,7 +3145,11 @@ impl RobcoShell {
             );
         }
 
-        container(scrollable(column(rows).spacing(6).padding(12)).height(Length::Fill))
+        container(
+            scrollable(column(rows).spacing(6).padding(12))
+                .height(Length::Fill)
+                .style(super::retro_iced_theme::retro_scrollable)
+        )
             .width(Length::Fill)
             .height(Length::Fill)
             .style(super::retro_iced_theme::window_background)
@@ -3209,7 +3163,7 @@ impl RobcoShell {
         let nav_button = |label: &'static str, msg: Message| {
             button(text(label).size(12))
                 .padding([3, 10])
-                .style(iced::widget::button::secondary)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(msg)
         };
 
@@ -3217,6 +3171,7 @@ impl RobcoShell {
             button(text(label).size(12))
                 .padding([4, 12])
                 .width(Length::Fill)
+                .style(super::retro_iced_theme::retro_button)
                 .on_press(msg)
                 .into()
         };
@@ -3289,6 +3244,7 @@ impl RobcoShell {
                     text_input("Search packages", &self.installer.search_query)
                         .on_input(Message::InstallerSearchQueryChanged)
                         .on_submit(Message::InstallerSearchRequested)
+                        .style(super::retro_iced_theme::terminal_text_input)
                         .padding(8)
                         .into(),
                 );
@@ -3330,6 +3286,7 @@ impl RobcoShell {
                     text_input("Search packages", &self.installer.search_query)
                         .on_input(Message::InstallerSearchQueryChanged)
                         .on_submit(Message::InstallerSearchRequested)
+                        .style(super::retro_iced_theme::terminal_text_input)
                         .padding(8)
                         .into(),
                 );
@@ -3352,6 +3309,7 @@ impl RobcoShell {
                 body.push(
                     text_input("Filter installed packages", &self.installer.installed_filter)
                         .on_input(Message::InstallerInstalledFilterChanged)
+                        .style(super::retro_iced_theme::terminal_text_input)
                         .padding(8)
                         .into(),
                 );
@@ -3402,6 +3360,7 @@ impl RobcoShell {
                 body.push(
                     text_input("Display name", &self.installer.display_name_input)
                         .on_input(Message::InstallerDisplayNameChanged)
+                        .style(super::retro_iced_theme::terminal_text_input)
                         .padding(8)
                         .into(),
                 );
@@ -3459,7 +3418,14 @@ impl RobcoShell {
         );
 
         let content = column(body).spacing(8).padding(12);
-        container(column![toolbar, scrollable(content).height(Length::Fill)])
+        container(
+            column![
+                toolbar,
+                scrollable(content)
+                    .height(Length::Fill)
+                    .style(super::retro_iced_theme::retro_scrollable)
+            ]
+        )
             .width(Length::Fill)
             .height(Length::Fill)
             .style(super::retro_iced_theme::window_background)
@@ -3472,6 +3438,7 @@ impl RobcoShell {
 
         let refresh = button(text("Refresh").size(12))
             .padding([4, 10])
+            .style(super::retro_iced_theme::retro_button)
             .on_press(Message::NukeCodesRefreshRequested);
 
         let body = match &self.nuke_codes {
@@ -3575,12 +3542,10 @@ impl RobcoShell {
         use super::desktop_surface_service::desktop_builtin_icons;
         use super::message::DesktopIconId;
         use iced::widget::{button, column, container, row, text};
-        use iced::{Border, Length};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
         let selected_fg = palette.selected_fg.to_iced();
 
         let mut icon_col = column![].spacing(4).padding([8, 4]);
@@ -3588,12 +3553,12 @@ impl RobcoShell {
         for entry in desktop_builtin_icons() {
             let icon_id = DesktopIconId::Builtin(entry.key);
             let is_selected = self.surface.selected_icon.as_ref() == Some(&icon_id);
-
-            let (lbl_bg, lbl_fg) = if is_selected {
-                (selected_bg, selected_fg)
+            let tile_style: fn(&Theme) -> iced::widget::container::Style = if is_selected {
+                super::retro_iced_theme::icon_tile_selected
             } else {
-                (bg, fg)
+                super::retro_iced_theme::icon_tile
             };
+            let lbl_fg = if is_selected { selected_fg } else { fg };
 
             let id_clone = icon_id.clone();
             let icon_btn = button(
@@ -3603,11 +3568,7 @@ impl RobcoShell {
                         text(entry.ascii).size(10).color(lbl_fg)
                     )
                     .width(64)
-                    .style(move |_t| container::Style {
-                        background: Some(iced::Background::Color(lbl_bg)),
-                        border: Border { color: fg, width: 1.0, radius: 0.0.into() },
-                        ..container::Style::default()
-                    })
+                    .style(tile_style)
                     .padding(4),
                     // Label below
                     text(entry.label).size(10).color(lbl_fg),
@@ -3616,10 +3577,7 @@ impl RobcoShell {
                 .width(68)
             )
             .on_press(Message::DesktopIconClicked { id: id_clone, shift: false })
-            .style(move |_t, _s| button::Style {
-                background: None,
-                ..button::Style::default()
-            })
+            .style(super::retro_iced_theme::transparent_button)
             .padding(2);
 
             icon_col = icon_col.push(icon_btn);
@@ -3637,31 +3595,15 @@ impl RobcoShell {
 
     fn view_taskbar(&self) -> Element<'_, Message> {
         use iced::widget::{button, container, row, text, Space};
-        use iced::{Border, Length};
-
-        let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let panel_bg = palette.panel.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let active_bg = palette.active_bg.to_iced();
+        use iced::Length;
 
         // [Start] button — always filled green.
         let start_label = if self.start_menu.open { "[Close]" } else { "[Start]" };
         let start_btn = button(
-            text(start_label).size(14).color(selected_fg)
+            text(start_label).size(14)
         )
         .on_press(Message::StartButtonClicked)
-        .style(move |_t, _s| button::Style {
-            background: Some(iced::Background::Color(selected_bg)),
-            text_color: selected_fg,
-            border: Border {
-                color: fg,
-                width: 2.0,
-                radius: 0.0.into(),
-            },
-            ..button::Style::default()
-        })
+        .style(super::retro_iced_theme::retro_button_selected_strong)
         .padding([4, 10]);
 
         let mut task_row = row![start_btn, Space::with_width(6)].spacing(3).padding([3, 4]);
@@ -3673,26 +3615,20 @@ impl RobcoShell {
             let is_minimized = win.is_minimized();
             let label = format!(" {:?} ", id);
 
-            let (btn_bg, btn_fg, border_w) = if is_active {
-                (active_bg, selected_fg, 2.0_f32)
+            let style: fn(
+                &Theme,
+                iced::widget::button::Status,
+            ) -> iced::widget::button::Style = if is_active {
+                super::retro_iced_theme::retro_button_panel_active
             } else if is_minimized {
-                (panel_bg, palette.dim.to_iced(), 1.0_f32)
+                super::retro_iced_theme::retro_button_panel_minimized
             } else {
-                (panel_bg, fg, 1.0_f32)
+                super::retro_iced_theme::retro_button_panel
             };
 
-            let btn = button(text(label).size(12).color(btn_fg))
+            let btn = button(text(label).size(12))
                 .on_press(Message::TaskbarWindowClicked(id))
-                .style(move |_t, _s| button::Style {
-                    background: Some(iced::Background::Color(btn_bg)),
-                    text_color: btn_fg,
-                    border: Border {
-                        color: fg,
-                        width: border_w,
-                        radius: 0.0.into(),
-                    },
-                    ..button::Style::default()
-                })
+                .style(style)
                 .padding([4, 8]);
 
             task_row = task_row.push(btn);
@@ -3712,16 +3648,10 @@ impl RobcoShell {
         use iced::widget::{
             button, column, container, mouse_area, row, scrollable, text, text_input, Space,
         };
-        use iced::{Alignment, Border, Length};
+        use iced::{Alignment, Length};
 
         let palette = super::retro_theme::current_retro_colors();
-        let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
         let dim = palette.dim.to_iced();
-        let panel_bg = palette.panel.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
 
         // ── Search input ──────────────────────────────────────────────────────
         let search_input = text_input("> Search…", &self.spotlight.query)
@@ -3736,20 +3666,18 @@ impl RobcoShell {
         let mut tab_row = row![].spacing(0);
         for (i, tab_label) in tabs.iter().enumerate() {
             let is_sel = self.spotlight.tab == i as u8;
-            let (tab_bg, tab_fg) = if is_sel {
-                (selected_bg, selected_fg)
+            let style: fn(
+                &Theme,
+                iced::widget::button::Status,
+            ) -> iced::widget::button::Style = if is_sel {
+                super::retro_iced_theme::retro_button_selected
             } else {
-                (panel_bg, fg)
+                super::retro_iced_theme::retro_button_panel
             };
             tab_row = tab_row.push(
-                button(text(*tab_label).size(12).color(tab_fg))
+                button(text(*tab_label).size(12))
                     .on_press(Message::SpotlightTabChanged(i as u8))
-                    .style(move |_t, _s| button::Style {
-                        background: Some(iced::Background::Color(tab_bg)),
-                        text_color: tab_fg,
-                        border: Border { color: fg, width: 1.0, radius: 0.0.into() },
-                        ..button::Style::default()
-                    })
+                    .style(style)
                     .padding([4, 12])
             );
         }
@@ -3772,43 +3700,41 @@ impl RobcoShell {
         } else {
             for (i, result) in self.spotlight.results.iter().enumerate() {
                 let is_sel = i == selected;
-                let (item_bg, item_fg) = if is_sel {
-                    (selected_bg, selected_fg)
+                let style: fn(
+                    &Theme,
+                    iced::widget::button::Status,
+                ) -> iced::widget::button::Style = if is_sel {
+                    super::retro_iced_theme::retro_button_flat_selected
                 } else {
-                    (bg, fg)
+                    super::retro_iced_theme::retro_button_flat
                 };
                 let category_str = format!("[{:?}]", result.category);
                 results_col = results_col.push(
                     button(
                         row![
-                            text(result.name.as_str()).size(13).color(item_fg).width(Length::Fill),
-                            text(category_str).size(11).color(if is_sel { selected_fg } else { dim }),
+                            text(result.name.as_str()).size(13).width(Length::Fill),
+                            text(category_str)
+                                .size(11)
+                                .color(if is_sel {
+                                    palette.selected_fg.to_iced()
+                                } else {
+                                    dim
+                                }),
                         ]
                         .spacing(8)
                         .padding([4, 10])
                     )
                     .on_press(Message::SpotlightActivateSelected)
                     .width(Length::Fill)
-                    .style(move |_t, status| {
-                        use iced::widget::button::Status;
-                        let bg_color = match status {
-                            Status::Hovered => hovered_bg,
-                            _ => item_bg,
-                        };
-                        button::Style {
-                            background: Some(iced::Background::Color(bg_color)),
-                            text_color: item_fg,
-                            border: Border::default(),
-                            ..button::Style::default()
-                        }
-                    })
+                    .style(style)
                     .padding(0)
                 );
             }
         }
 
         let results_scroll = scrollable(results_col)
-            .height(300);
+            .height(300)
+            .style(super::retro_iced_theme::retro_scrollable);
 
         // ── Compose panel ─────────────────────────────────────────────────────
         let panel = container(
@@ -3856,15 +3782,11 @@ impl RobcoShell {
             START_ROOT_VIS_ROWS,
         };
         use iced::widget::{button, column, container, mouse_area, row, text, Space};
-        use iced::{Border, Length};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
-        let bg = palette.bg.to_iced();
         let dim = palette.dim.to_iced();
-        let selected_bg = palette.selected_bg.to_iced();
-        let selected_fg = palette.selected_fg.to_iced();
-        let hovered_bg = palette.hovered_bg.to_iced();
 
         let selected_root = self.start_menu.selected_root;
 
@@ -3906,35 +3828,25 @@ impl RobcoShell {
                         || start_root_submenu_for_idx(idx).is_some();
                     let arrow = if has_sub { " >" } else { "  " };
                     let disp = format!("{label}{arrow}");
-
-                    let (item_bg, item_fg) = if is_sel {
-                        (selected_bg, selected_fg)
+                    let style: fn(
+                        &Theme,
+                        iced::widget::button::Status,
+                    ) -> iced::widget::button::Style = if is_sel {
+                        super::retro_iced_theme::retro_button_flat_selected
                     } else {
-                        (bg, fg)
+                        super::retro_iced_theme::retro_button_flat
                     };
 
                     root_col = root_col.push(
                         button(
                             row![
-                                text(disp).size(13).color(item_fg),
+                                text(disp).size(13),
                             ]
                             .padding([4, 8])
                         )
                         .on_press(Message::StartMenuSelectRoot(idx))
                         .width(Length::Fill)
-                        .style(move |_t, status| {
-                            use iced::widget::button::Status;
-                            let bg = match status {
-                                Status::Hovered => Some(iced::Background::Color(hovered_bg)),
-                                _ => Some(iced::Background::Color(item_bg)),
-                            };
-                            button::Style {
-                                background: bg,
-                                text_color: item_fg,
-                                border: Border::default(),
-                                ..button::Style::default()
-                            }
-                        })
+                        .style(style)
                         .padding(0)
                     );
                 }
@@ -3956,23 +3868,11 @@ impl RobcoShell {
             for (label, _action) in START_SYSTEM_ITEMS.iter() {
                 sub_col = sub_col.push(
                     button(
-                        text(*label).size(13).color(fg).width(Length::Fill)
+                        text(*label).size(13).width(Length::Fill)
                     )
                     .on_press(Message::StartMenuNavigate(super::message::NavDirection::Right))
                     .width(Length::Fill)
-                    .style(move |_t, status| {
-                        use iced::widget::button::Status;
-                        let bg_color = match status {
-                            Status::Hovered | Status::Pressed => hovered_bg,
-                            _ => bg,
-                        };
-                        button::Style {
-                            background: Some(iced::Background::Color(bg_color)),
-                            text_color: fg,
-                            border: Border::default(),
-                            ..button::Style::default()
-                        }
-                    })
+                    .style(super::retro_iced_theme::retro_button_flat)
                     .padding([4, 8])
                 );
             }
