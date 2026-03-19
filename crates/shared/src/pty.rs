@@ -569,12 +569,39 @@ pub struct PtyTextSnapshot {
     pub cursor_hidden: bool,
 }
 
+/// Framework-agnostic terminal cell color. Decouples PTY rendering from any
+/// specific UI framework (ratatui, iced, etc.).
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CellColor {
+    /// Use the terminal's default fg/bg (maps to theme color in renderer).
+    Reset,
+    Black,
+    DarkGray,
+    Gray,
+    White,
+    Red,
+    LightRed,
+    Green,
+    LightGreen,
+    Yellow,
+    LightYellow,
+    Blue,
+    LightBlue,
+    Magenta,
+    LightMagenta,
+    Cyan,
+    LightCyan,
+    Rgb(u8, u8, u8),
+    Indexed(u8),
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct PtyStyledCell {
     pub ch: char,
-    pub fg: Color,
-    pub bg: Color,
+    pub fg: CellColor,
+    pub bg: CellColor,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -607,8 +634,8 @@ impl CommittedFrame {
     fn blank(cols: u16, rows: u16) -> Self {
         let default_cell = PtyStyledCell {
             ch: ' ',
-            fg: Color::Reset,
-            bg: Color::Black,
+            fg: CellColor::Reset,
+            bg: CellColor::Black,
             bold: false,
             italic: false,
             underline: false,
@@ -657,18 +684,19 @@ fn build_styled_snapshot(
             } else {
                 ch
             };
-            let style = cell
-                .map(|c| vt100_style(c, color_mode))
-                .unwrap_or_else(|| vt100_default_style(color_mode));
-            out.push(PtyStyledCell {
-                ch,
-                fg: style.fg.unwrap_or(crate::config::current_theme_color()),
-                bg: style.bg.unwrap_or(Color::Black),
-                bold: style.add_modifier.contains(Modifier::BOLD),
-                italic: style.add_modifier.contains(Modifier::ITALIC),
-                underline: style.add_modifier.contains(Modifier::UNDERLINED),
-                reversed: style.add_modifier.contains(Modifier::REVERSED),
-            });
+            let (fg, bg, bold, italic, underline, reversed) = if let Some(c) = cell {
+                let (fg, bg) = cell_colors_direct(c, color_mode);
+                let reversed = c.inverse();
+                let (fg, bg) = if reversed && matches!(color_mode, PtyColorMode::ThemeLock) {
+                    (CellColor::Black, CellColor::Reset)
+                } else {
+                    (fg, bg)
+                };
+                (fg, bg, c.bold(), c.italic(), c.underline(), c.inverse())
+            } else {
+                (CellColor::Reset, CellColor::Black, false, false, false, false)
+            };
+            out.push(PtyStyledCell { ch, fg, bg, bold, italic, underline, reversed });
         }
         lines.push(out);
     }
@@ -678,6 +706,96 @@ fn build_styled_snapshot(
         cursor_row: cursor_row.min(rows.saturating_sub(1)),
         cursor_col: cursor_col.min(cols.saturating_sub(1)),
         cursor_hidden: screen.hide_cursor(),
+    }
+}
+
+/// Compute fg/bg `CellColor` directly from a vt100 cell, without going
+/// through a ratatui Style intermediate. Used by the iced renderer path.
+fn cell_colors_direct(cell: &vt100::Cell, mode: PtyColorMode) -> (CellColor, CellColor) {
+    match mode {
+        PtyColorMode::Ansi => {
+            let fg = vt100_color_to_cell(cell.fgcolor());
+            let bg = vt100_color_to_cell(cell.bgcolor());
+            (fg, bg)
+        }
+        PtyColorMode::PaletteMap => {
+            let fg = if matches!(cell.fgcolor(), vt100::Color::Default) {
+                CellColor::Reset
+            } else {
+                palette_map_vt100_color_to_cell(cell.fgcolor(), false)
+            };
+            let bg = if matches!(cell.bgcolor(), vt100::Color::Default) {
+                CellColor::Black
+            } else {
+                palette_map_vt100_color_to_cell(cell.bgcolor(), true)
+            };
+            (fg, bg)
+        }
+        PtyColorMode::ThemeLock | PtyColorMode::Monochrome => {
+            (CellColor::Reset, CellColor::Black)
+        }
+    }
+}
+
+fn vt100_color_to_cell(c: vt100::Color) -> CellColor {
+    match c {
+        vt100::Color::Default => CellColor::Reset,
+        vt100::Color::Idx(i) => ansi_idx_to_cell(i),
+        vt100::Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
+    }
+}
+
+fn ansi_idx_to_cell(i: u8) -> CellColor {
+    match i {
+        0 => CellColor::Black,
+        1 => CellColor::Red,
+        2 => CellColor::Green,
+        3 => CellColor::Yellow,
+        4 => CellColor::Blue,
+        5 => CellColor::Magenta,
+        6 => CellColor::Cyan,
+        7 => CellColor::White,
+        8 => CellColor::DarkGray,
+        9 => CellColor::LightRed,
+        10 => CellColor::LightGreen,
+        11 => CellColor::LightYellow,
+        12 => CellColor::LightBlue,
+        13 => CellColor::LightMagenta,
+        14 => CellColor::LightCyan,
+        15 => CellColor::White,
+        n => CellColor::Indexed(n),
+    }
+}
+
+fn palette_map_vt100_color_to_cell(c: vt100::Color, is_background: bool) -> CellColor {
+    // Use the existing palette_map_vt100_color which returns a ratatui Color,
+    // then convert to CellColor. This keeps the complex luma math in one place.
+    ratatui_to_cell_color(palette_map_vt100_color(c, is_background))
+}
+
+/// Convert a ratatui Color to a CellColor. Used internally where the legacy
+/// ratatui pipeline is still in use (TUI render loop, palette map calculations).
+fn ratatui_to_cell_color(c: Color) -> CellColor {
+    match c {
+        Color::Reset => CellColor::Reset,
+        Color::Black => CellColor::Black,
+        Color::DarkGray => CellColor::DarkGray,
+        Color::Gray => CellColor::Gray,
+        Color::White => CellColor::White,
+        Color::Red => CellColor::Red,
+        Color::LightRed => CellColor::LightRed,
+        Color::Green => CellColor::Green,
+        Color::LightGreen => CellColor::LightGreen,
+        Color::Yellow => CellColor::Yellow,
+        Color::LightYellow => CellColor::LightYellow,
+        Color::Blue => CellColor::Blue,
+        Color::LightBlue => CellColor::LightBlue,
+        Color::Magenta => CellColor::Magenta,
+        Color::LightMagenta => CellColor::LightMagenta,
+        Color::Cyan => CellColor::Cyan,
+        Color::LightCyan => CellColor::LightCyan,
+        Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
+        Color::Indexed(n) => CellColor::Indexed(n),
     }
 }
 
@@ -1087,18 +1205,13 @@ impl PtySession {
                 } else {
                     ch
                 };
-                let style = cell
-                    .map(|c| vt100_style(c, self.color_mode))
-                    .unwrap_or_else(|| vt100_default_style(self.color_mode));
-                out.push(PtyStyledCell {
-                    ch,
-                    fg: style.fg.unwrap_or(crate::config::current_theme_color()),
-                    bg: style.bg.unwrap_or(Color::Black),
-                    bold: style.add_modifier.contains(Modifier::BOLD),
-                    italic: style.add_modifier.contains(Modifier::ITALIC),
-                    underline: style.add_modifier.contains(Modifier::UNDERLINED),
-                    reversed: style.add_modifier.contains(Modifier::REVERSED),
-                });
+                let (fg, bg, bold, italic, underline, reversed) = if let Some(c) = cell {
+                    let (fg, bg) = cell_colors_direct(c, self.color_mode);
+                    (fg, bg, c.bold(), c.italic(), c.underline(), c.inverse())
+                } else {
+                    (CellColor::Reset, CellColor::Black, false, false, false, false)
+                };
+                out.push(PtyStyledCell { ch, fg, bg, bold, italic, underline, reversed });
             }
             lines.push(out);
         }
@@ -1346,14 +1459,39 @@ fn is_ranger_program(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-// ── vt100 cell → ratatui Style ────────────────────────────────────────────────
+// ── vt100 cell → ratatui Style (TUI render loop only) ────────────────────────
+
+/// Convert a ThemeColor to a ratatui Color. Used only in the legacy
+/// crossterm/ratatui TUI render path; the iced renderer uses CellColor.
+fn theme_to_ratatui(c: crate::config::ThemeColor) -> Color {
+    use crate::config::ThemeColor as T;
+    match c {
+        T::Black => Color::Black,
+        T::DarkGray => Color::DarkGray,
+        T::Gray => Color::Gray,
+        T::White => Color::White,
+        T::Red => Color::Red,
+        T::LightRed => Color::LightRed,
+        T::Green => Color::Green,
+        T::LightGreen => Color::LightGreen,
+        T::Yellow => Color::Yellow,
+        T::LightYellow => Color::LightYellow,
+        T::Blue => Color::Blue,
+        T::LightBlue => Color::LightBlue,
+        T::Magenta => Color::Magenta,
+        T::LightMagenta => Color::LightMagenta,
+        T::Cyan => Color::Cyan,
+        T::LightCyan => Color::LightCyan,
+        T::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
 
 fn vt100_default_style(mode: PtyColorMode) -> Style {
     let fg = match mode {
         PtyColorMode::Ansi
         | PtyColorMode::ThemeLock
         | PtyColorMode::PaletteMap
-        | PtyColorMode::Monochrome => crate::config::current_theme_color(),
+        | PtyColorMode::Monochrome => theme_to_ratatui(crate::config::current_theme_color()),
     };
     Style::default().fg(fg).bg(Color::Black)
 }
@@ -1365,7 +1503,7 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
         PtyColorMode::Ansi => {
             style = style.fg(vt100_color(
                 cell.fgcolor(),
-                crate::config::current_theme_color(),
+                theme_to_ratatui(crate::config::current_theme_color()),
             ));
             style = style.bg(vt100_color(cell.bgcolor(), Color::Black));
         }
@@ -1394,7 +1532,7 @@ fn vt100_style(cell: &vt100::Cell, mode: PtyColorMode) -> Style {
             PtyColorMode::ThemeLock => {
                 style = style
                     .fg(Color::Black)
-                    .bg(crate::config::current_theme_color());
+                    .bg(theme_to_ratatui(crate::config::current_theme_color()));
             }
             PtyColorMode::PaletteMap | PtyColorMode::Monochrome | PtyColorMode::Ansi => {
                 style = style.add_modifier(Modifier::REVERSED);
@@ -1440,7 +1578,7 @@ fn palette_map_vt100_color(c: vt100::Color, is_background: bool) -> Color {
         return if is_background {
             Color::Black
         } else {
-            crate::config::current_theme_color()
+            theme_to_ratatui(crate::config::current_theme_color())
         };
     };
 
@@ -1484,7 +1622,7 @@ fn vt100_color_rgb(c: vt100::Color) -> Option<(u8, u8, u8)> {
 }
 
 fn theme_base_rgb() -> (u8, u8, u8) {
-    color_to_rgb(crate::config::current_theme_color()).unwrap_or((0, 255, 0))
+    color_to_rgb(theme_to_ratatui(crate::config::current_theme_color())).unwrap_or((0, 255, 0))
 }
 
 fn color_to_rgb(c: Color) -> Option<(u8, u8, u8)> {
@@ -1766,7 +1904,7 @@ fn render_top_bar(f: &mut ratatui::Frame, area: Rect, label: &str) {
     let text = format!(" {label} ");
     let style = Style::default()
         .fg(Color::Black)
-        .bg(crate::config::current_theme_color())
+        .bg(theme_to_ratatui(crate::config::current_theme_color()))
         .add_modifier(Modifier::BOLD);
     f.render_widget(
         Paragraph::new(text)

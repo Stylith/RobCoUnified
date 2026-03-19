@@ -1,9 +1,8 @@
 use super::retro_theme::{RetroColor, RetroColors};
-use crate::pty::{CommittedFrame, PtyStyledCell};
+use crate::pty::{CellColor, CommittedFrame, PtyStyledCell};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
-use ratatui::style::Color as TuiColor;
 
 pub const TERMINAL_CELL_WIDTH: f32 = 11.5;
 pub const TERMINAL_CELL_HEIGHT: f32 = 20.0;
@@ -123,8 +122,8 @@ impl<Message> canvas::Program<Message> for PtyCanvas {
 fn blank_cell() -> PtyStyledCell {
     PtyStyledCell {
         ch: ' ',
-        fg: TuiColor::Reset,
-        bg: TuiColor::Black,
+        fg: CellColor::Reset,
+        bg: CellColor::Black,
         bold: false,
         italic: false,
         underline: false,
@@ -133,29 +132,29 @@ fn blank_cell() -> PtyStyledCell {
 }
 
 fn resolve_cell_colors(cell: PtyStyledCell, palette: RetroColors) -> (Color, Color) {
-    let mut fg = tui_color_to_iced(cell.fg, palette.fg);
-    let mut bg = tui_color_to_iced(cell.bg, palette.bg);
+    let mut fg = cell_color_to_iced(cell.fg, palette.fg);
+    let mut bg = cell_color_to_iced(cell.bg, palette.bg);
     if cell.reversed {
         std::mem::swap(&mut fg, &mut bg);
     }
     (fg, bg)
 }
 
-fn tui_color_to_iced(color: TuiColor, fallback: RetroColor) -> Color {
+fn cell_color_to_iced(color: CellColor, fallback: RetroColor) -> Color {
     match color {
-        TuiColor::Reset => fallback.to_iced(),
-        TuiColor::Black => Color::from_rgb8(0, 0, 0),
-        TuiColor::DarkGray => Color::from_rgb8(85, 85, 85),
-        TuiColor::Gray => Color::from_rgb8(170, 170, 170),
-        TuiColor::White => Color::from_rgb8(240, 240, 240),
-        TuiColor::Red | TuiColor::LightRed => Color::from_rgb8(255, 90, 90),
-        TuiColor::Green | TuiColor::LightGreen => Color::from_rgb8(111, 255, 84),
-        TuiColor::Yellow | TuiColor::LightYellow => Color::from_rgb8(255, 191, 74),
-        TuiColor::Blue | TuiColor::LightBlue => Color::from_rgb8(105, 180, 255),
-        TuiColor::Magenta | TuiColor::LightMagenta => Color::from_rgb8(214, 112, 255),
-        TuiColor::Cyan | TuiColor::LightCyan => Color::from_rgb8(110, 235, 255),
-        TuiColor::Rgb(r, g, b) => Color::from_rgb8(r, g, b),
-        TuiColor::Indexed(idx) => {
+        CellColor::Reset => fallback.to_iced(),
+        CellColor::Black => Color::from_rgb8(0, 0, 0),
+        CellColor::DarkGray => Color::from_rgb8(85, 85, 85),
+        CellColor::Gray => Color::from_rgb8(170, 170, 170),
+        CellColor::White => Color::from_rgb8(240, 240, 240),
+        CellColor::Red | CellColor::LightRed => Color::from_rgb8(255, 90, 90),
+        CellColor::Green | CellColor::LightGreen => Color::from_rgb8(111, 255, 84),
+        CellColor::Yellow | CellColor::LightYellow => Color::from_rgb8(255, 191, 74),
+        CellColor::Blue | CellColor::LightBlue => Color::from_rgb8(105, 180, 255),
+        CellColor::Magenta | CellColor::LightMagenta => Color::from_rgb8(214, 112, 255),
+        CellColor::Cyan | CellColor::LightCyan => Color::from_rgb8(110, 235, 255),
+        CellColor::Rgb(r, g, b) => Color::from_rgb8(r, g, b),
+        CellColor::Indexed(idx) => {
             let ramp = idx.saturating_mul(10);
             Color::from_rgb8(ramp, ramp, ramp)
         }

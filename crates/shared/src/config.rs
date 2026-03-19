@@ -1221,42 +1221,63 @@ mod tests {
 
 // ── Themes ────────────────────────────────────────────────────────────────────
 
-use ratatui::style::Color;
+/// Framework-agnostic terminal theme color. Replaces ratatui::style::Color as
+/// the single source of truth for the active UI color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeColor {
+    Black,
+    DarkGray,
+    Gray,
+    White,
+    Red,
+    LightRed,
+    Green,
+    LightGreen,
+    Yellow,
+    LightYellow,
+    Blue,
+    LightBlue,
+    Magenta,
+    LightMagenta,
+    Cyan,
+    LightCyan,
+    Rgb(u8, u8, u8),
+}
 
 pub const CUSTOM_THEME_NAME: &str = "Custom";
 
-pub const THEMES: &[(&str, Color)] = &[
-    ("Green (Default)", Color::Green),
-    ("White", Color::White),
-    ("Amber", Color::Yellow),
-    ("Blue", Color::Blue),
-    ("Red", Color::Red),
-    ("Purple", Color::Magenta),
-    ("Light Blue", Color::Cyan),
-    (CUSTOM_THEME_NAME, Color::Green),
+pub const THEMES: &[(&str, ThemeColor)] = &[
+    ("Green (Default)", ThemeColor::Green),
+    ("White", ThemeColor::White),
+    ("Amber", ThemeColor::Yellow),
+    ("Blue", ThemeColor::Blue),
+    ("Red", ThemeColor::Red),
+    ("Purple", ThemeColor::Magenta),
+    ("Light Blue", ThemeColor::Cyan),
+    (CUSTOM_THEME_NAME, ThemeColor::Green),
 ];
 
-pub fn theme_color(name: &str) -> Color {
+pub fn theme_color(name: &str) -> ThemeColor {
     if name == CUSTOM_THEME_NAME {
         let [r, g, b] = default_custom_theme_rgb();
-        return Color::Rgb(r, g, b);
+        return ThemeColor::Rgb(r, g, b);
     }
     THEMES
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, c)| *c)
-        .unwrap_or(Color::Green)
+        .unwrap_or(ThemeColor::Green)
 }
 
-pub fn theme_color_for_settings(settings: &Settings) -> Color {
+pub fn theme_color_for_settings(settings: &Settings) -> ThemeColor {
     if settings.theme == CUSTOM_THEME_NAME {
         let [r, g, b] = settings.custom_theme_rgb;
-        return Color::Rgb(r, g, b);
+        return ThemeColor::Rgb(r, g, b);
     }
     theme_color(&settings.theme)
 }
 
-pub fn current_theme_color() -> Color {
+pub fn current_theme_color() -> ThemeColor {
     with_settings(theme_color_for_settings)
 }
 

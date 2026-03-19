@@ -4,11 +4,7 @@
 //! consumed by either renderer. Conversion helpers for iced live at the bottom
 //! of this file behind `#[cfg(feature = ...)]` so the lib stays clean.
 
-use crate::config::current_theme_color;
-// ratatui::style::Color is already a dependency of this crate (used by the
-// egui retro_ui module). We reuse it as the theme-color source of truth until
-// Phase 5 removes ratatui.
-use ratatui::style::Color as ThemeColor;
+use crate::config::{current_theme_color, ThemeColor};
 use std::sync::Mutex;
 
 // ── RetroColor ────────────────────────────────────────────────────────────────
@@ -114,7 +110,6 @@ fn retro_color_from_theme(color: ThemeColor) -> RetroColor {
         ThemeColor::Magenta | ThemeColor::LightMagenta => RetroColor::rgb(214, 112, 255),
         ThemeColor::Cyan | ThemeColor::LightCyan       => RetroColor::rgb(110, 235, 255),
         ThemeColor::Rgb(r, g, b) => RetroColor::rgb(r, g, b),
-        _ => RetroColor::rgb(111, 255, 84), // default: green
     }
 }
 

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::config::{current_theme_color, get_settings, HEADER_LINES};
+use crate::config::{current_theme_color, get_settings, ThemeColor, HEADER_LINES};
 use crate::status::render_status_bar;
 
 pub type Term = Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
@@ -296,25 +296,50 @@ pub fn pad_horizontal(area: Rect) -> Rect {
     }
 }
 
+// ── ThemeColor → ratatui Color (TUI render path only) ────────────────────────
+
+fn theme_to_ratatui(c: ThemeColor) -> ratatui::style::Color {
+    use ratatui::style::Color as R;
+    match c {
+        ThemeColor::Black => R::Black,
+        ThemeColor::DarkGray => R::DarkGray,
+        ThemeColor::Gray => R::Gray,
+        ThemeColor::White => R::White,
+        ThemeColor::Red => R::Red,
+        ThemeColor::LightRed => R::LightRed,
+        ThemeColor::Green => R::Green,
+        ThemeColor::LightGreen => R::LightGreen,
+        ThemeColor::Yellow => R::Yellow,
+        ThemeColor::LightYellow => R::LightYellow,
+        ThemeColor::Blue => R::Blue,
+        ThemeColor::LightBlue => R::LightBlue,
+        ThemeColor::Magenta => R::Magenta,
+        ThemeColor::LightMagenta => R::LightMagenta,
+        ThemeColor::Cyan => R::Cyan,
+        ThemeColor::LightCyan => R::LightCyan,
+        ThemeColor::Rgb(r, g, b) => R::Rgb(r, g, b),
+    }
+}
+
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
 pub fn normal_style() -> Style {
-    Style::default().fg(current_theme_color())
+    Style::default().fg(theme_to_ratatui(current_theme_color()))
 }
 pub fn sel_style() -> Style {
     Style::default()
         .fg(ratatui::style::Color::Black)
-        .bg(current_theme_color())
+        .bg(theme_to_ratatui(current_theme_color()))
         .add_modifier(Modifier::BOLD)
 }
 pub fn title_style() -> Style {
     Style::default()
-        .fg(current_theme_color())
+        .fg(theme_to_ratatui(current_theme_color()))
         .add_modifier(Modifier::BOLD)
 }
 pub fn dim_style() -> Style {
     Style::default()
-        .fg(current_theme_color())
+        .fg(theme_to_ratatui(current_theme_color()))
         .add_modifier(Modifier::DIM)
 }
 
@@ -421,7 +446,7 @@ pub fn run_menu_with_index(
                     Paragraph::new(Span::styled(
                         sub,
                         Style::default()
-                            .fg(current_theme_color())
+                            .fg(theme_to_ratatui(current_theme_color()))
                             .add_modifier(Modifier::UNDERLINED),
                     ))
                     .alignment(Alignment::Left),
