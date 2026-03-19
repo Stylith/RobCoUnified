@@ -1,4 +1,5 @@
 mod about_screen;
+pub mod desktop_wm_widget;
 pub mod message;
 pub mod retro_theme;
 pub mod shell;

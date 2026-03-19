@@ -5,7 +5,7 @@ resolver = "2"
 
 [workspace.dependencies]
 lru = "0.12"
-iced = { version = "0.13", features = ["canvas", "image", "tokio"] }
+iced = { version = "0.13", features = ["advanced", "canvas", "image", "tokio"] }
 
 [package]
 name = "robcos"

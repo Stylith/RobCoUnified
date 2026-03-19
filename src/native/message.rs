@@ -129,6 +129,10 @@ pub enum Message {
     WindowResizeHandleDragged { window: DesktopWindow, w: f32, h: f32 },
     /// One of the title-bar chrome buttons was clicked.
     WindowHeaderButtonClicked { window: DesktopWindow, button: WindowHeaderButton },
+    /// The WM widget finished dragging a window to a new position.
+    WindowMoved { window: DesktopWindow, x: f32, y: f32 },
+    /// The WM widget finished resizing a window to a new size.
+    WindowResized { window: DesktopWindow, w: f32, h: f32 },
 
     // ── Taskbar ──────────────────────────────────────────────────────────────
     TaskbarWindowClicked(DesktopWindow),

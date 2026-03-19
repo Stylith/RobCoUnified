@@ -12,9 +12,11 @@ use super::desktop_search_service::NativeSpotlightResult;
 use super::desktop_settings_service::load_settings_snapshot;
 use super::desktop_start_menu::{StartLeaf, StartSubmenu};
 use super::desktop_surface_service::DesktopSurfaceEntry;
+use super::desktop_wm_widget::{DesktopWindowHost, WindowChild};
 use super::message::{ContextMenuAction, DesktopIconId, Message};
 use super::shared_types::DesktopWindow;
 use crate::config::{DesktopIconSortMode, Settings};
+use chrono::Local;
 use iced::{Element, Subscription, Task, Theme};
 use robcos_native_editor_app::EditorWindow;
 use robcos_native_file_manager_app::{FileManagerAction, NativeFileManagerState};
@@ -420,6 +422,10 @@ pub struct RobcoShell {
 
     // ── Status bar ──────────────────────────────────────────────────────────
     pub shell_status: String,
+
+    // ── Clock ────────────────────────────────────────────────────────────────
+    /// Last clock string, refreshed on Tick.
+    pub clock: String,
 }
 
 // ── RobcoShell iced Application methods ──────────────────────────────────────
@@ -431,8 +437,23 @@ impl RobcoShell {
     pub fn new() -> (Self, Task<Message>) {
         let settings = load_settings_snapshot();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let mut windows = WindowManager::new();
+        // Open two demo windows so the WM widget is testable on launch.
+        windows.open(
+            DesktopWindow::FileManager,
+            WindowRect::new(60.0, 40.0, 640.0, 420.0),
+            (400.0, 300.0),
+            true,
+        );
+        windows.open(
+            DesktopWindow::Editor,
+            WindowRect::new(200.0, 80.0, 600.0, 400.0),
+            (400.0, 300.0),
+            true,
+        );
+
         let shell = Self {
-            windows: WindowManager::new(),
+            windows,
             spotlight: SpotlightState::default(),
             start_menu: StartMenuState::default(),
             surface: DesktopSurfaceState::default(),
@@ -444,6 +465,7 @@ impl RobcoShell {
             settings_panel: None,
             settings,
             shell_status: String::new(),
+            clock: Local::now().format("%H:%M").to_string(),
         };
         (shell, Task::none())
     }
@@ -565,6 +587,18 @@ impl RobcoShell {
                     }
                 }
             }
+            Message::WindowMoved { window, x, y } => {
+                if let Some(w) = self.windows.get_mut(window) {
+                    w.rect.x = x;
+                    w.rect.y = y;
+                }
+            }
+            Message::WindowResized { window, w, h } => {
+                if let Some(win) = self.windows.get_mut(window) {
+                    win.rect.w = w;
+                    win.rect.h = h;
+                }
+            }
 
             // ── Taskbar ──────────────────────────────────────────────────────
             Message::TaskbarWindowClicked(w) => {
@@ -610,6 +644,9 @@ impl RobcoShell {
             }
 
             // ── System ───────────────────────────────────────────────────────
+            Message::Tick(_) => {
+                self.clock = Local::now().format("%H:%M").to_string();
+            }
             Message::PersistSnapshotRequested => {
                 // Phase 3: call persist_native_shell_snapshot()
             }
@@ -620,91 +657,208 @@ impl RobcoShell {
         Task::none()
     }
 
-    /// Render the shell.
-    ///
-    /// Phase 2: minimal retro-styled layout with top bar, center, and taskbar.
-    /// Phase 3 will replace the center with the real window-manager widget and
-    /// the top/bottom bars with the real menu bar and taskbar.
     pub fn view(&self) -> Element<'_, Message> {
-        use iced::widget::{button, column, container, row, text, Space};
-        use iced::{Color, Length};
+        use iced::widget::column;
+        column![
+            self.view_top_bar(),
+            self.view_desktop(),
+            self.view_taskbar(),
+        ]
+        .into()
+    }
+
+    fn view_top_bar(&self) -> Element<'_, Message> {
+        use iced::widget::{button, container, row, text, Space};
+        use iced::Length;
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
+        let panel_bg = palette.panel.to_iced();
+        let selected_fg = palette.selected_fg.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let dim = palette.dim.to_iced();
+
+        // Active app name (bold, leftmost).
+        let active_app_name = self.windows.active()
+            .map(|w| format!("{:?}", w))
+            .unwrap_or_else(|| "RobCoOS".to_string());
+
+        let app_label = button(
+            text(active_app_name).size(14).color(selected_fg)
+        )
+        .style(move |_t, _s| button::Style {
+            background: Some(iced::Background::Color(selected_bg)),
+            text_color: selected_fg,
+            border: iced::Border::default(),
+            ..button::Style::default()
+        })
+        .padding([3, 8]);
+
+        // Standard menu sections.
+        let menu_items = ["File", "Edit", "View", "Window", "Help"];
+        let mut menu_row = row![app_label].spacing(0).padding([0, 4]);
+        for label in menu_items {
+            let fg2 = fg;
+            let btn = button(text(label).size(13).color(fg2))
+                .style(move |_t, status| {
+                    use iced::widget::button::Status;
+                    let bg = match status {
+                        Status::Hovered | Status::Pressed => {
+                            Some(iced::Background::Color(palette.hovered_bg.to_iced()))
+                        }
+                        _ => None,
+                    };
+                    button::Style {
+                        background: bg,
+                        text_color: fg2,
+                        border: iced::Border::default(),
+                        ..button::Style::default()
+                    }
+                })
+                .padding([3, 8]);
+            menu_row = menu_row.push(btn);
+        }
+
+        let clock_str = self.clock.clone();
+        let top_row = row![
+            menu_row,
+            Space::with_width(Length::Fill),
+            text(clock_str).size(13).color(dim),
+            Space::with_width(8),
+        ]
+        .align_y(iced::Alignment::Center)
+        .height(28);
+
+        container(top_row)
+            .width(Length::Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(panel_bg)),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    fn view_desktop(&self) -> Element<'_, Message> {
+        use iced::widget::{column, container, text};
+        use iced::Length;
 
         let palette = super::retro_theme::current_retro_colors();
         let fg = palette.fg.to_iced();
         let bg = palette.bg.to_iced();
+        let dim = palette.dim.to_iced();
+
+        let wm_children: Vec<WindowChild<'_>> = self.windows.z_ordered()
+            .map(|w| {
+                let id = w.id;
+                let is_active = self.windows.active() == Some(id);
+                let lifecycle = w.lifecycle;
+                let resizable = w.resizable;
+                let rect = w.rect;
+                let title = format!("{:?}", id);
+
+                let content: Element<'_, Message> = container(
+                    column![
+                        text(format!("{:?}", id)).size(15).color(fg),
+                        text("Window content placeholder").size(11).color(dim),
+                    ]
+                    .spacing(6)
+                    .padding(10)
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_t| container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    ..container::Style::default()
+                })
+                .into();
+
+                WindowChild { id, rect, title, lifecycle, is_active, resizable, content }
+            })
+            .collect();
+
+        container(Element::from(DesktopWindowHost::new(wm_children)))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(bg)),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    fn view_taskbar(&self) -> Element<'_, Message> {
+        use iced::widget::{button, container, row, text, Space};
+        use iced::{Border, Length};
+
+        let palette = super::retro_theme::current_retro_colors();
+        let fg = palette.fg.to_iced();
         let panel_bg = palette.panel.to_iced();
         let selected_fg = palette.selected_fg.to_iced();
+        let selected_bg = palette.selected_bg.to_iced();
+        let active_bg = palette.active_bg.to_iced();
 
-        // ── Top menu bar ─────────────────────────────────────────────────────
-        let top_bar = container(
-            row![
-                text("RobCoOS").size(18).color(fg),
-                Space::with_width(Length::Fill),
-                text("Phase 2").size(14).color(palette.dim.to_iced()),
-            ]
-            .padding(6)
-            .spacing(8)
-        )
-        .width(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(panel_bg)),
-            ..container::Style::default()
-        });
-
-        // ── Center workspace ─────────────────────────────────────────────────
-        let center = container(
-            column![
-                text("R O B C O O S").size(28).color(fg),
-                text(match &self.session_username {
-                    Some(u) => format!("Logged in as: {u}"),
-                    None    => "RobCoOS — not logged in".to_string(),
-                }).size(16).color(palette.dim.to_iced()),
-                text(if self.desktop_mode { "Desktop mode" } else { "Terminal mode" })
-                    .size(14).color(palette.dim.to_iced()),
-                text("iced scaffold — Phase 2").size(12).color(palette.dim.to_iced()),
-            ]
-            .spacing(10)
-            .padding(40)
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            ..container::Style::default()
-        });
-
-        // ── Bottom taskbar ───────────────────────────────────────────────────
+        // [Start] button — always filled green.
         let start_label = if self.start_menu.open { "[Close]" } else { "[Start]" };
         let start_btn = button(
-            text(start_label).size(16).color(iced::Color::BLACK)
+            text(start_label).size(14).color(selected_fg)
         )
         .on_press(Message::StartButtonClicked)
-        .style(move |_theme, _status| button::Style {
-            background: Some(iced::Background::Color(fg)),
+        .style(move |_t, _s| button::Style {
+            background: Some(iced::Background::Color(selected_bg)),
             text_color: selected_fg,
-            border: iced::Border {
+            border: Border {
                 color: fg,
                 width: 2.0,
                 radius: 0.0.into(),
             },
             ..button::Style::default()
-        });
+        })
+        .padding([4, 10]);
 
-        let taskbar = container(
-            row![
-                start_btn,
-                Space::with_width(Length::Fill),
-            ]
-            .padding(4)
-            .spacing(8)
-        )
-        .width(Length::Fill)
-        .style(move |_theme| container::Style {
-            background: Some(iced::Background::Color(panel_bg)),
-            ..container::Style::default()
-        });
+        let mut task_row = row![start_btn, Space::with_width(6)].spacing(3).padding([3, 4]);
 
-        column![top_bar, center, taskbar].into()
+        // One button per open window.
+        for win in self.windows.z_ordered() {
+            let id = win.id;
+            let is_active = self.windows.active() == Some(id);
+            let is_minimized = win.is_minimized();
+            let label = format!(" {:?} ", id);
+
+            let (btn_bg, btn_fg, border_w) = if is_active {
+                (active_bg, selected_fg, 2.0_f32)
+            } else if is_minimized {
+                (panel_bg, palette.dim.to_iced(), 1.0_f32)
+            } else {
+                (panel_bg, fg, 1.0_f32)
+            };
+
+            let btn = button(text(label).size(12).color(btn_fg))
+                .on_press(Message::TaskbarWindowClicked(id))
+                .style(move |_t, _s| button::Style {
+                    background: Some(iced::Background::Color(btn_bg)),
+                    text_color: btn_fg,
+                    border: Border {
+                        color: fg,
+                        width: border_w,
+                        radius: 0.0.into(),
+                    },
+                    ..button::Style::default()
+                })
+                .padding([4, 8]);
+
+            task_row = task_row.push(btn);
+        }
+
+        task_row = task_row.push(Space::with_width(Length::Fill));
+
+        container(task_row)
+            .width(Length::Fill)
+            .height(32)
+            .style(move |_t| container::Style {
+                background: Some(iced::Background::Color(panel_bg)),
+                ..container::Style::default()
+            })
+            .into()
     }
 
     /// Return the application theme.
@@ -717,9 +871,10 @@ impl RobcoShell {
 
     /// Return active subscriptions.
     ///
-    /// Phase 2: none.
-    /// Phase 3: add PTY output stream, settings-file watcher, tick timer.
+    /// Phase 3b: clock tick every 30 seconds.
+    /// Phase 3g: also add PTY output stream.
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::none()
+        iced::time::every(std::time::Duration::from_secs(30))
+            .map(Message::Tick)
     }
 }
