@@ -14,6 +14,7 @@ use super::shared_types::DesktopWindow;
 use crate::config::DesktopIconSortMode;
 use robcos_native_editor_app::{EditorCommand, EditorTextCommand};
 use robcos_native_file_manager_app::FileManagerCommand;
+use robcos_native_installer_app::{InstallerMenuTarget, InstallerPackageAction};
 use robcos_native_settings_app::NativeSettingsPanel;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -195,6 +196,9 @@ pub enum Message {
     ShortcutIconSelected { shortcut_idx: usize, path: PathBuf },
     /// Async: directory scan for desktop surface entries completed.
     DesktopSurfaceScanned(Vec<DesktopSurfaceEntry>),
+    /// Raw keyboard input routed through the shell so desktop and terminal
+    /// modes can interpret it differently.
+    GlobalKeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
 
     // ── Session / auth ────────────────────────────────────────────────────────
     LoginUsernameSelected(String),
@@ -242,6 +246,24 @@ pub enum Message {
     FileManagerCommand(FileManagerCommand),
     /// Async: file drop received by the file manager.
     FileManagerDropReceived { paths: Vec<PathBuf>, target: Option<PathBuf> },
+    NukeCodesRefreshRequested,
+
+    // ── Installer ─────────────────────────────────────────────────────────────
+    InstallerSearchQueryChanged(String),
+    InstallerInstalledFilterChanged(String),
+    InstallerPackageManagerSelected(usize),
+    InstallerSearchRequested,
+    InstallerInstalledRequested,
+    InstallerRuntimeToolsRequested,
+    InstallerBackRequested,
+    InstallerOpenPackageActions { pkg: String, installed: bool },
+    InstallerRunPackageAction(InstallerPackageAction),
+    InstallerConfirmAccepted,
+    InstallerConfirmCancelled,
+    InstallerOpenAddToMenu(String),
+    InstallerDisplayNameChanged(String),
+    InstallerAddToMenu { pkg: String, target: InstallerMenuTarget },
+    InstallerNoticeDismissed,
 
     // ── Async results ─────────────────────────────────────────────────────────
     /// A background file operation finished.
