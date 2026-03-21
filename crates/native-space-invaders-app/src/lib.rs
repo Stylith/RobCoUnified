@@ -3,17 +3,19 @@ use egui::{
     TextureHandle, Ui, Vec2,
 };
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 pub const BUILTIN_SPACE_INVADERS_GAME: &str = "Space Invaders";
 
 const WORLD_W: f32 = 224.0;
 const WORLD_H: f32 = 256.0;
-const SWARM_MARGIN: f32 = 10.0;
-const PLAYER_SIZE: Vec2 = Vec2::new(16.0, 14.0);
-const ALIEN_SIZE: Vec2 = Vec2::new(16.0, 16.0);
-const UFO_SIZE: Vec2 = Vec2::new(16.0, 12.0);
-const BULLET_SIZE: Vec2 = Vec2::new(4.0, 10.0);
+const SWARM_MARGIN: f32 = 16.0;
+const PLAYER_SIZE: Vec2 = Vec2::new(14.0, 12.0);
+const ALIEN_SIZE: Vec2 = Vec2::new(12.0, 10.0);
+const UFO_SIZE: Vec2 = Vec2::new(14.0, 8.0);
+const BULLET_HITBOX_SIZE: Vec2 = Vec2::new(2.0, 6.0);
+const PLAYER_BULLET_DRAW_SIZE: Vec2 = Vec2::new(0.9, 7.5);
+const ALIEN_BULLET_DRAW_SIZE: Vec2 = Vec2::new(1.2, 7.5);
 const BARRIER_CELL_SIZE: Vec2 = Vec2::new(4.0, 4.0);
 const BARRIER_COLS: usize = 6;
 const BARRIER_ROWS: usize = 4;
@@ -23,22 +25,25 @@ const PLAYER_SPEED: f32 = 110.0;
 const PLAYER_BULLET_SPEED: f32 = 210.0;
 const ALIEN_BULLET_SPEED: f32 = 105.0;
 const UFO_SPEED: f32 = 48.0;
-const ALIEN_STEP_X: f32 = 6.0;
-const ALIEN_STEP_DOWN: f32 = 10.0;
-const ALIEN_SPACING_X: f32 = 18.0;
-const ALIEN_SPACING_Y: f32 = 18.0;
+const ALIEN_STEP_X: f32 = 3.0;
+const ALIEN_STEP_DOWN: f32 = 4.0;
+const ALIEN_SPACING_X: f32 = 16.0;
+const ALIEN_SPACING_Y: f32 = 16.0;
 const READY_SECS: f32 = 0.9;
 const RESPAWN_SECS: f32 = 0.85;
-const PLAYER_FLASH_SECS: f32 = 0.12;
+const PLAYER_FLASH_SECS: f32 = 0.18;
 const PLAYER_RELOAD_SECS: f32 = 0.26;
 const PLAYER_EXPLOSION_SECS: f32 = 0.55;
 const EFFECT_SECS: f32 = 0.32;
+const TITLE_ANIM_SPEED: f32 = 1.0;
+const UFO_ANIM_SPEED: f32 = 0.75;
 const MAX_ALIEN_BULLETS: usize = 3;
 const ALIEN_ROWS: usize = 5;
 const ALIEN_COLS: usize = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GamePhase {
+    Title,
     Ready,
     Playing,
     Respawning,
@@ -105,6 +110,7 @@ pub struct GameInput {
     pub left: bool,
     pub right: bool,
     pub fire: bool,
+    pub start: bool,
 }
 
 pub struct SpaceInvadersGame {
@@ -138,11 +144,14 @@ enum FrameId {
     PlayerBullet,
     AlienBullet1,
     AlienBullet2,
-    AlienBullet3,
     Spark1,
     Spark2,
     ExplosionSmall1,
     ExplosionSmall2,
+    ExplosionSmall3,
+    ExplosionSmall4,
+    ExplosionSmall5,
+    ExplosionSmall6,
     BarrierFull,
     BarrierDamage1,
     BarrierDamage2,
@@ -155,6 +164,26 @@ enum FrameId {
     ScoreIcon,
     WaveIcon,
     ReadyIcon,
+    Title01,
+    Title02,
+    Title03,
+    Title04,
+    Title05,
+    Title06,
+    Title07,
+    Title08,
+    Title09,
+    Title10,
+    Title11,
+    Title12,
+    Title13,
+    Title14,
+    Title15,
+    Title16,
+    Title17,
+    Title18,
+    Title19,
+    Title20,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -167,6 +196,7 @@ enum AnimationId {
     Spark,
     ExplosionSmall,
     UfoMove,
+    TitleScreen,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -209,6 +239,7 @@ struct Bullet {
     pos: Vec2,
     prev_pos: Vec2,
     vel: Vec2,
+    age: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -312,6 +343,13 @@ impl SpaceInvadersGame {
         self.fire_held = false;
     }
 
+    fn begin_run(&mut self) {
+        self.state = GameState::new();
+        self.state.phase = GamePhase::Ready;
+        self.state.phase_timer = READY_SECS;
+        self.fire_held = false;
+    }
+
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
     }
@@ -340,12 +378,22 @@ impl SpaceInvadersGame {
         self.state.animation_ticks += dt * 60.0;
         self.state.player.flash_timer = (self.state.player.flash_timer - dt).max(0.0);
         self.state.player.reload_timer = (self.state.player.reload_timer - dt).max(0.0);
+
+        if self.state.phase == GamePhase::Title {
+            if input.start {
+                self.begin_run();
+            }
+            return;
+        }
+
         self.update_effects(dt);
         self.update_player_explosion(dt);
         self.update_ufo(dt);
 
         if self.state.phase == GamePhase::GameOver {
-            if fire_pressed {
+            if input.start {
+                self.begin_run();
+            } else if fire_pressed {
                 self.reset();
             }
             return;
@@ -377,19 +425,27 @@ impl SpaceInvadersGame {
     }
 
     pub fn draw(&self, ui: &mut Ui, atlas: &AtlasTextures) {
-        let fallback = vec2(WORLD_W * self.config.scale, WORLD_H * self.config.scale);
-        let available = ui.available_size_before_wrap();
-        let desired = if available.x > 1.0 && available.y > 1.0 {
-            fit_size(fallback, available)
+        let outer = ui.available_rect_before_wrap();
+        let outer = if outer.width() > 1.0 && outer.height() > 1.0 {
+            ui.allocate_rect(outer, Sense::hover()).rect
         } else {
-            fallback
+            ui.allocate_exact_size(
+                vec2(WORLD_W * self.config.scale, WORLD_H * self.config.scale),
+                Sense::hover(),
+            )
+            .0
         };
-        let (outer, _) = ui.allocate_exact_size(desired, Sense::hover());
         let painter = ui.painter_at(outer);
         let world = fit_world_rect(outer, self.config.scale);
         ui.ctx().request_repaint();
 
         painter.rect_filled(outer, 6.0, Color32::BLACK);
+
+        if self.state.phase == GamePhase::Title {
+            self.draw_title_screen(&painter, world, atlas);
+            return;
+        }
+
         self.paint_starfield(&painter, world);
         painter.rect_stroke(world, 0.0, Stroke::new(2.0, self.theme.neutral));
 
@@ -402,6 +458,14 @@ impl SpaceInvadersGame {
         self.draw_effects(&painter, world, atlas);
         self.draw_player(&painter, world, atlas);
         self.draw_overlay(&painter, world, atlas);
+    }
+
+    fn draw_title_screen(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
+        let frame = atlas.animation_frame_for_tick_clamped(
+            AnimationId::TitleScreen,
+            self.state.animation_ticks * TITLE_ANIM_SPEED,
+        );
+        atlas.paint_frame(painter, world, frame, self.theme, false);
     }
 
     fn update_player(&mut self, input: &GameInput, fire_pressed: bool, dt: f32) {
@@ -425,6 +489,7 @@ impl SpaceInvadersGame {
                 pos: bullet_pos,
                 prev_pos: bullet_pos,
                 vel: vec2(0.0, -PLAYER_BULLET_SPEED),
+                age: 0.0,
             });
             self.state.player.flash_timer = PLAYER_FLASH_SECS;
             self.state.player.reload_timer = PLAYER_RELOAD_SECS;
@@ -444,6 +509,7 @@ impl SpaceInvadersGame {
         if let Some(bullet) = &mut self.state.player_bullet {
             bullet.prev_pos = bullet.pos;
             bullet.pos += bullet.vel * dt;
+            bullet.age += dt;
             if bullet.pos.y < -12.0 {
                 self.state.player_bullet = None;
             }
@@ -454,6 +520,7 @@ impl SpaceInvadersGame {
         for bullet in &mut self.state.alien_bullets {
             bullet.prev_pos = bullet.pos;
             bullet.pos += bullet.vel * dt;
+            bullet.age += dt;
         }
         self.state
             .alien_bullets
@@ -475,6 +542,7 @@ impl SpaceInvadersGame {
             pos: bullet_pos,
             prev_pos: bullet_pos,
             vel: vec2(0.0, ALIEN_BULLET_SPEED + self.state.wave as f32 * 6.0),
+            age: 0.0,
         });
         self.state.alien_shot_timer = self.alien_shot_interval();
     }
@@ -547,9 +615,13 @@ impl SpaceInvadersGame {
             return;
         };
 
-        let player_rect = swept_rect(player_bullet.prev_pos, player_bullet.pos, BULLET_SIZE);
+        let player_rect = swept_rect(
+            player_bullet.prev_pos,
+            player_bullet.pos,
+            BULLET_HITBOX_SIZE,
+        );
         let hit_index = self.state.alien_bullets.iter().position(|bullet| {
-            swept_rect(bullet.prev_pos, bullet.pos, BULLET_SIZE).intersects(player_rect)
+            swept_rect(bullet.prev_pos, bullet.pos, BULLET_HITBOX_SIZE).intersects(player_rect)
         });
 
         if let Some(index) = hit_index {
@@ -563,7 +635,7 @@ impl SpaceInvadersGame {
         let Some(bullet) = self.state.player_bullet else {
             return;
         };
-        let bullet_rect = swept_rect(bullet.prev_pos, bullet.pos, BULLET_SIZE);
+        let bullet_rect = swept_rect(bullet.prev_pos, bullet.pos, BULLET_HITBOX_SIZE);
 
         if self.hit_ufo(bullet_rect) {
             self.state.player_bullet = None;
@@ -587,7 +659,7 @@ impl SpaceInvadersGame {
         let mut player_hit = false;
 
         for bullet in bullets {
-            let bullet_rect = swept_rect(bullet.prev_pos, bullet.pos, BULLET_SIZE);
+            let bullet_rect = swept_rect(bullet.prev_pos, bullet.pos, BULLET_HITBOX_SIZE);
 
             if self.hit_barrier(bullet_rect, false) {
                 continue;
@@ -716,8 +788,8 @@ impl SpaceInvadersGame {
 
     fn alien_step_interval(&self) -> f32 {
         let alive_ratio = self.alive_aliens() as f32 / (ALIEN_ROWS * ALIEN_COLS) as f32;
-        let wave_factor = (0.52 - (self.state.wave.saturating_sub(1) as f32 * 0.03)).max(0.14);
-        wave_factor * (0.35 + alive_ratio * 0.65)
+        let wave_factor = (0.82 - (self.state.wave.saturating_sub(1) as f32 * 0.04)).max(0.28);
+        wave_factor * (0.55 + alive_ratio * 0.85)
     }
 
     fn alien_shot_interval(&self) -> f32 {
@@ -761,7 +833,7 @@ impl SpaceInvadersGame {
 
     fn swarm_reached_player_zone(&self) -> bool {
         self.swarm_bounds()
-            .map(|bounds| bounds.bottom() >= PLAYER_Y - 12.0)
+            .map(|bounds| bounds.bottom() >= PLAYER_Y - 18.0)
             .unwrap_or(false)
     }
 
@@ -862,7 +934,8 @@ impl SpaceInvadersGame {
         let frame = match ufo.state {
             UfoState::Flying => atlas.animation_frame_for_tick(
                 AnimationId::UfoMove,
-                self.state.animation_ticks + ufo.pos.x.abs() * 0.2,
+                self.state.animation_ticks * UFO_ANIM_SPEED
+                    + if ufo.direction < 0.0 { 4.0 } else { 0.0 },
             ),
             UfoState::Exploding { .. } => FrameId::UfoExplosion,
         };
@@ -918,7 +991,7 @@ impl SpaceInvadersGame {
         };
         atlas.paint_frame(
             painter,
-            world_rect_from_entity(world, bullet.pos, BULLET_SIZE),
+            world_rect_from_entity(world, bullet.pos, PLAYER_BULLET_DRAW_SIZE),
             FrameId::PlayerBullet,
             self.theme,
             false,
@@ -926,11 +999,11 @@ impl SpaceInvadersGame {
     }
 
     fn draw_alien_bullets(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
-        for (idx, bullet) in self.state.alien_bullets.iter().enumerate() {
-            let frame = atlas.animation_frame_by_index(AnimationId::AlienBullet, idx);
+        for bullet in &self.state.alien_bullets {
+            let frame = atlas.animation_frame_for_tick(AnimationId::AlienBullet, bullet.age * 60.0);
             atlas.paint_frame(
                 painter,
-                world_rect_from_entity(world, bullet.pos, BULLET_SIZE),
+                world_rect_from_entity(world, bullet.pos, ALIEN_BULLET_DRAW_SIZE),
                 frame,
                 self.theme,
                 false,
@@ -997,6 +1070,7 @@ impl SpaceInvadersGame {
 
     fn draw_overlay(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
         let (title, subtitle) = match self.state.phase {
+            GamePhase::Title => return,
             GamePhase::Ready => ("READY", "Clear the wave"),
             GamePhase::Respawning => ("HIT", "Get back in position"),
             GamePhase::GameOver => ("GAME OVER", "Press fire to restart"),
@@ -1040,208 +1114,270 @@ impl SpaceInvadersGame {
 
 impl AtlasTextures {
     pub fn new(ctx: &Context) -> Self {
+        macro_rules! load_frame_asset {
+            ($atlas:expr, $ctx:expr, $frame_id:expr, $tint_role:expr, $file_name:literal) => {
+                $atlas.load_frame(
+                    $ctx,
+                    $frame_id,
+                    $tint_role,
+                    $file_name,
+                    include_bytes!(concat!("../assets/png/", $file_name)),
+                );
+            };
+        }
+
         let mut atlas = Self {
             textures: HashMap::new(),
             catalog: SpriteCatalog::default(),
         };
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerIdle,
             TintRole::Player,
-            include_bytes!("../assets/png/player_idle.png"),
+            "player_idle.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerMoveLeft,
             TintRole::Player,
-            include_bytes!("../assets/png/player_move_left.png"),
+            "player_move_left.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerMoveRight,
             TintRole::Player,
-            include_bytes!("../assets/png/player_move_right.png"),
+            "player_move_right.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerShoot,
             TintRole::Player,
-            include_bytes!("../assets/png/player_shoot.png"),
+            "player_shoot.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerExplosion1,
             TintRole::Enemy,
-            include_bytes!("../assets/png/player_explosion_1.png"),
+            "player_explosion_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerExplosion2,
             TintRole::Enemy,
-            include_bytes!("../assets/png/player_explosion_2.png"),
+            "player_explosion_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienSquid1,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_squid_1.png"),
+            "alien_squid_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienSquid2,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_squid_2.png"),
+            "alien_squid_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienCrab1,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_crab_1.png"),
+            "alien_crab_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienCrab2,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_crab_2.png"),
+            "alien_crab_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienOcto1,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_octo_1.png"),
+            "alien_octo_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienOcto2,
             TintRole::Alien,
-            include_bytes!("../assets/png/alien_octo_2.png"),
+            "alien_octo_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienExplosion,
             TintRole::Enemy,
-            include_bytes!("../assets/png/alien_explosion.png"),
+            "alien_explosion.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::PlayerBullet,
             TintRole::Bullet,
-            include_bytes!("../assets/png/player_bullet.png"),
+            "player_bullet.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienBullet1,
             TintRole::Enemy,
-            include_bytes!("../assets/png/alien_bullet_1.png"),
+            "alien_bullet_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::AlienBullet2,
             TintRole::Enemy,
-            include_bytes!("../assets/png/alien_bullet_2.png"),
+            "alien_bullet_2.png"
         );
-        atlas.load_frame(
-            ctx,
-            FrameId::AlienBullet3,
-            TintRole::Enemy,
-            include_bytes!("../assets/png/alien_bullet_3.png"),
-        );
-        atlas.load_frame(
-            ctx,
-            FrameId::Spark1,
-            TintRole::Enemy,
-            include_bytes!("../assets/png/spark_1.png"),
-        );
-        atlas.load_frame(
-            ctx,
-            FrameId::Spark2,
-            TintRole::Enemy,
-            include_bytes!("../assets/png/spark_2.png"),
-        );
-        atlas.load_frame(
+        load_frame_asset!(atlas, ctx, FrameId::Spark1, TintRole::Enemy, "spark_1.png");
+        load_frame_asset!(atlas, ctx, FrameId::Spark2, TintRole::Enemy, "spark_2.png");
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::ExplosionSmall1,
             TintRole::Enemy,
-            include_bytes!("../assets/png/explosion_small_1.png"),
+            "explosion_small_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::ExplosionSmall2,
             TintRole::Enemy,
-            include_bytes!("../assets/png/explosion_small_2.png"),
+            "explosion_small_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
+            ctx,
+            FrameId::ExplosionSmall3,
+            TintRole::Enemy,
+            "explosion_small_3.png"
+        );
+        load_frame_asset!(
+            atlas,
+            ctx,
+            FrameId::ExplosionSmall4,
+            TintRole::Enemy,
+            "explosion_small_4.png"
+        );
+        load_frame_asset!(
+            atlas,
+            ctx,
+            FrameId::ExplosionSmall5,
+            TintRole::Enemy,
+            "explosion_small_5.png"
+        );
+        load_frame_asset!(
+            atlas,
+            ctx,
+            FrameId::ExplosionSmall6,
+            TintRole::Enemy,
+            "explosion_small_6.png"
+        );
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::BarrierFull,
             TintRole::Barrier,
-            include_bytes!("../assets/png/barrier_full.png"),
+            "barrier_full.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::BarrierDamage1,
             TintRole::Barrier,
-            include_bytes!("../assets/png/barrier_damage_1.png"),
+            "barrier_damage_1.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::BarrierDamage2,
             TintRole::Barrier,
-            include_bytes!("../assets/png/barrier_damage_2.png"),
+            "barrier_damage_2.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::BarrierDamage3,
             TintRole::Barrier,
-            include_bytes!("../assets/png/barrier_damage_3.png"),
+            "barrier_damage_3.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::BarrierChunk,
             TintRole::Barrier,
-            include_bytes!("../assets/png/barrier_chunk.png"),
+            "barrier_chunk.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::UfoIdle,
             TintRole::Enemy,
-            include_bytes!("../assets/png/ufo_idle.png"),
+            "ufo_idle.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::UfoFlash,
             TintRole::Enemy,
-            include_bytes!("../assets/png/ufo_flash.png"),
+            "ufo_flash.png"
         );
-        atlas.load_frame(
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::UfoExplosion,
             TintRole::Enemy,
-            include_bytes!("../assets/png/ufo_explosion.png"),
+            "ufo_explosion.png"
         );
-        atlas.load_frame(
-            ctx,
-            FrameId::LifeIcon,
-            TintRole::Ui,
-            include_bytes!("../assets/png/life_icon.png"),
-        );
-        atlas.load_frame(
+        load_frame_asset!(atlas, ctx, FrameId::LifeIcon, TintRole::Ui, "life_icon.png");
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::ScoreIcon,
             TintRole::Ui,
-            include_bytes!("../assets/png/score_icon.png"),
+            "score_icon.png"
         );
-        atlas.load_frame(
-            ctx,
-            FrameId::WaveIcon,
-            TintRole::Ui,
-            include_bytes!("../assets/png/wave_icon.png"),
-        );
-        atlas.load_frame(
+        load_frame_asset!(atlas, ctx, FrameId::WaveIcon, TintRole::Ui, "wave_icon.png");
+        load_frame_asset!(
+            atlas,
             ctx,
             FrameId::ReadyIcon,
             TintRole::Ui,
-            include_bytes!("../assets/png/ready_icon.png"),
+            "ready_icon.png"
         );
+        load_frame_asset!(atlas, ctx, FrameId::Title01, TintRole::Ui, "title_01.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title02, TintRole::Ui, "title_02.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title03, TintRole::Ui, "title_03.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title04, TintRole::Ui, "title_04.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title05, TintRole::Ui, "title_05.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title06, TintRole::Ui, "title_06.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title07, TintRole::Ui, "title_07.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title08, TintRole::Ui, "title_08.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title09, TintRole::Ui, "title_09.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title10, TintRole::Ui, "title_10.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title11, TintRole::Ui, "title_11.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title12, TintRole::Ui, "title_12.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title13, TintRole::Ui, "title_13.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title14, TintRole::Ui, "title_14.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title15, TintRole::Ui, "title_15.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title16, TintRole::Ui, "title_16.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title17, TintRole::Ui, "title_17.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title18, TintRole::Ui, "title_18.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title19, TintRole::Ui, "title_19.png");
+        load_frame_asset!(atlas, ctx, FrameId::Title20, TintRole::Ui, "title_20.png");
 
         atlas.load_animation(
             AnimationId::PlayerExplode,
@@ -1265,23 +1401,52 @@ impl AtlasTextures {
         );
         atlas.load_animation(
             AnimationId::AlienBullet,
-            &[
-                FrameId::AlienBullet1,
-                FrameId::AlienBullet2,
-                FrameId::AlienBullet3,
-            ],
+            &[FrameId::AlienBullet1, FrameId::AlienBullet2],
             4,
         );
         atlas.load_animation(AnimationId::Spark, &[FrameId::Spark1, FrameId::Spark2], 4);
         atlas.load_animation(
             AnimationId::ExplosionSmall,
-            &[FrameId::ExplosionSmall1, FrameId::ExplosionSmall2],
+            &[
+                FrameId::ExplosionSmall1,
+                FrameId::ExplosionSmall2,
+                FrameId::ExplosionSmall3,
+                FrameId::ExplosionSmall4,
+                FrameId::ExplosionSmall5,
+                FrameId::ExplosionSmall6,
+            ],
             5,
         );
         atlas.load_animation(
             AnimationId::UfoMove,
             &[FrameId::UfoIdle, FrameId::UfoFlash],
             8,
+        );
+        atlas.load_animation(
+            AnimationId::TitleScreen,
+            &[
+                FrameId::Title01,
+                FrameId::Title02,
+                FrameId::Title03,
+                FrameId::Title04,
+                FrameId::Title05,
+                FrameId::Title06,
+                FrameId::Title07,
+                FrameId::Title08,
+                FrameId::Title09,
+                FrameId::Title10,
+                FrameId::Title11,
+                FrameId::Title12,
+                FrameId::Title13,
+                FrameId::Title14,
+                FrameId::Title15,
+                FrameId::Title16,
+                FrameId::Title17,
+                FrameId::Title18,
+                FrameId::Title19,
+                FrameId::Title20,
+            ],
+            4,
         );
         atlas
     }
@@ -1323,6 +1488,16 @@ impl AtlasTextures {
         animation.frames[idx]
     }
 
+    fn animation_frame_for_tick_clamped(&self, animation_id: AnimationId, ticks: f32) -> FrameId {
+        let animation = self
+            .catalog
+            .animations
+            .get(&animation_id)
+            .expect("space invaders animation missing");
+        let idx = (((ticks.max(0.0)) as u32) / animation.tick.max(1)) as usize;
+        animation.frames[idx.min(animation.frames.len().saturating_sub(1))]
+    }
+
     fn animation_frame_by_index(&self, animation_id: AnimationId, index: usize) -> FrameId {
         let animation = self
             .catalog
@@ -1332,9 +1507,17 @@ impl AtlasTextures {
         animation.frames[index % animation.frames.len()]
     }
 
-    fn load_frame(&mut self, ctx: &Context, frame_id: FrameId, tint_role: TintRole, png: &[u8]) {
-        let image = image::load_from_memory(png)
-            .expect("invalid space invaders png")
+    fn load_frame(
+        &mut self,
+        ctx: &Context,
+        frame_id: FrameId,
+        tint_role: TintRole,
+        file_name: &str,
+        fallback_png: &[u8],
+    ) {
+        let bytes = load_runtime_asset_bytes(file_name).unwrap_or_else(|| fallback_png.to_vec());
+        let image = image::load_from_memory(&bytes)
+            .unwrap_or_else(|err| panic!("invalid space invaders png {file_name}: {err}"))
             .into_rgba8();
         let (width, height) = image.dimensions();
         let texture = ctx.load_texture(
@@ -1360,6 +1543,17 @@ impl AtlasTextures {
     }
 }
 
+fn load_runtime_asset_bytes(file_name: &str) -> Option<Vec<u8>> {
+    std::fs::read(runtime_asset_path(file_name)).ok()
+}
+
+fn runtime_asset_path(file_name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("png")
+        .join(file_name)
+}
+
 impl GameState {
     fn new() -> Self {
         Self {
@@ -1376,8 +1570,8 @@ impl GameState {
             effects: Vec::new(),
             ufo: None,
             player_explosion: None,
-            phase: GamePhase::Ready,
-            phase_timer: READY_SECS,
+            phase: GamePhase::Title,
+            phase_timer: 0.0,
             score: 0,
             lives: 3,
             wave: 1,
@@ -1431,6 +1625,7 @@ pub fn input_from_ctx(ctx: &Context) -> GameInput {
         left: ctx.input(|i| i.key_down(Key::ArrowLeft) || i.key_down(Key::A)),
         right: ctx.input(|i| i.key_down(Key::ArrowRight) || i.key_down(Key::D)),
         fire: ctx.input(|i| i.key_down(Key::Space)),
+        start: ctx.input(|i| i.key_pressed(Key::Enter)),
     }
 }
 
@@ -1457,7 +1652,7 @@ fn build_formation() -> AlienFormation {
     }
     AlienFormation {
         aliens,
-        offset: vec2(14.0, 46.0),
+        offset: vec2(24.0, 34.0),
         direction: 1.0,
         step_timer: 0.0,
         anim_frame_idx: 0,
@@ -1528,11 +1723,6 @@ fn barrier_frame_for_cell(barrier: &Barrier, idx: usize, hp: u8) -> FrameId {
     }
 }
 
-fn fit_size(base: Vec2, available: Vec2) -> Vec2 {
-    let scale = (available.x / base.x).min(available.y / base.y).max(0.1);
-    base * scale
-}
-
 fn fit_world_rect(outer: Rect, scale_hint: f32) -> Rect {
     let scale = (outer.width() / WORLD_W)
         .min(outer.height() / WORLD_H)
@@ -1595,11 +1785,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_game_starts_ready_with_full_swarm() {
+    fn new_game_starts_on_title_screen() {
         let game = SpaceInvadersGame::new(SpaceInvadersConfig::default());
-        assert_eq!(game.phase(), GamePhase::Ready);
+        assert_eq!(game.phase(), GamePhase::Title);
         assert_eq!(game.alive_aliens(), ALIEN_ROWS * ALIEN_COLS);
         assert_eq!(game.lives(), 3);
+    }
+
+    #[test]
+    fn pressing_enter_on_title_starts_ready_phase() {
+        let mut game = SpaceInvadersGame::new(SpaceInvadersConfig::default());
+        game.update(
+            &GameInput {
+                start: true,
+                ..GameInput::default()
+            },
+            1.0 / 60.0,
+        );
+        assert_eq!(game.phase(), GamePhase::Ready);
+        assert_eq!(game.wave(), 1);
     }
 
     #[test]
@@ -1648,11 +1852,14 @@ mod tests {
             include_bytes!("../assets/png/player_bullet.png").as_slice(),
             include_bytes!("../assets/png/alien_bullet_1.png").as_slice(),
             include_bytes!("../assets/png/alien_bullet_2.png").as_slice(),
-            include_bytes!("../assets/png/alien_bullet_3.png").as_slice(),
             include_bytes!("../assets/png/spark_1.png").as_slice(),
             include_bytes!("../assets/png/spark_2.png").as_slice(),
             include_bytes!("../assets/png/explosion_small_1.png").as_slice(),
             include_bytes!("../assets/png/explosion_small_2.png").as_slice(),
+            include_bytes!("../assets/png/explosion_small_3.png").as_slice(),
+            include_bytes!("../assets/png/explosion_small_4.png").as_slice(),
+            include_bytes!("../assets/png/explosion_small_5.png").as_slice(),
+            include_bytes!("../assets/png/explosion_small_6.png").as_slice(),
             include_bytes!("../assets/png/barrier_full.png").as_slice(),
             include_bytes!("../assets/png/barrier_damage_1.png").as_slice(),
             include_bytes!("../assets/png/barrier_damage_2.png").as_slice(),
@@ -1665,6 +1872,26 @@ mod tests {
             include_bytes!("../assets/png/score_icon.png").as_slice(),
             include_bytes!("../assets/png/wave_icon.png").as_slice(),
             include_bytes!("../assets/png/ready_icon.png").as_slice(),
+            include_bytes!("../assets/png/title_01.png").as_slice(),
+            include_bytes!("../assets/png/title_02.png").as_slice(),
+            include_bytes!("../assets/png/title_03.png").as_slice(),
+            include_bytes!("../assets/png/title_04.png").as_slice(),
+            include_bytes!("../assets/png/title_05.png").as_slice(),
+            include_bytes!("../assets/png/title_06.png").as_slice(),
+            include_bytes!("../assets/png/title_07.png").as_slice(),
+            include_bytes!("../assets/png/title_08.png").as_slice(),
+            include_bytes!("../assets/png/title_09.png").as_slice(),
+            include_bytes!("../assets/png/title_10.png").as_slice(),
+            include_bytes!("../assets/png/title_11.png").as_slice(),
+            include_bytes!("../assets/png/title_12.png").as_slice(),
+            include_bytes!("../assets/png/title_13.png").as_slice(),
+            include_bytes!("../assets/png/title_14.png").as_slice(),
+            include_bytes!("../assets/png/title_15.png").as_slice(),
+            include_bytes!("../assets/png/title_16.png").as_slice(),
+            include_bytes!("../assets/png/title_17.png").as_slice(),
+            include_bytes!("../assets/png/title_18.png").as_slice(),
+            include_bytes!("../assets/png/title_19.png").as_slice(),
+            include_bytes!("../assets/png/title_20.png").as_slice(),
         ] {
             image::load_from_memory(bytes).expect("placeholder png should decode");
         }

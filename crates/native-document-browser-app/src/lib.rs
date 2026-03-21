@@ -14,6 +14,26 @@ pub enum TerminalDocumentBrowserRequest {
     OpenFile(PathBuf),
 }
 
+/// Strip the file extension and replace underscores with spaces for display.
+fn prettify_file_label(name: &str) -> String {
+    let without_ext = match name.rfind('.') {
+        Some(dot) if dot > 0 => &name[..dot],
+        _ => name,
+    };
+    without_ext.replace('_', " ")
+}
+
+/// Sort key that ignores a leading "The " (case-insensitive) so books like
+/// "The Great Gatsby" sort under G rather than T.
+fn sort_key(label: &str) -> String {
+    let trimmed = label.trim();
+    let stripped = trimmed
+        .strip_prefix("The ")
+        .or_else(|| trimmed.strip_prefix("the "))
+        .unwrap_or(trimmed);
+    stripped.to_ascii_lowercase()
+}
+
 pub fn browser_rows(file_manager: &NativeFileManagerState) -> Vec<DocumentBrowserRow> {
     let mut rows = Vec::new();
     for row in file_manager.rows() {
@@ -24,13 +44,33 @@ pub fn browser_rows(file_manager: &NativeFileManagerState) -> Vec<DocumentBrowse
                 format!("[DIR] {}", row.label)
             }
         } else {
-            row.label
+            prettify_file_label(&row.label)
         };
         rows.push(DocumentBrowserRow {
             label,
             path: Some(row.path),
         });
     }
+    // Sort non-directory entries alphabetically, ignoring leading "The ".
+    // Keep the parent ".." entry at the top.
+    rows.sort_by(|a, b| {
+        let a_is_parent = a.label == "../";
+        let b_is_parent = b.label == "../";
+        if a_is_parent || b_is_parent {
+            return if a_is_parent {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let a_is_dir = a.label.starts_with("[DIR]");
+        let b_is_dir = b.label.starts_with("[DIR]");
+        match (a_is_dir, b_is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => sort_key(&a.label).cmp(&sort_key(&b.label)),
+        }
+    });
     if rows.is_empty() {
         rows.push(DocumentBrowserRow {
             label: "(empty)".to_string(),

@@ -1977,7 +1977,9 @@ impl RobcoNativeApp {
             Ok(FileManagerOpenTarget::Launch(launch)) => {
                 self.shell_status = self.launch_open_with_request(launch);
             }
-            Ok(FileManagerOpenTarget::OpenInEditor(path)) => self.open_path_in_editor(path),
+            Ok(FileManagerOpenTarget::OpenInEditor(path)) => {
+                self.open_file_with_default_app_or_editor(path);
+            }
             Err(status) => self.shell_status = status,
         }
     }
@@ -2855,8 +2857,37 @@ impl RobcoNativeApp {
             Ok(FileManagerOpenTarget::Launch(launch)) => {
                 self.shell_status = self.launch_open_with_request(launch);
             }
-            Ok(FileManagerOpenTarget::OpenInEditor(path)) => self.open_path_in_editor(path),
+            Ok(FileManagerOpenTarget::OpenInEditor(path)) => {
+                self.open_file_with_default_app_or_editor(path);
+            }
             Err(status) => self.shell_status = status,
+        }
+    }
+
+    /// Try the Default Apps system before falling back to the built-in editor.
+    fn open_file_with_default_app_or_editor(&mut self, path: PathBuf) {
+        use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
+        match resolve_document_open(&path) {
+            Some(ResolvedDocumentOpen::ExternalArgv(argv)) => {
+                let display = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let title = format!(
+                    "{} - {}",
+                    robcos_native_file_manager_app::open_with_command_title(&argv[0]),
+                    display,
+                );
+                if self.desktop_mode_open {
+                    self.open_desktop_pty(&title, &argv);
+                } else {
+                    self.open_embedded_pty(&title, &argv, TerminalScreen::DocumentBrowser);
+                }
+                self.shell_status = format!("Opened {display}");
+            }
+            Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) | None => {
+                self.open_path_in_editor(path);
+            }
         }
     }
 

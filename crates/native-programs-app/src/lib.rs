@@ -20,6 +20,7 @@ pub enum TerminalApplicationsAction {
     Back,
     OpenTextEditor,
     OpenNukeCodes,
+    OpenFileManager,
     LaunchConfigured(String),
 }
 
@@ -27,6 +28,7 @@ pub enum TerminalApplicationsAction {
 pub enum DesktopApplicationsAction {
     OpenTextEditor,
     OpenNukeCodes,
+    OpenFileManager,
     LaunchConfigured(String),
 }
 
@@ -42,6 +44,7 @@ pub enum TerminalProgramRequest {
     BackToMainMenu,
     OpenTextEditor,
     OpenNukeCodes,
+    OpenFileManager,
     OpenBuiltinGame,
     LaunchCatalog {
         name: String,
@@ -57,6 +60,7 @@ pub enum DesktopProgramRequest {
     OpenNukeCodes {
         close_window: bool,
     },
+    OpenFileManager,
     OpenBuiltinGame,
     LaunchCatalog {
         name: String,
@@ -103,6 +107,8 @@ pub fn resolve_program_menu_event(
     }
 }
 
+pub const BUILTIN_FILE_MANAGER_APP: &str = "File Manager";
+
 pub fn build_terminal_application_entries(
     show_text_editor: bool,
     show_nuke_codes: bool,
@@ -111,6 +117,7 @@ pub fn build_terminal_application_entries(
     nuke_codes_label: &str,
 ) -> Vec<String> {
     let mut entries = Vec::new();
+    entries.push(BUILTIN_FILE_MANAGER_APP.to_string());
     if show_nuke_codes {
         entries.push(nuke_codes_label.to_string());
     }
@@ -120,7 +127,11 @@ pub fn build_terminal_application_entries(
     entries.extend(
         configured_names
             .iter()
-            .filter(|name| *name != nuke_codes_label && *name != text_editor_label)
+            .filter(|name| {
+                *name != nuke_codes_label
+                    && *name != text_editor_label
+                    && *name != BUILTIN_FILE_MANAGER_APP
+            })
             .cloned(),
     );
     entries
@@ -131,7 +142,9 @@ pub fn resolve_desktop_applications_action(
     text_editor_label: &str,
     nuke_codes_label: &str,
 ) -> DesktopApplicationsAction {
-    if label == text_editor_label {
+    if label == BUILTIN_FILE_MANAGER_APP {
+        DesktopApplicationsAction::OpenFileManager
+    } else if label == text_editor_label {
         DesktopApplicationsAction::OpenTextEditor
     } else if label == nuke_codes_label {
         DesktopApplicationsAction::OpenNukeCodes
@@ -168,6 +181,7 @@ pub fn build_desktop_applications_sections(
         nuke_codes_label,
     )
     .into_iter()
+    .filter(|label| label != BUILTIN_FILE_MANAGER_APP)
     .map(|label| DesktopProgramEntry {
         action: resolve_desktop_applications_action(&label, text_editor_label, nuke_codes_label),
         label,
@@ -219,6 +233,7 @@ pub fn resolve_terminal_applications_request(
         TerminalApplicationsAction::Back => TerminalProgramRequest::BackToMainMenu,
         TerminalApplicationsAction::OpenTextEditor => TerminalProgramRequest::OpenTextEditor,
         TerminalApplicationsAction::OpenNukeCodes => TerminalProgramRequest::OpenNukeCodes,
+        TerminalApplicationsAction::OpenFileManager => TerminalProgramRequest::OpenFileManager,
         TerminalApplicationsAction::LaunchConfigured(name) => {
             TerminalProgramRequest::LaunchCatalog {
                 name,
@@ -266,6 +281,7 @@ pub fn resolve_desktop_applications_request(
         DesktopApplicationsAction::OpenNukeCodes => {
             DesktopProgramRequest::OpenNukeCodes { close_window: true }
         }
+        DesktopApplicationsAction::OpenFileManager => DesktopProgramRequest::OpenFileManager,
         DesktopApplicationsAction::LaunchConfigured(name) => DesktopProgramRequest::LaunchCatalog {
             name: name.clone(),
             catalog: ProgramCatalog::Applications,
@@ -296,6 +312,9 @@ pub fn resolve_terminal_applications_action(
     match event {
         ProgramMenuEvent::None => TerminalApplicationsAction::None,
         ProgramMenuEvent::Back => TerminalApplicationsAction::Back,
+        ProgramMenuEvent::Launch(name) if name == BUILTIN_FILE_MANAGER_APP => {
+            TerminalApplicationsAction::OpenFileManager
+        }
         ProgramMenuEvent::Launch(name) if name == text_editor_label => {
             TerminalApplicationsAction::OpenTextEditor
         }
@@ -365,7 +384,10 @@ mod tests {
             "Editor",
             "Nuke Codes",
         );
-        assert_eq!(entries, vec!["Nuke Codes", "Editor", "Custom App"]);
+        assert_eq!(
+            entries,
+            vec!["File Manager", "Nuke Codes", "Editor", "Custom App"]
+        );
     }
 
     #[test]
@@ -420,6 +442,10 @@ mod tests {
         assert_eq!(
             sections.builtins,
             vec![
+                DesktopProgramEntry {
+                    label: "File Manager".to_string(),
+                    action: DesktopApplicationsAction::OpenFileManager,
+                },
                 DesktopProgramEntry {
                     label: "Nuke Codes".to_string(),
                     action: DesktopApplicationsAction::OpenNukeCodes,

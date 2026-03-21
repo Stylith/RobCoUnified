@@ -148,6 +148,8 @@ impl RobcoNativeApp {
             }
             MainMenuSelectionAction::EnterDesktopMode => {
                 crate::sound::play_login();
+                self.terminate_all_native_pty_children();
+                self.close_all_desktop_windows();
                 self.desktop_mode_open = true;
                 self.close_start_menu();
                 self.sync_desktop_active_window();

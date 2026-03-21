@@ -6,6 +6,13 @@ pub use robcos_native_document_browser_app::{
     activate_browser_selection, browser_rows, TerminalDocumentBrowserRequest,
 };
 
+pub enum DocumentBrowserEvent {
+    None,
+    Activate(usize),
+    GoBack,
+    Quit,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_terminal_document_browser(
     ctx: &Context,
@@ -23,7 +30,7 @@ pub fn draw_terminal_document_browser(
     status_row: usize,
     status_row_alt: usize,
     content_col: usize,
-) -> Option<usize> {
+) -> DocumentBrowserEvent {
     let rows_data = browser_rows(file_manager);
     *selected_idx = (*selected_idx).min(rows_data.len().saturating_sub(1));
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
@@ -33,9 +40,13 @@ pub fn draw_terminal_document_browser(
         *selected_idx = (*selected_idx + 1).min(rows_data.len().saturating_sub(1));
     }
 
-    let mut activated = None;
+    let mut event = DocumentBrowserEvent::None;
     if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
-        activated = Some(*selected_idx);
+        event = DocumentBrowserEvent::Activate(*selected_idx);
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+        event = DocumentBrowserEvent::GoBack;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
+        event = DocumentBrowserEvent::Quit;
     }
 
     egui::CentralPanel::default()
@@ -81,7 +92,7 @@ pub fn draw_terminal_document_browser(
                 );
                 if response.clicked() {
                     *selected_idx = idx;
-                    activated = Some(idx);
+                    event = DocumentBrowserEvent::Activate(idx);
                 }
                 row += 1;
             }
@@ -89,7 +100,7 @@ pub fn draw_terminal_document_browser(
                 &painter,
                 content_col,
                 status_row,
-                "Enter open | Tab back | Up/Down move",
+                "Enter open | Tab back | Q quit | Up/Down move",
                 palette.dim,
             );
             if !shell_status.is_empty() {
@@ -103,5 +114,5 @@ pub fn draw_terminal_document_browser(
             }
         });
 
-    activated
+    event
 }

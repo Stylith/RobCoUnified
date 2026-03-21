@@ -706,4 +706,15 @@ impl RobcoNativeApp {
             self.desktop_active_window = self.first_open_desktop_window();
         }
     }
+
+    /// Close every desktop window and secondary instance.
+    pub(super) fn close_all_desktop_windows(&mut self) {
+        for binding in desktop_components() {
+            (binding.set_open)(self, false);
+        }
+        self.secondary_windows.clear();
+        self.desktop_window_states.clear();
+        self.desktop_active_window = None;
+        self.desktop_nuke_codes_open = false;
+    }
 }

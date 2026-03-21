@@ -16,7 +16,8 @@ use super::super::desktop_user_service::{
     update_user_auth_method,
 };
 use super::super::document_browser::{
-    activate_browser_selection, draw_terminal_document_browser, TerminalDocumentBrowserRequest,
+    activate_browser_selection, draw_terminal_document_browser, DocumentBrowserEvent,
+    TerminalDocumentBrowserRequest,
 };
 use super::super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
@@ -152,6 +153,12 @@ impl RobcoNativeApp {
             TerminalProgramRequest::OpenNukeCodes => {
                 self.open_nuke_codes_screen(launch_return_screen);
             }
+            TerminalProgramRequest::OpenFileManager => {
+                self.terminal_nav.browser_idx = 0;
+                self.terminal_nav.browser_return_screen = launch_return_screen;
+                self.navigate_to_screen(TerminalScreen::DocumentBrowser);
+                self.shell_status = "Opened File Manager.".to_string();
+            }
             TerminalProgramRequest::OpenBuiltinGame => {
                 self.open_terminal_donkey_kong();
             }
@@ -168,6 +175,9 @@ impl RobcoNativeApp {
             }
             DesktopProgramRequest::OpenNukeCodes { close_window: _ } => {
                 self.open_desktop_nuke_codes();
+            }
+            DesktopProgramRequest::OpenFileManager => {
+                self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
             }
             DesktopProgramRequest::OpenBuiltinGame => {
                 self.open_desktop_donkey_kong();
@@ -284,7 +294,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_document_browser(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let activated = draw_terminal_document_browser(
+        let event = draw_terminal_document_browser(
             ctx,
             &self.file_manager,
             &mut self.terminal_nav.browser_idx,
@@ -301,16 +311,29 @@ impl RobcoNativeApp {
             layout.status_row_alt,
             layout.content_col,
         );
-        if activated.is_some() {
-            match activate_browser_selection(&mut self.file_manager, self.terminal_nav.browser_idx)
-            {
-                TerminalDocumentBrowserRequest::None => {}
-                TerminalDocumentBrowserRequest::ChangedDir => {
-                    self.terminal_nav.browser_idx = 0;
-                }
-                TerminalDocumentBrowserRequest::OpenFile(path) => {
-                    self.file_manager.select(Some(path));
-                    self.activate_file_manager_selection();
+        match event {
+            DocumentBrowserEvent::None => {}
+            DocumentBrowserEvent::Quit => {
+                self.navigate_to_screen(self.terminal_nav.browser_return_screen);
+                self.apply_status_update(clear_shell_status());
+            }
+            DocumentBrowserEvent::GoBack => {
+                self.file_manager.up();
+                self.terminal_nav.browser_idx = 0;
+            }
+            DocumentBrowserEvent::Activate(_) => {
+                match activate_browser_selection(
+                    &mut self.file_manager,
+                    self.terminal_nav.browser_idx,
+                ) {
+                    TerminalDocumentBrowserRequest::None => {}
+                    TerminalDocumentBrowserRequest::ChangedDir => {
+                        self.terminal_nav.browser_idx = 0;
+                    }
+                    TerminalDocumentBrowserRequest::OpenFile(path) => {
+                        self.file_manager.select(Some(path));
+                        self.activate_file_manager_selection();
+                    }
                 }
             }
         }

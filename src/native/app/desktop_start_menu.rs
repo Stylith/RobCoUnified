@@ -301,6 +301,8 @@ impl RobcoNativeApp {
             StartRootAction::ReturnToTerminal => {
                 self.close_start_menu();
                 sound::play_logout();
+                self.terminate_all_native_pty_children();
+                self.close_all_desktop_windows();
                 self.desktop_mode_open = false;
             }
             StartRootAction::Logout => {
