@@ -100,14 +100,26 @@ pub fn draw_terminal_document_browser(
                 &file_manager.cwd.display().to_string(),
                 palette.fg,
             );
-            let mut row = menu_start_row;
-            for (idx, row_data) in rows_data.iter().enumerate() {
-                let selected = idx == *selected_idx;
+            let visible_rows = status_row.saturating_sub(menu_start_row);
+            let scroll_offset = if rows_data.len() <= visible_rows {
+                0
+            } else if *selected_idx < visible_rows / 2 {
+                0
+            } else if *selected_idx + visible_rows / 2 >= rows_data.len() {
+                rows_data.len().saturating_sub(visible_rows)
+            } else {
+                selected_idx.saturating_sub(visible_rows / 2)
+            };
+            let end = (scroll_offset + visible_rows).min(rows_data.len());
+            for data_idx in scroll_offset..end {
+                let row_data = &rows_data[data_idx];
+                let selected = data_idx == *selected_idx;
                 let text = if selected {
                     format!("  > {}", row_data.label)
                 } else {
                     format!("    {}", row_data.label)
                 };
+                let row = menu_start_row + (data_idx - scroll_offset);
                 let response = screen.selectable_row(
                     ui,
                     &painter,
@@ -118,10 +130,9 @@ pub fn draw_terminal_document_browser(
                     selected,
                 );
                 if response.clicked() {
-                    *selected_idx = idx;
-                    event = DocumentBrowserEvent::Activate(idx);
+                    *selected_idx = data_idx;
+                    event = DocumentBrowserEvent::Activate(data_idx);
                 }
-                row += 1;
             }
             screen.text(
                 &painter,

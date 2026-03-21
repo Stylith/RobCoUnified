@@ -368,10 +368,12 @@ impl RobcoNativeApp {
         match event {
             DocumentBrowserEvent::None => {}
             DocumentBrowserEvent::Quit => {
+                crate::sound::play_navigate();
                 self.navigate_to_screen(self.terminal_nav.browser_return_screen);
                 self.apply_status_update(clear_shell_status());
             }
             DocumentBrowserEvent::GoBack => {
+                crate::sound::play_navigate();
                 self.file_manager.up();
                 self.terminal_nav.browser_idx = 0;
             }
@@ -382,15 +384,18 @@ impl RobcoNativeApp {
                 ) {
                     TerminalDocumentBrowserRequest::None => {}
                     TerminalDocumentBrowserRequest::ChangedDir => {
+                        crate::sound::play_navigate();
                         self.terminal_nav.browser_idx = 0;
                     }
                     TerminalDocumentBrowserRequest::OpenFile(path) => {
+                        crate::sound::play_navigate();
                         self.file_manager.select(Some(path));
                         self.activate_file_manager_selection();
                     }
                 }
             }
             DocumentBrowserEvent::OpenCommandPalette => {
+                crate::sound::play_navigate();
                 self.terminal_command_palette = CommandPaletteState {
                     open: true,
                     target: CommandPaletteTarget::DocumentBrowser,
@@ -399,27 +404,35 @@ impl RobcoNativeApp {
                 };
             }
             DocumentBrowserEvent::Copy => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Copy);
             }
             DocumentBrowserEvent::Cut => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Cut);
             }
             DocumentBrowserEvent::Paste => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Paste);
             }
             DocumentBrowserEvent::Delete => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Delete);
             }
             DocumentBrowserEvent::Rename => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Rename);
             }
             DocumentBrowserEvent::Undo => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Undo);
             }
             DocumentBrowserEvent::Redo => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::Redo);
             }
             DocumentBrowserEvent::NewFolder => {
+                crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::NewFolder);
             }
         }

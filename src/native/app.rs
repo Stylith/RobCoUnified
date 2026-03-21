@@ -4007,9 +4007,16 @@ impl eframe::App for RobcoNativeApp {
         if !self.desktop_mode_open
             && !matches!(self.terminal_nav.screen, TerminalScreen::PtyApp)
             && !self.editor.open
-            && ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
         {
-            self.handle_terminal_back();
+            let is_browser = matches!(self.terminal_nav.screen, TerminalScreen::DocumentBrowser);
+            let back = if is_browser {
+                ctx.input(|i| i.key_pressed(Key::Escape))
+            } else {
+                ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
+            };
+            if back {
+                self.handle_terminal_back();
+            }
         }
 
         if self.terminal_prompt.is_some() {
