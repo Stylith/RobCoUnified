@@ -350,10 +350,11 @@ impl RobcoNativeApp {
                 self.create_desktop_folder();
             }
             ContextMenuAction::ChangeAppearance => {
-                self.open_standalone_settings(Some(NativeSettingsPanel::Appearance));
+                self.settings.panel = NativeSettingsPanel::Appearance;
+                self.open_desktop_window(DesktopWindow::Settings);
             }
             ContextMenuAction::OpenSettings => {
-                self.open_standalone_settings(None);
+                self.open_desktop_window(DesktopWindow::Settings);
             }
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}

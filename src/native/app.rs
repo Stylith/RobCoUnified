@@ -104,9 +104,7 @@ use super::retro_ui::{
     configure_visuals, configure_visuals_for_settings, current_palette,
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
-use super::settings_standalone::standalone_settings_panel_arg;
 use super::shell_screen::draw_login_screen;
-use super::standalone_launcher::{launch_standalone_app, StandaloneNativeApp};
 use crate::config::{
     desktop_dir as robco_desktop_dir, get_current_user, global_settings_file, user_dir, DesktopFileManagerSettings, DesktopIconSortMode,
     HackingDifficulty, NativeStartupWindowMode, OpenMode, Settings,
@@ -131,7 +129,6 @@ use robcos_native_settings_app::{
     NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
 };
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -966,16 +963,19 @@ impl RobcoNativeApp {
                     self.replace_settings_draft(settings);
                 }
                 super::ipc::IpcMessage::OpenInEditor { path } => {
-                    self.launch_standalone_editor(Some(std::path::PathBuf::from(path)));
+                    self.open_path_in_editor(std::path::PathBuf::from(path));
                 }
                 super::ipc::IpcMessage::RevealInFileManager { path } => {
-                    self.launch_standalone_file_manager(Some(std::path::PathBuf::from(path)));
+                    self.open_file_manager_at(std::path::PathBuf::from(path));
                 }
                 super::ipc::IpcMessage::OpenSettings { panel } => {
                     let panel = panel.and_then(|p| {
                         super::settings_standalone::standalone_settings_panel_from_arg(&p)
                     });
-                    self.open_standalone_settings(panel);
+                    if let Some(panel) = panel {
+                        self.settings.panel = panel;
+                    }
+                    self.open_desktop_window(DesktopWindow::Settings);
                 }
                 super::ipc::IpcMessage::AppClosed { .. } | super::ipc::IpcMessage::Ping => {}
             }
@@ -2089,60 +2089,23 @@ impl RobcoNativeApp {
     fn draw_editor_save_as_window(&mut self, _ctx: &egui::Context) {}
 
     fn open_file_manager_at(&mut self, path: PathBuf) {
-        self.launch_standalone_file_manager(Some(path));
+        if self.desktop_window_is_open(DesktopWindow::FileManager) {
+            self.spawn_secondary_window(
+                DesktopWindow::FileManager,
+                SecondaryWindowApp::FileManager {
+                    state: NativeFileManagerState::new(path),
+                    runtime: FileManagerEditRuntime::default(),
+                },
+            );
+        } else {
+            self.open_embedded_file_manager_at(path);
+            self.open_desktop_window(DesktopWindow::FileManager);
+        }
     }
 
     fn open_embedded_file_manager_at(&mut self, path: PathBuf) {
         match open_directory_location(path) {
             Ok(location) => self.apply_file_manager_location(location),
-            Err(status) => self.shell_status = status,
-        }
-    }
-
-    fn launch_standalone_file_manager(&mut self, path: Option<PathBuf>) {
-        let start_path = path.unwrap_or_else(|| self.file_manager.cwd.clone());
-        let current_user = get_current_user();
-        let session_username = self
-            .session
-            .as_ref()
-            .map(|session| session.username.as_str())
-            .or(current_user.as_deref());
-        let args = vec![start_path.into_os_string()];
-        match launch_standalone_app(StandaloneNativeApp::FileManager, &args, session_username) {
-            Ok(()) => self.apply_status_update(clear_shell_status()),
-            Err(status) => self.shell_status = status,
-        }
-    }
-
-    fn launch_standalone_editor(&mut self, path: Option<PathBuf>) {
-        let current_user = get_current_user();
-        let session_username = self
-            .session
-            .as_ref()
-            .map(|session| session.username.as_str())
-            .or(current_user.as_deref());
-        let args = path
-            .map(|path| vec![path.into_os_string()])
-            .unwrap_or_default();
-        match launch_standalone_app(StandaloneNativeApp::Editor, &args, session_username) {
-            Ok(()) => self.apply_status_update(clear_shell_status()),
-            Err(status) => self.shell_status = status,
-        }
-    }
-
-    fn open_standalone_settings(&mut self, panel: Option<NativeSettingsPanel>) {
-        let current_user = get_current_user();
-        let session_username = self
-            .session
-            .as_ref()
-            .map(|session| session.username.as_str())
-            .or(current_user.as_deref());
-        let mut args = Vec::new();
-        if let Some(panel) = panel {
-            args.push(OsString::from(standalone_settings_panel_arg(panel)));
-        }
-        match launch_standalone_app(StandaloneNativeApp::Settings, &args, session_username) {
-            Ok(()) => self.apply_status_update(clear_shell_status()),
             Err(status) => self.shell_status = status,
         }
     }
@@ -2323,12 +2286,7 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::OpenFileManagerAt(path) => {
-                if self.desktop_window_is_open(DesktopWindow::FileManager) {
-                    self.launch_standalone_file_manager(Some(path));
-                } else {
-                    self.open_embedded_file_manager_at(path);
-                    self.open_desktop_window(DesktopWindow::FileManager);
-                }
+                self.open_file_manager_at(path);
             }
             DesktopShellAction::LaunchNetworkProgram(name) => {
                 self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
@@ -2342,15 +2300,19 @@ impl RobcoNativeApp {
                 self.apply_desktop_program_request(request);
             }
             DesktopShellAction::OpenPathInEditor(path) => {
-                if self.desktop_window_is_open(DesktopWindow::Editor) {
-                    self.launch_standalone_editor(Some(path));
-                } else {
-                    self.open_embedded_path_in_editor(path);
-                }
+                self.open_path_in_editor(path);
             }
             DesktopShellAction::RevealPathInFileManager(path) => {
                 if self.desktop_window_is_open(DesktopWindow::FileManager) {
-                    self.launch_standalone_file_manager(Some(path));
+                    // Spawn a new embedded instance at the parent directory.
+                    let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(home_dir_fallback);
+                    self.spawn_secondary_window(
+                        DesktopWindow::FileManager,
+                        SecondaryWindowApp::FileManager {
+                            state: NativeFileManagerState::new(dir),
+                            runtime: FileManagerEditRuntime::default(),
+                        },
+                    );
                 } else {
                     match reveal_path_location(path) {
                         Ok(location) => {
@@ -2854,7 +2816,16 @@ impl RobcoNativeApp {
     }
 
     fn open_path_in_editor(&mut self, path: PathBuf) {
-        self.launch_standalone_editor(Some(path));
+        if self.desktop_window_is_open(DesktopWindow::Editor) {
+            let mut editor = EditorWindow::default();
+            if let Ok(document) = load_text_document(path.clone()) {
+                editor.path = Some(document.path.clone());
+                editor.text = document.text;
+            }
+            self.spawn_secondary_window(DesktopWindow::Editor, SecondaryWindowApp::Editor(editor));
+        } else {
+            self.open_embedded_path_in_editor(path);
+        }
     }
 
     fn open_embedded_path_in_editor(&mut self, path: PathBuf) {
