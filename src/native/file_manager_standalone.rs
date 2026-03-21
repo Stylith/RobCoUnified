@@ -306,6 +306,7 @@ impl RobcoNativeFileManagerApp {
                 FileManagerPromptAction::ApplySettingsUpdate(update) => {
                     apply_file_manager_settings_update(&mut self.settings_draft, update);
                     self.sync_settings_snapshot();
+                    super::ipc::notify_settings_changed();
                 }
                 FileManagerPromptAction::ReportStatus(status) => self.apply_status(status),
             }
@@ -330,6 +331,7 @@ impl RobcoNativeFileManagerApp {
             FileManagerCommandRequest::ApplyDisplaySettings(update) => {
                 apply_file_manager_display_settings_update(&mut self.settings_draft, update);
                 self.sync_settings_snapshot();
+                super::ipc::notify_settings_changed();
             }
             FileManagerCommandRequest::ReportStatus(status) => self.apply_status(status),
         }
@@ -346,9 +348,15 @@ impl RobcoNativeFileManagerApp {
                 self.apply_status(self.launch_open_with_request(launch));
             }
             Ok(FileManagerOpenTarget::OpenInEditor(path)) => {
-                self.apply_status(
-                    open_path_externally(&path).unwrap_or_else(|err| format!("Open failed: {err}")),
-                );
+                if super::ipc::shell_is_running() {
+                    super::ipc::request_open_in_editor(&path);
+                    self.apply_status(format!("Opened {} in editor.", path.display()));
+                } else {
+                    self.apply_status(
+                        open_path_externally(&path)
+                            .unwrap_or_else(|err| format!("Open failed: {err}")),
+                    );
+                }
             }
             Err(status) => self.apply_status(status),
         }
@@ -965,6 +973,8 @@ impl eframe::App for RobcoNativeFileManagerApp {
         if let Some(action) = self.pending_context_action.take() {
             self.apply_context_action(action);
         }
+
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
 }
 

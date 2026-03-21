@@ -3,15 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_USER";
+pub const ROBCOS_NATIVE_IPC_SOCKET_ENV: &str = "ROBCOS_NATIVE_IPC_SOCKET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandaloneNativeApp {
     FileManager,
     Settings,
     Editor,
-    Applications,
-    NukeCodes,
-    Installer,
 }
 
 impl StandaloneNativeApp {
@@ -20,9 +18,6 @@ impl StandaloneNativeApp {
             Self::FileManager => "robcos-file-manager",
             Self::Settings => "robcos-settings",
             Self::Editor => "robcos-editor",
-            Self::Applications => "robcos-applications",
-            Self::NukeCodes => "robcos-nuke-codes",
-            Self::Installer => "robcos-installer",
         }
     }
 
@@ -31,9 +26,6 @@ impl StandaloneNativeApp {
             Self::FileManager => "file manager",
             Self::Settings => "settings",
             Self::Editor => "editor",
-            Self::Applications => "applications",
-            Self::NukeCodes => "nuke codes",
-            Self::Installer => "installer",
         }
     }
 }
@@ -49,6 +41,10 @@ pub fn launch_standalone_app(
     if let Some(username) = session_username.filter(|username| !username.is_empty()) {
         command.env(ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
     }
+    command.env(
+        ROBCOS_NATIVE_IPC_SOCKET_ENV,
+        super::ipc::socket_path().as_os_str(),
+    );
     command
         .spawn()
         .map(|_| ())
@@ -113,8 +109,5 @@ mod tests {
         assert_eq!(StandaloneNativeApp::FileManager.label(), "file manager");
         assert_eq!(StandaloneNativeApp::Settings.label(), "settings");
         assert_eq!(StandaloneNativeApp::Editor.label(), "editor");
-        assert_eq!(StandaloneNativeApp::Applications.label(), "applications");
-        assert_eq!(StandaloneNativeApp::NukeCodes.label(), "nuke codes");
-        assert_eq!(StandaloneNativeApp::Installer.label(), "installer");
     }
 }

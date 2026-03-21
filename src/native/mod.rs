@@ -1,6 +1,7 @@
 mod about_screen;
 mod applications_standalone;
 pub mod app;
+mod background;
 mod connections_screen;
 mod data;
 mod default_apps_screen;
@@ -19,6 +20,7 @@ mod file_manager_standalone;
 mod hacking_screen;
 mod installer_standalone;
 mod installer_screen;
+pub mod ipc;
 mod menu;
 mod nuke_codes_screen;
 mod nuke_codes_standalone;
@@ -50,4 +52,4 @@ pub use nuke_codes_standalone::RobcoNativeNukeCodesApp;
 pub use settings_standalone::{
     standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
 };
-pub use standalone_launcher::ROBCOS_NATIVE_STANDALONE_USER_ENV;
+pub use standalone_launcher::{ROBCOS_NATIVE_IPC_SOCKET_ENV, ROBCOS_NATIVE_STANDALONE_USER_ENV};

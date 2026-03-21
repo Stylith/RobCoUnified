@@ -2,6 +2,7 @@ use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
 use robcos::config::{get_settings, reload_settings, NativeStartupWindowMode};
 use robcos::core::auth::ensure_default_admin;
+use robcos::native::desktop_session_service::restore_current_user_from_last_session;
 use robcos::native::{configure_native_context, RobcoNativeApp};
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
@@ -79,6 +80,7 @@ fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
 
 fn main() -> Result<()> {
     ensure_default_admin();
+    restore_current_user_from_last_session();
     reload_settings();
     let settings = get_settings();
     let mode = resolve_native_startup_window_mode(

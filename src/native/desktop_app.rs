@@ -8,7 +8,7 @@ use super::file_manager::NativeFileManagerState;
 use super::file_manager_app::{FileManagerEditRuntime, FileManagerPromptRequest};
 use super::file_manager_desktop::FILE_MANAGER_APP_TITLE;
 use super::file_manager_menu::build_file_manager_menu_section;
-pub use super::shared_types::DesktopWindow;
+pub use super::shared_types::{DesktopWindow, WindowInstanceId};
 use crate::config::DesktopFileManagerSettings;
 use eframe::egui::Context;
 use std::path::PathBuf;
@@ -69,8 +69,8 @@ pub enum DesktopMenuAction {
     ToggleStartMenu,
     CloseActiveDesktopWindow,
     MinimizeActiveDesktopWindow,
-    ActivateDesktopWindow(DesktopWindow),
-    ActivateTaskbarWindow(DesktopWindow),
+    ActivateDesktopWindow(WindowInstanceId),
+    ActivateTaskbarWindow(WindowInstanceId),
     OpenManual {
         path: &'static str,
         status_label: &'static str,
@@ -120,13 +120,13 @@ pub struct DesktopMenuBuildContext<'a> {
 }
 
 pub struct DesktopWindowMenuEntry {
-    pub window: DesktopWindow,
+    pub id: WindowInstanceId,
     pub open: bool,
     pub active: bool,
 }
 
 pub struct DesktopTaskbarEntry {
-    pub window: DesktopWindow,
+    pub id: WindowInstanceId,
     pub label: String,
     pub inactive: bool,
 }
@@ -458,31 +458,53 @@ pub fn build_window_menu_section(
             DesktopMenuItem::Action {
                 label: format!(
                     "{marker}: {}",
-                    desktop_window_title(entry.window, pty_title)
+                    desktop_window_title(entry.id.kind, pty_title)
                 ),
-                action: DesktopMenuAction::ActivateDesktopWindow(entry.window),
+                action: DesktopMenuAction::ActivateDesktopWindow(entry.id),
             }
         })
         .collect()
 }
 
 pub fn build_taskbar_entries(
-    open_windows: &[DesktopWindow],
-    active_window: Option<DesktopWindow>,
+    open_windows: &[WindowInstanceId],
+    active_window: Option<WindowInstanceId>,
     pty_title: Option<&str>,
 ) -> Vec<DesktopTaskbarEntry> {
-    desktop_components()
-        .iter()
-        .filter(|component| {
-            component.spec.show_in_taskbar && open_windows.contains(&component.spec.window)
-        })
-        .map(|component| DesktopTaskbarEntry {
-            window: component.spec.window,
-            label: component.spec.title(pty_title),
-            // Taskbar chrome renders the "active" look in the inverse branch.
-            inactive: active_window != Some(component.spec.window),
-        })
-        .collect()
+    let mut entries = Vec::new();
+    // Iterate each open window instance, grouped by component order.
+    for component in desktop_components() {
+        if !component.spec.show_in_taskbar {
+            continue;
+        }
+        let kind = component.spec.window;
+        // Count how many instances of this kind are open.
+        let instances: Vec<WindowInstanceId> = open_windows
+            .iter()
+            .filter(|id| id.kind == kind)
+            .copied()
+            .collect();
+        if instances.is_empty() {
+            continue;
+        }
+        let has_multiple = instances.len() > 1;
+        for id in instances {
+            let base_title = component.spec.title(pty_title);
+            let label = if has_multiple && id.instance == 0 {
+                format!("{} [1]", base_title)
+            } else if id.instance > 0 {
+                format!("{} [{}]", base_title, id.instance + 1)
+            } else {
+                base_title
+            };
+            entries.push(DesktopTaskbarEntry {
+                id,
+                label,
+                inactive: active_window != Some(id),
+            });
+        }
+    }
+    entries
 }
 
 pub fn build_active_desktop_menu_section(
@@ -513,9 +535,9 @@ pub fn build_active_desktop_menu_section(
     }
 }
 
-pub fn hosted_app_for_window(window: Option<DesktopWindow>) -> DesktopHostedApp {
+pub fn hosted_app_for_window(window: Option<WindowInstanceId>) -> DesktopHostedApp {
     window
-        .map(|window| desktop_component_spec(window).hosted_app)
+        .map(|id| desktop_component_spec(id.kind).hosted_app)
         .unwrap_or(DesktopHostedApp::Desktop)
 }
 
@@ -524,11 +546,11 @@ pub fn desktop_window_title(window: DesktopWindow, pty_title: Option<&str>) -> S
 }
 
 pub fn desktop_app_menu_name(
-    active_window: Option<DesktopWindow>,
+    active_window: Option<WindowInstanceId>,
     pty_title: Option<&str>,
 ) -> String {
     active_window
-        .map(|window| desktop_window_title(window, pty_title))
+        .map(|id| desktop_window_title(id.kind, pty_title))
         .unwrap_or_else(|| "Desktop".to_string())
 }
 
@@ -623,7 +645,7 @@ mod tests {
     #[test]
     fn window_metadata_routes_titles_and_hosted_apps() {
         assert_eq!(
-            hosted_app_for_window(Some(DesktopWindow::Editor)),
+            hosted_app_for_window(Some(WindowInstanceId::primary(DesktopWindow::Editor))),
             DesktopHostedApp::Editor
         );
         assert_eq!(
@@ -705,9 +727,10 @@ mod tests {
 
     #[test]
     fn window_menu_spec_reflects_window_state_markers() {
+        let editor_id = WindowInstanceId::primary(DesktopWindow::Editor);
         let items = build_window_menu_section(
             &[DesktopWindowMenuEntry {
-                window: DesktopWindow::Editor,
+                id: editor_id,
                 open: true,
                 active: false,
             }],
@@ -718,8 +741,8 @@ mod tests {
             item,
             DesktopMenuItem::Action {
                 label,
-                action: DesktopMenuAction::ActivateDesktopWindow(DesktopWindow::Editor),
-            } if label.starts_with("open: ")
+                action: DesktopMenuAction::ActivateDesktopWindow(id),
+            } if label.starts_with("open: ") && id.kind == DesktopWindow::Editor
         )));
     }
 
@@ -727,16 +750,16 @@ mod tests {
     fn taskbar_entries_follow_window_order_and_active_marker() {
         let entries = build_taskbar_entries(
             &[
-                DesktopWindow::Applications,
-                DesktopWindow::Editor,
-                DesktopWindow::FileManager,
+                WindowInstanceId::primary(DesktopWindow::Applications),
+                WindowInstanceId::primary(DesktopWindow::Editor),
+                WindowInstanceId::primary(DesktopWindow::FileManager),
             ],
-            Some(DesktopWindow::Editor),
+            Some(WindowInstanceId::primary(DesktopWindow::Editor)),
             None,
         );
 
-        assert_eq!(entries[0].window, DesktopWindow::FileManager);
-        assert_eq!(entries[1].window, DesktopWindow::Editor);
+        assert_eq!(entries[0].id.kind, DesktopWindow::FileManager);
+        assert_eq!(entries[1].id.kind, DesktopWindow::Editor);
         assert!(entries[0].inactive);
         assert!(!entries[1].inactive);
     }

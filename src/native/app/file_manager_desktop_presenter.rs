@@ -446,7 +446,7 @@ impl RobcoNativeApp {
 
                 ui.add_space(4.0);
 
-                let search_requested = self.desktop_active_window
+                let search_requested = self.active_window_kind()
                     == Some(DesktopWindow::FileManager)
                     && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::F));
                 if search_requested {
