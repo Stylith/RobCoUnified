@@ -3,7 +3,7 @@ use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
 };
-use super::super::editor_app::{EditorCommand, EditorTextAlign, EDITOR_APP_TITLE};
+use super::super::editor_app::{EditorCommand, EditorTextAlign, EditorTextCommand, EDITOR_APP_TITLE};
 use super::super::file_manager_desktop;
 use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
@@ -11,6 +11,9 @@ use super::super::pty_screen::{
     draw_embedded_pty_in_ui_focused, PtyScreenEvent,
 };
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
+use super::super::terminal_command_palette::{
+    draw_command_palette, CommandPaletteAction, CommandPaletteState, CommandPaletteTarget,
+};
 use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
@@ -198,7 +201,10 @@ impl RobcoNativeApp {
         if ctx.input(|i| i.key_pressed(Key::H) && i.modifiers.command) {
             self.run_editor_command(EditorCommand::OpenFindReplace);
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.editor.ui.find_open {
+        if self.desktop_mode_open
+            && ctx.input(|i| i.key_pressed(Key::Escape))
+            && self.editor.ui.find_open
+        {
             self.run_editor_command(EditorCommand::CloseFind);
         }
         let title = self
@@ -211,17 +217,61 @@ impl RobcoNativeApp {
             .to_string();
 
         if !self.desktop_mode_open {
-            // Keyboard shortcuts for terminal mode (no mouse needed)
-            if ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab)) {
-                self.update_desktop_window_state(DesktopWindow::Editor, false);
-                return;
+            let palette_is_open = self.terminal_command_palette.open
+                && self.terminal_command_palette.target == CommandPaletteTarget::Editor;
+
+            // If command palette is open, let it process and consume keys first
+            let mut palette_action = None;
+            if palette_is_open {
+                let layout = self.terminal_layout();
+                palette_action =
+                    draw_command_palette(ctx, &mut self.terminal_command_palette, layout.cols, layout.rows);
+                // Consume remaining keys so editor and underlying screens don't act on them
+                ctx.input_mut(|i| {
+                    let m = egui::Modifiers::NONE;
+                    i.consume_key(m, egui::Key::ArrowUp);
+                    i.consume_key(m, egui::Key::ArrowDown);
+                    i.consume_key(m, egui::Key::Enter);
+                    i.consume_key(m, egui::Key::Space);
+                    i.consume_key(m, egui::Key::Escape);
+                    i.consume_key(m, egui::Key::Tab);
+                });
             }
-            if ctx.input(|i| i.key_pressed(Key::N) && i.modifiers.command) {
-                self.run_editor_command(EditorCommand::NewDocument);
+
+            // Handle editor keyboard shortcuts (only when palette is closed)
+            if !palette_is_open {
+                // Tab closes the editor (go back)
+                if ctx.input(|i| i.key_pressed(Key::Tab)) {
+                    self.update_desktop_window_state(DesktopWindow::Editor, false);
+                    return;
+                }
+                // Esc closes the editor (go back)
+                if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                    if self.editor.ui.find_open {
+                        self.run_editor_command(EditorCommand::CloseFind);
+                    } else {
+                        self.update_desktop_window_state(DesktopWindow::Editor, false);
+                    }
+                    return;
+                }
+                // F1 opens the command palette
+                if ctx.input(|i| i.key_pressed(Key::F1)) {
+                    self.terminal_command_palette = CommandPaletteState {
+                        open: true,
+                        target: CommandPaletteTarget::Editor,
+                        selected: 0,
+                        pending_action: None,
+                    };
+                }
+                if ctx.input(|i| i.key_pressed(Key::N) && i.modifiers.command) {
+                    self.run_editor_command(EditorCommand::NewDocument);
+                }
             }
+
             let palette = current_palette();
 
-            // Editor fills remaining space (status bar drawn globally)
+            // Editor always draws its CentralPanel (even when palette overlays on top)
+            let text_edit_id = Id::new("terminal_editor_text_edit");
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::none()
@@ -234,7 +284,7 @@ impl RobcoNativeApp {
                         ui.label(RichText::new(&title).color(palette.fg).strong());
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
-                                RichText::new("Esc:Back  ^S:Save  ^N:New  ^F:Find")
+                                RichText::new("F1:Cmds  Esc:Back  ^S:Save  ^N:New  ^F:Find")
                                     .color(palette.dim)
                                     .small(),
                             );
@@ -259,6 +309,7 @@ impl RobcoNativeApp {
                     let char_width = 16.0 * 0.6;
                     ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(char_width, palette.fg);
                     let edit = TextEdit::multiline(&mut self.editor.text)
+                        .id(text_edit_id)
                         .lock_focus(true)
                         .frame(false)
                         .font(egui::TextStyle::Monospace);
@@ -267,6 +318,28 @@ impl RobcoNativeApp {
                         self.editor.dirty = true;
                     }
                 });
+            // Auto-focus the text edit so typing works immediately without mouse click
+            if !palette_is_open {
+                ctx.memory_mut(|m| m.request_focus(text_edit_id));
+            }
+            // Process palette action or deferred text command
+            if let Some(action) = palette_action {
+                self.apply_editor_palette_action(action);
+            }
+            if let Some(action) = self.terminal_command_palette.pending_action.take() {
+                let text_cmd = match action {
+                    CommandPaletteAction::EditorUndo => Some(EditorTextCommand::Undo),
+                    CommandPaletteAction::EditorRedo => Some(EditorTextCommand::Redo),
+                    CommandPaletteAction::EditorCut => Some(EditorTextCommand::Cut),
+                    CommandPaletteAction::EditorCopy => Some(EditorTextCommand::Copy),
+                    CommandPaletteAction::EditorPaste => Some(EditorTextCommand::Paste),
+                    CommandPaletteAction::EditorSelectAll => Some(EditorTextCommand::SelectAll),
+                    _ => None,
+                };
+                if let Some(cmd) = text_cmd {
+                    self.run_editor_text_command(ctx, text_edit_id, cmd);
+                }
+            }
             return;
         }
 

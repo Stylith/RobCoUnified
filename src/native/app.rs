@@ -95,6 +95,9 @@ use super::prompt::{
     TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
 };
 use super::prompt_flow::PromptOutcome;
+use super::terminal_command_palette::{
+    CommandPaletteAction, CommandPaletteState,
+};
 use super::pty_screen::{
     handle_pty_input,
     spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
@@ -155,7 +158,6 @@ mod settings_panels;
 use desktop_start_menu::{StartLeaf, StartSubmenu};
 #[cfg(test)]
 use desktop_start_menu::START_ROOT_ITEMS;
-#[cfg(test)]
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
 use crate::config::CUSTOM_THEME_NAME;
@@ -520,6 +522,7 @@ pub struct RobcoNativeApp {
     terminal_connections: TerminalConnectionsState,
     terminal_prompt: Option<TerminalPrompt>,
     terminal_flash: Option<TerminalFlash>,
+    terminal_command_palette: CommandPaletteState,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
     desktop_window_generation_seed: u64,
@@ -700,6 +703,7 @@ impl Default for RobcoNativeApp {
             terminal_connections: TerminalConnectionsState::default(),
             terminal_prompt: None,
             terminal_flash: None,
+            terminal_command_palette: CommandPaletteState::default(),
             session_leader_until: None,
             session_runtime: HashMap::new(),
             desktop_window_generation_seed: 1,
@@ -2975,6 +2979,113 @@ impl RobcoNativeApp {
             EditorCommand::ToggleLineNumbers => {
                 self.editor.ui.toggle_line_numbers();
             }
+        }
+    }
+
+    fn apply_editor_palette_action(&mut self, action: CommandPaletteAction) {
+        match action {
+            CommandPaletteAction::EditorSave => self.run_editor_command(EditorCommand::Save),
+            CommandPaletteAction::EditorSaveAs => self.run_editor_command(EditorCommand::SaveAs),
+            CommandPaletteAction::EditorNewDocument => {
+                self.run_editor_command(EditorCommand::NewDocument)
+            }
+            CommandPaletteAction::EditorFind => {
+                self.run_editor_command(EditorCommand::OpenFind)
+            }
+            CommandPaletteAction::EditorFindReplace => {
+                self.run_editor_command(EditorCommand::OpenFindReplace)
+            }
+            CommandPaletteAction::EditorUndo
+            | CommandPaletteAction::EditorRedo
+            | CommandPaletteAction::EditorCut
+            | CommandPaletteAction::EditorCopy
+            | CommandPaletteAction::EditorPaste
+            | CommandPaletteAction::EditorSelectAll => {
+                self.terminal_command_palette.pending_action = Some(action);
+            }
+            CommandPaletteAction::EditorToggleWordWrap => {
+                self.run_editor_command(EditorCommand::ToggleWordWrap)
+            }
+            CommandPaletteAction::EditorFontLarger => {
+                self.run_editor_command(EditorCommand::IncreaseFontSize)
+            }
+            CommandPaletteAction::EditorFontSmaller => {
+                self.run_editor_command(EditorCommand::DecreaseFontSize)
+            }
+            CommandPaletteAction::EditorFontReset => {
+                self.run_editor_command(EditorCommand::ResetFontSize)
+            }
+            CommandPaletteAction::EditorAlignLeft => {
+                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Left))
+            }
+            CommandPaletteAction::EditorAlignCenter => {
+                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Center))
+            }
+            CommandPaletteAction::EditorAlignRight => {
+                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Right))
+            }
+            CommandPaletteAction::EditorToggleLineNumbers => {
+                self.run_editor_command(EditorCommand::ToggleLineNumbers)
+            }
+            CommandPaletteAction::EditorClose => {
+                self.update_desktop_window_state(DesktopWindow::Editor, false);
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_fm_palette_action(&mut self, action: CommandPaletteAction) {
+        match action {
+            CommandPaletteAction::FmOpenSelected => {
+                self.run_file_manager_command(FileManagerCommand::OpenSelected);
+            }
+            CommandPaletteAction::FmNewFolder => {
+                self.run_file_manager_command(FileManagerCommand::NewFolder);
+            }
+            CommandPaletteAction::FmHome => {
+                self.run_file_manager_command(FileManagerCommand::OpenHome);
+            }
+            CommandPaletteAction::FmCopy => {
+                self.run_file_manager_command(FileManagerCommand::Copy);
+            }
+            CommandPaletteAction::FmCut => {
+                self.run_file_manager_command(FileManagerCommand::Cut);
+            }
+            CommandPaletteAction::FmPaste => {
+                self.run_file_manager_command(FileManagerCommand::Paste);
+            }
+            CommandPaletteAction::FmDuplicate => {
+                self.run_file_manager_command(FileManagerCommand::Duplicate);
+            }
+            CommandPaletteAction::FmRename => {
+                self.run_file_manager_command(FileManagerCommand::Rename);
+            }
+            CommandPaletteAction::FmMoveTo => {
+                self.run_file_manager_command(FileManagerCommand::Move);
+            }
+            CommandPaletteAction::FmDelete => {
+                self.run_file_manager_command(FileManagerCommand::Delete);
+            }
+            CommandPaletteAction::FmUndo => {
+                self.run_file_manager_command(FileManagerCommand::Undo);
+            }
+            CommandPaletteAction::FmRedo => {
+                self.run_file_manager_command(FileManagerCommand::Redo);
+            }
+            CommandPaletteAction::FmClearSearch => {
+                self.run_file_manager_command(FileManagerCommand::ClearSearch);
+            }
+            CommandPaletteAction::FmNewDocument => {
+                self.run_editor_command(EditorCommand::NewDocument);
+            }
+            CommandPaletteAction::FmToggleHiddenFiles => {
+                self.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
+            }
+            CommandPaletteAction::FmClose => {
+                self.navigate_to_screen(self.terminal_nav.browser_return_screen);
+                self.apply_status_update(clear_shell_status());
+            }
+            _ => {}
         }
     }
 

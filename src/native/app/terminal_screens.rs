@@ -19,6 +19,10 @@ use super::super::document_browser::{
     activate_browser_selection, draw_terminal_document_browser, DocumentBrowserEvent,
     TerminalDocumentBrowserRequest,
 };
+use super::super::file_manager::FileManagerCommand;
+use super::super::terminal_command_palette::{
+    draw_command_palette, CommandPaletteState, CommandPaletteTarget,
+};
 use super::super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
 };
@@ -294,6 +298,56 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_document_browser(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        // If command palette is open for the document browser, handle it
+        if self.terminal_command_palette.open
+            && self.terminal_command_palette.target == CommandPaletteTarget::DocumentBrowser
+        {
+            // Let the palette process and consume keys first
+            let palette_action =
+                draw_command_palette(ctx, &mut self.terminal_command_palette, layout.cols, layout.rows);
+            // Consume any remaining navigation keys so the browser doesn't act on them
+            ctx.input_mut(|i| {
+                let m = egui::Modifiers::NONE;
+                i.consume_key(m, egui::Key::ArrowUp);
+                i.consume_key(m, egui::Key::ArrowDown);
+                i.consume_key(m, egui::Key::Enter);
+                i.consume_key(m, egui::Key::Space);
+                i.consume_key(m, egui::Key::Escape);
+                i.consume_key(m, egui::Key::Tab);
+                i.consume_key(m, egui::Key::Q);
+                i.consume_key(m, egui::Key::F2);
+                i.consume_key(m, egui::Key::Delete);
+                i.consume_key(m, egui::Key::Backspace);
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::C);
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::X);
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::V);
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+                i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::N);
+            });
+            // Draw the browser visually underneath (keys already consumed)
+            draw_terminal_document_browser(
+                ctx,
+                &self.file_manager,
+                &mut self.terminal_nav.browser_idx,
+                &self.shell_status,
+                layout.cols,
+                layout.rows,
+                layout.header_start_row,
+                layout.separator_top_row,
+                layout.title_row,
+                layout.separator_bottom_row,
+                layout.subtitle_row,
+                layout.menu_start_row,
+                layout.status_row,
+                layout.status_row_alt,
+                layout.content_col,
+            );
+            if let Some(action) = palette_action {
+                self.apply_fm_palette_action(action);
+            }
+            return;
+        }
         let event = draw_terminal_document_browser(
             ctx,
             &self.file_manager,
@@ -335,6 +389,38 @@ impl RobcoNativeApp {
                         self.activate_file_manager_selection();
                     }
                 }
+            }
+            DocumentBrowserEvent::OpenCommandPalette => {
+                self.terminal_command_palette = CommandPaletteState {
+                    open: true,
+                    target: CommandPaletteTarget::DocumentBrowser,
+                    selected: 0,
+                    pending_action: None,
+                };
+            }
+            DocumentBrowserEvent::Copy => {
+                self.run_file_manager_command(FileManagerCommand::Copy);
+            }
+            DocumentBrowserEvent::Cut => {
+                self.run_file_manager_command(FileManagerCommand::Cut);
+            }
+            DocumentBrowserEvent::Paste => {
+                self.run_file_manager_command(FileManagerCommand::Paste);
+            }
+            DocumentBrowserEvent::Delete => {
+                self.run_file_manager_command(FileManagerCommand::Delete);
+            }
+            DocumentBrowserEvent::Rename => {
+                self.run_file_manager_command(FileManagerCommand::Rename);
+            }
+            DocumentBrowserEvent::Undo => {
+                self.run_file_manager_command(FileManagerCommand::Undo);
+            }
+            DocumentBrowserEvent::Redo => {
+                self.run_file_manager_command(FileManagerCommand::Redo);
+            }
+            DocumentBrowserEvent::NewFolder => {
+                self.run_file_manager_command(FileManagerCommand::NewFolder);
             }
         }
     }

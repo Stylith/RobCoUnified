@@ -33,6 +33,7 @@ mod settings_screen;
 mod settings_standalone;
 mod shell_screen;
 mod standalone_launcher;
+mod terminal_command_palette;
 
 pub use robcos_native_services::{
     desktop_connections_service, desktop_default_apps_service, desktop_documents_service,

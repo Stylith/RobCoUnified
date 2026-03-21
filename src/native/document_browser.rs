@@ -11,6 +11,15 @@ pub enum DocumentBrowserEvent {
     Activate(usize),
     GoBack,
     Quit,
+    OpenCommandPalette,
+    Copy,
+    Cut,
+    Paste,
+    Delete,
+    Rename,
+    Undo,
+    Redo,
+    NewFolder,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -47,6 +56,24 @@ pub fn draw_terminal_document_browser(
         event = DocumentBrowserEvent::GoBack;
     } else if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
         event = DocumentBrowserEvent::Quit;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+        event = DocumentBrowserEvent::OpenCommandPalette;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::C) && i.modifiers.command) {
+        event = DocumentBrowserEvent::Copy;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::X) && i.modifiers.command) {
+        event = DocumentBrowserEvent::Cut;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::V) && i.modifiers.command) {
+        event = DocumentBrowserEvent::Paste;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        event = DocumentBrowserEvent::Delete;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+        event = DocumentBrowserEvent::Rename;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command) {
+        event = DocumentBrowserEvent::Undo;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Y) && i.modifiers.command) {
+        event = DocumentBrowserEvent::Redo;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift) {
+        event = DocumentBrowserEvent::NewFolder;
     }
 
     egui::CentralPanel::default()
@@ -100,7 +127,7 @@ pub fn draw_terminal_document_browser(
                 &painter,
                 content_col,
                 status_row,
-                "Enter open | Tab back | Q quit | Up/Down move",
+                "Enter open | Tab back | Q quit | Up/Down | F1 cmds",
                 palette.dim,
             );
             if !shell_status.is_empty() {
