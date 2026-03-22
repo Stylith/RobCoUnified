@@ -64,14 +64,14 @@ impl RobcoNativeApp {
                     let has_saved = open_with_entries.len() > known_app_count;
                     for (i, (label, command)) in open_with_entries.iter().enumerate() {
                         if i == known_app_count && known_app_count > 0 && has_saved {
-                            ui.separator();
+                            Self::retro_separator(ui);
                         }
                         if ui.button(label.as_str()).clicked() {
                             *action = Some(ContextMenuAction::OpenWithCommand(command.clone()));
                             ui.close_menu();
                         }
                     }
-                    ui.separator();
+                    Self::retro_separator(ui);
                     if ui.button("Other...").clicked() {
                         *action = Some(ContextMenuAction::OpenWith);
                         ui.close_menu();
