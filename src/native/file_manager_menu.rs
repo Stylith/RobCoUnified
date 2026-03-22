@@ -9,7 +9,8 @@ use super::file_manager_app::{
 };
 use crate::config::{DesktopFileManagerSettings, FileManagerSortMode, FileManagerViewMode};
 use robcos_native_file_manager_app::{
-    open_with_state_for_path, selected_file, FileManagerClipboardMode, FileManagerEditRuntime,
+    known_apps_for_extension, open_with_state_for_path, selected_file,
+    FileManagerClipboardMode, FileManagerEditRuntime,
 };
 use std::path::Path;
 
@@ -19,13 +20,36 @@ fn build_file_manager_open_with_menu(
 ) -> Vec<DesktopMenuItem> {
     let open_with = open_with_state_for_path(path, fm);
     let mut items = Vec::new();
+    let known_apps = known_apps_for_extension(&open_with.ext_key);
 
+    // Known apps at the top
+    let mut known_commands: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for app in &known_apps {
+        known_commands.insert(&app.command);
+        items.push(DesktopMenuItem::Action {
+            label: app.label.clone(),
+            action: DesktopMenuAction::FileManagerLaunchOpenWithCommand {
+                path: path.to_path_buf(),
+                ext_key: open_with.ext_key.clone(),
+                command: app.command.clone(),
+            },
+        });
+    }
+
+    // Saved commands (skip duplicates with known apps)
+    let has_saved = open_with.saved_commands.iter().any(|c| !known_commands.contains(c.as_str()));
+    if !known_apps.is_empty() && has_saved {
+        items.push(DesktopMenuItem::Separator);
+    }
     for command in &open_with.saved_commands {
+        if known_commands.contains(command.as_str()) {
+            continue;
+        }
         let is_default = open_with.current_default.as_deref() == Some(command.as_str());
         let label = if is_default {
-            format!("Use: {command} [default]")
+            format!("{command} [default]")
         } else {
-            format!("Use: {command}")
+            command.clone()
         };
         items.push(DesktopMenuItem::Action {
             label,
@@ -37,12 +61,12 @@ fn build_file_manager_open_with_menu(
         });
     }
 
-    if !open_with.saved_commands.is_empty() {
+    if !items.is_empty() {
         items.push(DesktopMenuItem::Separator);
     }
 
     items.push(DesktopMenuItem::Action {
-        label: "New Command...".to_string(),
+        label: "Other...".to_string(),
         action: DesktopMenuAction::OpenFileManagerPrompt(
             FileManagerPromptRequest::open_with_new_command(
                 path.to_path_buf(),
@@ -52,7 +76,7 @@ fn build_file_manager_open_with_menu(
         ),
     });
     items.push(DesktopMenuItem::Action {
-        label: format!("New Command + Always Use for {}", open_with.ext_label),
+        label: format!("Other + Always Use for {}", open_with.ext_label),
         action: DesktopMenuAction::OpenFileManagerPrompt(
             FileManagerPromptRequest::open_with_new_command(
                 path.to_path_buf(),
@@ -415,7 +439,7 @@ mod tests {
         assert!(open_with_items.iter().any(|item| matches!(
             item,
             DesktopMenuItem::Action { label, action: DesktopMenuAction::FileManagerLaunchOpenWithCommand { .. } }
-                if label == "Use: hx [default]"
+                if label == "hx [default]"
         )));
     }
 

@@ -98,6 +98,7 @@ use super::prompt_flow::PromptOutcome;
 use super::terminal_command_palette::{
     CommandPaletteAction, CommandPaletteState,
 };
+use super::terminal_open_with_picker;
 use super::pty_screen::{
     handle_pty_input,
     spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
@@ -309,6 +310,7 @@ struct StartMenuRenameState {
 pub(super) enum ContextMenuAction {
     Open,
     OpenWith,
+    OpenWithCommand(String),
     Rename,
     Cut,
     Copy,
@@ -523,6 +525,7 @@ pub struct RobcoNativeApp {
     terminal_prompt: Option<TerminalPrompt>,
     terminal_flash: Option<TerminalFlash>,
     terminal_command_palette: CommandPaletteState,
+    terminal_open_with_picker: Option<terminal_open_with_picker::OpenWithPickerState>,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
     desktop_window_generation_seed: u64,
@@ -704,6 +707,7 @@ impl Default for RobcoNativeApp {
             terminal_prompt: None,
             terminal_flash: None,
             terminal_command_palette: CommandPaletteState::default(),
+            terminal_open_with_picker: None,
             session_leader_until: None,
             session_runtime: HashMap::new(),
             desktop_window_generation_seed: 1,
@@ -3081,12 +3085,69 @@ impl RobcoNativeApp {
             CommandPaletteAction::FmToggleHiddenFiles => {
                 self.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
             }
+            CommandPaletteAction::FmOpenWith => {
+                self.open_terminal_open_with_picker();
+            }
             CommandPaletteAction::FmClose => {
                 self.navigate_to_screen(self.terminal_nav.browser_return_screen);
                 self.apply_status_update(clear_shell_status());
             }
             _ => {}
         }
+    }
+
+    fn open_terminal_open_with_picker(&mut self) {
+        let Some(row) = file_manager_app::selected_file(
+            self.file_manager.selected_rows_for_action(),
+        ) else {
+            self.shell_status = "Select a file first.".to_string();
+            return;
+        };
+        let ext_key = file_manager_app::open_with_extension_key(&row.path);
+        let settings = load_settings_snapshot();
+        let saved_commands = robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
+            &settings.desktop_file_manager,
+            &ext_key,
+        );
+        self.terminal_open_with_picker = Some(
+            terminal_open_with_picker::OpenWithPickerState::new(
+                row.path,
+                ext_key,
+                saved_commands,
+            ),
+        );
+    }
+
+    fn apply_open_with_picker_launch(&mut self, command: String) {
+        let Some(picker) = self.terminal_open_with_picker.take() else {
+            return;
+        };
+        match file_manager_app::prepare_open_with_launch(&picker.path, &command) {
+            Ok(launch) => {
+                let ext_key = picker.ext_key.clone();
+                self.shell_status = self.launch_open_with_request(launch);
+                self.apply_file_manager_settings_update(
+                    FileManagerSettingsUpdate::RecordOpenWithCommand {
+                        ext_key,
+                        command,
+                    },
+                );
+            }
+            Err(err) => {
+                self.shell_status = format!("Open failed: {err}");
+            }
+        }
+    }
+
+    fn apply_open_with_picker_other(&mut self) {
+        let Some(picker) = self.terminal_open_with_picker.take() else {
+            return;
+        };
+        self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
+            picker.path,
+            picker.ext_key,
+            false,
+        ));
     }
 
     fn run_editor_text_command(

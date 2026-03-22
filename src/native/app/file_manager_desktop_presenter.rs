@@ -3,6 +3,37 @@ use crate::config::FileManagerViewMode;
 use crate::native::file_manager_desktop::FILE_MANAGER_APP_TITLE;
 use crate::native::retro_ui::RetroPalette;
 
+/// Returns (entries, known_app_count) so the renderer can insert a separator.
+pub(super) fn build_open_with_context_entries(
+    file_manager: &super::super::file_manager::NativeFileManagerState,
+    settings: &crate::config::DesktopFileManagerSettings,
+) -> (Vec<(String, String)>, usize) {
+    let selected = super::super::file_manager_app::selected_file(
+        file_manager.selected_rows_for_action(),
+    );
+    let Some(entry) = selected else {
+        return (Vec::new(), 0);
+    };
+    let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
+    let known_apps = robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
+    let open_with = robcos_native_file_manager_app::open_with_state_for_path(&entry.path, settings);
+
+    let mut entries = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for app in &known_apps {
+        seen.insert(app.command.clone());
+        entries.push((app.label.clone(), app.command.clone()));
+    }
+    let known_app_count = entries.len();
+    for command in &open_with.saved_commands {
+        if !seen.contains(command) {
+            entries.push((command.clone(), command.clone()));
+        }
+    }
+    (entries, known_app_count)
+}
+
 impl RobcoNativeApp {
     fn attach_file_manager_context_menu(
         action: &mut Option<ContextMenuAction>,
@@ -10,6 +41,8 @@ impl RobcoNativeApp {
         has_selection: bool,
         has_file_selection: bool,
         has_clipboard: bool,
+        open_with_entries: &[(String, String)],
+        known_app_count: usize,
     ) {
         response.context_menu(|ui| {
             Self::apply_context_menu_style(ui);
@@ -25,14 +58,35 @@ impl RobcoNativeApp {
                 *action = Some(ContextMenuAction::Open);
                 ui.close_menu();
             }
-            let open_with = if has_file_selection {
-                ui.button("Open with...")
+            if has_file_selection && !open_with_entries.is_empty() {
+                ui.menu_button("Open With", |ui| {
+                    Self::apply_context_menu_style(ui);
+                    let has_saved = open_with_entries.len() > known_app_count;
+                    for (i, (label, command)) in open_with_entries.iter().enumerate() {
+                        if i == known_app_count && known_app_count > 0 && has_saved {
+                            ui.separator();
+                        }
+                        if ui.button(label.as_str()).clicked() {
+                            *action = Some(ContextMenuAction::OpenWithCommand(command.clone()));
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Other...").clicked() {
+                        *action = Some(ContextMenuAction::OpenWith);
+                        ui.close_menu();
+                    }
+                });
+            } else if has_file_selection {
+                ui.menu_button("Open With", |ui| {
+                    Self::apply_context_menu_style(ui);
+                    if ui.button("Other...").clicked() {
+                        *action = Some(ContextMenuAction::OpenWith);
+                        ui.close_menu();
+                    }
+                });
             } else {
-                Self::retro_disabled_button(ui, "Open with...")
-            };
-            if open_with.clicked() {
-                *action = Some(ContextMenuAction::OpenWith);
-                ui.close_menu();
+                Self::retro_disabled_button(ui, "Open With");
             }
 
             Self::retro_separator(ui);
@@ -290,6 +344,8 @@ impl RobcoNativeApp {
         has_editable_selection: bool,
         has_single_file_selection: bool,
         has_clipboard: bool,
+        open_with_entries: &[(String, String)],
+        known_app_count: usize,
     ) {
         let allow_multi = !save_picker_mode
             && self.picking_icon_for_shortcut.is_none()
@@ -344,6 +400,8 @@ impl RobcoNativeApp {
             has_editable_selection,
             has_single_file_selection,
             has_clipboard,
+            open_with_entries,
+            known_app_count,
         );
     }
 
@@ -744,6 +802,8 @@ impl RobcoNativeApp {
         has_editable_selection: bool,
         has_single_file_selection: bool,
         has_clipboard: bool,
+        open_with_entries: &[(String, String)],
+        known_app_count: usize,
     ) {
         let palette = current_palette();
         egui::CentralPanel::default()
@@ -784,6 +844,8 @@ impl RobcoNativeApp {
                                         has_editable_selection,
                                         has_single_file_selection,
                                         has_clipboard,
+                                        open_with_entries,
+                                        known_app_count,
                                     );
                                 }
                                 let background = ui.allocate_rect(
@@ -830,6 +892,8 @@ impl RobcoNativeApp {
                                     has_editable_selection,
                                     has_single_file_selection,
                                     has_clipboard,
+                                    open_with_entries,
+                                    known_app_count,
                                 );
                             });
                     }
@@ -874,6 +938,8 @@ impl RobcoNativeApp {
                                                     has_editable_selection,
                                                     has_single_file_selection,
                                                     has_clipboard,
+                                                    open_with_entries,
+                                                    known_app_count,
                                                 );
                                             }
                                         },
@@ -923,6 +989,8 @@ impl RobcoNativeApp {
                                     has_editable_selection,
                                     has_single_file_selection,
                                     has_clipboard,
+                                    open_with_entries,
+                                    known_app_count,
                                 );
                             });
                     }

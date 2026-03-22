@@ -56,6 +56,7 @@ pub enum CommandPaletteAction {
     FmClearSearch,
     FmNewDocument,
     FmToggleHiddenFiles,
+    FmOpenWith,
     FmClose,
 }
 
@@ -200,6 +201,11 @@ pub fn file_manager_palette_entries() -> Vec<CommandPaletteEntry> {
             label: "Open Selected".into(),
             shortcut: "Enter",
             action: CommandPaletteAction::FmOpenSelected,
+        },
+        CommandPaletteEntry {
+            label: "Open With...".into(),
+            shortcut: "O",
+            action: CommandPaletteAction::FmOpenWith,
         },
         CommandPaletteEntry {
             label: "New Folder".into(),

@@ -20,6 +20,7 @@ pub enum DocumentBrowserEvent {
     Undo,
     Redo,
     NewFolder,
+    OpenWith,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -74,6 +75,8 @@ pub fn draw_terminal_document_browser(
         event = DocumentBrowserEvent::Redo;
     } else if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift) {
         event = DocumentBrowserEvent::NewFolder;
+    } else if ctx.input(|i| i.key_pressed(egui::Key::O) && !i.modifiers.command) {
+        event = DocumentBrowserEvent::OpenWith;
     }
 
     egui::CentralPanel::default()
@@ -138,7 +141,7 @@ pub fn draw_terminal_document_browser(
                 &painter,
                 content_col,
                 status_row,
-                "Enter open | Tab back | Q quit | Up/Down | F1 cmds",
+                "Enter open | O open-with | Tab back | Q quit | Up/Down | F1 cmds",
                 palette.dim,
             );
             if !shell_status.is_empty() {

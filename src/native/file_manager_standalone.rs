@@ -27,10 +27,11 @@ use std::process::Command;
 const STANDALONE_FILE_MANAGER_DEFAULT_SIZE: [f32; 2] = [1200.0, 760.0];
 const STANDALONE_FILE_MANAGER_MIN_SIZE: [f32; 2] = [760.0, 520.0];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum StandaloneContextAction {
     Open,
     OpenWith,
+    OpenWithCommand(String),
     Rename,
     Cut,
     Copy,
@@ -380,6 +381,32 @@ impl RobcoNativeFileManagerApp {
         ));
     }
 
+    fn launch_open_with_command(&mut self, command: String) {
+        let Some(entry) = self.selected_file() else {
+            self.apply_status("Select a file first.");
+            return;
+        };
+        let ext_key = file_manager_app::open_with_extension_key(&entry.path);
+        match file_manager_app::prepare_open_with_launch(&entry.path, &command) {
+            Ok(launch) => {
+                self.apply_status(self.launch_open_with_request(launch));
+                use robcos_native_services::shared_file_manager_settings::FileManagerSettingsUpdate;
+                apply_file_manager_settings_update(
+                    &mut self.settings_draft,
+                    FileManagerSettingsUpdate::RecordOpenWithCommand {
+                        ext_key,
+                        command,
+                    },
+                );
+                self.sync_settings_snapshot();
+                super::ipc::notify_settings_changed();
+            }
+            Err(err) => {
+                self.apply_status(format!("Open failed: {err}"));
+            }
+        }
+    }
+
     fn create_new_document(&mut self) {
         let path = unique_path_in_dir(&self.file_manager.cwd, "New Document.txt");
         match save_text_file(&path, "") {
@@ -418,6 +445,9 @@ impl RobcoNativeFileManagerApp {
         match action {
             StandaloneContextAction::Open => self.run_command(FileManagerCommand::OpenSelected),
             StandaloneContextAction::OpenWith => self.open_with_selected(),
+            StandaloneContextAction::OpenWithCommand(command) => {
+                self.launch_open_with_command(command);
+            }
             StandaloneContextAction::Rename => self.run_command(FileManagerCommand::Rename),
             StandaloneContextAction::Cut => self.run_command(FileManagerCommand::Cut),
             StandaloneContextAction::Copy => self.run_command(FileManagerCommand::Copy),
@@ -482,12 +512,53 @@ impl RobcoNativeFileManagerApp {
                 self.pending_context_action = Some(StandaloneContextAction::Open);
                 ui.close_menu();
             }
-            if ui
-                .add_enabled(has_file_selection, egui::Button::new("Open with..."))
-                .clicked()
-            {
-                self.pending_context_action = Some(StandaloneContextAction::OpenWith);
-                ui.close_menu();
+            if has_file_selection {
+                ui.menu_button("Open With", |ui| {
+                    if let Some(entry) = self.selected_file() {
+                        let ext_key = file_manager_app::open_with_extension_key(&entry.path);
+                        let known_apps = robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
+                        let open_with = robcos_native_file_manager_app::open_with_state_for_path(
+                            &entry.path,
+                            &self.settings_draft.desktop_file_manager,
+                        );
+                        let mut known_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                        for app in &known_apps {
+                            known_commands.insert(app.command.clone());
+                            if ui.button(app.label.as_str()).clicked() {
+                                self.pending_context_action = Some(
+                                    StandaloneContextAction::OpenWithCommand(app.command.clone()),
+                                );
+                                ui.close_menu();
+                            }
+                        }
+
+                        let has_saved = open_with.saved_commands.iter().any(|c| !known_commands.contains(c));
+                        if !known_apps.is_empty() && has_saved {
+                            ui.separator();
+                        }
+                        for command in &open_with.saved_commands {
+                            if known_commands.contains(command) {
+                                continue;
+                            }
+                            if ui.button(command.as_str()).clicked() {
+                                self.pending_context_action = Some(
+                                    StandaloneContextAction::OpenWithCommand(command.clone()),
+                                );
+                                ui.close_menu();
+                            }
+                        }
+
+                        if !known_apps.is_empty() || !open_with.saved_commands.is_empty() {
+                            ui.separator();
+                        }
+
+                        if ui.button("Other...").clicked() {
+                            self.pending_context_action = Some(StandaloneContextAction::OpenWith);
+                            ui.close_menu();
+                        }
+                    }
+                });
             }
             ui.separator();
             if ui

@@ -1,4 +1,5 @@
 use super::super::desktop_app::DesktopWindow;
+use super::super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use super::super::desktop_search_service::NativeStartLeafAction;
 use super::super::desktop_shortcuts_service::{
     create_shortcut_from_start_action, delete_shortcut as delete_desktop_shortcut,
@@ -328,6 +329,27 @@ impl RobcoNativeApp {
                     self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
                         entry.path, ext_key, false,
                     ));
+                } else {
+                    self.shell_status = "Open With requires a file.".to_string();
+                }
+            }
+            ContextMenuAction::OpenWithCommand(command) => {
+                if let Some(entry) = self.file_manager_selected_file() {
+                    let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
+                    match super::super::file_manager_app::prepare_open_with_launch(&entry.path, &command) {
+                        Ok(launch) => {
+                            self.shell_status = self.launch_open_with_request(launch);
+                            self.apply_file_manager_settings_update(
+                                FileManagerSettingsUpdate::RecordOpenWithCommand {
+                                    ext_key,
+                                    command,
+                                },
+                            );
+                        }
+                        Err(err) => {
+                            self.shell_status = format!("Open failed: {err}");
+                        }
+                    }
                 } else {
                     self.shell_status = "Open With requires a file.".to_string();
                 }

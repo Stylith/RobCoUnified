@@ -133,6 +133,10 @@ impl RobcoNativeApp {
             );
             self.draw_file_manager_footer_panel(ui, generation, save_picker_mode, &footer_model);
             self.draw_file_manager_tree_panel(ui, generation, save_picker_mode, &desktop_model);
+            let (open_with_entries, known_app_count) = super::file_manager_desktop_presenter::build_open_with_context_entries(
+                &self.file_manager,
+                &self.live_desktop_file_manager_settings,
+            );
             self.draw_file_manager_content_panel(
                 ctx,
                 ui,
@@ -143,6 +147,8 @@ impl RobcoNativeApp {
                 has_editable_selection,
                 has_single_file_selection,
                 has_clipboard,
+                &open_with_entries,
+                known_app_count,
             );
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);

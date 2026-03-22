@@ -23,6 +23,9 @@ use super::super::file_manager::FileManagerCommand;
 use super::super::terminal_command_palette::{
     draw_command_palette, CommandPaletteState, CommandPaletteTarget,
 };
+use super::super::terminal_open_with_picker::{
+    draw_open_with_picker, OpenWithPickerAction,
+};
 use super::super::donkey_kong::{
     input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
 };
@@ -298,6 +301,72 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_document_browser(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        // If open-with picker is open, handle it as overlay
+        if let Some(ref mut picker) = self.terminal_open_with_picker {
+            if picker.open {
+                let picker_action =
+                    draw_open_with_picker(ctx, picker, layout.cols, layout.rows);
+                // Consume remaining navigation keys so the browser doesn't act on them
+                ctx.input_mut(|i| {
+                    let m = egui::Modifiers::NONE;
+                    i.consume_key(m, egui::Key::ArrowUp);
+                    i.consume_key(m, egui::Key::ArrowDown);
+                    i.consume_key(m, egui::Key::Enter);
+                    i.consume_key(m, egui::Key::Space);
+                    i.consume_key(m, egui::Key::Escape);
+                    i.consume_key(m, egui::Key::Tab);
+                    i.consume_key(m, egui::Key::Q);
+                    i.consume_key(m, egui::Key::O);
+                    i.consume_key(m, egui::Key::F1);
+                    i.consume_key(m, egui::Key::F2);
+                    i.consume_key(m, egui::Key::Delete);
+                    i.consume_key(m, egui::Key::Backspace);
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::C);
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::X);
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::V);
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+                    i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::N);
+                });
+                // Draw browser underneath
+                draw_terminal_document_browser(
+                    ctx,
+                    &self.file_manager,
+                    &mut self.terminal_nav.browser_idx,
+                    &self.shell_status,
+                    layout.cols,
+                    layout.rows,
+                    layout.header_start_row,
+                    layout.separator_top_row,
+                    layout.title_row,
+                    layout.separator_bottom_row,
+                    layout.subtitle_row,
+                    layout.menu_start_row,
+                    layout.status_row,
+                    layout.status_row_alt,
+                    layout.content_col,
+                );
+                if let Some(action) = picker_action {
+                    match action {
+                        OpenWithPickerAction::LaunchCommand { command } => {
+                            self.apply_open_with_picker_launch(command);
+                        }
+                        OpenWithPickerAction::OpenOtherPrompt => {
+                            self.apply_open_with_picker_other();
+                        }
+                    }
+                }
+                // Check if picker was closed (e.g. by Esc)
+                if self
+                    .terminal_open_with_picker
+                    .as_ref()
+                    .is_some_and(|p| !p.open)
+                {
+                    self.terminal_open_with_picker = None;
+                }
+                return;
+            }
+        }
         // If command palette is open for the document browser, handle it
         if self.terminal_command_palette.open
             && self.terminal_command_palette.target == CommandPaletteTarget::DocumentBrowser
@@ -434,6 +503,10 @@ impl RobcoNativeApp {
             DocumentBrowserEvent::NewFolder => {
                 crate::sound::play_navigate();
                 self.run_file_manager_command(FileManagerCommand::NewFolder);
+            }
+            DocumentBrowserEvent::OpenWith => {
+                crate::sound::play_navigate();
+                self.open_terminal_open_with_picker();
             }
         }
     }
