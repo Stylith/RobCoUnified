@@ -1073,6 +1073,12 @@ pub struct Settings {
     pub desktop_hidden_builtin_icons: BTreeSet<String>,
     #[serde(default)]
     pub editor_recent_files: Vec<String>,
+    #[serde(default = "default_native_terminal_ui_highlighting")]
+    pub native_terminal_ui_highlighting: bool,
+}
+
+const fn default_native_terminal_ui_highlighting() -> bool {
+    true
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -1128,6 +1134,7 @@ impl Default for Settings {
             desktop_icon_custom_positions: BTreeMap::new(),
             desktop_hidden_builtin_icons: BTreeSet::new(),
             editor_recent_files: Vec::new(),
+            native_terminal_ui_highlighting: default_native_terminal_ui_highlighting(),
         }
     }
 }

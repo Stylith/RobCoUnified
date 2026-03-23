@@ -105,6 +105,7 @@ enum SettingsRowId {
     CustomThemeGreen,
     CustomThemeBlue,
     BorderGlyphs,
+    NativeTerminalUiHighlighting,
     CrtEffectsEnabled,
     CrtPreset,
     CrtCurvature,
@@ -384,6 +385,10 @@ pub fn handle_settings_activation(
                 CliAcsMode::Ascii => CliAcsMode::Unicode,
                 CliAcsMode::Unicode => CliAcsMode::Ascii,
             };
+            TerminalSettingsEvent::Persist
+        }
+        SettingsRowId::NativeTerminalUiHighlighting => {
+            draft.native_terminal_ui_highlighting = !draft.native_terminal_ui_highlighting;
             TerminalSettingsEvent::Persist
         }
         SettingsRowId::CrtEffectsEnabled => {
@@ -775,6 +780,17 @@ fn terminal_settings_rows_with_ids(
                     }
                 ),
                 SettingsRowId::BorderGlyphs,
+            ));
+            rows.push((
+                format!(
+                    "Native UI Highlighting: {} [toggle]",
+                    if draft.native_terminal_ui_highlighting {
+                        "On"
+                    } else {
+                        "Off"
+                    }
+                ),
+                SettingsRowId::NativeTerminalUiHighlighting,
             ));
             rows.push(("Effects".to_string(), SettingsRowId::OpenEffects));
             rows.push(("Back".to_string(), SettingsRowId::Back));

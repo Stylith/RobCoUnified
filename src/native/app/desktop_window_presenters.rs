@@ -1072,6 +1072,16 @@ impl RobcoNativeApp {
                                                     };
                                                 changed = true;
                                             }
+                                            ui.add_space(8.0);
+                                            if Self::retro_checkbox_row(
+                                                ui,
+                                                &mut self.settings.draft.native_terminal_ui_highlighting,
+                                                "Native UI Highlighting",
+                                            )
+                                            .clicked()
+                                            {
+                                                changed = true;
+                                            }
                                         });
                                     }
                                 }
