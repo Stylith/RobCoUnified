@@ -60,9 +60,7 @@ pub fn standalone_settings_panel_from_arg(arg: &str) -> Option<NativeSettingsPan
         "home" => Some(NativeSettingsPanel::Home),
         "general" => Some(NativeSettingsPanel::General),
         "appearance" => Some(NativeSettingsPanel::Appearance),
-        "default-apps" | "default_apps" | "defaultapps" => {
-            Some(NativeSettingsPanel::DefaultApps)
-        }
+        "default-apps" | "default_apps" | "defaultapps" => Some(NativeSettingsPanel::DefaultApps),
         "connections" => Some(NativeSettingsPanel::Connections),
         "connections-network" | "connections_network" | "network" => {
             Some(NativeSettingsPanel::ConnectionsNetwork)

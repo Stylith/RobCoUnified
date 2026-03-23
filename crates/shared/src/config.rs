@@ -771,6 +771,240 @@ impl Default for BuiltinMenuVisibilitySettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum CrtPreset {
+    Off,
+    Subtle,
+    #[default]
+    RobCoStandard,
+    WornTerminal,
+    ExtremeRetro,
+    Custom,
+}
+
+impl CrtPreset {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Subtle => "Subtle",
+            Self::RobCoStandard => "RobCo Standard",
+            Self::WornTerminal => "Worn Terminal",
+            Self::ExtremeRetro => "Extreme Retro",
+            Self::Custom => "Custom",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct DisplayEffectsSettings {
+    #[serde(default = "default_display_effects_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub preset: CrtPreset,
+    #[serde(default = "default_crt_curvature")]
+    pub curvature: f32,
+    #[serde(default = "default_crt_scanlines")]
+    pub scanlines: f32,
+    #[serde(default = "default_crt_glow")]
+    pub glow: f32,
+    #[serde(default = "default_crt_bloom")]
+    pub bloom: f32,
+    #[serde(default = "default_crt_vignette")]
+    pub vignette: f32,
+    #[serde(default = "default_crt_noise")]
+    pub noise: f32,
+    #[serde(default = "default_crt_flicker")]
+    pub flicker: f32,
+    #[serde(default = "default_crt_jitter")]
+    pub jitter: f32,
+    #[serde(default = "default_crt_burn_in")]
+    pub burn_in: f32,
+    #[serde(default = "default_crt_glow_line")]
+    pub glow_line: f32,
+    #[serde(default = "default_crt_brightness")]
+    pub brightness: f32,
+    #[serde(default = "default_crt_contrast")]
+    pub contrast: f32,
+    #[serde(default = "default_crt_phosphor_softness")]
+    pub phosphor_softness: f32,
+}
+
+impl DisplayEffectsSettings {
+    pub fn from_preset(preset: CrtPreset) -> Self {
+        match preset {
+            CrtPreset::Off => Self {
+                enabled: false,
+                preset,
+                curvature: 0.0,
+                scanlines: 0.0,
+                glow: 0.0,
+                bloom: 0.0,
+                vignette: 0.0,
+                noise: 0.0,
+                flicker: 0.0,
+                jitter: 0.0,
+                burn_in: 0.0,
+                glow_line: 0.0,
+                brightness: 1.0,
+                contrast: 1.0,
+                phosphor_softness: 0.0,
+            },
+            CrtPreset::Subtle => Self {
+                enabled: true,
+                preset,
+                curvature: 0.025,
+                scanlines: 0.2,
+                glow: 0.18,
+                bloom: 0.08,
+                vignette: 0.12,
+                noise: 0.01,
+                flicker: 0.015,
+                jitter: 0.003,
+                burn_in: 0.04,
+                glow_line: 0.06,
+                brightness: 1.0,
+                contrast: 1.05,
+                phosphor_softness: 0.08,
+            },
+            CrtPreset::RobCoStandard => Self {
+                enabled: true,
+                preset,
+                curvature: default_crt_curvature(),
+                scanlines: default_crt_scanlines(),
+                glow: default_crt_glow(),
+                bloom: default_crt_bloom(),
+                vignette: default_crt_vignette(),
+                noise: default_crt_noise(),
+                flicker: default_crt_flicker(),
+                jitter: default_crt_jitter(),
+                burn_in: default_crt_burn_in(),
+                glow_line: default_crt_glow_line(),
+                brightness: default_crt_brightness(),
+                contrast: default_crt_contrast(),
+                phosphor_softness: default_crt_phosphor_softness(),
+            },
+            CrtPreset::WornTerminal => Self {
+                enabled: true,
+                preset,
+                curvature: 0.08,
+                scanlines: 0.45,
+                glow: 0.45,
+                bloom: 0.34,
+                vignette: 0.35,
+                noise: 0.1,
+                flicker: 0.05,
+                jitter: 0.024,
+                burn_in: 0.26,
+                glow_line: 0.18,
+                brightness: 0.98,
+                contrast: 1.14,
+                phosphor_softness: 0.28,
+            },
+            CrtPreset::ExtremeRetro => Self {
+                enabled: true,
+                preset,
+                curvature: 0.16,
+                scanlines: 0.8,
+                glow: 0.9,
+                bloom: 0.82,
+                vignette: 0.65,
+                noise: 0.2,
+                flicker: 0.12,
+                jitter: 0.065,
+                burn_in: 0.58,
+                glow_line: 0.42,
+                brightness: 0.94,
+                contrast: 1.2,
+                phosphor_softness: 0.45,
+            },
+            CrtPreset::Custom => {
+                let mut settings = Self::from_preset(CrtPreset::RobCoStandard);
+                settings.preset = CrtPreset::Custom;
+                settings
+            }
+        }
+    }
+
+    pub fn apply_preset(&mut self, preset: CrtPreset) {
+        *self = Self::from_preset(preset);
+    }
+
+    pub fn mark_custom(&mut self) {
+        self.preset = CrtPreset::Custom;
+    }
+
+    pub fn needs_animation(&self) -> bool {
+        self.enabled
+            && (self.noise > 0.0
+                || self.flicker > 0.0
+                || self.jitter > 0.0
+                || self.glow_line > 0.0
+                || self.burn_in > 0.0)
+    }
+}
+
+impl Default for DisplayEffectsSettings {
+    fn default() -> Self {
+        Self::from_preset(CrtPreset::RobCoStandard)
+    }
+}
+
+fn default_display_effects_enabled() -> bool {
+    true
+}
+
+fn default_crt_curvature() -> f32 {
+    0.06
+}
+
+fn default_crt_scanlines() -> f32 {
+    0.28
+}
+
+fn default_crt_glow() -> f32 {
+    0.22
+}
+
+fn default_crt_bloom() -> f32 {
+    0.18
+}
+
+fn default_crt_vignette() -> f32 {
+    0.18
+}
+
+fn default_crt_noise() -> f32 {
+    0.03
+}
+
+fn default_crt_flicker() -> f32 {
+    0.012
+}
+
+fn default_crt_jitter() -> f32 {
+    0.01
+}
+
+fn default_crt_burn_in() -> f32 {
+    0.08
+}
+
+fn default_crt_glow_line() -> f32 {
+    0.12
+}
+
+fn default_crt_brightness() -> f32 {
+    1.0
+}
+
+fn default_crt_contrast() -> f32 {
+    1.08
+}
+
+fn default_crt_phosphor_softness() -> f32 {
+    0.12
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub sound: bool,
@@ -819,6 +1053,8 @@ pub struct Settings {
     pub desktop_file_manager: DesktopFileManagerSettings,
     #[serde(default)]
     pub desktop_session: DesktopSessionSettings,
+    #[serde(default)]
+    pub display_effects: DisplayEffectsSettings,
     #[serde(default)]
     pub desktop_icon_positions: DesktopIconPositionsSettings,
     #[serde(default)]
@@ -882,6 +1118,7 @@ impl Default for Settings {
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
             desktop_session: DesktopSessionSettings::default(),
+            display_effects: DisplayEffectsSettings::default(),
             desktop_icon_positions: DesktopIconPositionsSettings::default(),
             desktop_wallpapers_custom: BTreeMap::new(),
             native_ui_scale: default_native_ui_scale(),
@@ -902,6 +1139,20 @@ fn apply_legacy_settings_migrations(settings: &mut Settings) {
         settings.builtin_menu_visibility.text_editor = false;
         settings.hide_builtin_apps_in_menus = false;
     }
+    settings.display_effects.curvature = settings.display_effects.curvature.clamp(0.0, 0.2);
+    settings.display_effects.scanlines = settings.display_effects.scanlines.clamp(0.0, 1.0);
+    settings.display_effects.glow = settings.display_effects.glow.clamp(0.0, 1.5);
+    settings.display_effects.bloom = settings.display_effects.bloom.clamp(0.0, 1.5);
+    settings.display_effects.vignette = settings.display_effects.vignette.clamp(0.0, 1.0);
+    settings.display_effects.noise = settings.display_effects.noise.clamp(0.0, 0.35);
+    settings.display_effects.flicker = settings.display_effects.flicker.clamp(0.0, 0.3);
+    settings.display_effects.jitter = settings.display_effects.jitter.clamp(0.0, 0.12);
+    settings.display_effects.burn_in = settings.display_effects.burn_in.clamp(0.0, 1.0);
+    settings.display_effects.glow_line = settings.display_effects.glow_line.clamp(0.0, 1.0);
+    settings.display_effects.brightness = settings.display_effects.brightness.clamp(0.5, 1.4);
+    settings.display_effects.contrast = settings.display_effects.contrast.clamp(0.7, 1.5);
+    settings.display_effects.phosphor_softness =
+        settings.display_effects.phosphor_softness.clamp(0.0, 1.0);
 }
 
 // ── About config ──────────────────────────────────────────────────────────────
@@ -1210,6 +1461,25 @@ mod tests {
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert_eq!(decoded.custom_theme_rgb, [0, 255, 0]);
+    }
+
+    #[test]
+    fn display_effects_new_fields_default_when_missing() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        let display_effects = value
+            .get_mut("display_effects")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("display_effects object");
+        display_effects.remove("bloom");
+        display_effects.remove("jitter");
+        display_effects.remove("burn_in");
+        display_effects.remove("glow_line");
+
+        let decoded: Settings = serde_json::from_value(value).expect("decode settings");
+        assert!((decoded.display_effects.bloom - default_crt_bloom()).abs() < f32::EPSILON);
+        assert!((decoded.display_effects.jitter - default_crt_jitter()).abs() < f32::EPSILON);
+        assert!((decoded.display_effects.burn_in - default_crt_burn_in()).abs() < f32::EPSILON);
+        assert!((decoded.display_effects.glow_line - default_crt_glow_line()).abs() < f32::EPSILON);
     }
 
     #[test]

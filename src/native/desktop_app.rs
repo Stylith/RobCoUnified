@@ -1,5 +1,4 @@
 use super::app::RobcoNativeApp;
-use super::donkey_kong::BUILTIN_DONKEY_KONG_GAME;
 use super::editor_app::{
     build_editor_menu_section, EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
@@ -26,7 +25,6 @@ pub enum DesktopHostedApp {
     Editor,
     Settings,
     Applications,
-    Game,
     Utility,
     Terminal,
     Installer,
@@ -64,7 +62,6 @@ pub enum DesktopMenuAction {
         command: String,
     },
     OpenFileManager,
-    OpenApplications,
     OpenSettings,
     ToggleStartMenu,
     CloseActiveDesktopWindow,
@@ -152,7 +149,7 @@ pub struct DesktopComponentSpec {
     title_kind: DesktopTitleKind,
 }
 
-const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 9] = [
+const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 8] = [
     DesktopComponentBinding {
         spec: DesktopComponentSpec {
             window: DesktopWindow::FileManager,
@@ -214,22 +211,6 @@ const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 9] = [
         is_open: RobcoNativeApp::desktop_component_applications_is_open,
         set_open: RobcoNativeApp::desktop_component_applications_set_open,
         draw: RobcoNativeApp::desktop_component_applications_draw,
-        on_open: None,
-        on_closed: None,
-    },
-    DesktopComponentBinding {
-        spec: DesktopComponentSpec {
-            window: DesktopWindow::DonkeyKong,
-            hosted_app: DesktopHostedApp::Game,
-            id_salt: "native_donkey_kong",
-            default_size: [820.0, 720.0],
-            show_in_taskbar: true,
-            show_in_window_menu: true,
-            title_kind: DesktopTitleKind::Static(BUILTIN_DONKEY_KONG_GAME),
-        },
-        is_open: RobcoNativeApp::desktop_component_donkey_kong_is_open,
-        set_open: RobcoNativeApp::desktop_component_donkey_kong_set_open,
-        draw: RobcoNativeApp::desktop_component_donkey_kong_draw,
         on_open: None,
         on_closed: None,
     },
@@ -366,10 +347,6 @@ pub fn build_shared_desktop_menu_section(section: DesktopMenuSection) -> Vec<Des
                 action: DesktopMenuAction::OpenFileManager,
             },
             DesktopMenuItem::Action {
-                label: "Applications".to_string(),
-                action: DesktopMenuAction::OpenApplications,
-            },
-            DesktopMenuItem::Action {
                 label: "Settings".to_string(),
                 action: DesktopMenuAction::OpenSettings,
             },
@@ -445,6 +422,12 @@ pub fn build_window_menu_section(
     entries: &[DesktopWindowMenuEntry],
     pty_title: Option<&str>,
 ) -> Vec<DesktopMenuItem> {
+    if entries.is_empty() {
+        return vec![DesktopMenuItem::Label {
+            label: "No windows open".to_string(),
+        }];
+    }
+
     entries
         .iter()
         .map(|entry| {
@@ -464,6 +447,28 @@ pub fn build_window_menu_section(
             }
         })
         .collect()
+}
+
+pub fn build_window_menu_entries(
+    open_windows: &[WindowInstanceId],
+    active_window: Option<WindowInstanceId>,
+) -> Vec<DesktopWindowMenuEntry> {
+    let mut entries = Vec::new();
+    for component in desktop_components() {
+        if !component.spec.show_in_window_menu {
+            continue;
+        }
+
+        let kind = component.spec.window;
+        for id in open_windows.iter().filter(|id| id.kind == kind).copied() {
+            entries.push(DesktopWindowMenuEntry {
+                id,
+                open: true,
+                active: active_window == Some(id),
+            });
+        }
+    }
+    entries
 }
 
 pub fn build_taskbar_entries(
@@ -604,8 +609,15 @@ mod tests {
             item,
             DesktopMenuItem::Action {
                 label,
-                action: DesktopMenuAction::OpenApplications,
-            } if label == "Applications"
+                action: DesktopMenuAction::OpenFileManager,
+            } if label == "My Computer"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            DesktopMenuItem::Action {
+                label,
+                action: DesktopMenuAction::OpenSettings,
+            } if label == "Settings"
         )));
         assert!(items.iter().any(|item| matches!(
             item,
@@ -613,6 +625,10 @@ mod tests {
                 label,
                 action: DesktopMenuAction::CloseActiveDesktopWindow,
             } if label == "Exit"
+        )));
+        assert!(!items.iter().any(|item| matches!(
+            item,
+            DesktopMenuItem::Action { label, .. } if label == "Applications"
         )));
     }
 
@@ -744,6 +760,37 @@ mod tests {
                 action: DesktopMenuAction::ActivateDesktopWindow(id),
             } if label.starts_with("open: ") && id.kind == DesktopWindow::Editor
         )));
+    }
+
+    #[test]
+    fn empty_window_menu_shows_placeholder() {
+        let items = build_window_menu_section(&[], None);
+
+        assert!(matches!(
+            items.as_slice(),
+            [DesktopMenuItem::Label { label }] if label == "No windows open"
+        ));
+    }
+
+    #[test]
+    fn window_menu_entries_only_include_open_windows() {
+        let entries = build_window_menu_entries(
+            &[
+                WindowInstanceId::primary(DesktopWindow::Editor),
+                WindowInstanceId::primary(DesktopWindow::PtyApp),
+            ],
+            Some(WindowInstanceId::primary(DesktopWindow::Editor)),
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id.kind, DesktopWindow::Editor);
+        assert!(entries[0].active);
+        assert_eq!(entries[1].id.kind, DesktopWindow::PtyApp);
+        assert!(!entries[1].active);
+        assert!(entries.iter().all(|entry| entry.open));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.id.kind == DesktopWindow::Applications));
     }
 
     #[test]

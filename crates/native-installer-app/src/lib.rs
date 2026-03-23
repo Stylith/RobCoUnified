@@ -803,8 +803,10 @@ impl DesktopInstallerState {
     where
         I: IntoIterator<Item = String>,
     {
-        self.installed_search_cache
-            .insert(Self::installed_cache_key(pm), packages.into_iter().collect());
+        self.installed_search_cache.insert(
+            Self::installed_cache_key(pm),
+            packages.into_iter().collect(),
+        );
     }
 
     fn invalidate_installed_snapshot_for_pm(&mut self, pm: PackageManager) {
@@ -1214,8 +1216,13 @@ pub fn apply_search_query(state: &mut TerminalInstallerState, query: &str) -> In
     let Some(pm) = state.selected_pm() else {
         return InstallerEvent::Status("Error: No supported package manager found.".to_string());
     };
-    let installed_snapshot = (!state.installed_packages.is_empty())
-        .then(|| state.installed_packages.iter().cloned().collect::<HashSet<_>>());
+    let installed_snapshot = (!state.installed_packages.is_empty()).then(|| {
+        state
+            .installed_packages
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+    });
     state.search_results = pm.search_with_installed(&query, installed_snapshot.as_ref());
     state.search_query = query;
     state.search_idx = 0;

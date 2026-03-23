@@ -25,43 +25,124 @@ pub struct KnownAppEntry {
 pub fn known_apps_for_extension(ext_key: &str) -> Vec<KnownAppEntry> {
     let candidates: Vec<KnownAppEntry> = match ext_key {
         "txt" | "md" | "rs" | "toml" | "json" | "yaml" | "yml" => vec![
-            KnownAppEntry { label: "Helix".into(), command: "hx".into() },
-            KnownAppEntry { label: "Neovim".into(), command: "nvim".into() },
-            KnownAppEntry { label: "Nano".into(), command: "nano".into() },
-            KnownAppEntry { label: "Emacs".into(), command: "emacs".into() },
-            KnownAppEntry { label: "Kakoune".into(), command: "kak".into() },
-            KnownAppEntry { label: "Micro".into(), command: "micro".into() },
-            KnownAppEntry { label: "Orbiton".into(), command: "o".into() },
-            KnownAppEntry { label: "mdv".into(), command: "mdv".into() },
+            KnownAppEntry {
+                label: "Helix".into(),
+                command: "hx".into(),
+            },
+            KnownAppEntry {
+                label: "Neovim".into(),
+                command: "nvim".into(),
+            },
+            KnownAppEntry {
+                label: "Nano".into(),
+                command: "nano".into(),
+            },
+            KnownAppEntry {
+                label: "Emacs".into(),
+                command: "emacs".into(),
+            },
+            KnownAppEntry {
+                label: "Kakoune".into(),
+                command: "kak".into(),
+            },
+            KnownAppEntry {
+                label: "Micro".into(),
+                command: "micro".into(),
+            },
+            KnownAppEntry {
+                label: "Orbiton".into(),
+                command: "o".into(),
+            },
+            KnownAppEntry {
+                label: "mdv".into(),
+                command: "mdv".into(),
+            },
         ],
         "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" => vec![
-            KnownAppEntry { label: "feh".into(), command: "feh".into() },
-            KnownAppEntry { label: "Preview".into(), command: "open -a Preview".into() },
+            KnownAppEntry {
+                label: "feh".into(),
+                command: "feh".into(),
+            },
+            KnownAppEntry {
+                label: "Preview".into(),
+                command: "open -a Preview".into(),
+            },
         ],
         "mp3" | "wav" | "flac" | "ogg" => vec![
-            KnownAppEntry { label: "mpv".into(), command: "mpv".into() },
-            KnownAppEntry { label: "cmus".into(), command: "cmus".into() },
-            KnownAppEntry { label: "mpd".into(), command: "mpd".into() },
-            KnownAppEntry { label: "ncmpcpp".into(), command: "ncmpcpp".into() },
-            KnownAppEntry { label: "moc".into(), command: "moc".into() },
-            KnownAppEntry { label: "Musikcube".into(), command: "musikcube".into() },
-            KnownAppEntry { label: "mpvc".into(), command: "mpvc-tui".into() },
+            KnownAppEntry {
+                label: "mpv".into(),
+                command: "mpv".into(),
+            },
+            KnownAppEntry {
+                label: "cmus".into(),
+                command: "cmus".into(),
+            },
+            KnownAppEntry {
+                label: "mpd".into(),
+                command: "mpd".into(),
+            },
+            KnownAppEntry {
+                label: "ncmpcpp".into(),
+                command: "ncmpcpp".into(),
+            },
+            KnownAppEntry {
+                label: "moc".into(),
+                command: "moc".into(),
+            },
+            KnownAppEntry {
+                label: "Musikcube".into(),
+                command: "musikcube".into(),
+            },
+            KnownAppEntry {
+                label: "mpvc".into(),
+                command: "mpvc-tui".into(),
+            },
         ],
         "mp4" | "mkv" | "mov" | "webm" => vec![
-            KnownAppEntry { label: "mpv".into(), command: "mpv".into() },
-            KnownAppEntry { label: "VLC".into(), command: "vlc".into() },
+            KnownAppEntry {
+                label: "mpv".into(),
+                command: "mpv".into(),
+            },
+            KnownAppEntry {
+                label: "VLC".into(),
+                command: "vlc".into(),
+            },
         ],
-        "epub" | "mobi" | "azw" | "azw3" | "iba" | "rtf"  => vec![
-            KnownAppEntry { label: "epr".into(), command: "epr".into() },
-            KnownAppEntry { label: "epy".into(), command: "epy".into() },
-            KnownAppEntry { label: "hygg".into(), command: "hygg".into() },
+        "epub" | "mobi" | "azw" | "azw3" | "iba" | "rtf" => vec![
+            KnownAppEntry {
+                label: "epr".into(),
+                command: "epr".into(),
+            },
+            KnownAppEntry {
+                label: "epy".into(),
+                command: "epy".into(),
+            },
+            KnownAppEntry {
+                label: "hygg".into(),
+                command: "hygg".into(),
+            },
         ],
         "pdf" => vec![
-            KnownAppEntry { label: "hygg".into(), command: "hygg".into() },
-            KnownAppEntry { label: "less".into(), command: "less".into() },
-            KnownAppEntry { label: "xdg-open".into(), command: "xdg-open".into() },
-            KnownAppEntry { label: "xreader".into(), command: "xreader".into() },
-            KnownAppEntry { label: "Ghostview".into(), command: "gv".into() },
+            KnownAppEntry {
+                label: "hygg".into(),
+                command: "hygg".into(),
+            },
+            KnownAppEntry {
+                label: "less".into(),
+                command: "less".into(),
+            },
+            KnownAppEntry {
+                label: "xdg-open".into(),
+                command: "xdg-open".into(),
+            },
+            KnownAppEntry {
+                label: "xreader".into(),
+                command: "xreader".into(),
+            },
+            KnownAppEntry {
+                label: "Ghostview".into(),
+                command: "gv".into(),
+            },
         ],
         _ => Vec::new(),
     };
@@ -1605,7 +1686,11 @@ mod tests {
 
         assert_eq!(count, 1);
         assert_eq!(last_dst, Some(desktop.join("Projects")));
-        assert!(desktop.join("Projects").join("nested").join("todo.txt").exists());
+        assert!(desktop
+            .join("Projects")
+            .join("nested")
+            .join("todo.txt")
+            .exists());
         assert!(src_dir.join("nested").join("todo.txt").exists());
     }
 

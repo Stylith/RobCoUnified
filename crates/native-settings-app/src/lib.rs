@@ -4,8 +4,8 @@ use robcos_native_services::desktop_default_apps_service::{
 use robcos_native_services::desktop_user_service::sorted_usernames;
 use robcos_native_terminal_app::{SettingsChoiceKind, SettingsChoiceOverlay};
 use robcos_shared::config::{
-    CliAcsMode, DesktopCliProfiles, DesktopPtyProfileSettings, NativeStartupWindowMode, OpenMode,
-    Settings, CUSTOM_THEME_NAME, THEMES,
+    CliAcsMode, CrtPreset, DesktopCliProfiles, DesktopPtyProfileSettings, NativeStartupWindowMode,
+    OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
 };
 use robcos_shared::connections::macos_connections_disabled;
 use robcos_shared::core::auth::AuthMethod;
@@ -28,6 +28,7 @@ pub enum TerminalSettingsPanel {
     Home,
     General,
     Appearance,
+    AppearanceEffects,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,7 @@ pub struct DesktopSettingsUiDefaults {
 enum SettingsRowId {
     OpenGeneral,
     OpenAppearance,
+    OpenEffects,
     Sound,
     SystemSoundVolume,
     Bootup,
@@ -103,6 +105,21 @@ enum SettingsRowId {
     CustomThemeGreen,
     CustomThemeBlue,
     BorderGlyphs,
+    CrtEffectsEnabled,
+    CrtPreset,
+    CrtCurvature,
+    CrtScanlines,
+    CrtGlow,
+    CrtBloom,
+    CrtVignette,
+    CrtNoise,
+    CrtFlicker,
+    CrtJitter,
+    CrtBurnIn,
+    CrtGlowLine,
+    CrtPhosphorSoftness,
+    CrtBrightness,
+    CrtContrast,
     DefaultOpenMode,
     WindowMode,
     Connections,
@@ -307,7 +324,15 @@ pub fn gui_cli_profile_mut(
 }
 
 pub fn terminal_settings_rows(draft: &Settings, is_admin: bool) -> Vec<String> {
-    terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, draft, is_admin)
+    terminal_settings_panel_rows(TerminalSettingsPanel::Home, draft, is_admin)
+}
+
+pub fn terminal_settings_panel_rows(
+    panel: TerminalSettingsPanel,
+    draft: &Settings,
+    is_admin: bool,
+) -> Vec<String> {
+    terminal_settings_rows_with_ids(panel, draft, is_admin)
         .into_iter()
         .map(|(label, _)| label)
         .collect()
@@ -330,6 +355,9 @@ pub fn handle_settings_activation(
         }
         SettingsRowId::OpenAppearance => {
             TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::Appearance)
+        }
+        SettingsRowId::OpenEffects => {
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::AppearanceEffects)
         }
         SettingsRowId::Sound => {
             draft.sound = !draft.sound;
@@ -358,6 +386,30 @@ pub fn handle_settings_activation(
             };
             TerminalSettingsEvent::Persist
         }
+        SettingsRowId::CrtEffectsEnabled => {
+            draft.display_effects.enabled = !draft.display_effects.enabled;
+            if draft.display_effects.enabled && draft.display_effects.preset == CrtPreset::Off {
+                draft.display_effects.apply_preset(CrtPreset::RobCoStandard);
+            }
+            TerminalSettingsEvent::Persist
+        }
+        SettingsRowId::CrtPreset => {
+            *choice_overlay = Some(open_settings_choice(draft, SettingsChoiceKind::CrtPreset));
+            TerminalSettingsEvent::None
+        }
+        SettingsRowId::CrtCurvature
+        | SettingsRowId::CrtScanlines
+        | SettingsRowId::CrtGlow
+        | SettingsRowId::CrtBloom
+        | SettingsRowId::CrtVignette
+        | SettingsRowId::CrtNoise
+        | SettingsRowId::CrtFlicker
+        | SettingsRowId::CrtJitter
+        | SettingsRowId::CrtBurnIn
+        | SettingsRowId::CrtGlowLine
+        | SettingsRowId::CrtPhosphorSoftness
+        | SettingsRowId::CrtBrightness
+        | SettingsRowId::CrtContrast => TerminalSettingsEvent::None,
         SettingsRowId::DefaultOpenMode => {
             *choice_overlay = Some(open_settings_choice(
                 draft,
@@ -400,6 +452,14 @@ pub fn open_settings_choice(draft: &Settings, kind: SettingsChoiceKind) -> Setti
             NativeStartupWindowMode::BorderlessFullscreen => 2,
             NativeStartupWindowMode::Fullscreen => 3,
         },
+        SettingsChoiceKind::CrtPreset => match draft.display_effects.preset {
+            CrtPreset::Off => 0,
+            CrtPreset::Subtle => 1,
+            CrtPreset::RobCoStandard => 2,
+            CrtPreset::WornTerminal => 3,
+            CrtPreset::ExtremeRetro => 4,
+            CrtPreset::Custom => 5,
+        },
     };
     SettingsChoiceOverlay { kind, selected }
 }
@@ -413,6 +473,14 @@ pub fn settings_choice_items(kind: SettingsChoiceKind) -> Vec<String> {
             "Maximized".to_string(),
             "Borderless Fullscreen".to_string(),
             "Fullscreen".to_string(),
+        ],
+        SettingsChoiceKind::CrtPreset => vec![
+            CrtPreset::Off.label().to_string(),
+            CrtPreset::Subtle.label().to_string(),
+            CrtPreset::RobCoStandard.label().to_string(),
+            CrtPreset::WornTerminal.label().to_string(),
+            CrtPreset::ExtremeRetro.label().to_string(),
+            CrtPreset::Custom.label().to_string(),
         ],
     }
 }
@@ -438,6 +506,21 @@ pub fn apply_settings_choice(draft: &mut Settings, kind: SettingsChoiceKind, sel
                 3 => NativeStartupWindowMode::Fullscreen,
                 _ => NativeStartupWindowMode::Windowed,
             };
+        }
+        SettingsChoiceKind::CrtPreset => {
+            let preset = match selected {
+                1 => CrtPreset::Subtle,
+                2 => CrtPreset::RobCoStandard,
+                3 => CrtPreset::WornTerminal,
+                4 => CrtPreset::ExtremeRetro,
+                5 => CrtPreset::Custom,
+                _ => CrtPreset::Off,
+            };
+            if preset == CrtPreset::Custom {
+                draft.display_effects.preset = CrtPreset::Custom;
+            } else {
+                draft.display_effects.apply_preset(preset);
+            }
         }
     }
 }
@@ -479,6 +562,110 @@ pub fn adjust_settings_slider(
             }
             true
         }
+        SettingsRowId::CrtCurvature => adjust_crt_value(
+            &mut draft.display_effects.curvature,
+            delta,
+            0.0,
+            0.2,
+            0.01,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtScanlines => adjust_crt_value(
+            &mut draft.display_effects.scanlines,
+            delta,
+            0.0,
+            1.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtGlow => adjust_crt_value(
+            &mut draft.display_effects.glow,
+            delta,
+            0.0,
+            1.5,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtBloom => adjust_crt_value(
+            &mut draft.display_effects.bloom,
+            delta,
+            0.0,
+            1.5,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtVignette => adjust_crt_value(
+            &mut draft.display_effects.vignette,
+            delta,
+            0.0,
+            1.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtNoise => adjust_crt_value(
+            &mut draft.display_effects.noise,
+            delta,
+            0.0,
+            0.35,
+            0.01,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtFlicker => adjust_crt_value(
+            &mut draft.display_effects.flicker,
+            delta,
+            0.0,
+            0.3,
+            0.01,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtJitter => adjust_crt_value(
+            &mut draft.display_effects.jitter,
+            delta,
+            0.0,
+            0.12,
+            0.005,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtBurnIn => adjust_crt_value(
+            &mut draft.display_effects.burn_in,
+            delta,
+            0.0,
+            1.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtGlowLine => adjust_crt_value(
+            &mut draft.display_effects.glow_line,
+            delta,
+            0.0,
+            1.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtPhosphorSoftness => adjust_crt_value(
+            &mut draft.display_effects.phosphor_softness,
+            delta,
+            0.0,
+            1.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtBrightness => adjust_crt_value(
+            &mut draft.display_effects.brightness,
+            delta,
+            0.7,
+            1.4,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
+        SettingsRowId::CrtContrast => adjust_crt_value(
+            &mut draft.display_effects.contrast,
+            delta,
+            0.8,
+            1.5,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
         _ => false,
     }
 }
@@ -589,6 +776,106 @@ fn terminal_settings_rows_with_ids(
                 ),
                 SettingsRowId::BorderGlyphs,
             ));
+            rows.push(("Effects".to_string(), SettingsRowId::OpenEffects));
+            rows.push(("Back".to_string(), SettingsRowId::Back));
+            rows
+        }
+        TerminalSettingsPanel::AppearanceEffects => {
+            let mut rows = vec![(
+                format!(
+                    "CRT Effects: {} [toggle]",
+                    if draft.display_effects.enabled {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ),
+                SettingsRowId::CrtEffectsEnabled,
+            )];
+            rows.push((
+                format!(
+                    "CRT Preset: {} [choose]",
+                    draft.display_effects.preset.label()
+                ),
+                SettingsRowId::CrtPreset,
+            ));
+            if draft.display_effects.enabled {
+                rows.extend([
+                    (
+                        format!(
+                            "CRT Curvature: {:.2} [adjust]",
+                            draft.display_effects.curvature
+                        ),
+                        SettingsRowId::CrtCurvature,
+                    ),
+                    (
+                        format!(
+                            "CRT Scanlines: {:.2} [adjust]",
+                            draft.display_effects.scanlines
+                        ),
+                        SettingsRowId::CrtScanlines,
+                    ),
+                    (
+                        format!("CRT Glow: {:.2} [adjust]", draft.display_effects.glow),
+                        SettingsRowId::CrtGlow,
+                    ),
+                    (
+                        format!("CRT Bloom: {:.2} [adjust]", draft.display_effects.bloom),
+                        SettingsRowId::CrtBloom,
+                    ),
+                    (
+                        format!(
+                            "CRT Vignette: {:.2} [adjust]",
+                            draft.display_effects.vignette
+                        ),
+                        SettingsRowId::CrtVignette,
+                    ),
+                    (
+                        format!("CRT Noise: {:.2} [adjust]", draft.display_effects.noise),
+                        SettingsRowId::CrtNoise,
+                    ),
+                    (
+                        format!("CRT Flicker: {:.2} [adjust]", draft.display_effects.flicker),
+                        SettingsRowId::CrtFlicker,
+                    ),
+                    (
+                        format!("CRT Jitter: {:.3} [adjust]", draft.display_effects.jitter),
+                        SettingsRowId::CrtJitter,
+                    ),
+                    (
+                        format!("CRT Burn-In: {:.2} [adjust]", draft.display_effects.burn_in),
+                        SettingsRowId::CrtBurnIn,
+                    ),
+                    (
+                        format!(
+                            "CRT Glow Line: {:.2} [adjust]",
+                            draft.display_effects.glow_line
+                        ),
+                        SettingsRowId::CrtGlowLine,
+                    ),
+                    (
+                        format!(
+                            "CRT Softness: {:.2} [adjust]",
+                            draft.display_effects.phosphor_softness
+                        ),
+                        SettingsRowId::CrtPhosphorSoftness,
+                    ),
+                    (
+                        format!(
+                            "CRT Brightness: {:.2} [adjust]",
+                            draft.display_effects.brightness
+                        ),
+                        SettingsRowId::CrtBrightness,
+                    ),
+                    (
+                        format!(
+                            "CRT Contrast: {:.2} [adjust]",
+                            draft.display_effects.contrast
+                        ),
+                        SettingsRowId::CrtContrast,
+                    ),
+                ]);
+            }
             rows.push(("Back".to_string(), SettingsRowId::Back));
             rows
         }
@@ -603,6 +890,23 @@ fn adjust_rgb_component(value: &mut u8, delta: i16) {
 fn adjust_percent(value: &mut u8, delta: i16) {
     let next = (*value as i16 + delta).clamp(0, 100);
     *value = next as u8;
+}
+
+fn adjust_crt_value(
+    value: &mut f32,
+    delta: i16,
+    min: f32,
+    max: f32,
+    step: f32,
+    preset: &mut CrtPreset,
+) -> bool {
+    let next = (*value + delta as f32 * step).clamp(min, max);
+    if (next - *value).abs() < f32::EPSILON {
+        return false;
+    }
+    *value = next;
+    *preset = CrtPreset::Custom;
+    true
 }
 
 #[cfg(test)]
@@ -650,6 +954,10 @@ mod tests {
             .iter()
             .position(|(_, id)| *id == SettingsRowId::OpenGeneral)
             .unwrap();
+        let appearance_idx = user_rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::OpenAppearance)
+            .unwrap();
         let default_apps_idx = user_rows
             .iter()
             .position(|(_, id)| *id == SettingsRowId::DefaultApps)
@@ -677,6 +985,16 @@ mod tests {
                 false,
             ),
             TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::General)
+        ));
+        assert!(matches!(
+            handle_settings_activation(
+                TerminalSettingsPanel::Home,
+                &mut draft,
+                appearance_idx,
+                &mut overlay,
+                false,
+            ),
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::Appearance)
         ));
         assert!(matches!(
             handle_settings_activation(
@@ -845,6 +1163,87 @@ mod tests {
         ));
         assert_eq!(draft.custom_theme_rgb[0], 15);
         assert_eq!(draft.theme, CUSTOM_THEME_NAME);
+    }
+
+    #[test]
+    fn appearance_rows_include_crt_controls_when_enabled() {
+        let mut draft = get_settings();
+        draft.display_effects.enabled = true;
+        let rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::OpenEffects)));
+        assert!(!rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtEffectsEnabled)));
+    }
+
+    #[test]
+    fn appearance_effects_rows_include_crt_controls_when_enabled() {
+        let mut draft = get_settings();
+        draft.display_effects.enabled = true;
+        let rows = terminal_settings_rows_with_ids(
+            TerminalSettingsPanel::AppearanceEffects,
+            &draft,
+            false,
+        );
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtEffectsEnabled)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtPreset)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtBloom)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtGlow)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtBurnIn)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtGlowLine)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtContrast)));
+    }
+
+    #[test]
+    fn effects_row_opens_effects_panel() {
+        let mut draft = get_settings();
+        let mut overlay = None;
+        let rows =
+            terminal_settings_rows_with_ids(TerminalSettingsPanel::Appearance, &draft, false);
+        let idx = rows
+            .iter()
+            .position(|(_, id)| *id == SettingsRowId::OpenEffects)
+            .expect("effects row");
+
+        assert!(matches!(
+            handle_settings_activation(
+                TerminalSettingsPanel::Appearance,
+                &mut draft,
+                idx,
+                &mut overlay,
+                false,
+            ),
+            TerminalSettingsEvent::OpenPanel(TerminalSettingsPanel::AppearanceEffects)
+        ));
+    }
+
+    #[test]
+    fn crt_preset_choice_applies_effects_preset() {
+        let mut draft = get_settings();
+        draft.display_effects.apply_preset(CrtPreset::Subtle);
+        apply_settings_choice(&mut draft, SettingsChoiceKind::CrtPreset, 4);
+        assert_eq!(draft.display_effects.preset, CrtPreset::ExtremeRetro);
+        assert!(draft.display_effects.enabled);
+        assert!(draft.display_effects.glow >= 0.9);
+        assert!(draft.display_effects.bloom >= 0.8);
+        assert!(draft.display_effects.burn_in >= 0.5);
     }
 
     #[test]

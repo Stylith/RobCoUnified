@@ -4,7 +4,6 @@ use super::super::desktop_search_service::{
     start_application_entries, start_document_entries, start_game_entries, start_network_entries,
     NativeStartLeafAction, NativeStartLeafEntry,
 };
-use super::super::donkey_kong::BUILTIN_DONKEY_KONG_GAME;
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::prompt::FlashAction;
@@ -271,7 +270,7 @@ impl RobcoNativeApp {
             NativeStartLeafAction::LaunchNetworkProgram(name) => {
                 Some((EditMenuTarget::Network, name.clone()))
             }
-            NativeStartLeafAction::LaunchGameProgram(name) if name != BUILTIN_DONKEY_KONG_GAME => {
+            NativeStartLeafAction::LaunchGameProgram(name) => {
                 Some((EditMenuTarget::Games, name.clone()))
             }
             _ => None,
@@ -292,7 +291,7 @@ impl RobcoNativeApp {
                     .map(|session| session.username.as_str()),
             ),
             StartLeaf::Network => start_network_entries(),
-            StartLeaf::Games => start_game_entries(BUILTIN_DONKEY_KONG_GAME),
+            StartLeaf::Games => start_game_entries(),
         }
     }
 

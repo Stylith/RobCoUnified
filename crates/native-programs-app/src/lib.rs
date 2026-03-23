@@ -34,7 +34,6 @@ pub enum DesktopApplicationsAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopGamesAction {
-    OpenBuiltinGame,
     LaunchConfigured(String),
 }
 
@@ -45,7 +44,6 @@ pub enum TerminalProgramRequest {
     OpenTextEditor,
     OpenNukeCodes,
     OpenFileManager,
-    OpenBuiltinGame,
     LaunchCatalog {
         name: String,
         catalog: ProgramCatalog,
@@ -61,7 +59,6 @@ pub enum DesktopProgramRequest {
         close_window: bool,
     },
     OpenFileManager,
-    OpenBuiltinGame,
     LaunchCatalog {
         name: String,
         catalog: ProgramCatalog,
@@ -85,7 +82,6 @@ pub struct DesktopApplicationsSections {
 pub enum TerminalGamesAction {
     None,
     Back,
-    OpenBuiltinGame,
     LaunchConfigured(String),
 }
 
@@ -193,26 +189,12 @@ pub fn build_desktop_applications_sections(
     }
 }
 
-pub fn resolve_desktop_games_action(label: &str, builtin_game_label: &str) -> DesktopGamesAction {
-    if label == builtin_game_label {
-        DesktopGamesAction::OpenBuiltinGame
-    } else {
-        DesktopGamesAction::LaunchConfigured(label.to_string())
-    }
+pub fn resolve_desktop_games_action(label: &str) -> DesktopGamesAction {
+    DesktopGamesAction::LaunchConfigured(label.to_string())
 }
 
-pub fn build_terminal_game_entries(
-    configured_names: &[String],
-    builtin_game_label: &str,
-) -> Vec<String> {
-    let mut entries = vec![builtin_game_label.to_string()];
-    entries.extend(
-        configured_names
-            .iter()
-            .filter(|name| *name != builtin_game_label)
-            .cloned(),
-    );
-    entries
+pub fn build_terminal_game_entries(configured_names: &[String]) -> Vec<String> {
+    configured_names.to_vec()
 }
 
 pub fn resolve_catalog_menu_action(event: ProgramMenuEvent) -> TerminalCatalogMenuAction {
@@ -256,14 +238,10 @@ pub fn resolve_terminal_catalog_request(
     }
 }
 
-pub fn resolve_terminal_games_request(
-    event: ProgramMenuEvent,
-    builtin_game_label: &str,
-) -> TerminalProgramRequest {
-    match resolve_terminal_games_action(event, builtin_game_label) {
+pub fn resolve_terminal_games_request(event: ProgramMenuEvent) -> TerminalProgramRequest {
+    match resolve_terminal_games_action(event) {
         TerminalGamesAction::None => TerminalProgramRequest::None,
         TerminalGamesAction::Back => TerminalProgramRequest::BackToMainMenu,
-        TerminalGamesAction::OpenBuiltinGame => TerminalProgramRequest::OpenBuiltinGame,
         TerminalGamesAction::LaunchConfigured(name) => TerminalProgramRequest::LaunchCatalog {
             name,
             catalog: ProgramCatalog::Games,
@@ -290,12 +268,8 @@ pub fn resolve_desktop_applications_request(
     }
 }
 
-pub fn resolve_desktop_games_request(
-    name: &str,
-    builtin_game_label: &str,
-) -> DesktopProgramRequest {
-    match resolve_desktop_games_action(name, builtin_game_label) {
-        DesktopGamesAction::OpenBuiltinGame => DesktopProgramRequest::OpenBuiltinGame,
+pub fn resolve_desktop_games_request(name: &str) -> DesktopProgramRequest {
+    match resolve_desktop_games_action(name) {
         DesktopGamesAction::LaunchConfigured(name) => DesktopProgramRequest::LaunchCatalog {
             name,
             catalog: ProgramCatalog::Games,
@@ -325,16 +299,10 @@ pub fn resolve_terminal_applications_action(
     }
 }
 
-pub fn resolve_terminal_games_action(
-    event: ProgramMenuEvent,
-    builtin_game_label: &str,
-) -> TerminalGamesAction {
+pub fn resolve_terminal_games_action(event: ProgramMenuEvent) -> TerminalGamesAction {
     match event {
         ProgramMenuEvent::None => TerminalGamesAction::None,
         ProgramMenuEvent::Back => TerminalGamesAction::Back,
-        ProgramMenuEvent::Launch(name) if name == builtin_game_label => {
-            TerminalGamesAction::OpenBuiltinGame
-        }
         ProgramMenuEvent::Launch(name) => TerminalGamesAction::LaunchConfigured(name),
     }
 }
@@ -468,19 +436,16 @@ mod tests {
     #[test]
     fn resolve_terminal_games_action_maps_builtin_game() {
         assert_eq!(
-            resolve_terminal_games_action(
-                ProgramMenuEvent::Launch("Donkey Kong".to_string()),
-                "Donkey Kong",
-            ),
-            TerminalGamesAction::OpenBuiltinGame
+            resolve_terminal_games_action(ProgramMenuEvent::Launch("Custom".to_string())),
+            TerminalGamesAction::LaunchConfigured("Custom".to_string())
         );
         assert_eq!(
             resolve_catalog_menu_action(ProgramMenuEvent::Back),
             TerminalCatalogMenuAction::Back
         );
         assert_eq!(
-            resolve_desktop_games_action("Donkey Kong", "Donkey Kong"),
-            DesktopGamesAction::OpenBuiltinGame
+            resolve_desktop_games_action("Custom"),
+            DesktopGamesAction::LaunchConfigured("Custom".to_string())
         );
     }
 
@@ -497,11 +462,11 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_terminal_games_request(
-                ProgramMenuEvent::Launch("Donkey Kong".to_string()),
-                "Donkey Kong"
-            ),
-            TerminalProgramRequest::OpenBuiltinGame
+            resolve_terminal_games_request(ProgramMenuEvent::Launch("Custom".to_string())),
+            TerminalProgramRequest::LaunchCatalog {
+                name: "Custom".to_string(),
+                catalog: ProgramCatalog::Games,
+            }
         );
     }
 
@@ -514,7 +479,7 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_desktop_games_request("Custom", "Donkey Kong"),
+            resolve_desktop_games_request("Custom"),
             DesktopProgramRequest::LaunchCatalog {
                 name: "Custom".to_string(),
                 catalog: ProgramCatalog::Games,

@@ -1,6 +1,4 @@
-use super::super::desktop_app::{
-    build_taskbar_entries, DesktopMenuAction, WindowInstanceId,
-};
+use super::super::desktop_app::{build_taskbar_entries, DesktopMenuAction, WindowInstanceId};
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, RichText, TopBottomPanel};
 
@@ -60,12 +58,8 @@ impl RobcoNativeApp {
                         if !has_multiple {
                             // Single instance — simple button.
                             let entry = &group[0];
-                            let response = Self::desktop_bar_button(
-                                ui,
-                                &entry.label,
-                                entry.inactive,
-                                false,
-                            );
+                            let response =
+                                Self::desktop_bar_button(ui, &entry.label, entry.inactive, false);
                             if response.clicked() {
                                 self.apply_desktop_menu_action(
                                     ctx,
@@ -84,14 +78,10 @@ impl RobcoNativeApp {
                             // pops up an instance picker.
                             let base_label = &group[0].label;
                             // Strip "[1]" from base label if present.
-                            let combined_label = base_label
-                                .strip_suffix(" [1]")
-                                .unwrap_or(base_label);
+                            let combined_label =
+                                base_label.strip_suffix(" [1]").unwrap_or(base_label);
                             let any_active = group.iter().any(|e| !e.inactive);
-                            let popup_id = egui::Id::new((
-                                "taskbar_instance_popup",
-                                kind as u8,
-                            ));
+                            let popup_id = egui::Id::new(("taskbar_instance_popup", kind as u8));
                             let response = Self::desktop_bar_button(
                                 ui,
                                 format!("{} [{}]", combined_label, group.len()),
@@ -100,10 +90,8 @@ impl RobcoNativeApp {
                             );
                             if response.clicked() {
                                 // Cycle through instances on click.
-                                let active_idx = group
-                                    .iter()
-                                    .position(|e| !e.inactive)
-                                    .unwrap_or(0);
+                                let active_idx =
+                                    group.iter().position(|e| !e.inactive).unwrap_or(0);
                                 let next = (active_idx + 1) % group.len();
                                 let next_id = group[next].id;
                                 self.apply_desktop_menu_action(
@@ -135,8 +123,7 @@ impl RobcoNativeApp {
                                     Self::apply_desktop_panel_button_style(ui);
                                     let palette = current_palette();
                                     for (id, label, inactive) in &ids {
-                                        let minimized =
-                                            self.desktop_window_state(*id).minimized;
+                                        let minimized = self.desktop_window_state(*id).minimized;
                                         let status = if minimized {
                                             " (min)"
                                         } else if !inactive {
@@ -147,27 +134,19 @@ impl RobcoNativeApp {
                                         ui.horizontal(|ui| {
                                             if ui
                                                 .button(
-                                                    RichText::new(format!(
-                                                        "{}{}",
-                                                        label, status
-                                                    ))
-                                                    .color(palette.fg),
+                                                    RichText::new(format!("{}{}", label, status))
+                                                        .color(palette.fg),
                                                 )
                                                 .clicked()
                                             {
                                                 self.apply_desktop_menu_action(
                                                     ctx,
-                                                    &DesktopMenuAction::ActivateTaskbarWindow(
-                                                        *id,
-                                                    ),
+                                                    &DesktopMenuAction::ActivateTaskbarWindow(*id),
                                                 );
                                             }
                                             if id.instance > 0 {
                                                 if ui
-                                                    .button(
-                                                        RichText::new("[X]")
-                                                            .color(palette.fg),
-                                                    )
+                                                    .button(RichText::new("[X]").color(palette.fg))
                                                     .clicked()
                                                 {
                                                     self.close_secondary_window(*id);

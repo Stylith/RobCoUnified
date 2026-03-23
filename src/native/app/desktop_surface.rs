@@ -1,5 +1,4 @@
 use super::super::desktop_app::DesktopWindow;
-use super::super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use super::super::desktop_search_service::NativeStartLeafAction;
 use super::super::desktop_shortcuts_service::{
     create_shortcut_from_start_action, delete_shortcut as delete_desktop_shortcut,
@@ -15,12 +14,12 @@ use super::super::desktop_surface_service::{
 use super::super::file_manager::FileEntryRow;
 use super::super::file_manager_app::{FileManagerPromptRequest, NativeFileManagerDragPayload};
 use super::super::retro_ui::{current_palette, RetroPalette};
+use super::super::shared_file_manager_settings::FileManagerSettingsUpdate;
+use super::RobcoNativeApp;
 use super::{
     AssetCache, ContextMenuAction, DesktopIconLayoutCache, DesktopIconSelection,
-    DesktopSurfaceEntriesCache, ShortcutPropertiesState,
-    StartMenuRenameState,
+    DesktopSurfaceEntriesCache, ShortcutPropertiesState, StartMenuRenameState,
 };
-use super::RobcoNativeApp;
 use crate::config::{
     desktop_dir as robco_desktop_dir, DesktopIconSortMode, DesktopIconStyle, WallpaperSizeMode,
 };
@@ -320,12 +319,13 @@ impl RobcoNativeApp {
             return;
         };
         match action {
-            ContextMenuAction::Open => {
-                self.run_file_manager_command(super::super::file_manager::FileManagerCommand::OpenSelected)
-            }
+            ContextMenuAction::Open => self.run_file_manager_command(
+                super::super::file_manager::FileManagerCommand::OpenSelected,
+            ),
             ContextMenuAction::OpenWith => {
                 if let Some(entry) = self.file_manager_selected_file() {
-                    let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
+                    let ext_key =
+                        super::super::file_manager_app::open_with_extension_key(&entry.path);
                     self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
                         entry.path, ext_key, false,
                     ));
@@ -335,8 +335,12 @@ impl RobcoNativeApp {
             }
             ContextMenuAction::OpenWithCommand(command) => {
                 if let Some(entry) = self.file_manager_selected_file() {
-                    let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
-                    match super::super::file_manager_app::prepare_open_with_launch(&entry.path, &command) {
+                    let ext_key =
+                        super::super::file_manager_app::open_with_extension_key(&entry.path);
+                    match super::super::file_manager_app::prepare_open_with_launch(
+                        &entry.path,
+                        &command,
+                    ) {
                         Ok(launch) => {
                             self.shell_status = self.launch_open_with_request(launch);
                             self.apply_file_manager_settings_update(
@@ -354,14 +358,22 @@ impl RobcoNativeApp {
                     self.shell_status = "Open With requires a file.".to_string();
                 }
             }
-            ContextMenuAction::Rename => self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Rename),
-            ContextMenuAction::Cut => self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Cut),
-            ContextMenuAction::Copy => self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Copy),
-            ContextMenuAction::Paste => self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Paste),
-            ContextMenuAction::Duplicate => {
-                self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Duplicate)
+            ContextMenuAction::Rename => self
+                .run_file_manager_command(super::super::file_manager::FileManagerCommand::Rename),
+            ContextMenuAction::Cut => {
+                self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Cut)
             }
-            ContextMenuAction::Delete => self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Delete),
+            ContextMenuAction::Copy => {
+                self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Copy)
+            }
+            ContextMenuAction::Paste => {
+                self.run_file_manager_command(super::super::file_manager::FileManagerCommand::Paste)
+            }
+            ContextMenuAction::Duplicate => self.run_file_manager_command(
+                super::super::file_manager::FileManagerCommand::Duplicate,
+            ),
+            ContextMenuAction::Delete => self
+                .run_file_manager_command(super::super::file_manager::FileManagerCommand::Delete),
             ContextMenuAction::Properties => {
                 self.shell_status = "Properties dialog is not implemented yet.".to_string();
             }
@@ -564,7 +576,12 @@ impl RobcoNativeApp {
         ]
     }
 
-    pub(super) fn paint_desktop_icon_label(ui: &mut egui::Ui, rect: egui::Rect, label: &str, color: Color32) {
+    pub(super) fn paint_desktop_icon_label(
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        label: &str,
+        color: Color32,
+    ) {
         let lines = Self::desktop_icon_label_lines(label);
         if lines.len() == 1 {
             ui.painter().text(
@@ -1179,7 +1196,10 @@ impl RobcoNativeApp {
                 // Header
                 let header_action =
                     Self::draw_desktop_window_header(ui, "Shortcut Properties", false);
-                if matches!(header_action, super::desktop_window_mgmt::DesktopHeaderAction::Close) {
+                if matches!(
+                    header_action,
+                    super::desktop_window_mgmt::DesktopHeaderAction::Close
+                ) {
                     action = Some("cancel");
                 }
 
@@ -1339,7 +1359,10 @@ impl RobcoNativeApp {
                 Self::apply_settings_control_style(ui);
                 let header_action =
                     Self::draw_desktop_window_header(ui, "Desktop Item Properties", false);
-                if matches!(header_action, super::desktop_window_mgmt::DesktopHeaderAction::Close) {
+                if matches!(
+                    header_action,
+                    super::desktop_window_mgmt::DesktopHeaderAction::Close
+                ) {
                     action = Some("cancel");
                 }
 

@@ -1,10 +1,10 @@
 use super::super::about_screen::{draw_about_screen, TerminalAboutRequest};
 use super::super::background::BackgroundResult;
-use super::super::desktop_app::DesktopWindow;
 use super::super::connections_screen::{
     draw_terminal_connections_screen, TerminalConnectionsRequest,
 };
 use super::super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
+use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_default_apps_service::apply_default_app_binding;
 use super::super::desktop_documents_service::document_category_path;
 use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
@@ -12,26 +12,16 @@ use super::super::desktop_session_service::session_tabs as native_session_tabs;
 use super::super::desktop_settings_service::cycle_hacking_difficulty_in_settings;
 use super::super::desktop_status_service::{clear_shell_status, saved_shell_status};
 use super::super::desktop_user_service::{
-    create_user as create_desktop_user,
-    update_user_auth_method,
+    create_user as create_desktop_user, update_user_auth_method,
 };
 use super::super::document_browser::{
     activate_browser_selection, draw_terminal_document_browser, DocumentBrowserEvent,
     TerminalDocumentBrowserRequest,
 };
-use super::super::file_manager::FileManagerCommand;
-use super::super::terminal_command_palette::{
-    draw_command_palette, CommandPaletteState, CommandPaletteTarget,
-};
-use super::super::terminal_open_with_picker::{
-    draw_open_with_picker, OpenWithPickerAction,
-};
-use super::super::donkey_kong::{
-    input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
-};
 use super::super::edit_menus_screen::{
     draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest,
 };
+use super::super::file_manager::FileManagerCommand;
 use super::super::installer_screen::{
     draw_installer_screen, settle_view_after_package_command, InstallerEvent,
     InstallerPackageAction,
@@ -44,16 +34,18 @@ use super::super::menu::{
 };
 use super::super::nuke_codes_screen::{draw_nuke_codes_screen, NukeCodesEvent};
 use super::super::programs_screen::draw_programs_menu;
-use super::super::prompt::{
-    draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction,
-};
+use super::super::prompt::{draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction};
 use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
+use super::super::terminal_command_palette::{
+    draw_command_palette, CommandPaletteState, CommandPaletteTarget,
+};
+use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
 use super::retro_footer_height;
-use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
 use super::RobcoNativeApp;
+use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, TopBottomPanel};
 use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesView};
@@ -166,9 +158,6 @@ impl RobcoNativeApp {
                 self.navigate_to_screen(TerminalScreen::DocumentBrowser);
                 self.shell_status = "Opened File Manager.".to_string();
             }
-            TerminalProgramRequest::OpenBuiltinGame => {
-                self.open_terminal_donkey_kong();
-            }
             TerminalProgramRequest::LaunchCatalog { name, catalog } => {
                 self.open_embedded_catalog_launch(&name, catalog, launch_return_screen);
             }
@@ -185,9 +174,6 @@ impl RobcoNativeApp {
             }
             DesktopProgramRequest::OpenFileManager => {
                 self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
-            }
-            DesktopProgramRequest::OpenBuiltinGame => {
-                self.open_desktop_donkey_kong();
             }
             DesktopProgramRequest::LaunchCatalog { name, catalog, .. } => {
                 self.open_desktop_catalog_launch(&name, catalog);
@@ -304,8 +290,7 @@ impl RobcoNativeApp {
         // If open-with picker is open, handle it as overlay
         if let Some(ref mut picker) = self.terminal_open_with_picker {
             if picker.open {
-                let picker_action =
-                    draw_open_with_picker(ctx, picker, layout.cols, layout.rows);
+                let picker_action = draw_open_with_picker(ctx, picker, layout.cols, layout.rows);
                 // Consume remaining navigation keys so the browser doesn't act on them
                 ctx.input_mut(|i| {
                     let m = egui::Modifiers::NONE;
@@ -326,7 +311,10 @@ impl RobcoNativeApp {
                     i.consume_key(egui::Modifiers::COMMAND, egui::Key::V);
                     i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
                     i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
-                    i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::N);
+                    i.consume_key(
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                        egui::Key::N,
+                    );
                 });
                 // Draw browser underneath
                 draw_terminal_document_browser(
@@ -372,8 +360,12 @@ impl RobcoNativeApp {
             && self.terminal_command_palette.target == CommandPaletteTarget::DocumentBrowser
         {
             // Let the palette process and consume keys first
-            let palette_action =
-                draw_command_palette(ctx, &mut self.terminal_command_palette, layout.cols, layout.rows);
+            let palette_action = draw_command_palette(
+                ctx,
+                &mut self.terminal_command_palette,
+                layout.cols,
+                layout.rows,
+            );
             // Consume any remaining navigation keys so the browser doesn't act on them
             ctx.input_mut(|i| {
                 let m = egui::Modifiers::NONE;
@@ -392,7 +384,10 @@ impl RobcoNativeApp {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::V);
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
-                i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::N);
+                i.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::N,
+                );
             });
             // Draw the browser visually underneath (keys already consumed)
             draw_terminal_document_browser(
@@ -554,6 +549,14 @@ impl RobcoNativeApp {
                         0,
                         true,
                     ));
+                } else if matches!(
+                    self.terminal_settings_panel,
+                    TerminalSettingsPanel::AppearanceEffects
+                ) {
+                    self.terminal_settings_panel = TerminalSettingsPanel::Appearance;
+                    self.terminal_nav.settings_idx = 0;
+                    self.terminal_nav.settings_choice = None;
+                    self.apply_status_update(clear_shell_status());
                 } else {
                     self.terminal_settings_panel = TerminalSettingsPanel::Home;
                     self.terminal_nav.settings_idx = 0;
@@ -677,7 +680,10 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn apply_terminal_connections_request(&mut self, request: TerminalConnectionsRequest) {
+    pub(super) fn apply_terminal_connections_request(
+        &mut self,
+        request: TerminalConnectionsRequest,
+    ) {
         match request {
             TerminalConnectionsRequest::None => {}
             TerminalConnectionsRequest::BackToSettings => {
@@ -878,10 +884,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let entries = build_terminal_game_entries(
-            &catalog_names(ProgramCatalog::Games),
-            BUILTIN_DONKEY_KONG_GAME,
-        );
+        let entries = build_terminal_game_entries(&catalog_names(ProgramCatalog::Games));
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -900,40 +903,8 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         );
-        let request = resolve_terminal_games_request(event, BUILTIN_DONKEY_KONG_GAME);
+        let request = resolve_terminal_games_request(event);
         self.apply_terminal_program_request(request, TerminalScreen::Games);
-    }
-
-    pub(super) fn draw_terminal_donkey_kong(&mut self, ctx: &Context) {
-        ctx.request_repaint();
-        let theme = self.current_donkey_kong_theme();
-        let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
-        let input = donkey_kong_input_from_ctx(ctx);
-        let game = self.ensure_donkey_kong_loaded(ctx);
-        game.set_theme(theme);
-        game.update(input, dt);
-
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::none()
-                    .fill(current_palette().bg)
-                    .inner_margin(egui::Margin::same(12.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(BUILTIN_DONKEY_KONG_GAME).strong());
-                    ui.separator();
-                    ui.small("Arrow keys / WASD move");
-                    ui.separator();
-                    ui.small("Space jump / restart");
-                    ui.separator();
-                    ui.small("Esc back");
-                });
-                ui.add_space(8.0);
-                let game_rect = ui.available_rect_before_wrap();
-                game.draw(ui, game_rect);
-                ui.allocate_rect(game_rect, egui::Sense::hover());
-            });
     }
 
     pub(super) fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {

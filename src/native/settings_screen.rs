@@ -5,7 +5,7 @@ use eframe::egui::{self, Context};
 pub use robcos_native_settings_app::TerminalSettingsEvent;
 use robcos_native_settings_app::{
     adjust_settings_slider, apply_settings_choice, handle_settings_activation,
-    settings_choice_items, terminal_settings_rows, TerminalSettingsPanel,
+    settings_choice_items, terminal_settings_panel_rows, TerminalSettingsPanel,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -190,60 +190,7 @@ fn terminal_settings_rows_for_panel(
     draft: &Settings,
     is_admin: bool,
 ) -> Vec<String> {
-    match panel {
-        TerminalSettingsPanel::Home => terminal_settings_rows(draft, is_admin),
-        TerminalSettingsPanel::General => vec![
-            format!(
-                "Default Open Mode: {} [choose]",
-                match draft.default_open_mode {
-                    crate::config::OpenMode::Terminal => "Terminal",
-                    crate::config::OpenMode::Desktop => "Desktop",
-                }
-            ),
-            format!("Sound: {} [toggle]", if draft.sound { "ON" } else { "OFF" }),
-            format!(
-                "System Sound Volume: {}% [adjust]",
-                draft.system_sound_volume
-            ),
-            format!(
-                "Bootup: {} [toggle]",
-                if draft.bootup { "ON" } else { "OFF" }
-            ),
-            format!(
-                "Navigation Hints: {} [toggle]",
-                if draft.show_navigation_hints {
-                    "ON"
-                } else {
-                    "OFF"
-                }
-            ),
-            "Back".to_string(),
-        ],
-        TerminalSettingsPanel::Appearance => {
-            let mut items = vec![
-                format!(
-                    "Window Mode: {} [choose]",
-                    draft.native_startup_window_mode.label()
-                ),
-                format!("Theme: {} [choose]", draft.theme),
-            ];
-            if draft.theme == crate::config::CUSTOM_THEME_NAME {
-                let [r, g, b] = draft.custom_theme_rgb;
-                items.push(format!("Custom Theme Red: {r} [adjust]"));
-                items.push(format!("Custom Theme Green: {g} [adjust]"));
-                items.push(format!("Custom Theme Blue: {b} [adjust]"));
-            }
-            items.push(format!(
-                "Border Glyphs: {} [toggle]",
-                match draft.cli_acs_mode {
-                    crate::config::CliAcsMode::Ascii => "ASCII",
-                    crate::config::CliAcsMode::Unicode => "Unicode Smooth",
-                }
-            ));
-            items.push("Back".to_string());
-            items
-        }
-    }
+    terminal_settings_panel_rows(panel, draft, is_admin)
 }
 
 fn terminal_settings_title(panel: TerminalSettingsPanel) -> &'static str {
@@ -251,6 +198,7 @@ fn terminal_settings_title(panel: TerminalSettingsPanel) -> &'static str {
         TerminalSettingsPanel::Home => "Settings",
         TerminalSettingsPanel::General => "Settings - General",
         TerminalSettingsPanel::Appearance => "Settings - Appearance",
+        TerminalSettingsPanel::AppearanceEffects => "Settings - Effects",
     }
 }
 
@@ -258,6 +206,7 @@ fn terminal_settings_subtitle(panel: TerminalSettingsPanel) -> &'static str {
     match panel {
         TerminalSettingsPanel::Home => "Choose a settings panel",
         TerminalSettingsPanel::General => "General system settings",
-        TerminalSettingsPanel::Appearance => "Theme and display settings",
+        TerminalSettingsPanel::Appearance => "Theme, glyph, and display settings",
+        TerminalSettingsPanel::AppearanceEffects => "CRT display effects",
     }
 }

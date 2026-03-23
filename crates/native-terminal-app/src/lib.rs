@@ -17,6 +17,7 @@ pub enum SettingsChoiceKind {
     Theme,
     DefaultOpenMode,
     WindowMode,
+    CrtPreset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -955,8 +956,7 @@ pub fn terminal_screen_open_plan(
             reset_user_management_to_root: false,
             clear_status,
         },
-        TerminalScreen::DonkeyKong
-        | TerminalScreen::NukeCodes
+        TerminalScreen::NukeCodes
         | TerminalScreen::EditMenus
         | TerminalScreen::About
         | TerminalScreen::PtyApp => TerminalScreenOpenPlan {
@@ -1037,11 +1037,6 @@ pub fn resolve_terminal_back_action(context: TerminalBackContext) -> TerminalBac
         | TerminalScreen::Settings
         | TerminalScreen::UserManagement => TerminalBackAction::NavigateTo {
             screen: TerminalScreen::MainMenu,
-            clear_status: true,
-            reset_installer: false,
-        },
-        TerminalScreen::DonkeyKong => TerminalBackAction::NavigateTo {
-            screen: TerminalScreen::Games,
             clear_status: true,
             reset_installer: false,
         },

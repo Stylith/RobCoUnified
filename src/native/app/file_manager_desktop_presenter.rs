@@ -8,9 +8,8 @@ pub(super) fn build_open_with_context_entries(
     file_manager: &super::super::file_manager::NativeFileManagerState,
     settings: &crate::config::DesktopFileManagerSettings,
 ) -> (Vec<(String, String)>, usize) {
-    let selected = super::super::file_manager_app::selected_file(
-        file_manager.selected_rows_for_action(),
-    );
+    let selected =
+        super::super::file_manager_app::selected_file(file_manager.selected_rows_for_action());
     let Some(entry) = selected else {
         return (Vec::new(), 0);
     };
@@ -378,11 +377,8 @@ impl RobcoNativeApp {
                 .dnd_hover_payload::<NativeFileManagerDragPayload>()
                 .is_some_and(|payload| Self::file_manager_drop_allowed(&payload.paths, &row.path));
             if drop_hover {
-                ui.painter().rect_stroke(
-                    response.rect,
-                    0.0,
-                    egui::Stroke::new(2.0, palette.fg),
-                );
+                ui.painter()
+                    .rect_stroke(response.rect, 0.0, egui::Stroke::new(2.0, palette.fg));
             }
             if let Some(payload) = response.dnd_release_payload::<NativeFileManagerDragPayload>() {
                 if Self::file_manager_drop_allowed(&payload.paths, &row.path) {
@@ -451,7 +447,11 @@ impl RobcoNativeApp {
                             for (idx, tab) in desktop_model.tabs.iter().enumerate() {
                                 let title = Self::truncate_file_manager_label(
                                     &tab.title,
-                                    if desktop_model.close_tab_enabled() { 10 } else { 12 },
+                                    if desktop_model.close_tab_enabled() {
+                                        10
+                                    } else {
+                                        12
+                                    },
                                 );
                                 let response = Self::retro_file_manager_button(
                                     ui,
@@ -529,9 +529,7 @@ impl RobcoNativeApp {
                                 .show_ui(ui, |ui| {
                                     Self::apply_installer_dropdown_style(ui, palette);
                                     for drive in &desktop_model.drives {
-                                        if ui
-                                            .selectable_label(drive.active, &drive.label)
-                                            .clicked()
+                                        if ui.selectable_label(drive.active, &drive.label).clicked()
                                         {
                                             self.file_manager
                                                 .open_selected_tree_path(drive.path.clone());
@@ -540,10 +538,8 @@ impl RobcoNativeApp {
                                     }
                                 });
 
-                            let fixed_controls_width = 160.0
-                                + (56.0 * 3.0)
-                                + (ui.spacing().item_spacing.x * 5.0)
-                                + 16.0;
+                            let fixed_controls_width =
+                                160.0 + (56.0 * 3.0) + (ui.spacing().item_spacing.x * 5.0) + 16.0;
                             let search_width =
                                 (ui.available_width() - fixed_controls_width).clamp(180.0, 420.0);
                             let search = ui.add_sized(
@@ -605,9 +601,9 @@ impl RobcoNativeApp {
                     .inner_margin(egui::Margin::symmetric(8.0, 3.0))
                     .show(ui, |ui| {
                         let location_label = match desktop_model.action_mode {
-                            file_manager_desktop::FileManagerDesktopActionMode::SavePicker { .. } => {
-                                "Save Folder"
-                            }
+                            file_manager_desktop::FileManagerDesktopActionMode::SavePicker {
+                                ..
+                            } => "Save Folder",
                             _ => "Location",
                         };
                         ui.set_min_height(28.0);

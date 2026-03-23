@@ -27,7 +27,8 @@ hex           = "0.4"
 dirs          = "5"
 portable-pty  = "0.8"
 vt100         = "0.15"
-eframe        = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe        = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui-wgpu     = { version = "0.29.1", default-features = false }
 image         = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 fontdue       = "0.8"
 libc          = "0.2"
@@ -50,9 +51,6 @@ robcos-native-nuke-codes-app = { path = "crates/native-nuke-codes-app" }
 
 [build-dependencies]
 winres        = "0.1"
-image         = { version = "0.25", default-features = false, features = ["png"] }
-resvg         = "0.44"
-usvg          = "0.44"
 
 [features]
 default = []
@@ -69,3 +67,6 @@ opt-level     = 3
 lto           = true
 codegen-units = 1
 strip         = true
+
+[patch.crates-io]
+egui-wgpu = { path = "vendor/egui-wgpu" }

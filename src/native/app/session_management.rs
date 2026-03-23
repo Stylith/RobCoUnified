@@ -1,14 +1,13 @@
+#[cfg(test)]
+use super::super::desktop_session_service::active_session_identity;
 use super::super::desktop_session_service::{
     active_session_index as active_native_session_index, apply_session_switch,
     close_active_session as close_native_session,
     ensure_login_session_entry as ensure_native_login_session_entry,
-    request_session_switch as request_native_session_switch,
-    session_count as native_session_count,
+    request_session_switch as request_native_session_switch, session_count as native_session_count,
     take_pending_session_switch as take_native_pending_session_switch,
     user_record as session_user_record, NativePendingSessionSwitch,
 };
-#[cfg(test)]
-use super::super::desktop_session_service::active_session_identity;
 use super::RobcoNativeApp;
 use super::{ParkedSessionState, SessionState, SESSION_LEADER_WINDOW};
 use eframe::egui::{self, Context, Key, Modifiers};
@@ -51,8 +50,6 @@ impl RobcoNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             applications: self.applications.clone(),
-            donkey_kong_window: self.donkey_kong_window.clone(),
-            donkey_kong: self.donkey_kong.clone(),
             desktop_nuke_codes_open: self.desktop_nuke_codes_open,
             desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
@@ -118,8 +115,6 @@ impl RobcoNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.applications = parked.applications;
-        self.donkey_kong_window = parked.donkey_kong_window;
-        self.donkey_kong = parked.donkey_kong;
         self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;

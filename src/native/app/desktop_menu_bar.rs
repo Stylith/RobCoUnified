@@ -1,8 +1,8 @@
 use super::super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
-    build_window_menu_section, desktop_app_menu_name, desktop_components, hosted_app_for_window,
-    DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem,
-    DesktopMenuSection, DesktopWindow, DesktopWindowMenuEntry, WindowInstanceId,
+    build_window_menu_entries, build_window_menu_section, desktop_app_menu_name,
+    hosted_app_for_window, DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext,
+    DesktopMenuItem, DesktopMenuSection, DesktopWindow,
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
 use super::super::retro_ui::{current_palette, RetroPalette};
@@ -46,11 +46,7 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn apply_desktop_menu_action(
-        &mut self,
-        ctx: &Context,
-        action: &DesktopMenuAction,
-    ) {
+    pub(super) fn apply_desktop_menu_action(&mut self, ctx: &Context, action: &DesktopMenuAction) {
         match action {
             DesktopMenuAction::EditorCommand(command) => self.run_editor_command(*command),
             DesktopMenuAction::EditorTextCommand(command) => {
@@ -103,14 +99,10 @@ impl RobcoNativeApp {
                         command: command.clone(),
                     },
                 );
-                self.shell_status =
-                    file_manager_app::open_with_removed_saved_status(ext_key);
+                self.shell_status = file_manager_app::open_with_removed_saved_status(ext_key);
             }
             DesktopMenuAction::OpenFileManager => {
                 self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
-            }
-            DesktopMenuAction::OpenApplications => {
-                self.open_or_spawn_desktop_window(DesktopWindow::Applications);
             }
             DesktopMenuAction::OpenSettings => {
                 self.open_or_spawn_desktop_window(DesktopWindow::Settings);
@@ -239,18 +231,8 @@ impl RobcoNativeApp {
     pub(super) fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         let menu = ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
-            let entries: Vec<DesktopWindowMenuEntry> = desktop_components()
-                .iter()
-                .filter(|component| component.spec.show_in_window_menu)
-                .map(|component| {
-                    let id = WindowInstanceId::primary(component.spec.window);
-                    DesktopWindowMenuEntry {
-                        id,
-                        open: self.desktop_window_is_open(component.spec.window),
-                        active: self.desktop_active_window == Some(id),
-                    }
-                })
-                .collect();
+            let open_windows = self.all_open_window_instances();
+            let entries = build_window_menu_entries(&open_windows, self.desktop_active_window);
             let items = build_window_menu_section(
                 &entries,
                 self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),

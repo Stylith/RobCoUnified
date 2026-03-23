@@ -1,15 +1,18 @@
 use super::super::background::BackgroundResult;
 use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
-use super::super::donkey_kong::{
-    input_from_ctx as donkey_kong_input_from_ctx, BUILTIN_DONKEY_KONG_GAME,
+use super::super::desktop_settings_service::persist_settings_draft;
+use super::super::desktop_status_service::{clear_settings_status, saved_settings_status};
+use super::super::desktop_surface_service::{
+    desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
+    set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
 };
-use super::super::editor_app::{EditorCommand, EditorTextAlign, EditorTextCommand, EDITOR_APP_TITLE};
+use super::super::editor_app::{
+    EditorCommand, EditorTextAlign, EditorTextCommand, EDITOR_APP_TITLE,
+};
 use super::super::file_manager_desktop;
 use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
-use super::super::pty_screen::{
-    draw_embedded_pty_in_ui_focused, PtyScreenEvent,
-};
+use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
 use super::super::terminal_command_palette::{
     draw_command_palette, CommandPaletteAction, CommandPaletteState, CommandPaletteTarget,
@@ -18,26 +21,18 @@ use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
 use super::RobcoNativeApp;
+use crate::config::ConnectionKind;
 use crate::config::{
     CliAcsMode, CliColorMode, DesktopIconStyle, NativeStartupWindowMode, OpenMode,
     WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use eframe::egui::{self, Context, Id, Key, Layout, RichText, TextEdit};
-use robcos_native_programs_app::{
-    resolve_desktop_applications_request, DesktopProgramRequest,
-};
+use robcos_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
 use robcos_native_settings_app::{
     desktop_settings_back_target, desktop_settings_connections_nav_items,
     desktop_settings_user_management_nav_items, settings_panel_title, NativeSettingsPanel,
     SettingsHomeTileAction,
 };
-use super::super::desktop_settings_service::persist_settings_draft;
-use super::super::desktop_status_service::{clear_settings_status, saved_settings_status};
-use super::super::desktop_surface_service::{
-    desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
-    set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
-};
-use crate::config::ConnectionKind;
 use std::path::PathBuf;
 
 impl RobcoNativeApp {
@@ -133,10 +128,11 @@ impl RobcoNativeApp {
             );
             self.draw_file_manager_footer_panel(ui, generation, save_picker_mode, &footer_model);
             self.draw_file_manager_tree_panel(ui, generation, save_picker_mode, &desktop_model);
-            let (open_with_entries, known_app_count) = super::file_manager_desktop_presenter::build_open_with_context_entries(
-                &self.file_manager,
-                &self.live_desktop_file_manager_settings,
-            );
+            let (open_with_entries, known_app_count) =
+                super::file_manager_desktop_presenter::build_open_with_context_entries(
+                    &self.file_manager,
+                    &self.live_desktop_file_manager_settings,
+                );
             self.draw_file_manager_content_panel(
                 ctx,
                 ui,
@@ -230,8 +226,12 @@ impl RobcoNativeApp {
             let mut palette_action = None;
             if palette_is_open {
                 let layout = self.terminal_layout();
-                palette_action =
-                    draw_command_palette(ctx, &mut self.terminal_command_palette, layout.cols, layout.rows);
+                palette_action = draw_command_palette(
+                    ctx,
+                    &mut self.terminal_command_palette,
+                    layout.cols,
+                    layout.rows,
+                );
                 // Consume remaining keys so editor and underlying screens don't act on them
                 ctx.input_mut(|i| {
                     let m = egui::Modifiers::NONE;
@@ -692,7 +692,7 @@ impl RobcoNativeApp {
                             NativeSettingsPanel::Appearance => {
                                 let palette = current_palette();
                                 // ── Tab bar ───────────────────────────────────────────────────
-                                let tabs = ["Background", "Colors", "Icons", "Terminal"];
+                                let tabs = ["Background", "Display", "Colors", "Icons", "Terminal"];
                                 ui.horizontal(|ui| {
                                     for (i, label) in tabs.iter().enumerate() {
                                         let active = self.appearance_tab == i as u8;
@@ -719,40 +719,6 @@ impl RobcoNativeApp {
                                 match self.appearance_tab {
                                     // ── Background ─────────────────────────────────────────────
                                     0 => {
-                                        Self::settings_section(ui, "Window", |ui| {
-                                            ui.label("Window Mode");
-                                            ui.horizontal_wrapped(|ui| {
-                                                for mode in [
-                                                    NativeStartupWindowMode::Windowed,
-                                                    NativeStartupWindowMode::Maximized,
-                                                    NativeStartupWindowMode::BorderlessFullscreen,
-                                                    NativeStartupWindowMode::Fullscreen,
-                                                ] {
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        mode.label(),
-                                                        self.settings.draft
-                                                            .native_startup_window_mode
-                                                            == mode,
-                                                    )
-                                                    .clicked()
-                                                        && self.settings.draft
-                                                            .native_startup_window_mode
-                                                            != mode
-                                                    {
-                                                        self.settings.draft
-                                                            .native_startup_window_mode = mode;
-                                                        changed = true;
-                                                        window_mode_changed = true;
-                                                    }
-                                                }
-                                            });
-                                            ui.add_space(8.0);
-                                            ui.small(
-                                                "Applies immediately and persists across launches. Windowed is the safest mode on older GPUs.",
-                                            );
-                                        });
-                                        ui.add_space(10.0);
                                         Self::settings_section(ui, "Wallpaper", |ui| {
                                             ui.label("Wallpaper Path");
                                             ui.horizontal(|ui| {
@@ -841,8 +807,45 @@ impl RobcoNativeApp {
                                             });
                                         });
                                     }
-                                    // ── Colors ─────────────────────────────────────────────────
                                     1 => {
+                                        Self::settings_section(ui, "Window", |ui| {
+                                            ui.label("Window Mode");
+                                            ui.horizontal_wrapped(|ui| {
+                                                for mode in [
+                                                    NativeStartupWindowMode::Windowed,
+                                                    NativeStartupWindowMode::Maximized,
+                                                    NativeStartupWindowMode::BorderlessFullscreen,
+                                                    NativeStartupWindowMode::Fullscreen,
+                                                ] {
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        mode.label(),
+                                                        self.settings.draft
+                                                            .native_startup_window_mode
+                                                            == mode,
+                                                    )
+                                                    .clicked()
+                                                        && self.settings.draft
+                                                            .native_startup_window_mode
+                                                            != mode
+                                                    {
+                                                        self.settings.draft
+                                                            .native_startup_window_mode = mode;
+                                                        changed = true;
+                                                        window_mode_changed = true;
+                                                    }
+                                                }
+                                            });
+                                            ui.add_space(8.0);
+                                            ui.small(
+                                                "Applies immediately and persists across launches. Windowed is the safest mode on older GPUs.",
+                                            );
+                                        });
+                                        ui.add_space(10.0);
+                                        changed |= self.draw_settings_display_effects_panel(ui);
+                                    }
+                                    // ── Colors ─────────────────────────────────────────────────
+                                    2 => {
                                         Self::settings_section(ui, "Theme Color", |ui| {
                                             ui.horizontal(|ui| {
                                                 ui.label("Theme");
@@ -915,7 +918,7 @@ impl RobcoNativeApp {
                                         });
                                     }
                                     // ── Icons ──────────────────────────────────────────────────
-                                    2 => {
+                                    3 => {
                                         Self::settings_section(ui, "Desktop Icons", |ui| {
                                             ui.horizontal(|ui| {
                                                 ui.label("Icon Style");
@@ -1298,65 +1301,6 @@ impl RobcoNativeApp {
         self.finish_desktop_window_host(
             ctx,
             DesktopWindow::Applications,
-            &mut open,
-            maximized,
-            shown_rect,
-            shown_contains_pointer,
-            DesktopWindowRectTracking::FullRect,
-            header_action,
-        );
-    }
-
-    pub(super) fn draw_desktop_donkey_kong(&mut self, ctx: &Context) {
-        if !self.donkey_kong_window.open
-            || self.desktop_window_is_minimized(DesktopWindow::DonkeyKong)
-        {
-            return;
-        }
-        ctx.request_repaint();
-        let mut open = self.donkey_kong_window.open;
-        let mut header_action = DesktopHeaderAction::None;
-        let (window, maximized) = self.build_resizable_desktop_window(
-            ctx,
-            DesktopWindow::DonkeyKong,
-            BUILTIN_DONKEY_KONG_GAME,
-            &mut open,
-            ResizableDesktopWindowOptions {
-                min_size: egui::vec2(560.0, 500.0),
-                default_size: Self::desktop_default_window_size(DesktopWindow::DonkeyKong),
-                default_pos: None,
-                clamp_restore: false,
-            },
-        );
-        let theme = self.current_donkey_kong_theme();
-        let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
-        let input = donkey_kong_input_from_ctx(ctx);
-        let game = self.ensure_donkey_kong_loaded(ctx);
-        game.set_theme(theme);
-        game.update(input, dt);
-        let shown = window.show(ctx, |ui| {
-            Self::apply_settings_control_style(ui);
-            header_action =
-                Self::draw_desktop_window_header(ui, BUILTIN_DONKEY_KONG_GAME, maximized);
-            ui.horizontal(|ui| {
-                ui.small("Arrow keys / WASD move");
-                ui.separator();
-                ui.small("Space jump / restart");
-                ui.separator();
-                ui.small("Esc closes");
-            });
-            ui.separator();
-            let game_rect = ui.available_rect_before_wrap();
-            game.draw(ui, game_rect);
-            ui.allocate_rect(game_rect, egui::Sense::hover());
-        });
-        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
-        let shown_contains_pointer = shown
-            .as_ref()
-            .is_some_and(|inner| inner.response.contains_pointer());
-        self.finish_desktop_window_host(
-            ctx,
-            DesktopWindow::DonkeyKong,
             &mut open,
             maximized,
             shown_rect,

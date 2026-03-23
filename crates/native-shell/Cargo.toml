@@ -35,6 +35,6 @@ path = "src/installer_main.rs"
 
 [dependencies]
 anyhow = "1"
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 robcos = { path = "../.." }

@@ -65,7 +65,8 @@ pub fn draw_terminal_document_browser(
         event = DocumentBrowserEvent::Cut;
     } else if ctx.input(|i| i.key_pressed(egui::Key::V) && i.modifiers.command) {
         event = DocumentBrowserEvent::Paste;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+    } else if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+    {
         event = DocumentBrowserEvent::Delete;
     } else if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
         event = DocumentBrowserEvent::Rename;
@@ -73,7 +74,8 @@ pub fn draw_terminal_document_browser(
         event = DocumentBrowserEvent::Undo;
     } else if ctx.input(|i| i.key_pressed(egui::Key::Y) && i.modifiers.command) {
         event = DocumentBrowserEvent::Redo;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift) {
+    } else if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift)
+    {
         event = DocumentBrowserEvent::NewFolder;
     } else if ctx.input(|i| i.key_pressed(egui::Key::O) && !i.modifiers.command) {
         event = DocumentBrowserEvent::OpenWith;

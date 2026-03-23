@@ -30,11 +30,7 @@ pub struct OpenWithPickerState {
 }
 
 impl OpenWithPickerState {
-    pub fn new(
-        path: std::path::PathBuf,
-        ext_key: String,
-        saved_commands: Vec<String>,
-    ) -> Self {
+    pub fn new(path: std::path::PathBuf, ext_key: String, saved_commands: Vec<String>) -> Self {
         let known_apps = known_apps_for_extension(&ext_key);
         let mut entries = Vec::new();
         let mut seen_commands: HashSet<String> = HashSet::new();

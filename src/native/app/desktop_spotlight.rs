@@ -1,9 +1,9 @@
 use super::super::desktop_app::{DesktopShellAction, DesktopWindow};
 use super::super::desktop_search_service::{
-    gather_spotlight_results, spotlight_category_tag, NativeSpotlightCategory, NativeSpotlightResult,
+    gather_spotlight_results, spotlight_category_tag, NativeSpotlightCategory,
+    NativeSpotlightResult,
 };
 use super::super::desktop_session_service::active_session_username as active_native_session_username;
-use super::super::donkey_kong::BUILTIN_DONKEY_KONG_GAME;
 use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, Key, RichText, TextEdit};
@@ -30,7 +30,6 @@ impl RobcoNativeApp {
             active_username.as_deref(),
             BUILTIN_TEXT_EDITOR_APP,
             BUILTIN_NUKE_CODES_APP,
-            BUILTIN_DONKEY_KONG_GAME,
         );
         self.spotlight_selected = 0;
     }

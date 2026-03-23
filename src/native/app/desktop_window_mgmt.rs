@@ -231,10 +231,7 @@ impl RobcoNativeApp {
             .inner_margin(egui::Margin::same(1.0))
     }
 
-    pub(super) fn desktop_header_glyph_button(
-        ui: &mut egui::Ui,
-        label: &str,
-    ) -> egui::Response {
+    pub(super) fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         ui.add(
             egui::Button::new(RichText::new(label).color(Color32::BLACK).monospace())
                 .frame(false)
@@ -435,15 +432,10 @@ impl RobcoNativeApp {
             .map(WindowInstanceId::primary)
     }
 
-    pub(super) fn focus_desktop_window(
-        &mut self,
-        ctx: Option<&Context>,
-        id: WindowInstanceId,
-    ) {
+    pub(super) fn focus_desktop_window(&mut self, ctx: Option<&Context>, id: WindowInstanceId) {
         self.desktop_active_window = Some(id);
         if let Some(ctx) = ctx {
-            let layer_id =
-                egui::LayerId::new(egui::Order::Middle, self.desktop_window_egui_id(id));
+            let layer_id = egui::LayerId::new(egui::Order::Middle, self.desktop_window_egui_id(id));
             ctx.move_to_top(layer_id);
         }
     }
@@ -605,20 +597,15 @@ impl RobcoNativeApp {
         // Clean up window states for removed secondaries.
         let secondary_ids: std::collections::HashSet<WindowInstanceId> =
             secondaries.iter().map(|s| s.id).collect();
-        self.desktop_window_states.retain(|id, _| {
-            id.instance == 0 || secondary_ids.contains(id)
-        });
+        self.desktop_window_states
+            .retain(|id, _| id.instance == 0 || secondary_ids.contains(id));
 
         self.secondary_windows = secondaries;
         self.sync_desktop_active_window();
     }
 
     /// Swap secondary instance state into primary fields, draw, swap back.
-    fn swap_draw_secondary(
-        &mut self,
-        ctx: &Context,
-        secondary: &mut super::SecondaryWindow,
-    ) {
+    fn swap_draw_secondary(&mut self, ctx: &Context, secondary: &mut super::SecondaryWindow) {
         let id = secondary.id;
         self.drawing_window_id = Some(id);
         match &mut secondary.app {

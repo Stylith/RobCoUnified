@@ -393,10 +393,7 @@ impl RobcoNativeFileManagerApp {
                 use robcos_native_services::shared_file_manager_settings::FileManagerSettingsUpdate;
                 apply_file_manager_settings_update(
                     &mut self.settings_draft,
-                    FileManagerSettingsUpdate::RecordOpenWithCommand {
-                        ext_key,
-                        command,
-                    },
+                    FileManagerSettingsUpdate::RecordOpenWithCommand { ext_key, command },
                 );
                 self.sync_settings_snapshot();
                 super::ipc::notify_settings_changed();
@@ -516,12 +513,14 @@ impl RobcoNativeFileManagerApp {
                 ui.menu_button("Open With", |ui| {
                     if let Some(entry) = self.selected_file() {
                         let ext_key = file_manager_app::open_with_extension_key(&entry.path);
-                        let known_apps = robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
+                        let known_apps =
+                            robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
                         let open_with = robcos_native_file_manager_app::open_with_state_for_path(
                             &entry.path,
                             &self.settings_draft.desktop_file_manager,
                         );
-                        let mut known_commands: std::collections::HashSet<String> = std::collections::HashSet::new();
+                        let mut known_commands: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
 
                         for app in &known_apps {
                             known_commands.insert(app.command.clone());
@@ -533,7 +532,10 @@ impl RobcoNativeFileManagerApp {
                             }
                         }
 
-                        let has_saved = open_with.saved_commands.iter().any(|c| !known_commands.contains(c));
+                        let has_saved = open_with
+                            .saved_commands
+                            .iter()
+                            .any(|c| !known_commands.contains(c));
                         if !known_apps.is_empty() && has_saved {
                             ui.separator();
                         }
@@ -542,9 +544,8 @@ impl RobcoNativeFileManagerApp {
                                 continue;
                             }
                             if ui.button(command.as_str()).clicked() {
-                                self.pending_context_action = Some(
-                                    StandaloneContextAction::OpenWithCommand(command.clone()),
-                                );
+                                self.pending_context_action =
+                                    Some(StandaloneContextAction::OpenWithCommand(command.clone()));
                                 ui.close_menu();
                             }
                         }

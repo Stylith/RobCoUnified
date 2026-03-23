@@ -1,16 +1,17 @@
 use super::background::{BackgroundResult, BackgroundTasks};
 use super::connections_screen::TerminalConnectionsState;
 use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
-use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
+use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::{
-    connections_macos_disabled, connections_macos_disabled_hint,
-    saved_connections_for_kind, DiscoveredConnection,
+    connections_macos_disabled, connections_macos_disabled_hint, saved_connections_for_kind,
+    DiscoveredConnection,
 };
 use super::desktop_documents_service::{
     add_document_category as add_desktop_document_category,
-    delete_document_category as delete_desktop_document_category, document_category_names, rename_document_category as rename_desktop_document_category,
+    delete_document_category as delete_desktop_document_category, document_category_names,
+    rename_document_category as rename_desktop_document_category,
 };
 use super::desktop_file_service::{
     load_text_document, open_directory_location, reveal_path_location, FileManagerLocation,
@@ -19,50 +20,39 @@ use super::desktop_launcher_service::{
     add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
     rename_catalog_entry, resolve_catalog_launch, ProgramCatalog,
 };
-use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 #[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
+use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::{
     authenticate_login, bind_login_identity, clear_all_sessions as clear_native_sessions,
-    has_pending_session_switch as has_native_pending_session_switch,
-    last_session_username, login_selection_auth_method, login_usernames as load_login_usernames,
-    logout_flash_plan,
+    has_pending_session_switch as has_native_pending_session_switch, last_session_username,
+    login_selection_auth_method, login_usernames as load_login_usernames, logout_flash_plan,
     persist_shell_snapshot as persist_native_shell_snapshot,
     restore_current_user_from_last_session,
-    restore_session_plan as build_native_session_restore_plan,
-    user_record as session_user_record, NativeSessionFlashPlan,
+    restore_session_plan as build_native_session_restore_plan, user_record as session_user_record,
+    NativeSessionFlashPlan,
 };
 use super::desktop_settings_service::{
     apply_file_manager_display_settings_update as apply_desktop_file_manager_display_settings_update,
-    apply_file_manager_settings_update as apply_desktop_file_manager_settings_update, load_settings_snapshot, persist_settings_draft,
+    apply_file_manager_settings_update as apply_desktop_file_manager_settings_update,
+    load_settings_snapshot, persist_settings_draft,
     pty_force_render_mode as desktop_pty_force_render_mode,
     pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
 };
-use super::desktop_shortcuts_service::{
-    set_shortcut_icon as set_desktop_shortcut_icon,
-};
+use super::desktop_shortcuts_service::set_shortcut_icon as set_desktop_shortcut_icon;
 use super::desktop_status_service::{
-    clear_settings_status, clear_shell_status, saved_shell_status, shell_status, NativeStatusUpdate,
-    NativeStatusValue,
+    clear_settings_status, clear_shell_status, saved_shell_status, shell_status,
+    NativeStatusUpdate, NativeStatusValue,
 };
 use super::desktop_surface_service::{
     set_wallpaper_path as set_desktop_wallpaper_path, DesktopIconGridLayout, DesktopSurfaceEntry,
 };
 use super::desktop_user_service::{
-    create_user as create_desktop_user, sorted_user_records,
-    sorted_usernames, update_user_auth_method,
+    create_user as create_desktop_user, sorted_user_records, sorted_usernames,
+    update_user_auth_method,
 };
-use super::donkey_kong::{
-    DonkeyKongConfig, DonkeyKongGame,
-    DonkeyKongTheme, BUILTIN_DONKEY_KONG_GAME,
-};
-use super::edit_menus_screen::{
-    EditMenuTarget,
-    TerminalEditMenusState,
-};
-use super::editor_app::{
-    EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
-};
+use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
+use super::editor_app::{EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE};
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
 use super::file_manager_app::{
     self, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate, FileManagerEditRuntime,
@@ -75,43 +65,38 @@ use super::file_manager_desktop::{
 };
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
 use super::installer_screen::{
-    DesktopInstallerNotice, DesktopInstallerState,
-    TerminalInstallerState,
+    DesktopInstallerNotice, DesktopInstallerState, TerminalInstallerState,
 };
 use super::menu::{
-    login_menu_rows_from_users, resolve_hacking_screen_event,
-    resolve_login_selection_plan,
-    resolve_terminal_flash_action, terminal_command_launch_plan, terminal_runtime_defaults, terminal_shell_launch_plan, TerminalDesktopPtyExitPlan, TerminalEmbeddedPtyExitPlan,
-    TerminalFlashActionPlan, TerminalFlashPtyLaunchPlan,
-    TerminalHackingUiEvent, TerminalLoginPasswordPlan, TerminalLoginScreenMode, TerminalLoginState,
-    TerminalNavigationState, TerminalPtyLaunchPlan, TerminalScreen, TerminalShellSurface, TerminalUserManagementPromptPlan,
-    TerminalUserPasswordFlow, UserManagementMode,
+    login_menu_rows_from_users, resolve_hacking_screen_event, resolve_login_selection_plan,
+    resolve_terminal_flash_action, terminal_command_launch_plan, terminal_runtime_defaults,
+    terminal_shell_launch_plan, TerminalDesktopPtyExitPlan, TerminalEmbeddedPtyExitPlan,
+    TerminalFlashActionPlan, TerminalFlashPtyLaunchPlan, TerminalHackingUiEvent,
+    TerminalLoginPasswordPlan, TerminalLoginScreenMode, TerminalLoginState,
+    TerminalNavigationState, TerminalPtyLaunchPlan, TerminalScreen, TerminalShellSurface,
+    TerminalUserManagementPromptPlan, TerminalUserPasswordFlow, UserManagementMode,
 };
-use super::nuke_codes_screen::{
-    fetch_nuke_codes, NukeCodesView,
-};
+use super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 use super::prompt::{
-    draw_terminal_flash, draw_terminal_flash_boxed, FlashAction,
-    TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
+    draw_terminal_flash, draw_terminal_flash_boxed, FlashAction, TerminalFlash, TerminalPrompt,
+    TerminalPromptAction, TerminalPromptKind,
 };
 use super::prompt_flow::PromptOutcome;
-use super::terminal_command_palette::{
-    CommandPaletteAction, CommandPaletteState,
-};
-use super::terminal_open_with_picker;
 use super::pty_screen::{
-    handle_pty_input,
-    spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
+    handle_pty_input, spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
     TERMINAL_MODE_PTY_CELL_W,
 };
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_settings, current_palette,
-    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_settings, current_palette, FIXED_PTY_CELL_H,
+    FIXED_PTY_CELL_W,
 };
 use super::shell_screen::draw_login_screen;
+use super::terminal_command_palette::{CommandPaletteAction, CommandPaletteState};
+use super::terminal_open_with_picker;
 use crate::config::{
-    desktop_dir as robco_desktop_dir, get_current_user, global_settings_file, user_dir, DesktopFileManagerSettings, DesktopIconSortMode,
-    HackingDifficulty, NativeStartupWindowMode, OpenMode, Settings,
+    desktop_dir as robco_desktop_dir, get_current_user, global_settings_file, user_dir,
+    DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, NativeStartupWindowMode,
+    OpenMode, Settings,
 };
 use crate::config::{ConnectionKind, SavedConnection};
 use crate::core::auth::{AuthMethod, UserRecord};
@@ -119,18 +104,18 @@ use crate::session;
 use anyhow::Result;
 use chrono::Local;
 use eframe::egui::{
-    self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout, RichText, TextEdit, TextStyle, TextureHandle,
+    self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
+    RichText, TextEdit, TextStyle, TextureHandle,
 };
+use egui_wgpu::CrtEffects;
 use robcos_native_file_manager_app::FileManagerAction;
 use robcos_native_programs_app::{
-    build_desktop_applications_sections,
-    resolve_desktop_games_request, DesktopApplicationsSections,
-    DesktopProgramRequest,
+    build_desktop_applications_sections, resolve_desktop_games_request,
+    DesktopApplicationsSections, DesktopProgramRequest,
 };
 use robcos_native_settings_app::{
-    build_desktop_settings_ui_defaults, desktop_settings_default_panel,
-    desktop_settings_home_rows, GuiCliProfileSlot,
-    NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
+    build_desktop_settings_ui_defaults, desktop_settings_default_panel, desktop_settings_home_rows,
+    GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -149,19 +134,17 @@ mod desktop_window_mgmt;
 mod session_management;
 mod terminal_dispatch;
 mod terminal_screens;
-use desktop_window_mgmt::{
-    DesktopHeaderAction, DesktopWindowState,
-};
+use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod settings_panels;
 
-use desktop_start_menu::{StartLeaf, StartSubmenu};
-#[cfg(test)]
-use desktop_start_menu::START_ROOT_ITEMS;
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
 use crate::config::CUSTOM_THEME_NAME;
+#[cfg(test)]
+use desktop_start_menu::START_ROOT_ITEMS;
+use desktop_start_menu::{StartLeaf, StartSubmenu};
 #[cfg(test)]
 use desktop_window_mgmt::DesktopWindowRectTracking;
 
@@ -208,11 +191,6 @@ struct ApplicationsWindow {
 struct TerminalModeWindow {
     open: bool,
     status: String,
-}
-
-#[derive(Debug, Default, Clone)]
-struct DonkeyKongWindow {
-    open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,7 +327,6 @@ pub(super) enum ContextMenuAction {
     OpenDesktopItemProperties(PathBuf),
 }
 
-
 pub(super) const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 pub(super) const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
@@ -435,6 +412,7 @@ fn try_load_font_bytes() -> Option<Vec<u8>> {
 pub fn configure_native_context(ctx: &Context) {
     configure_native_fonts(ctx);
     apply_native_appearance(ctx);
+    apply_native_display_effects_for_settings(&crate::config::get_settings());
 }
 
 fn configure_native_fonts(ctx: &Context) {
@@ -467,6 +445,29 @@ fn apply_native_appearance_for_settings(ctx: &Context, settings: &Settings) {
     apply_native_text_style(ctx);
 }
 
+fn apply_native_display_effects_for_settings(settings: &Settings) {
+    let display_effects = &settings.display_effects;
+    if !display_effects.enabled {
+        egui_wgpu::set_crt_effects(None);
+        return;
+    }
+    egui_wgpu::set_crt_effects(Some(CrtEffects {
+        curvature: display_effects.curvature,
+        scanlines: display_effects.scanlines,
+        glow: display_effects.glow,
+        bloom: display_effects.bloom,
+        vignette: display_effects.vignette,
+        noise: display_effects.noise,
+        flicker: display_effects.flicker,
+        jitter: display_effects.jitter,
+        burn_in: display_effects.burn_in,
+        glow_line: display_effects.glow_line,
+        brightness: display_effects.brightness,
+        contrast: display_effects.contrast,
+        phosphor_softness: display_effects.phosphor_softness,
+    }));
+}
+
 fn apply_native_text_style(ctx: &Context) {
     let mut style = (*ctx.style()).clone();
     // Keep global egui zoom fixed. Terminal-mode sizing is handled in RetroScreen
@@ -493,8 +494,6 @@ pub struct RobcoNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
-    donkey_kong_window: DonkeyKongWindow,
-    donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -559,7 +558,7 @@ pub struct RobcoNativeApp {
     startup_profile_session_logged: bool,
     startup_profile_desktop_logged: bool,
     repaint_trace_last_pass: u64,
-    appearance_tab: u8, // 0=Background, 1=Colors, 2=Icons, 3=Terminal
+    appearance_tab: u8, // 0=Background, 1=Display, 2=Colors, 3=Icons, 4=Terminal
     // Spotlight search
     spotlight_open: bool,
     spotlight_query: String,
@@ -579,8 +578,6 @@ pub(super) struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
-    donkey_kong_window: DonkeyKongWindow,
-    donkey_kong: Option<DonkeyKongGame>,
     desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -678,8 +675,6 @@ impl Default for RobcoNativeApp {
                 user_delete_confirm: String::new(),
             },
             applications: ApplicationsWindow::default(),
-            donkey_kong_window: DonkeyKongWindow::default(),
-            donkey_kong: None,
             desktop_nuke_codes_open: false,
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
@@ -763,6 +758,10 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn sync_native_display_effects(&self) {
+        apply_native_display_effects_for_settings(&self.settings.draft);
+    }
+
     fn apply_autologin_open_mode(&mut self) {
         if matches!(self.settings.draft.default_open_mode, OpenMode::Desktop) {
             self.desktop_mode_open = true;
@@ -880,7 +879,6 @@ impl RobcoNativeApp {
         self.live_desktop_file_manager_settings = self.settings.draft.desktop_file_manager.clone();
         self.live_hacking_difficulty = self.settings.draft.hacking_difficulty;
     }
-
 
     fn invalidate_desktop_surface_cache(&mut self) {
         self.desktop_surface_entries_cache = None;
@@ -1332,13 +1330,14 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
         self.dispatch_context_menu_action(ctx);
         if self.terminal_prompt.is_some() {
             self.handle_terminal_prompt_input(ctx);
             self.consume_terminal_prompt_keys(ctx);
         }
-        let file_manager_first =
-            self.active_window_kind() != Some(DesktopWindow::FileManager) || !self.file_manager.open;
+        let file_manager_first = self.active_window_kind() != Some(DesktopWindow::FileManager)
+            || !self.file_manager.open;
         if file_manager_first {
             self.draw_file_manager(ctx);
             self.draw_settings(ctx);
@@ -1378,12 +1377,13 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
         if self.terminal_prompt.is_some() {
             self.handle_terminal_prompt_input(ctx);
             self.consume_terminal_prompt_keys(ctx);
         }
-        let file_manager_first =
-            self.active_window_kind() != Some(DesktopWindow::FileManager) || !self.file_manager.open;
+        let file_manager_first = self.active_window_kind() != Some(DesktopWindow::FileManager)
+            || !self.file_manager.open;
         if file_manager_first {
             self.draw_file_manager(ctx);
             self.draw_editor(ctx);
@@ -1425,23 +1425,12 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
         self.draw_applications(ctx);
         if !self.applications.open {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(500));
-    }
-
-    pub(crate) fn desktop_component_donkey_kong_is_open(&self) -> bool {
-        self.donkey_kong_window.open
-    }
-
-    pub(crate) fn desktop_component_donkey_kong_set_open(&mut self, open: bool) {
-        self.donkey_kong_window.open = open;
-    }
-
-    pub(crate) fn desktop_component_donkey_kong_draw(&mut self, ctx: &Context) {
-        self.draw_desktop_donkey_kong(ctx);
     }
 
     pub(crate) fn desktop_component_nuke_codes_is_open(&self) -> bool {
@@ -1470,6 +1459,7 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
         self.draw_nuke_codes_window(ctx);
         if !self.desktop_nuke_codes_open {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1495,10 +1485,7 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(crate) fn prepare_standalone_installer_window(
-        &mut self,
-        session_username: Option<String>,
-    ) {
+    pub(crate) fn prepare_standalone_installer_window(&mut self, session_username: Option<String>) {
         self.prepare_standalone_window_shell(session_username, true);
         self.prime_desktop_window_defaults(DesktopWindow::Installer);
         self.desktop_installer.open = true;
@@ -1510,6 +1497,7 @@ impl RobcoNativeApp {
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
         let pty_last =
             self.active_window_kind() == Some(DesktopWindow::PtyApp) && self.terminal_pty.is_some();
         if pty_last {
@@ -1523,7 +1511,6 @@ impl RobcoNativeApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(500));
-
     }
 
     pub(crate) fn desktop_component_terminal_mode_is_open(&self) -> bool {
@@ -1565,7 +1552,6 @@ impl RobcoNativeApp {
             self.prime_desktop_window_defaults(DesktopWindow::PtyApp);
         }
     }
-
 
     fn file_manager_home_path(&self) -> PathBuf {
         if let Some(session) = &self.session {
@@ -2306,7 +2292,7 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::LaunchGameProgram(name) => {
-                let request = resolve_desktop_games_request(&name, BUILTIN_DONKEY_KONG_GAME);
+                let request = resolve_desktop_games_request(&name);
                 self.apply_desktop_program_request(request);
             }
             DesktopShellAction::OpenPathInEditor(path) => {
@@ -2315,7 +2301,10 @@ impl RobcoNativeApp {
             DesktopShellAction::RevealPathInFileManager(path) => {
                 if self.desktop_window_is_open(DesktopWindow::FileManager) {
                     // Spawn a new embedded instance at the parent directory.
-                    let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(home_dir_fallback);
+                    let dir = path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(home_dir_fallback);
                     self.spawn_secondary_window(
                         DesktopWindow::FileManager,
                         SecondaryWindowApp::FileManager {
@@ -2367,8 +2356,6 @@ impl RobcoNativeApp {
         self.replace_settings_draft(settings);
         self.apply_status_update(clear_settings_status());
         self.settings.panel = desktop_settings_default_panel();
-        self.donkey_kong_window.open = false;
-        self.donkey_kong = None;
         self.desktop_nuke_codes_open = false;
         self.desktop_installer = DesktopInstallerState::default();
         self.terminal_mode.status.clear();
@@ -2721,7 +2708,8 @@ impl RobcoNativeApp {
                 self.terminal_pty = Some(state);
                 if desktop_window {
                     self.open_desktop_window(DesktopWindow::PtyApp);
-                    let window = self.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::PtyApp));
+                    let window = self
+                        .desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::PtyApp));
                     window.maximized = profile.open_fullscreen;
                 } else {
                     self.navigate_to_screen(TerminalScreen::PtyApp);
@@ -2877,7 +2865,8 @@ impl RobcoNativeApp {
         use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
         match resolve_document_open(&path) {
             Some(ResolvedDocumentOpen::ExternalArgv(argv)) => {
-                let display = path.file_name()
+                let display = path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("file")
                     .to_string();
@@ -2993,9 +2982,7 @@ impl RobcoNativeApp {
             CommandPaletteAction::EditorNewDocument => {
                 self.run_editor_command(EditorCommand::NewDocument)
             }
-            CommandPaletteAction::EditorFind => {
-                self.run_editor_command(EditorCommand::OpenFind)
-            }
+            CommandPaletteAction::EditorFind => self.run_editor_command(EditorCommand::OpenFind),
             CommandPaletteAction::EditorFindReplace => {
                 self.run_editor_command(EditorCommand::OpenFindReplace)
             }
@@ -3097,25 +3084,24 @@ impl RobcoNativeApp {
     }
 
     fn open_terminal_open_with_picker(&mut self) {
-        let Some(row) = file_manager_app::selected_file(
-            self.file_manager.selected_rows_for_action(),
-        ) else {
+        let Some(row) =
+            file_manager_app::selected_file(self.file_manager.selected_rows_for_action())
+        else {
             self.shell_status = "Select a file first.".to_string();
             return;
         };
         let ext_key = file_manager_app::open_with_extension_key(&row.path);
         let settings = load_settings_snapshot();
-        let saved_commands = robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
-            &settings.desktop_file_manager,
-            &ext_key,
-        );
-        self.terminal_open_with_picker = Some(
-            terminal_open_with_picker::OpenWithPickerState::new(
-                row.path,
-                ext_key,
-                saved_commands,
-            ),
-        );
+        let saved_commands =
+            robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
+                &settings.desktop_file_manager,
+                &ext_key,
+            );
+        self.terminal_open_with_picker = Some(terminal_open_with_picker::OpenWithPickerState::new(
+            row.path,
+            ext_key,
+            saved_commands,
+        ));
     }
 
     fn apply_open_with_picker_launch(&mut self, command: String) {
@@ -3127,10 +3113,7 @@ impl RobcoNativeApp {
                 let ext_key = picker.ext_key.clone();
                 self.shell_status = self.launch_open_with_request(launch);
                 self.apply_file_manager_settings_update(
-                    FileManagerSettingsUpdate::RecordOpenWithCommand {
-                        ext_key,
-                        command,
-                    },
+                    FileManagerSettingsUpdate::RecordOpenWithCommand { ext_key, command },
                 );
             }
             Err(err) => {
@@ -3279,40 +3262,6 @@ impl RobcoNativeApp {
             Err(err) => self.editor.status = format!("Save failed: {err}"),
         }
         self.push_editor_recent_file(&path);
-    }
-
-    fn current_donkey_kong_theme(&self) -> DonkeyKongTheme {
-        let palette = current_palette();
-        DonkeyKongTheme {
-            primary: palette.fg,
-            enemy: palette.selected_bg,
-            ui: palette.fg,
-            neutral: palette.dim,
-        }
-    }
-
-    fn ensure_donkey_kong_loaded(&mut self, ctx: &Context) -> &mut DonkeyKongGame {
-        let theme = self.current_donkey_kong_theme();
-        let scale = self.settings.draft.native_ui_scale.max(1.0);
-        self.donkey_kong.get_or_insert_with(|| {
-            DonkeyKongGame::new(
-                ctx,
-                DonkeyKongConfig {
-                    scale,
-                    theme: theme.clone(),
-                },
-            )
-        })
-    }
-
-    fn open_terminal_donkey_kong(&mut self) {
-        self.navigate_to_screen(TerminalScreen::DonkeyKong);
-        self.apply_status_update(clear_shell_status());
-    }
-
-    fn open_desktop_donkey_kong(&mut self) {
-        self.open_desktop_window(DesktopWindow::DonkeyKong);
-        self.apply_status_update(clear_shell_status());
     }
 
     fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
@@ -3631,7 +3580,6 @@ impl RobcoNativeApp {
         Id::new(("editor_text_edit", generation))
     }
 
-
     fn retro_separator(ui: &mut egui::Ui) {
         let palette = current_palette();
         let desired = egui::vec2(ui.available_width().max(1.0), 2.0);
@@ -3907,7 +3855,6 @@ impl RobcoNativeApp {
         }
     }
 
-
     fn handle_desktop_file_manager_shortcuts(&mut self, ctx: &Context) {
         if self.active_window_kind() != Some(DesktopWindow::FileManager)
             || self.terminal_prompt.is_some()
@@ -3986,6 +3933,7 @@ impl eframe::App for RobcoNativeApp {
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
+        self.sync_native_display_effects();
 
         if let Some(flash) = &self.terminal_flash {
             if Instant::now() >= flash.until {
@@ -4113,7 +4061,6 @@ impl eframe::App for RobcoNativeApp {
                 TerminalScreen::Logs => self.draw_terminal_logs(ctx),
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
-                TerminalScreen::DonkeyKong => self.draw_terminal_donkey_kong(ctx),
                 TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
@@ -4155,12 +4102,14 @@ impl eframe::App for RobcoNativeApp {
                 });
         }
 
-        // Schedule an idle repaint so the clock, settings-sync, and IPC
-        // polling still work when nothing else requests a faster repaint.
-        // Active subsystems (PTY, games, flash animations) already call
-        // ctx.request_repaint() or request_repaint_after() with shorter
-        // intervals, which takes precedence over this.
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // Animated CRT effects need a real frame cadence. Without this, the
+        // post-process only advances on input or other app activity.
+        let idle_repaint = if self.settings.draft.display_effects.needs_animation() {
+            Duration::from_millis(33)
+        } else {
+            Duration::from_millis(500)
+        };
+        ctx.request_repaint_after(idle_repaint);
     }
 }
 
@@ -4957,7 +4906,10 @@ mod tests {
 
         app.open_desktop_window(DesktopWindow::Editor);
 
-        assert_eq!(app.desktop_active_window, Some(WindowInstanceId::primary(DesktopWindow::Editor)));
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::Editor))
+        );
         assert!(!app.spotlight_open);
     }
 
@@ -4965,7 +4917,8 @@ mod tests {
     fn reopening_settings_window_reprimes_component_state() {
         let mut app = RobcoNativeApp::default();
         app.settings.open = true;
-        let state = app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
+        let state =
+            app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
         state.restore_pos = Some([24.0, 48.0]);
         state.restore_size = Some([640.0, 360.0]);
         state.apply_restore = true;
@@ -4990,7 +4943,8 @@ mod tests {
     #[test]
     fn opening_closed_installer_window_clears_stale_restore_state() {
         let mut app = RobcoNativeApp::default();
-        let state = app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Installer));
+        let state =
+            app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Installer));
         state.restore_pos = Some([12.0, 36.0]);
         state.restore_size = Some([800.0, 520.0]);
         state.apply_restore = true;
@@ -5016,7 +4970,8 @@ mod tests {
     fn shared_desktop_window_host_tracks_position_only_and_handles_minimize() {
         let mut app = RobcoNativeApp::default();
         app.settings.open = true;
-        let state = app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
+        let state =
+            app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
         state.restore_size = Some([760.0, 500.0]);
         let mut open = true;
 
@@ -5071,10 +5026,15 @@ mod tests {
 
         app.apply_desktop_menu_action(
             &Context::default(),
-            &DesktopMenuAction::ActivateDesktopWindow(WindowInstanceId::primary(DesktopWindow::FileManager)),
+            &DesktopMenuAction::ActivateDesktopWindow(WindowInstanceId::primary(
+                DesktopWindow::FileManager,
+            )),
         );
 
-        assert_eq!(app.desktop_active_window, Some(WindowInstanceId::primary(DesktopWindow::FileManager)));
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::FileManager))
+        );
         assert!(!app.start_open);
         assert!(!app.spotlight_open);
     }
@@ -5089,7 +5049,9 @@ mod tests {
 
         app.apply_desktop_menu_action(
             &Context::default(),
-            &DesktopMenuAction::ActivateTaskbarWindow(WindowInstanceId::primary(DesktopWindow::FileManager)),
+            &DesktopMenuAction::ActivateTaskbarWindow(WindowInstanceId::primary(
+                DesktopWindow::FileManager,
+            )),
         );
 
         assert!(app.desktop_window_is_minimized(DesktopWindow::FileManager));
@@ -5107,11 +5069,16 @@ mod tests {
 
         app.apply_desktop_menu_action(
             &Context::default(),
-            &DesktopMenuAction::ActivateTaskbarWindow(WindowInstanceId::primary(DesktopWindow::FileManager)),
+            &DesktopMenuAction::ActivateTaskbarWindow(WindowInstanceId::primary(
+                DesktopWindow::FileManager,
+            )),
         );
 
         assert!(!app.desktop_window_is_minimized(DesktopWindow::FileManager));
-        assert_eq!(app.desktop_active_window, Some(WindowInstanceId::primary(DesktopWindow::FileManager)));
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::FileManager))
+        );
         assert!(!app.start_open);
         assert!(!app.spotlight_open);
     }
@@ -5143,7 +5110,10 @@ mod tests {
 
         app.set_desktop_window_minimized(DesktopWindow::Applications, true);
 
-        assert_eq!(app.desktop_active_window, Some(WindowInstanceId::primary(DesktopWindow::Settings)));
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::Settings))
+        );
     }
 
     #[test]

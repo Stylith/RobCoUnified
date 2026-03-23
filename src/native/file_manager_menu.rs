@@ -9,8 +9,8 @@ use super::file_manager_app::{
 };
 use crate::config::{DesktopFileManagerSettings, FileManagerSortMode, FileManagerViewMode};
 use robcos_native_file_manager_app::{
-    known_apps_for_extension, open_with_state_for_path, selected_file,
-    FileManagerClipboardMode, FileManagerEditRuntime,
+    known_apps_for_extension, open_with_state_for_path, selected_file, FileManagerClipboardMode,
+    FileManagerEditRuntime,
 };
 use std::path::Path;
 
@@ -37,7 +37,10 @@ fn build_file_manager_open_with_menu(
     }
 
     // Saved commands (skip duplicates with known apps)
-    let has_saved = open_with.saved_commands.iter().any(|c| !known_commands.contains(c.as_str()));
+    let has_saved = open_with
+        .saved_commands
+        .iter()
+        .any(|c| !known_commands.contains(c.as_str()));
     if !known_apps.is_empty() && has_saved {
         items.push(DesktopMenuItem::Separator);
     }

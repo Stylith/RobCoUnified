@@ -131,8 +131,7 @@ fn handle_connection(stream: UnixStream, tx: &mpsc::Sender<IpcMessage>) {
 /// with a 1-second timeout.
 pub fn send_to_shell(msg: &IpcMessage) -> Result<(), String> {
     let path = socket_path();
-    let mut stream =
-        UnixStream::connect(&path).map_err(|e| format!("connect to shell: {e}"))?;
+    let mut stream = UnixStream::connect(&path).map_err(|e| format!("connect to shell: {e}"))?;
     stream
         .set_write_timeout(Some(std::time::Duration::from_secs(1)))
         .ok();

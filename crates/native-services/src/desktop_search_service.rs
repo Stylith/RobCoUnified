@@ -52,16 +52,6 @@ pub struct NativeSpotlightResult {
     pub path: Option<PathBuf>,
 }
 
-fn game_program_names(builtin_game_name: &str) -> Vec<String> {
-    let mut names = vec![builtin_game_name.to_string()];
-    names.extend(
-        catalog_names(ProgramCatalog::Games)
-            .into_iter()
-            .filter(|name| name != builtin_game_name),
-    );
-    names
-}
-
 fn start_application_entries_from_names(
     application_names: Vec<String>,
     show_nuke_codes: bool,
@@ -155,9 +145,9 @@ pub fn start_network_entries() -> Vec<NativeStartLeafEntry> {
     items
 }
 
-pub fn start_game_entries(builtin_game_name: &str) -> Vec<NativeStartLeafEntry> {
+pub fn start_game_entries() -> Vec<NativeStartLeafEntry> {
     let mut items = Vec::new();
-    for key in game_program_names(builtin_game_name) {
+    for key in catalog_names(ProgramCatalog::Games) {
         items.push(NativeStartLeafEntry {
             label: key.clone(),
             action: NativeStartLeafAction::LaunchGameProgram(key),
@@ -189,7 +179,6 @@ pub fn gather_spotlight_results(
     active_username: Option<&str>,
     text_editor_name: &str,
     nuke_codes_name: &str,
-    builtin_game_name: &str,
 ) -> Vec<NativeSpotlightResult> {
     gather_spotlight_results_with_names(
         query,
@@ -198,7 +187,7 @@ pub fn gather_spotlight_results(
         text_editor_name,
         nuke_codes_name,
         catalog_names(ProgramCatalog::Applications),
-        game_program_names(builtin_game_name),
+        catalog_names(ProgramCatalog::Games),
         catalog_names(ProgramCatalog::Network),
     )
 }
@@ -343,7 +332,7 @@ mod tests {
             "ROBCO Word Processor",
             "Nuke Codes",
             vec!["Helix".to_string()],
-            vec!["Donkey Kong".to_string()],
+            vec!["Missile Command".to_string()],
             Vec::new(),
         );
 

@@ -1,4 +1,3 @@
-use crate::config::ConnectionKind;
 use super::super::desktop_connections_service::{
     connect_connection_and_refresh_settings, connection_requires_password,
     connections_macos_disabled, connections_macos_disabled_hint, discovered_connection_label,
@@ -22,6 +21,7 @@ use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::retro_ui::current_palette;
 use super::RobcoNativeApp;
 use crate::config::Settings;
+use crate::config::{ConnectionKind, CrtPreset};
 use crate::core::auth::AuthMethod;
 use eframe::egui::{self, RichText, TextEdit};
 use robcos_native_default_apps_app::{
@@ -32,6 +32,133 @@ use robcos_native_settings_app::{
 };
 
 impl RobcoNativeApp {
+    pub(super) fn draw_settings_display_effects_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        let palette = current_palette();
+        Self::settings_two_columns(ui, |left, right| {
+            Self::settings_section(left, "CRT Effects", |left| {
+                if Self::retro_checkbox_row(
+                    left,
+                    &mut self.settings.draft.display_effects.enabled,
+                    "Enable CRT effects",
+                )
+                .clicked()
+                {
+                    if self.settings.draft.display_effects.enabled
+                        && self.settings.draft.display_effects.preset == CrtPreset::Off
+                    {
+                        self.settings
+                            .draft
+                            .display_effects
+                            .apply_preset(CrtPreset::RobCoStandard);
+                    }
+                    changed = true;
+                }
+                left.add_space(8.0);
+                left.horizontal(|ui| {
+                    ui.label("Preset");
+                    egui::ComboBox::from_id_salt("native_settings_display_effects_preset")
+                        .selected_text(
+                            RichText::new(self.settings.draft.display_effects.preset.label())
+                                .color(palette.fg),
+                        )
+                        .show_ui(ui, |ui| {
+                            Self::apply_settings_control_style(ui);
+                            for preset in [
+                                CrtPreset::Off,
+                                CrtPreset::Subtle,
+                                CrtPreset::RobCoStandard,
+                                CrtPreset::WornTerminal,
+                                CrtPreset::ExtremeRetro,
+                                CrtPreset::Custom,
+                            ] {
+                                if Self::retro_choice_button(
+                                    ui,
+                                    preset.label(),
+                                    self.settings.draft.display_effects.preset == preset,
+                                )
+                                .clicked()
+                                {
+                                    if preset == CrtPreset::Custom {
+                                        self.settings.draft.display_effects.preset = preset;
+                                    } else {
+                                        self.settings.draft.display_effects.apply_preset(preset);
+                                    }
+                                    changed = true;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                });
+                left.add_space(8.0);
+                left.small(
+                    "Renders the UI to an offscreen texture and applies the CRT pass before present.",
+                );
+            });
+
+            Self::settings_section(right, "Tuning", |right| {
+                let effects = &mut self.settings.draft.display_effects;
+                let mut tuning_changed = false;
+                right.add_enabled_ui(effects.enabled, |ui| {
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.curvature, 0.0..=0.2).text("Curvature"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.scanlines, 0.0..=1.0).text("Scanlines"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.glow, 0.0..=1.5).text("Glow"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.bloom, 0.0..=1.5).text("Text Bloom"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.vignette, 0.0..=1.0).text("Vignette"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.noise, 0.0..=0.35).text("Noise"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.flicker, 0.0..=0.3).text("Flicker"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.jitter, 0.0..=0.12).text("Jitter"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.burn_in, 0.0..=1.0).text("Burn-In"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.glow_line, 0.0..=1.0).text("Glow Line"))
+                        .changed();
+                    tuning_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut effects.phosphor_softness, 0.0..=1.0)
+                                .text("Phosphor Softness"),
+                        )
+                        .changed();
+                    tuning_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut effects.brightness, 0.7..=1.4)
+                                .text("Brightness"),
+                        )
+                        .changed();
+                    tuning_changed |= ui
+                        .add(egui::Slider::new(&mut effects.contrast, 0.8..=1.5).text("Contrast"))
+                        .changed();
+                });
+                right.add_space(8.0);
+                right.small(
+                    "Glow and bloom push bright text, jitter and glow line emulate unstable signal sweep, and burn-in adds phosphor wear. Persistence / true feedback ghosting is still deferred to a later pass.",
+                );
+                if tuning_changed {
+                    effects.mark_custom();
+                    changed = true;
+                }
+            });
+        });
+        changed
+    }
+
     pub(super) fn draw_settings_default_apps_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -123,7 +250,11 @@ impl RobcoNativeApp {
         changed
     }
 
-    pub(super) fn draw_settings_connections_kind_panel(&mut self, ui: &mut egui::Ui, kind: ConnectionKind) {
+    pub(super) fn draw_settings_connections_kind_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        kind: ConnectionKind,
+    ) {
         if connections_macos_disabled() {
             ui.small(connections_macos_disabled_hint());
             return;

@@ -26,9 +26,9 @@ use super::super::menu::{
     resolve_terminal_back_action, resolve_user_password_confirm_prompt,
     resolve_user_password_first_prompt, terminal_screen_open_plan, terminal_settings_refresh_plan,
     MainMenuSelectionAction, TerminalBackAction, TerminalBackContext, TerminalHackingPlan,
-    TerminalLoginScreenMode, TerminalLoginSelectionPlan, TerminalLoginSubmitAction,
-    TerminalScreen, TerminalScreenOpenPlan, TerminalSelectionIndexTarget,
-    TerminalUserPasswordFlow, UserManagementMode,
+    TerminalLoginScreenMode, TerminalLoginSelectionPlan, TerminalLoginSubmitAction, TerminalScreen,
+    TerminalScreenOpenPlan, TerminalSelectionIndexTarget, TerminalUserPasswordFlow,
+    UserManagementMode,
 };
 use super::super::prompt::{FlashAction, TerminalPromptAction};
 use super::super::prompt_flow::{handle_prompt_input, PromptOutcome};
