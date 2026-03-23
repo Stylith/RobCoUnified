@@ -341,8 +341,12 @@ impl RetroScreen {
         let top = self.row_top(row);
         let cell_chars = clipped.chars().count().max(1) as f32;
         let measured_w = cell_chars * self.cell.x;
-        // Legacy TUI highlight paints exactly the selected text span.
-        let right = (left + measured_w).min(self.rect.right());
+        // Extend highlight to the end of the screen
+        let right = if selected {
+            self.rect.right()
+        } else {
+            (left + measured_w).min(self.rect.right())
+        };
         let hit_rect = Rect::from_min_max(
             self.snap_pos(Pos2::new(left.min(self.rect.right()), top)),
             self.snap_pos(Pos2::new(right.max(left), top + self.cell.y)),
