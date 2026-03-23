@@ -1,4 +1,4 @@
-use crate::config::{current_theme_color, theme_color_for_settings, Settings};
+use crate::config::{current_theme_color, get_settings, theme_color_for_settings, Settings};
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
@@ -341,8 +341,9 @@ impl RetroScreen {
         let top = self.row_top(row);
         let cell_chars = clipped.chars().count().max(1) as f32;
         let measured_w = cell_chars * self.cell.x;
-        // Extend highlight to the end of the screen
-        let right = if selected {
+        // Extend highlight to the end of the screen if highlighting is enabled
+        let extend_highlight = selected && get_settings().native_terminal_ui_highlighting;
+        let right = if extend_highlight {
             self.rect.right()
         } else {
             (left + measured_w).min(self.rect.right())
