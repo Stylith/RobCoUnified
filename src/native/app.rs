@@ -449,8 +449,12 @@ fn apply_native_display_effects_for_settings(settings: &Settings) {
     let display_effects = &settings.display_effects;
     if !display_effects.enabled {
         egui_wgpu::set_crt_effects(None);
+        egui_winit::set_crt_pointer_curve(None);
         return;
     }
+    egui_winit::set_crt_pointer_curve(
+        (display_effects.curvature > 0.0).then_some(display_effects.curvature),
+    );
     egui_wgpu::set_crt_effects(Some(CrtEffects {
         curvature: display_effects.curvature,
         scanlines: display_effects.scanlines,

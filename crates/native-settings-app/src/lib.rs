@@ -792,7 +792,7 @@ fn terminal_settings_rows_with_ids(
                 ),
                 SettingsRowId::NativeTerminalUiHighlighting,
             ));
-            rows.push(("Effects".to_string(), SettingsRowId::OpenEffects));
+            rows.push(("CRT Effects".to_string(), SettingsRowId::OpenEffects));
             rows.push(("Back".to_string(), SettingsRowId::Back));
             rows
         }

@@ -134,6 +134,7 @@ See [`docs/NATIVE_ROADMAP.md`](docs/NATIVE_ROADMAP.md) for the current native ar
 - PTY support: [portable-pty](https://github.com/wez/wezterm/tree/main/pty)
 - Terminal emulation: [vt100](https://crates.io/crates/vt100)
 - Utilities: [sysinfo](https://github.com/GuillaumeGomez/sysinfo), [chrono](https://github.com/chronotope/chrono)
+- Desktop icon set: [Pixel Icon](https://icon-sets.iconify.design/pixel/) by HackerNoon via Iconify, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 
 Nuclear launch code data is sourced from community-maintained sources:
 - [NukaCrypt](https://nukacrypt.com/)

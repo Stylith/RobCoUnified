@@ -46,6 +46,7 @@ pub enum GamePhase {
     Title,
     Ready,
     Playing,
+    Paused,
     Respawning,
     GameOver,
 }
@@ -111,6 +112,7 @@ pub struct GameInput {
     pub right: bool,
     pub fire: bool,
     pub start: bool,
+    pub pause: bool,
 }
 
 pub struct SpaceInvadersGame {
@@ -375,16 +377,35 @@ impl SpaceInvadersGame {
         let fire_pressed = input.fire && !self.fire_held;
         self.fire_held = input.fire;
 
-        self.state.animation_ticks += dt * 60.0;
-        self.state.player.flash_timer = (self.state.player.flash_timer - dt).max(0.0);
-        self.state.player.reload_timer = (self.state.player.reload_timer - dt).max(0.0);
-
         if self.state.phase == GamePhase::Title {
+            self.state.animation_ticks += dt * 60.0;
             if input.start {
                 self.begin_run();
             }
             return;
         }
+
+        if input.pause {
+            match self.state.phase {
+                GamePhase::Playing => {
+                    self.state.phase = GamePhase::Paused;
+                    return;
+                }
+                GamePhase::Paused => {
+                    self.state.phase = GamePhase::Playing;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if self.state.phase == GamePhase::Paused {
+            return;
+        }
+
+        self.state.animation_ticks += dt * 60.0;
+        self.state.player.flash_timer = (self.state.player.flash_timer - dt).max(0.0);
+        self.state.player.reload_timer = (self.state.player.reload_timer - dt).max(0.0);
 
         self.update_effects(dt);
         self.update_player_explosion(dt);
@@ -1072,6 +1093,7 @@ impl SpaceInvadersGame {
         let (title, subtitle) = match self.state.phase {
             GamePhase::Title => return,
             GamePhase::Ready => ("READY", "Clear the wave"),
+            GamePhase::Paused => ("PAUSED", "Press P or Esc to resume"),
             GamePhase::Respawning => ("HIT", "Get back in position"),
             GamePhase::GameOver => ("GAME OVER", "Press fire to restart"),
             GamePhase::Playing => return,
@@ -1626,6 +1648,7 @@ pub fn input_from_ctx(ctx: &Context) -> GameInput {
         right: ctx.input(|i| i.key_down(Key::ArrowRight) || i.key_down(Key::D)),
         fire: ctx.input(|i| i.key_down(Key::Space)),
         start: ctx.input(|i| i.key_pressed(Key::Enter)),
+        pause: ctx.input(|i| i.key_pressed(Key::P) || i.key_pressed(Key::Escape)),
     }
 }
 
@@ -1817,6 +1840,54 @@ mod tests {
         assert_eq!(game.wave(), 2);
         assert_eq!(game.phase(), GamePhase::Ready);
         assert_eq!(game.alive_aliens(), ALIEN_ROWS * ALIEN_COLS);
+    }
+
+    #[test]
+    fn pause_toggles_playing_and_freezes_gameplay() {
+        let mut game = SpaceInvadersGame::new(SpaceInvadersConfig::default());
+        game.state.phase = GamePhase::Playing;
+        let initial_x = game.state.player.pos.x;
+
+        game.update(
+            &GameInput {
+                right: true,
+                pause: true,
+                ..GameInput::default()
+            },
+            0.1,
+        );
+        assert_eq!(game.phase(), GamePhase::Paused);
+        assert_eq!(game.state.player.pos.x, initial_x);
+
+        game.update(
+            &GameInput {
+                right: true,
+                ..GameInput::default()
+            },
+            0.1,
+        );
+        assert_eq!(game.phase(), GamePhase::Paused);
+        assert_eq!(game.state.player.pos.x, initial_x);
+
+        game.update(
+            &GameInput {
+                right: true,
+                pause: true,
+                ..GameInput::default()
+            },
+            0.1,
+        );
+        assert_eq!(game.phase(), GamePhase::Playing);
+        assert_eq!(game.state.player.pos.x, initial_x);
+
+        game.update(
+            &GameInput {
+                right: true,
+                ..GameInput::default()
+            },
+            0.1,
+        );
+        assert!(game.state.player.pos.x > initial_x);
     }
 
     #[test]

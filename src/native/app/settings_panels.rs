@@ -100,51 +100,74 @@ impl RobcoNativeApp {
                 let effects = &mut self.settings.draft.display_effects;
                 let mut tuning_changed = false;
                 right.add_enabled_ui(effects.enabled, |ui| {
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.curvature, 0.0..=0.2).text("Curvature"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.scanlines, 0.0..=1.0).text("Scanlines"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.glow, 0.0..=1.5).text("Glow"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.bloom, 0.0..=1.5).text("Text Bloom"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.vignette, 0.0..=1.0).text("Vignette"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.noise, 0.0..=0.35).text("Noise"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.flicker, 0.0..=0.3).text("Flicker"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.jitter, 0.0..=0.12).text("Jitter"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.burn_in, 0.0..=1.0).text("Burn-In"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.glow_line, 0.0..=1.0).text("Glow Line"))
-                        .changed();
-                    tuning_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut effects.phosphor_softness, 0.0..=1.0)
-                                .text("Phosphor Softness"),
-                        )
-                        .changed();
-                    tuning_changed |= ui
-                        .add(
-                            egui::Slider::new(&mut effects.brightness, 0.7..=1.4)
-                                .text("Brightness"),
-                        )
-                        .changed();
-                    tuning_changed |= ui
-                        .add(egui::Slider::new(&mut effects.contrast, 0.8..=1.5).text("Contrast"))
-                        .changed();
+                    ui.scope(|ui| {
+                        // Mirror the custom-theme sliders so the rails stay visible instead of
+                        // fading into the dark settings chrome.
+                        ui.visuals_mut().selection.bg_fill = palette.fg;
+                        ui.visuals_mut().widgets.inactive.bg_fill = palette.dim;
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.curvature, 0.0..=0.2)
+                                    .text("Curvature"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.scanlines, 0.0..=1.0)
+                                    .text("Scanlines"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut effects.glow, 0.0..=1.5).text("Glow"))
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.bloom, 0.0..=1.5).text("Text Bloom"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.vignette, 0.0..=1.0)
+                                    .text("Vignette"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut effects.noise, 0.0..=0.35).text("Noise"))
+                            .changed();
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut effects.flicker, 0.0..=0.3).text("Flicker"))
+                            .changed();
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut effects.jitter, 0.0..=0.12).text("Jitter"))
+                            .changed();
+                        tuning_changed |= ui
+                            .add(egui::Slider::new(&mut effects.burn_in, 0.0..=1.0).text("Burn-In"))
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.glow_line, 0.0..=1.0)
+                                    .text("Glow Line"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.phosphor_softness, 0.0..=1.0)
+                                    .text("Phosphor Softness"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.brightness, 0.7..=1.4)
+                                    .text("Brightness"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
+                                egui::Slider::new(&mut effects.contrast, 0.8..=1.5)
+                                    .text("Contrast"),
+                            )
+                            .changed();
+                    });
                 });
                 right.add_space(8.0);
                 right.small(

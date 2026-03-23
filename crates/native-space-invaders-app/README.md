@@ -32,3 +32,10 @@ Standalone preview:
 ```bash
 cargo run -p robcos-native-space-invaders-app --bin robcos-space-invaders
 ```
+
+Controls:
+
+- `Enter` to start from the title screen
+- `Left` / `A` and `Right` / `D` to move
+- `Space` to fire
+- `P` or `Esc` to pause and resume during play

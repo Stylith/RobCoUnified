@@ -5,8 +5,8 @@ use std::{
 };
 
 use egui::{
-    pos2, vec2, Align2, Color32, ColorImage, Context, FontFamily, FontId, Key, Pos2, Rect,
-    Sense, Stroke, TextureHandle, TextureOptions, Ui, Vec2,
+    pos2, vec2, Align2, Color32, ColorImage, Context, FontFamily, FontId, Key, Pos2, Rect, Sense,
+    Stroke, TextureHandle, TextureOptions, Ui, Vec2,
 };
 use image::RgbaImage;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -425,12 +425,7 @@ impl StageOneState {
         outcome
     }
 
-    fn step_frame(
-        &mut self,
-        input: &GameInput,
-        level: u32,
-        rng: &mut SmallRng,
-    ) -> StageOneOutcome {
+    fn step_frame(&mut self, input: &GameInput, level: u32, rng: &mut SmallRng) -> StageOneOutcome {
         let mut outcome = StageOneOutcome::default();
         let girl_zone = Rect::from_center_size(pos2(self.girl_pos.x, self.girl_pos.y), GIRL_SIZE);
         if self.hero.rect().intersects(girl_zone) {
@@ -463,7 +458,9 @@ impl StageOneState {
                 if airborne && overlaps_x && hero_above {
                     bomb.jump_marked = true;
                 }
-                if bomb.jump_marked && !bomb.bonus_awarded && (self.hero.pos.x - bomb.pos.x).abs() > HERO_SIZE.x
+                if bomb.jump_marked
+                    && !bomb.bonus_awarded
+                    && (self.hero.pos.x - bomb.pos.x).abs() > HERO_SIZE.x
                 {
                     bomb.bonus_awarded = true;
                     outcome.score_delta += SCORE_BOMB;
@@ -631,7 +628,12 @@ impl StageOneState {
     }
 
     fn hand_pos(&self, left_hand: bool) -> Vec2 {
-        self.boss_pos + if left_hand { vec2(-42.0, 38.0) } else { vec2(42.0, 38.0) }
+        self.boss_pos
+            + if left_hand {
+                vec2(-42.0, 38.0)
+            } else {
+                vec2(42.0, 38.0)
+            }
     }
 
     fn update_hero(&mut self, input: &GameInput) {
@@ -879,7 +881,8 @@ impl StageOneState {
                 }
                 BombMotion::Rolling(RollingBombMode::OnGirder { girder, dir }) => {
                     let next_x = bomb.pos.x + dir * rolling_speed;
-                    if next_x < self.girders[girder].min_x() || next_x > self.girders[girder].max_x()
+                    if next_x < self.girders[girder].min_x()
+                        || next_x > self.girders[girder].max_x()
                     {
                         if girder + 1 < self.girders.len() {
                             let clamped_x = next_x.clamp(
@@ -898,11 +901,8 @@ impl StageOneState {
                         bomb.pos.x = next_x;
                         bomb.pos.y = self.girders[girder].y_at_x(bomb.pos.x);
 
-                        if let Some((ladder_idx, ladder)) = self
-                            .ladders
-                            .iter()
-                            .enumerate()
-                            .find(|(_, ladder)| {
+                        if let Some((ladder_idx, ladder)) =
+                            self.ladders.iter().enumerate().find(|(_, ladder)| {
                                 ladder.upper_girder == girder
                                     && (bomb.pos.x - ladder.x).abs() <= rolling_speed * 1.5
                             })
@@ -1336,11 +1336,10 @@ impl RedMenaceGame {
             dir += 1.0;
         }
         self.marker.pos.x += dir * PLACEHOLDER_MARKER_SPEED * dt;
-        self.marker.pos.x = self
-            .marker
-            .pos
-            .x
-            .clamp(PLACEHOLDER_MARKER_SIZE.x, WORLD_W - PLACEHOLDER_MARKER_SIZE.x);
+        self.marker.pos.x = self.marker.pos.x.clamp(
+            PLACEHOLDER_MARKER_SIZE.x,
+            WORLD_W - PLACEHOLDER_MARKER_SIZE.x,
+        );
 
         if input.action_pressed {
             self.marker.jump_timer = 0.22;
@@ -1397,7 +1396,9 @@ impl RedMenaceGame {
 
     fn textures(&self) -> Ref<'_, RedMenaceTextures> {
         Ref::map(self.textures.borrow(), |textures| {
-            textures.as_ref().expect("red menace textures should be loaded")
+            textures
+                .as_ref()
+                .expect("red menace textures should be loaded")
         })
     }
 
@@ -1537,7 +1538,14 @@ impl RedMenaceGame {
             (708.0, 370.0, 514.0),
             (758.0, 370.0, 566.0),
         ] {
-            draw_chain(painter, world, x, top, bottom, self.theme.neutral.gamma_multiply(0.9));
+            draw_chain(
+                painter,
+                world,
+                x,
+                top,
+                bottom,
+                self.theme.neutral.gamma_multiply(0.9),
+            );
         }
 
         for (clip, pos, width, flip_x) in [
@@ -1584,7 +1592,12 @@ impl RedMenaceGame {
             );
         }
 
-        draw_boss_stack(painter, world, stage.boss_pos + vec2(-88.0, -10.0), self.theme.ui);
+        draw_boss_stack(
+            painter,
+            world,
+            stage.boss_pos + vec2(-88.0, -10.0),
+            self.theme.ui,
+        );
         let (boss_clip, boss_phase, boss_ticks_per_frame, left_hand_bomb, right_hand_bomb) =
             match stage.attack_state {
                 BossAttackState::Cooldown(_) => {
@@ -1675,7 +1688,11 @@ impl RedMenaceGame {
 
         for bomb in &stage.bombs {
             let (clip, draw_size, flip_x) = match bomb.kind {
-                BombKind::Flying => (&textures.flying_bomb, FLYING_BOMB_DRAW_SIZE, bomb.pos.x < bomb.prev_pos.x),
+                BombKind::Flying => (
+                    &textures.flying_bomb,
+                    FLYING_BOMB_DRAW_SIZE,
+                    bomb.pos.x < bomb.prev_pos.x,
+                ),
                 BombKind::Rolling => (&textures.rolling_bomb, ROLLING_BOMB_DRAW_SIZE, false),
             };
             draw_clip_centered(
@@ -1692,11 +1709,36 @@ impl RedMenaceGame {
         }
 
         let (hero_clip, hero_size, hero_phase, hero_ticks_per_frame) = match stage.hero.visual {
-            HeroVisualState::Stand => (&textures.hero_stand, HERO_DRAW_SIZE, self.animation_ticks, 24.0),
-            HeroVisualState::Run => (&textures.hero_run, HERO_DRAW_SIZE, self.animation_ticks, 8.0),
-            HeroVisualState::Climb => (&textures.hero_climb, HERO_DRAW_SIZE, self.animation_ticks, 12.0),
-            HeroVisualState::Jump => (&textures.hero_jump, HERO_DRAW_SIZE, self.animation_ticks, 10.0),
-            HeroVisualState::Fall => (&textures.hero_fall, HERO_DRAW_SIZE, self.animation_ticks, 10.0),
+            HeroVisualState::Stand => (
+                &textures.hero_stand,
+                HERO_DRAW_SIZE,
+                self.animation_ticks,
+                24.0,
+            ),
+            HeroVisualState::Run => (
+                &textures.hero_run,
+                HERO_DRAW_SIZE,
+                self.animation_ticks,
+                8.0,
+            ),
+            HeroVisualState::Climb => (
+                &textures.hero_climb,
+                HERO_DRAW_SIZE,
+                self.animation_ticks,
+                12.0,
+            ),
+            HeroVisualState::Jump => (
+                &textures.hero_jump,
+                HERO_DRAW_SIZE,
+                self.animation_ticks,
+                10.0,
+            ),
+            HeroVisualState::Fall => (
+                &textures.hero_fall,
+                HERO_DRAW_SIZE,
+                self.animation_ticks,
+                10.0,
+            ),
             HeroVisualState::PowerArmorStand => (
                 &textures.hero_power_armor_stand,
                 HERO_POWER_ARMOR_DRAW_SIZE,
@@ -1774,8 +1816,11 @@ impl RedMenaceGame {
         } else {
             0.0
         };
-        let marker_rect =
-            world_rect_from_entity(world, self.marker.pos - vec2(0.0, bob), PLACEHOLDER_MARKER_SIZE);
+        let marker_rect = world_rect_from_entity(
+            world,
+            self.marker.pos - vec2(0.0, bob),
+            PLACEHOLDER_MARKER_SIZE,
+        );
         painter.rect_stroke(marker_rect, 0.0, Stroke::new(2.0, self.theme.ui));
         painter.line_segment(
             [marker_rect.center_top(), marker_rect.center_bottom()],
@@ -1864,7 +1909,13 @@ impl RedMenaceGame {
                 Align2::CENTER_TOP,
                 self.data.bonus_timer.max(0).to_string(),
                 value_font.clone(),
-                self.theme.ui.gamma_multiply(if self.data.bonus_timer <= 500 { 0.75 } else { 1.0 }),
+                self.theme
+                    .ui
+                    .gamma_multiply(if self.data.bonus_timer <= 500 {
+                        0.75
+                    } else {
+                        1.0
+                    }),
             );
             painter.text(
                 pos2(x_high, y_label),
@@ -1903,7 +1954,10 @@ impl RedMenaceGame {
             }
             draw_clip_in_rect(
                 painter,
-                Rect::from_center_size(pos2(world.right() - 28.0, world.top() + 24.0), vec2(26.0, 26.0)),
+                Rect::from_center_size(
+                    pos2(world.right() - 28.0, world.top() + 24.0),
+                    vec2(26.0, 26.0),
+                ),
                 &textures.pause_icon,
                 textures.pause_icon.first(),
                 self.theme.ui,
@@ -1981,11 +2035,7 @@ fn random_bomb_kind(rng: &mut SmallRng) -> BombKind {
 }
 
 fn random_flying_bomb_endpoint(left_hand: bool, rng: &mut SmallRng) -> Vec2 {
-    let endpoints = [
-        vec2(130.0, 760.0),
-        vec2(395.0, 760.0),
-        vec2(890.0, 640.0),
-    ];
+    let endpoints = [vec2(130.0, 760.0), vec2(395.0, 760.0), vec2(890.0, 640.0)];
     if left_hand {
         if rng.gen_bool(0.5) {
             endpoints[0]
@@ -2067,8 +2117,8 @@ fn stage1_rolling_bomb_speed(level: u32) -> f32 {
 }
 
 fn stage1_rolling_ladder_chance(level: u32) -> f64 {
-    ((6.0f32 * (1.0f32 + 0.18f32).powf(level.saturating_sub(1) as f32)).min(15.0f32)
-        / 100.0f32) as f64
+    ((6.0f32 * (1.0f32 + 0.18f32).powf(level.saturating_sub(1) as f32)).min(15.0f32) / 100.0f32)
+        as f64
 }
 
 fn asset_root() -> PathBuf {
@@ -2080,9 +2130,8 @@ fn asset_frame_path(dir: &str, frame: u16) -> PathBuf {
 }
 
 fn load_png_image(path: &Path) -> RgbaImage {
-    let bytes = fs::read(path).unwrap_or_else(|err| {
-        panic!("failed to read red menace asset {}: {err}", path.display())
-    });
+    let bytes = fs::read(path)
+        .unwrap_or_else(|err| panic!("failed to read red menace asset {}: {err}", path.display()));
     image::load_from_memory(&bytes)
         .unwrap_or_else(|err| panic!("invalid red menace png {}: {err}", path.display()))
         .into_rgba8()
@@ -2194,14 +2243,7 @@ fn circle_intersects_rect(center: Vec2, radius: f32, rect: Rect) -> bool {
     (center - vec2(nearest_x, nearest_y)).length() <= radius
 }
 
-fn draw_chain(
-    painter: &egui::Painter,
-    world: Rect,
-    x: f32,
-    top: f32,
-    bottom: f32,
-    color: Color32,
-) {
+fn draw_chain(painter: &egui::Painter, world: Rect, x: f32, top: f32, bottom: f32, color: Color32) {
     let mut y = top;
     while y < bottom {
         let center = world_point(world, vec2(x, y));
@@ -2213,7 +2255,10 @@ fn draw_chain(
 fn draw_boss_stack(painter: &egui::Painter, world: Rect, origin: Vec2, color: Color32) {
     for row in 0..4 {
         for col in 0..3 {
-            let offset = vec2(col as f32 * 18.0, row as f32 * 16.0 + (col % 2) as f32 * 1.5);
+            let offset = vec2(
+                col as f32 * 18.0,
+                row as f32 * 16.0 + (col % 2) as f32 * 1.5,
+            );
             painter.circle_stroke(
                 world_point(world, origin + offset),
                 7.0,

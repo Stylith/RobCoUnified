@@ -198,7 +198,7 @@ fn terminal_settings_title(panel: TerminalSettingsPanel) -> &'static str {
         TerminalSettingsPanel::Home => "Settings",
         TerminalSettingsPanel::General => "Settings - General",
         TerminalSettingsPanel::Appearance => "Settings - Appearance",
-        TerminalSettingsPanel::AppearanceEffects => "Settings - Effects",
+        TerminalSettingsPanel::AppearanceEffects => "Settings - CRT Effects",
     }
 }
 
