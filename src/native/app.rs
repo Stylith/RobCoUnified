@@ -826,12 +826,14 @@ impl Default for RobcoNativeApp {
 
 impl RobcoNativeApp {
     fn reset_zeta_invaders_runtime(&mut self, open: bool) {
-        self.zeta_invaders = ZetaInvadersWindow::default();
+        self.zeta_invaders.game.reset();
+        self.zeta_invaders.last_frame_at = None;
         self.zeta_invaders.open = open;
     }
 
     fn reset_red_menace_runtime(&mut self, open: bool) {
-        self.red_menace = RedMenaceWindow::default();
+        self.red_menace.game.reset();
+        self.red_menace.last_frame_at = None;
         self.red_menace.open = open;
     }
 
