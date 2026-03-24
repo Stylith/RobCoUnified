@@ -527,18 +527,28 @@ where
         if instances.is_empty() {
             continue;
         }
-        let has_multiple = instances.len() > 1;
-        for (idx, id) in instances.into_iter().enumerate() {
-            let base_title = title_for(id);
-            let label = if has_multiple {
-                format!("{} [{}]", base_title, idx + 1)
+        let titled_instances: Vec<(WindowInstanceId, String)> = instances
+            .into_iter()
+            .map(|id| (id, title_for(id)))
+            .collect();
+        for (idx, (id, base_title)) in titled_instances.iter().enumerate() {
+            let title_count = titled_instances
+                .iter()
+                .filter(|(_, other_title)| other_title == base_title)
+                .count();
+            let label = if title_count > 1 {
+                let title_index = titled_instances[..=idx]
+                    .iter()
+                    .filter(|(_, other_title)| other_title == base_title)
+                    .count();
+                format!("{} [{}]", base_title, title_index)
             } else {
-                base_title
+                base_title.clone()
             };
             entries.push(DesktopTaskbarEntry {
-                id,
+                id: *id,
                 label,
-                inactive: active_window != Some(id),
+                inactive: active_window != Some(*id),
             });
         }
     }
@@ -843,6 +853,38 @@ mod tests {
         assert_eq!(entries[1].id.kind, DesktopWindow::Editor);
         assert!(entries[0].inactive);
         assert!(!entries[1].inactive);
+    }
+
+    #[test]
+    fn taskbar_entries_only_number_duplicate_titles() {
+        let entries = build_taskbar_entries(
+            &[
+                WindowInstanceId::primary(DesktopWindow::PtyApp),
+                WindowInstanceId {
+                    kind: DesktopWindow::PtyApp,
+                    instance: 1,
+                },
+                WindowInstanceId {
+                    kind: DesktopWindow::PtyApp,
+                    instance: 2,
+                },
+                WindowInstanceId {
+                    kind: DesktopWindow::PtyApp,
+                    instance: 3,
+                },
+            ],
+            Some(WindowInstanceId::primary(DesktopWindow::PtyApp)),
+            |id| match id.instance {
+                0 => "spotify_player".to_string(),
+                1 => "ranger".to_string(),
+                _ => "Terminal".to_string(),
+            },
+        );
+
+        assert_eq!(entries[0].label, "spotify_player");
+        assert_eq!(entries[1].label, "ranger");
+        assert_eq!(entries[2].label, "Terminal [1]");
+        assert_eq!(entries[3].label, "Terminal [2]");
     }
 
     #[test]
