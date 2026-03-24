@@ -2,12 +2,13 @@ use super::super::desktop_app::{
     desktop_component_binding, desktop_component_spec, desktop_components, DesktopWindow,
     DesktopWindowTileAction, WindowInstanceId,
 };
+use super::super::pty_screen::NativePtyState;
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
 
 use crate::native::editor_app::EditorWindow;
 
-use super::{RobcoNativeApp, SecondaryWindowApp};
+use super::{RobcoNativeApp, SecondaryWindow, SecondaryWindowApp};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct DesktopWindowState {
@@ -44,6 +45,29 @@ pub(super) struct ResizableDesktopWindowOptions {
 }
 
 impl RobcoNativeApp {
+    pub(super) fn spawn_secondary_window(
+        &mut self,
+        kind: DesktopWindow,
+        app: SecondaryWindowApp,
+    ) -> WindowInstanceId {
+        let instance = self.next_window_instance;
+        self.next_window_instance += 1;
+        let id = WindowInstanceId { kind, instance };
+        // Set up window state with a fresh generation.
+        let generation = self.next_desktop_window_generation();
+        let state = self.desktop_window_state_mut(id);
+        state.minimized = false;
+        state.maximized = false;
+        state.generation = generation;
+        let secondary = SecondaryWindow { id, app };
+        self.secondary_windows.push(secondary);
+        self.desktop_active_window = Some(id);
+        if self.desktop_mode_open {
+            self.close_desktop_overlays();
+        }
+        id
+    }
+
     // ── Instance resolution ─────────────────────────────────────────────
 
     /// Returns the WindowInstanceId for the current drawing context.
@@ -88,6 +112,61 @@ impl RobcoNativeApp {
         id: WindowInstanceId,
     ) -> &mut DesktopWindowState {
         self.desktop_window_states.entry(id).or_default()
+    }
+
+    pub(super) fn desktop_pty_slot_mut(
+        &mut self,
+        id: WindowInstanceId,
+    ) -> Option<&mut Option<NativePtyState>> {
+        if id.kind != DesktopWindow::PtyApp {
+            return None;
+        }
+        if id.instance == 0 {
+            return Some(&mut self.terminal_pty);
+        }
+        self.secondary_windows
+            .iter_mut()
+            .find(|window| window.id == id)
+            .and_then(|window| match &mut window.app {
+                SecondaryWindowApp::Pty(state) => Some(state),
+                _ => None,
+            })
+    }
+
+    pub(super) fn desktop_pty_state(&self, id: WindowInstanceId) -> Option<&NativePtyState> {
+        if id.kind != DesktopWindow::PtyApp {
+            return None;
+        }
+        if id.instance == 0 {
+            return self.terminal_pty.as_ref();
+        }
+        self.secondary_windows
+            .iter()
+            .find(|window| window.id == id)
+            .and_then(|window| match &window.app {
+                SecondaryWindowApp::Pty(state) => state.as_ref(),
+                _ => None,
+            })
+    }
+
+    pub(super) fn active_desktop_pty_state_mut(&mut self) -> Option<&mut NativePtyState> {
+        let id = self.desktop_active_window?;
+        self.desktop_pty_slot_mut(id)?.as_mut()
+    }
+
+    pub(super) fn desktop_window_title_for_instance(&self, id: WindowInstanceId) -> String {
+        let pty_title = self.desktop_pty_state(id).map(|state| state.title.as_str());
+        desktop_component_spec(id.kind).title(pty_title)
+    }
+
+    pub(super) fn terminate_secondary_window_ptys(windows: &mut [SecondaryWindow]) {
+        for window in windows {
+            if let SecondaryWindowApp::Pty(state) = &mut window.app {
+                if let Some(mut pty) = state.take() {
+                    pty.session.terminate();
+                }
+            }
+        }
     }
 
     pub(super) fn desktop_window_generation(&self, id: WindowInstanceId) -> u64 {

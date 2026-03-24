@@ -3,9 +3,7 @@ use super::connections_screen::TerminalConnectionsState;
 use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
-use super::desktop_app::{
-    desktop_component_spec, DesktopShellAction, DesktopWindow, WindowInstanceId,
-};
+use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::{saved_connections_for_kind, DiscoveredConnection};
 use super::desktop_documents_service::{
     add_document_category as add_desktop_document_category,
@@ -24,20 +22,14 @@ use super::desktop_launcher_service::{
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::{
-    authenticate_login, bind_login_identity, clear_all_sessions as clear_native_sessions,
-    has_pending_session_switch as has_native_pending_session_switch, last_session_username,
-    login_selection_auth_method, login_usernames as load_login_usernames, logout_flash_plan,
-    persist_shell_snapshot as persist_native_shell_snapshot,
-    restore_current_user_from_last_session,
-    restore_session_plan as build_native_session_restore_plan, user_record as session_user_record,
-    NativeSessionFlashPlan,
+    authenticate_login, has_pending_session_switch as has_native_pending_session_switch,
+    login_selection_auth_method, restore_current_user_from_last_session,
+    user_record as session_user_record,
 };
 use super::desktop_settings_service::{
     apply_file_manager_display_settings_update as apply_desktop_file_manager_display_settings_update,
     apply_file_manager_settings_update as apply_desktop_file_manager_settings_update,
-    load_settings_snapshot, persist_settings_draft,
-    pty_force_render_mode as desktop_pty_force_render_mode,
-    pty_profile_for_command as desktop_pty_profile_for_command, reload_settings_snapshot,
+    load_settings_snapshot, persist_settings_draft, reload_settings_snapshot,
 };
 use super::desktop_shortcuts_service::set_shortcut_icon as set_desktop_shortcut_icon;
 use super::desktop_status_service::{
@@ -47,10 +39,7 @@ use super::desktop_status_service::{
 use super::desktop_surface_service::{
     set_wallpaper_path as set_desktop_wallpaper_path, DesktopIconGridLayout, DesktopSurfaceEntry,
 };
-use super::desktop_user_service::{
-    create_user as create_desktop_user, sorted_user_records, sorted_usernames,
-    update_user_auth_method,
-};
+use super::desktop_user_service::{sorted_user_records, sorted_usernames};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
 use super::editor_app::{EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE};
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
@@ -65,17 +54,11 @@ use super::file_manager_desktop::{
 };
 use super::first_party_capability_enabled_str;
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
-use super::installer_screen::{
-    DesktopInstallerNotice, DesktopInstallerState, TerminalInstallerState,
-};
+use super::installer_screen::{DesktopInstallerState, TerminalInstallerState};
 use super::menu::{
     login_menu_rows_from_users, resolve_hacking_screen_event, resolve_login_selection_plan,
-    resolve_terminal_flash_action, terminal_command_launch_plan, terminal_runtime_defaults,
-    terminal_shell_launch_plan, TerminalDesktopPtyExitPlan, TerminalEmbeddedPtyExitPlan,
-    TerminalFlashActionPlan, TerminalFlashPtyLaunchPlan, TerminalHackingUiEvent,
-    TerminalLoginPasswordPlan, TerminalLoginScreenMode, TerminalLoginState,
-    TerminalNavigationState, TerminalPtyLaunchPlan, TerminalScreen, TerminalShellSurface,
-    TerminalUserManagementPromptPlan, TerminalUserPasswordFlow, UserManagementMode,
+    resolve_terminal_flash_action, terminal_runtime_defaults, TerminalHackingUiEvent,
+    TerminalLoginScreenMode, TerminalLoginState, TerminalNavigationState, TerminalScreen,
 };
 use super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 use super::prompt::{
@@ -83,10 +66,7 @@ use super::prompt::{
     TerminalPromptAction, TerminalPromptKind,
 };
 use super::prompt_flow::PromptOutcome;
-use super::pty_screen::{
-    handle_pty_input, spawn_embedded_pty_with_options, NativePtyState, TERMINAL_MODE_PTY_CELL_H,
-    TERMINAL_MODE_PTY_CELL_W,
-};
+use super::pty_screen::{handle_pty_input, NativePtyState};
 use super::retro_ui::{
     configure_visuals, configure_visuals_for_settings, current_palette, palette_for_settings,
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
@@ -131,6 +111,7 @@ use std::time::{Duration, Instant};
 mod addon_policy;
 mod desktop_installer_ui;
 mod desktop_menu_bar;
+mod desktop_runtime;
 mod desktop_spotlight;
 mod desktop_start_menu;
 mod desktop_surface;
@@ -139,8 +120,10 @@ mod desktop_window_mgmt;
 mod launch_registry;
 mod launch_runtime;
 mod session_management;
+mod session_runtime;
 mod software_cursor;
 mod terminal_dispatch;
+mod terminal_runtime;
 mod terminal_screens;
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 #[cfg(test)]
@@ -868,37 +851,6 @@ impl RobcoNativeApp {
         egui_winit::set_app_cursor_mode(cursor_mode);
     }
 
-    fn apply_autologin_open_mode(&mut self) {
-        if matches!(self.settings.draft.default_open_mode, OpenMode::Desktop) {
-            self.desktop_mode_open = true;
-            self.close_start_menu();
-            self.sync_desktop_active_window();
-        }
-    }
-
-    fn maybe_apply_profile_autologin(&mut self) {
-        if self.session.is_some() {
-            return;
-        }
-        let Some(username) = std::env::var("ROBCOS_AUTOLOGIN_USER")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
-            return;
-        };
-        let Some(user) = session_user_record(&username) else {
-            return;
-        };
-        if user.auth_method != AuthMethod::NoPassword {
-            return;
-        }
-        bind_login_identity(&username);
-        self.ensure_login_session_entry(&username);
-        self.restore_for_user(&username, &user);
-        self.apply_autologin_open_mode();
-    }
-
     fn append_startup_profile_marker(marker: &str) {
         let Some(path) = std::env::var_os("ROBCOS_STARTUP_PROFILE_LOG") else {
             return;
@@ -1358,175 +1310,6 @@ impl RobcoNativeApp {
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
     }
 
-    fn restore_standalone_session_identity(&mut self, session_username: Option<String>) {
-        let session_username = session_username
-            .and_then(|username| {
-                let trimmed = username.trim().to_string();
-                (!trimmed.is_empty()).then_some(trimmed)
-            })
-            .or_else(get_current_user)
-            .or_else(last_session_username);
-        if let Some(username) = session_username {
-            if let Some(user) = session_user_record(&username) {
-                bind_login_identity(&username);
-                self.ensure_login_session_entry(&username);
-                self.restore_for_user(&username, &user);
-            }
-        }
-    }
-
-    fn prepare_standalone_window_shell(
-        &mut self,
-        session_username: Option<String>,
-        desktop_mode_open: bool,
-    ) {
-        self.restore_standalone_session_identity(session_username);
-        self.desktop_window_states.clear();
-        self.close_desktop_overlays();
-        self.terminal_prompt = None;
-        self.pending_settings_panel = None;
-        self.desktop_mode_open = desktop_mode_open;
-        self.desktop_active_window = None;
-        self.apply_status_update(clear_shell_status());
-    }
-
-    pub(crate) fn prepare_standalone_settings_window(
-        &mut self,
-        session_username: Option<String>,
-        panel: Option<NativeSettingsPanel>,
-    ) {
-        self.prepare_standalone_window_shell(session_username, false);
-        self.reset_desktop_settings_window();
-        self.prime_desktop_window_defaults(DesktopWindow::Settings);
-        self.settings.open = true;
-        self.settings.panel = self
-            .coerce_desktop_settings_panel(panel.unwrap_or_else(desktop_settings_default_panel));
-        self.file_manager.open = false;
-        self.picking_icon_for_shortcut = None;
-        self.picking_wallpaper = false;
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Settings));
-        self.apply_status_update(clear_settings_status());
-    }
-
-    pub(crate) fn update_standalone_settings_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        self.dispatch_context_menu_action(ctx);
-        if self.terminal_prompt.is_some() {
-            self.handle_terminal_prompt_input(ctx);
-            self.consume_terminal_prompt_keys(ctx);
-        }
-        let file_manager_first = self.active_window_kind() != Some(DesktopWindow::FileManager)
-            || !self.file_manager.open;
-        if file_manager_first {
-            self.draw_file_manager(ctx);
-            self.draw_settings(ctx);
-        } else {
-            self.draw_settings(ctx);
-            self.draw_file_manager(ctx);
-        }
-        self.draw_terminal_prompt_overlay_global(ctx);
-        if !self.settings.open && !self.file_manager.open && self.terminal_prompt.is_none() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
-    }
-
-    pub(crate) fn prepare_standalone_editor_window(
-        &mut self,
-        session_username: Option<String>,
-        start_path: Option<PathBuf>,
-    ) {
-        self.prepare_standalone_window_shell(session_username, true);
-        self.file_manager.open = false;
-        self.picking_icon_for_shortcut = None;
-        self.picking_wallpaper = false;
-        self.editor.reset_for_desktop_new_document();
-        self.editor.status.clear();
-        self.editor.ui.reset_search();
-        self.prime_desktop_window_defaults(DesktopWindow::Editor);
-        if let Some(path) = start_path {
-            self.open_embedded_path_in_editor(path);
-        } else {
-            self.new_document();
-        }
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Editor));
-    }
-
-    pub(crate) fn update_standalone_editor_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        if self.terminal_prompt.is_some() {
-            self.handle_terminal_prompt_input(ctx);
-            self.consume_terminal_prompt_keys(ctx);
-        }
-        let file_manager_first = self.active_window_kind() != Some(DesktopWindow::FileManager)
-            || !self.file_manager.open;
-        if file_manager_first {
-            self.draw_file_manager(ctx);
-            self.draw_editor(ctx);
-        } else {
-            self.draw_editor(ctx);
-            self.draw_file_manager(ctx);
-        }
-        self.draw_terminal_prompt_overlay_global(ctx);
-        self.maybe_intercept_viewport_close_for_unsaved_editor(ctx);
-        if !self.editor.open && !self.file_manager.open && self.terminal_prompt.is_none() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
-    }
-
-    fn dirty_editor_window_for_close_request(&self) -> Option<WindowInstanceId> {
-        if let Some(active) = self.desktop_active_window {
-            if active.kind == DesktopWindow::Editor {
-                if active.instance == 0 {
-                    if self.editor.open && self.editor.dirty {
-                        return Some(active);
-                    }
-                } else if self.secondary_windows.iter().any(|window| {
-                    window.id == active
-                        && matches!(&window.app, SecondaryWindowApp::Editor(editor) if editor.open && editor.dirty)
-                }) {
-                    return Some(active);
-                }
-            }
-        }
-        if self.editor.open && self.editor.dirty {
-            return Some(WindowInstanceId::primary(DesktopWindow::Editor));
-        }
-        self.secondary_windows
-            .iter()
-            .find_map(|window| match &window.app {
-                SecondaryWindowApp::Editor(editor) if editor.open && editor.dirty => {
-                    Some(window.id)
-                }
-                _ => None,
-            })
-    }
-
-    fn maybe_intercept_viewport_close_for_unsaved_editor(&mut self, ctx: &Context) {
-        if !self.desktop_mode_open {
-            if ctx.input(|i| i.viewport().close_requested()) {
-                self.persist_snapshot();
-            }
-            return;
-        }
-        if !ctx.input(|i| i.viewport().close_requested()) {
-            return;
-        }
-        if let Some(id) = self.dirty_editor_window_for_close_request() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.request_close_window_instance(id);
-        } else {
-            self.persist_snapshot();
-        }
-    }
-
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
         self.applications.open
     }
@@ -1571,29 +1354,6 @@ impl RobcoNativeApp {
         self.draw_red_menace_window(ctx);
     }
 
-    pub(crate) fn prepare_standalone_applications_window(
-        &mut self,
-        session_username: Option<String>,
-    ) {
-        self.prepare_standalone_window_shell(session_username, true);
-        self.applications.status.clear();
-        self.prime_desktop_window_defaults(DesktopWindow::Applications);
-        self.applications.open = true;
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Applications));
-    }
-
-    pub(crate) fn update_standalone_applications_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        self.draw_applications(ctx);
-        if !self.applications.open {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
-    }
-
     pub(crate) fn desktop_component_nuke_codes_is_open(&self) -> bool {
         self.desktop_nuke_codes_open
     }
@@ -1604,28 +1364,6 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_nuke_codes_draw(&mut self, ctx: &Context) {
         self.draw_nuke_codes_window(ctx);
-    }
-
-    pub(crate) fn prepare_standalone_nuke_codes_window(
-        &mut self,
-        session_username: Option<String>,
-    ) {
-        self.prepare_standalone_window_shell(session_username, true);
-        self.prime_desktop_window_defaults(DesktopWindow::NukeCodes);
-        self.open_desktop_nuke_codes();
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::NukeCodes));
-    }
-
-    pub(crate) fn update_standalone_nuke_codes_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        self.draw_nuke_codes_window(ctx);
-        if !self.desktop_nuke_codes_open {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
     }
 
     pub(crate) fn desktop_component_installer_is_open(&self) -> bool {
@@ -1644,35 +1382,6 @@ impl RobcoNativeApp {
         if !was_open {
             self.prime_desktop_window_defaults(DesktopWindow::Installer);
         }
-    }
-
-    pub(crate) fn prepare_standalone_installer_window(&mut self, session_username: Option<String>) {
-        self.prepare_standalone_window_shell(session_username, true);
-        self.prime_desktop_window_defaults(DesktopWindow::Installer);
-        self.desktop_installer.open = true;
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Installer));
-    }
-
-    pub(crate) fn update_standalone_installer_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.process_desktop_pty_input_early(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        self.sync_native_cursor_mode();
-        let pty_last =
-            self.active_window_kind() == Some(DesktopWindow::PtyApp) && self.terminal_pty.is_some();
-        if pty_last {
-            self.draw_installer(ctx);
-            self.draw_desktop_pty_window(ctx);
-        } else {
-            self.draw_desktop_pty_window(ctx);
-            self.draw_installer(ctx);
-        }
-        if !self.desktop_installer.open && self.terminal_pty.is_none() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
     }
 
     pub(crate) fn desktop_component_terminal_mode_is_open(&self) -> bool {
@@ -2580,84 +2289,6 @@ impl RobcoNativeApp {
         }
     }
 
-    fn spawn_secondary_window(
-        &mut self,
-        kind: DesktopWindow,
-        app: SecondaryWindowApp,
-    ) -> WindowInstanceId {
-        let instance = self.next_window_instance;
-        self.next_window_instance += 1;
-        let id = WindowInstanceId { kind, instance };
-        // Set up window state with a fresh generation.
-        let generation = self.next_desktop_window_generation();
-        let state = self.desktop_window_state_mut(id);
-        state.minimized = false;
-        state.maximized = false;
-        state.generation = generation;
-        let secondary = SecondaryWindow { id, app };
-        self.secondary_windows.push(secondary);
-        self.desktop_active_window = Some(id);
-        if self.desktop_mode_open {
-            self.close_desktop_overlays();
-        }
-        id
-    }
-
-    fn desktop_pty_slot_mut(
-        &mut self,
-        id: WindowInstanceId,
-    ) -> Option<&mut Option<NativePtyState>> {
-        if id.kind != DesktopWindow::PtyApp {
-            return None;
-        }
-        if id.instance == 0 {
-            return Some(&mut self.terminal_pty);
-        }
-        self.secondary_windows
-            .iter_mut()
-            .find(|window| window.id == id)
-            .and_then(|window| match &mut window.app {
-                SecondaryWindowApp::Pty(state) => Some(state),
-                _ => None,
-            })
-    }
-
-    fn desktop_pty_state(&self, id: WindowInstanceId) -> Option<&NativePtyState> {
-        if id.kind != DesktopWindow::PtyApp {
-            return None;
-        }
-        if id.instance == 0 {
-            return self.terminal_pty.as_ref();
-        }
-        self.secondary_windows
-            .iter()
-            .find(|window| window.id == id)
-            .and_then(|window| match &window.app {
-                SecondaryWindowApp::Pty(state) => state.as_ref(),
-                _ => None,
-            })
-    }
-
-    fn active_desktop_pty_state_mut(&mut self) -> Option<&mut NativePtyState> {
-        let id = self.desktop_active_window?;
-        self.desktop_pty_slot_mut(id)?.as_mut()
-    }
-
-    fn desktop_window_title_for_instance(&self, id: WindowInstanceId) -> String {
-        let pty_title = self.desktop_pty_state(id).map(|state| state.title.as_str());
-        desktop_component_spec(id.kind).title(pty_title)
-    }
-
-    fn terminate_secondary_window_ptys(windows: &mut [SecondaryWindow]) {
-        for window in windows {
-            if let SecondaryWindowApp::Pty(state) = &mut window.app {
-                if let Some(mut pty) = state.take() {
-                    pty.session.terminate();
-                }
-            }
-        }
-    }
-
     fn open_manual_file(&mut self, path: &str, status_label: &str) {
         let manual = PathBuf::from(path);
         match load_text_document(manual) {
@@ -2673,260 +2304,6 @@ impl RobcoNativeApp {
                 self.shell_status = format!("{status_label} unavailable: {status}");
             }
         }
-    }
-
-    fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
-        let settings = reload_settings_snapshot();
-        let plan = build_native_session_restore_plan(username, user, settings.default_open_mode);
-        self.session = Some(SessionState {
-            username: plan.identity.username,
-            is_admin: plan.identity.is_admin,
-        });
-        self.login.hacking = None;
-        self.file_manager.cwd = plan.file_manager_dir;
-        self.file_manager.open = false;
-        self.file_manager.selected = None;
-        self.editor = EditorWindow::default();
-        self.replace_settings_draft(settings);
-        self.apply_status_update(clear_settings_status());
-        self.settings.panel = desktop_settings_default_panel();
-        self.desktop_nuke_codes_open = false;
-        self.desktop_installer = DesktopInstallerState::default();
-        self.terminal_mode.status.clear();
-        self.reset_shell_runtime_for_session(plan.launch_default_desktop);
-        self.apply_status_update(clear_shell_status());
-    }
-
-    fn reset_shell_runtime_for_session(&mut self, launch_default_desktop: bool) {
-        let terminal_defaults = terminal_runtime_defaults();
-        self.desktop_window_states.clear();
-        self.desktop_active_window = None;
-        self.pending_settings_panel = None;
-        self.start_open = !launch_default_desktop;
-        self.start_selected_root = 0;
-        self.start_system_selected = 0;
-        self.start_leaf_selected = 0;
-        self.start_open_submenu = None;
-        self.start_open_leaf = None;
-        self.desktop_mode_open = launch_default_desktop;
-        self.apply_terminal_navigation_state(terminal_defaults);
-        self.terminal_nuke_codes = NukeCodesView::default();
-        if let Some(mut pty) = self.terminal_pty.take() {
-            pty.session.terminate();
-        }
-        Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
-        self.secondary_windows.clear();
-        self.terminal_installer.reset();
-        self.terminal_edit_menus.reset();
-        self.terminal_connections.reset();
-        self.terminal_prompt = None;
-        self.terminal_flash = None;
-        self.session_leader_until = None;
-    }
-
-    fn current_terminal_navigation_state(&self) -> TerminalNavigationState {
-        self.terminal_nav.clone()
-    }
-
-    fn apply_terminal_navigation_state(&mut self, state: TerminalNavigationState) {
-        self.terminal_nav = state;
-    }
-
-    fn persist_snapshot(&self) {
-        if let Some(session) = &self.session {
-            persist_native_shell_snapshot(
-                &session.username,
-                &self.file_manager.cwd,
-                self.editor.path.as_deref(),
-            );
-        }
-    }
-
-    fn navigate_to_screen(&mut self, screen: TerminalScreen) {
-        let previous = self.terminal_nav.screen;
-        if previous != screen {
-            self.reset_game_for_screen(previous);
-            crate::sound::play_navigate();
-        }
-        self.terminal_nav.screen = screen;
-    }
-
-    fn set_user_management_mode(&mut self, mode: UserManagementMode, selected_idx: usize) {
-        let changed = self.terminal_nav.user_management_mode != mode
-            || self.terminal_nav.user_management_idx != selected_idx;
-        if changed {
-            crate::sound::play_navigate();
-        }
-        self.terminal_nav.user_management_mode = mode;
-        self.terminal_nav.user_management_idx = selected_idx;
-    }
-
-    fn apply_terminal_login_password_plan(&mut self, plan: TerminalLoginPasswordPlan<UserRecord>) {
-        self.apply_terminal_login_submit_action(plan.action, true);
-        if let Some(prompt) = plan.reopen_prompt {
-            self.open_password_prompt(prompt.title, prompt.prompt);
-        }
-    }
-
-    fn apply_terminal_user_management_prompt_plan(
-        &mut self,
-        plan: TerminalUserManagementPromptPlan,
-    ) {
-        match plan {
-            TerminalUserManagementPromptPlan::Status(message) => {
-                self.apply_status_update(shell_status(message));
-            }
-            TerminalUserManagementPromptPlan::SetMode {
-                mode,
-                selected_idx,
-                suppress_next_menu_submit,
-            } => {
-                self.set_user_management_mode(mode, selected_idx);
-                self.terminal_nav.suppress_next_menu_submit = suppress_next_menu_submit;
-            }
-            TerminalUserManagementPromptPlan::OpenPasswordConfirm {
-                flow,
-                username,
-                first_password,
-                prompt,
-            } => {
-                let action = match flow {
-                    TerminalUserPasswordFlow::Create => {
-                        TerminalPromptAction::CreatePasswordConfirm {
-                            username,
-                            first_password,
-                        }
-                    }
-                    TerminalUserPasswordFlow::Reset => TerminalPromptAction::ResetPasswordConfirm {
-                        username,
-                        first_password,
-                    },
-                    TerminalUserPasswordFlow::ChangeAuth => {
-                        TerminalPromptAction::ChangeAuthPasswordConfirm {
-                            username,
-                            first_password,
-                        }
-                    }
-                };
-                self.open_password_prompt_with_action(prompt.title, prompt.prompt, action);
-            }
-            TerminalUserManagementPromptPlan::ApplyPassword {
-                flow,
-                username,
-                password,
-            } => {
-                match flow {
-                    TerminalUserPasswordFlow::Create => {
-                        self.apply_shell_status_result(create_desktop_user(
-                            &username,
-                            AuthMethod::Password,
-                            Some(&password),
-                        ));
-                        self.invalidate_user_cache();
-                    }
-                    TerminalUserPasswordFlow::Reset => {
-                        self.apply_shell_status_result(
-                            update_user_auth_method(
-                                &username,
-                                AuthMethod::Password,
-                                Some(&password),
-                            )
-                            .map(|_| "Password updated.".to_string()),
-                        );
-                        self.invalidate_user_cache();
-                    }
-                    TerminalUserPasswordFlow::ChangeAuth => {
-                        self.apply_shell_status_result(update_user_auth_method(
-                            &username,
-                            AuthMethod::Password,
-                            Some(&password),
-                        ));
-                        self.invalidate_user_cache();
-                    }
-                }
-                self.set_user_management_mode(UserManagementMode::Root, 0);
-            }
-        }
-    }
-
-    fn login_usernames(&self) -> Vec<String> {
-        load_login_usernames()
-    }
-
-    fn queue_terminal_flash(&mut self, message: impl Into<String>, ms: u64, action: FlashAction) {
-        self.terminal_flash = Some(TerminalFlash {
-            message: message.into(),
-            until: Instant::now() + Duration::from_millis(ms),
-            action,
-            boxed: false,
-        });
-    }
-
-    fn queue_terminal_flash_boxed(
-        &mut self,
-        message: impl Into<String>,
-        ms: u64,
-        action: FlashAction,
-    ) {
-        self.terminal_flash = Some(TerminalFlash {
-            message: message.into(),
-            until: Instant::now() + Duration::from_millis(ms),
-            action,
-            boxed: true,
-        });
-    }
-
-    fn queue_session_flash_plan(&mut self, plan: NativeSessionFlashPlan) {
-        self.terminal_flash = Some(TerminalFlash {
-            message: plan.message,
-            until: Instant::now() + Duration::from_millis(plan.duration_ms),
-            action: plan.action,
-            boxed: plan.boxed,
-        });
-    }
-
-    fn begin_logout(&mut self) {
-        let already_logging_out = self
-            .terminal_flash
-            .as_ref()
-            .is_some_and(|flash| matches!(&flash.action, FlashAction::FinishLogout));
-        let Some(plan) = logout_flash_plan(already_logging_out) else {
-            return;
-        };
-        crate::sound::play_logout();
-        self.persist_snapshot();
-        self.terminate_all_native_pty_children();
-        self.terminal_prompt = None;
-        self.terminal_nav.screen = TerminalScreen::MainMenu;
-        self.close_start_menu();
-        self.desktop_mode_open = false;
-        self.desktop_nuke_codes_open = false;
-        self.desktop_active_window = None;
-        self.session_leader_until = None;
-        self.queue_session_flash_plan(plan);
-    }
-
-    fn finish_logout(&mut self) {
-        let _ = reload_settings_snapshot();
-        self.terminate_all_native_pty_children();
-        clear_native_sessions();
-        self.session_runtime.clear();
-        self.session = None;
-        self.login.reset();
-        self.file_manager.open = false;
-        self.editor.open = false;
-        self.settings.open = false;
-        self.settings.panel = desktop_settings_default_panel();
-        self.applications.open = false;
-        self.desktop_nuke_codes_open = false;
-        self.terminal_mode.open = false;
-        self.reset_shell_runtime_for_logout();
-        self.apply_status_update(clear_shell_status());
-    }
-
-    fn reset_shell_runtime_for_logout(&mut self) {
-        self.reset_shell_runtime_for_session(false);
-        self.terminal_pty = None;
     }
 
     fn open_password_prompt(&mut self, title: impl Into<String>, prompt: impl Into<String>) {
@@ -3010,170 +2387,6 @@ impl RobcoNativeApp {
         match result {
             Ok(status) | Err(status) => self.apply_status_update(shell_status(status)),
         }
-    }
-
-    fn apply_terminal_pty_launch_plan(
-        &mut self,
-        plan: TerminalPtyLaunchPlan,
-        desktop_window: bool,
-    ) {
-        let spawn_secondary_desktop_pty =
-            desktop_window && self.desktop_window_is_open(DesktopWindow::PtyApp);
-        if !spawn_secondary_desktop_pty
-            && (plan.replace_existing_pty || self.terminal_pty.is_some())
-        {
-            if let Some(mut previous) = self.terminal_pty.take() {
-                previous.session.terminate();
-            }
-        }
-        let profile = desktop_pty_profile_for_command(&plan.argv);
-        let pty_cols = profile
-            .preferred_w
-            .unwrap_or(96)
-            .max(profile.min_w)
-            .clamp(40, 160);
-        let pty_rows = profile
-            .preferred_h
-            .unwrap_or(32)
-            .max(profile.min_h)
-            .clamp(10, 60);
-        let options = crate::pty::PtyLaunchOptions {
-            env: plan.env,
-            top_bar: None,
-            force_render_mode: plan.force_render_mode,
-        };
-        match spawn_embedded_pty_with_options(
-            &plan.title,
-            &plan.argv,
-            plan.return_screen,
-            pty_cols,
-            pty_rows,
-            options,
-        ) {
-            Ok(mut state) => {
-                state.desktop_cols_floor = Some(pty_cols);
-                state.desktop_rows_floor = Some(pty_rows);
-                state.desktop_live_resize = profile.live_resize;
-                if plan.use_fixed_terminal_metrics {
-                    state.fixed_cell_w = Some(TERMINAL_MODE_PTY_CELL_W);
-                    state.fixed_cell_h = Some(TERMINAL_MODE_PTY_CELL_H);
-                    state.fixed_font_scale = Some(0.94);
-                    state.fixed_font_width_divisor = Some(0.44);
-                }
-                if desktop_window {
-                    let window_id = if spawn_secondary_desktop_pty {
-                        self.spawn_secondary_window(
-                            DesktopWindow::PtyApp,
-                            SecondaryWindowApp::Pty(Some(state)),
-                        )
-                    } else {
-                        self.terminal_pty = Some(state);
-                        self.open_desktop_window(DesktopWindow::PtyApp);
-                        WindowInstanceId::primary(DesktopWindow::PtyApp)
-                    };
-                    let window = self.desktop_window_state_mut(window_id);
-                    window.maximized = profile.open_fullscreen;
-                } else {
-                    self.terminal_pty = Some(state);
-                    self.navigate_to_screen(TerminalScreen::PtyApp);
-                }
-                self.shell_status = plan.success_status;
-            }
-            Err(err) => {
-                self.shell_status = err;
-            }
-        }
-    }
-
-    fn apply_terminal_flash_pty_launch_plan(&mut self, plan: TerminalFlashPtyLaunchPlan) {
-        self.apply_terminal_pty_launch_plan(plan.launch, false);
-        if let Some(state) = self.terminal_pty.as_mut() {
-            state.completion_message = plan.completion_message;
-        }
-        self.shell_status = plan.status;
-    }
-
-    fn apply_terminal_flash_action_plan(&mut self, plan: TerminalFlashActionPlan) {
-        match plan {
-            TerminalFlashActionPlan::StartHacking {
-                username,
-                difficulty,
-            } => {
-                crate::sound::play_navigate();
-                self.login.start_hacking(username, difficulty);
-            }
-            TerminalFlashActionPlan::LaunchPty(plan) => {
-                self.apply_terminal_flash_pty_launch_plan(plan);
-            }
-        }
-    }
-
-    fn apply_terminal_embedded_pty_exit_plan(&mut self, plan: TerminalEmbeddedPtyExitPlan) {
-        self.navigate_to_screen(plan.return_screen);
-        if let Some(message) = plan.boxed_flash_message.clone() {
-            self.queue_terminal_flash_boxed(message.clone(), 1600, FlashAction::Noop);
-            self.shell_status = message;
-        } else {
-            self.shell_status = plan.status;
-        }
-    }
-
-    fn apply_terminal_desktop_pty_exit_plan(&mut self, plan: TerminalDesktopPtyExitPlan) {
-        self.shell_status = plan.status.clone();
-        if let Some(message) = plan.installer_notice_message {
-            self.desktop_installer.status = message.clone();
-            self.desktop_installer.notice = Some(DesktopInstallerNotice {
-                message,
-                success: plan.installer_notice_success,
-            });
-        }
-        if plan.reopen_installer {
-            self.open_desktop_window(DesktopWindow::Installer);
-        }
-    }
-
-    fn open_embedded_pty(&mut self, title: &str, cmd: &[String], return_screen: TerminalScreen) {
-        let plan = terminal_command_launch_plan(
-            TerminalShellSurface::Embedded,
-            title,
-            cmd,
-            return_screen,
-            desktop_pty_force_render_mode(cmd),
-        );
-        self.apply_terminal_pty_launch_plan(plan, false);
-    }
-
-    fn open_desktop_pty(&mut self, title: &str, cmd: &[String]) {
-        let plan = terminal_command_launch_plan(
-            TerminalShellSurface::Desktop,
-            title,
-            cmd,
-            TerminalScreen::MainMenu,
-            desktop_pty_force_render_mode(cmd),
-        );
-        self.apply_terminal_pty_launch_plan(plan, true);
-    }
-
-    fn open_embedded_terminal_shell(&mut self) {
-        let requested_shell = std::env::var("SHELL").ok();
-        let bash_exists = std::path::Path::new("/bin/bash").exists();
-        let plan = terminal_shell_launch_plan(
-            TerminalShellSurface::Embedded,
-            requested_shell.as_deref(),
-            bash_exists,
-        );
-        self.apply_terminal_pty_launch_plan(plan, false);
-    }
-
-    fn open_desktop_terminal_shell(&mut self) {
-        let requested_shell = std::env::var("SHELL").ok();
-        let bash_exists = std::path::Path::new("/bin/bash").exists();
-        let plan = terminal_shell_launch_plan(
-            TerminalShellSurface::Desktop,
-            requested_shell.as_deref(),
-            bash_exists,
-        );
-        self.apply_terminal_pty_launch_plan(plan, true);
     }
 
     fn open_path_in_editor(&mut self, path: PathBuf) {

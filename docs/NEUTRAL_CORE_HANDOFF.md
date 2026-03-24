@@ -275,6 +275,29 @@ Additional launch-runtime extraction slice:
 - the shared terminal launch executor for addon-backed terminal routes moved into that same runtime module, so desktop and terminal launch behavior now live beside each other instead of being split across `app.rs` and `terminal_screens.rs`
 - this does not change runtime behavior, but it gives the coordinator a cleaner seam for the later `ShellState` / runtime extraction work
 
+Additional session-runtime extraction slice:
+
+- session restore/reset lifecycle moved out of `src/native/app.rs` into `src/native/app/session_runtime.rs`
+- that module now owns user restore, shell runtime reset, snapshot persistence, and logout reset flow
+- `src/native/app/session_management.rs` still owns session switching and parked-session coordination, but it now calls into a dedicated session-runtime module instead of reaching back into a large coordinator block in `app.rs`
+
+Additional window-runtime extraction slice:
+
+- secondary desktop window spawning, desktop PTY window lookup, active desktop PTY access, window-title resolution, and secondary PTY cleanup moved out of `src/native/app.rs` into `src/native/app/desktop_window_mgmt.rs`
+- this keeps secondary-window and embedded-PTY mechanics beside the rest of the desktop window manager instead of leaving another runtime block in the root coordinator
+
+Additional desktop-runtime extraction slice:
+
+- desktop standalone-window preparation and update flow moved out of `src/native/app.rs` into `src/native/app/desktop_runtime.rs`
+- that module now owns profile autologin open-mode handling, standalone session restore for desktop windows, standalone Settings/Editor/Applications/Nuke Codes/Installer shell prep and repaint flow, and the unsaved-editor viewport-close interception path
+- this establishes a concrete `desktop_runtime` module without changing runtime behavior
+
+Additional terminal-runtime extraction slice:
+
+- terminal navigation, user-management prompt handling, terminal flash queueing, terminal PTY launch/open helpers, and terminal PTY exit handling moved out of `src/native/app.rs` into `src/native/app/terminal_runtime.rs`
+- `src/native/app/terminal_dispatch.rs` and `src/native/app/terminal_screens.rs` now call into a dedicated terminal runtime module instead of a large shared block on the root coordinator
+- this gives the native shell parallel `desktop_runtime` and `terminal_runtime` seams, which is closer to the planned coordinator split
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.
