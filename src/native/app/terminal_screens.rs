@@ -129,9 +129,12 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_applications(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let (show_file_manager, show_text_editor, show_nuke_codes) =
+            self.visible_application_builtins();
         let entries = build_terminal_application_entries(
-            self.settings.draft.builtin_menu_visibility.text_editor,
-            self.settings.draft.builtin_menu_visibility.nuke_codes,
+            show_file_manager,
+            show_text_editor,
+            show_nuke_codes,
             &catalog_names(ProgramCatalog::Applications),
             BUILTIN_TEXT_EDITOR_APP,
             BUILTIN_NUKE_CODES_APP,
@@ -602,12 +605,14 @@ impl RobcoNativeApp {
     pub(super) fn draw_terminal_settings(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let previous_window_mode = self.settings.draft.native_startup_window_mode;
+        let visibility = self.terminal_settings_visibility();
         let event = run_terminal_settings_screen(
             ctx,
             &mut self.settings.draft,
             &mut self.terminal_settings_panel,
             &mut self.terminal_nav.settings_idx,
             &mut self.terminal_nav.settings_choice,
+            visibility,
             self.session.as_ref().is_some_and(|s| s.is_admin),
             &self.shell_status,
             layout.cols,
@@ -695,6 +700,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_edit_menus(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let (_, show_text_editor, show_nuke_codes) = self.visible_application_builtins();
         let applications = self.edit_program_entries(EditMenuTarget::Applications);
         let documents = self.edit_program_entries(EditMenuTarget::Documents);
         let network = self.edit_program_entries(EditMenuTarget::Network);
@@ -708,8 +714,8 @@ impl RobcoNativeApp {
                 network: &network,
                 games: &games,
             },
-            self.settings.draft.builtin_menu_visibility.nuke_codes,
-            self.settings.draft.builtin_menu_visibility.text_editor,
+            show_nuke_codes,
+            show_text_editor,
             &self.shell_status,
             layout.cols,
             layout.rows,

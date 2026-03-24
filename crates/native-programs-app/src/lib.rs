@@ -106,6 +106,7 @@ pub fn resolve_program_menu_event(
 pub const BUILTIN_FILE_MANAGER_APP: &str = "File Manager";
 
 pub fn build_terminal_application_entries(
+    show_file_manager: bool,
     show_text_editor: bool,
     show_nuke_codes: bool,
     configured_names: &[String],
@@ -113,7 +114,9 @@ pub fn build_terminal_application_entries(
     nuke_codes_label: &str,
 ) -> Vec<String> {
     let mut entries = Vec::new();
-    entries.push(BUILTIN_FILE_MANAGER_APP.to_string());
+    if show_file_manager {
+        entries.push(BUILTIN_FILE_MANAGER_APP.to_string());
+    }
     if show_nuke_codes {
         entries.push(nuke_codes_label.to_string());
     }
@@ -175,6 +178,7 @@ pub fn build_desktop_applications_sections(
         })
         .collect();
     let configured = build_terminal_application_entries(
+        false,
         false,
         false,
         configured_names,
@@ -349,6 +353,7 @@ mod tests {
         let entries = build_terminal_application_entries(
             true,
             true,
+            true,
             &[
                 "Editor".to_string(),
                 "Nuke Codes".to_string(),
@@ -361,6 +366,20 @@ mod tests {
             entries,
             vec!["File Manager", "Nuke Codes", "Editor", "Custom App"]
         );
+    }
+
+    #[test]
+    fn build_terminal_application_entries_can_hide_file_manager_builtin() {
+        let entries = build_terminal_application_entries(
+            false,
+            true,
+            true,
+            &["Custom App".to_string()],
+            "Editor",
+            "Nuke Codes",
+        );
+
+        assert_eq!(entries, vec!["Nuke Codes", "Editor", "Custom App"]);
     }
 
     #[test]

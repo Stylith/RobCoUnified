@@ -32,6 +32,25 @@ pub enum TerminalSettingsPanel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalSettingsVisibility {
+    pub default_apps: bool,
+    pub connections: bool,
+    pub edit_menus: bool,
+    pub about: bool,
+}
+
+impl Default for TerminalSettingsVisibility {
+    fn default() -> Self {
+        Self {
+            default_apps: true,
+            connections: !macos_connections_disabled(),
+            edit_menus: true,
+            about: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSettingsPanel {
     Home,
     General,
@@ -334,7 +353,21 @@ pub fn terminal_settings_panel_rows(
     draft: &Settings,
     is_admin: bool,
 ) -> Vec<String> {
-    terminal_settings_rows_with_ids(panel, draft, is_admin)
+    terminal_settings_panel_rows_with_visibility(
+        panel,
+        draft,
+        is_admin,
+        TerminalSettingsVisibility::default(),
+    )
+}
+
+pub fn terminal_settings_panel_rows_with_visibility(
+    panel: TerminalSettingsPanel,
+    draft: &Settings,
+    is_admin: bool,
+    visibility: TerminalSettingsVisibility,
+) -> Vec<String> {
+    terminal_settings_rows_with_ids_for_visibility(panel, draft, is_admin, visibility)
         .into_iter()
         .map(|(label, _)| label)
         .collect()
@@ -347,7 +380,25 @@ pub fn handle_settings_activation(
     choice_overlay: &mut Option<SettingsChoiceOverlay>,
     is_admin: bool,
 ) -> TerminalSettingsEvent {
-    let rows = terminal_settings_rows_with_ids(panel, draft, is_admin);
+    handle_settings_activation_with_visibility(
+        panel,
+        draft,
+        idx,
+        choice_overlay,
+        is_admin,
+        TerminalSettingsVisibility::default(),
+    )
+}
+
+pub fn handle_settings_activation_with_visibility(
+    panel: TerminalSettingsPanel,
+    draft: &mut Settings,
+    idx: usize,
+    choice_overlay: &mut Option<SettingsChoiceOverlay>,
+    is_admin: bool,
+    visibility: TerminalSettingsVisibility,
+) -> TerminalSettingsEvent {
+    let rows = terminal_settings_rows_with_ids_for_visibility(panel, draft, is_admin, visibility);
     let Some((_, row_id)) = rows.get(idx) else {
         return TerminalSettingsEvent::Back;
     };
@@ -690,21 +741,41 @@ fn terminal_settings_rows_with_ids(
     draft: &Settings,
     is_admin: bool,
 ) -> Vec<(String, SettingsRowId)> {
+    terminal_settings_rows_with_ids_for_visibility(
+        panel,
+        draft,
+        is_admin,
+        TerminalSettingsVisibility::default(),
+    )
+}
+
+fn terminal_settings_rows_with_ids_for_visibility(
+    panel: TerminalSettingsPanel,
+    draft: &Settings,
+    is_admin: bool,
+    visibility: TerminalSettingsVisibility,
+) -> Vec<(String, SettingsRowId)> {
     match panel {
         TerminalSettingsPanel::Home => {
             let mut rows = vec![
                 ("General".to_string(), SettingsRowId::OpenGeneral),
                 ("Appearance".to_string(), SettingsRowId::OpenAppearance),
-                ("Default Apps".to_string(), SettingsRowId::DefaultApps),
             ];
-            if !macos_connections_disabled() {
+            if visibility.default_apps {
+                rows.push(("Default Apps".to_string(), SettingsRowId::DefaultApps));
+            }
+            if visibility.connections {
                 rows.push(("Connections".to_string(), SettingsRowId::Connections));
             }
-            rows.push(("Edit Menus".to_string(), SettingsRowId::EditMenus));
+            if visibility.edit_menus {
+                rows.push(("Edit Menus".to_string(), SettingsRowId::EditMenus));
+            }
             if is_admin {
                 rows.push(("User Management".to_string(), SettingsRowId::UserManagement));
             }
-            rows.push(("About".to_string(), SettingsRowId::About));
+            if visibility.about {
+                rows.push(("About".to_string(), SettingsRowId::About));
+            }
             rows.push(("Back".to_string(), SettingsRowId::Back));
             rows
         }
@@ -1077,6 +1148,30 @@ mod tests {
         let rows = terminal_settings_rows_with_ids(TerminalSettingsPanel::Home, &draft, false);
         let has_connections = rows.iter().any(|(_, id)| *id == SettingsRowId::Connections);
         assert_eq!(has_connections, !macos_connections_disabled());
+    }
+
+    #[test]
+    fn terminal_settings_rows_respect_explicit_visibility() {
+        let draft = get_settings();
+        let rows = terminal_settings_panel_rows_with_visibility(
+            TerminalSettingsPanel::Home,
+            &draft,
+            false,
+            TerminalSettingsVisibility {
+                default_apps: false,
+                connections: false,
+                edit_menus: false,
+                about: false,
+            },
+        );
+
+        assert!(rows.iter().any(|label| label == "General"));
+        assert!(rows.iter().any(|label| label == "Appearance"));
+        assert!(!rows.iter().any(|label| label == "Default Apps"));
+        assert!(!rows.iter().any(|label| label == "Connections"));
+        assert!(!rows.iter().any(|label| label == "Edit Menus"));
+        assert!(!rows.iter().any(|label| label == "About"));
+        assert_eq!(rows.last().map(|label| label.as_str()), Some("Back"));
     }
 
     #[test]

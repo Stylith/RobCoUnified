@@ -5,7 +5,9 @@ use super::super::desktop_search_service::{
 };
 use super::super::desktop_session_service::active_session_username as active_native_session_username;
 use super::super::editor_app::EDITOR_APP_TITLE;
+use super::super::first_party_capability_enabled_str;
 use super::super::retro_ui::current_palette;
+use crate::config::install_profile;
 use eframe::egui::{self, Color32, Context, Key, RichText, TextEdit};
 
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
@@ -31,6 +33,24 @@ impl RobcoNativeApp {
             BUILTIN_TEXT_EDITOR_APP,
             BUILTIN_NUKE_CODES_APP,
         );
+        let show_file_manager = self.spotlight_system_entry_enabled("file-browser");
+        let show_settings = self.spotlight_system_entry_enabled("settings-ui");
+        let show_terminal = self.spotlight_system_entry_enabled("terminal-tool");
+        let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
+            && self.spotlight_system_entry_enabled("text-editor");
+        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
+            && self.spotlight_system_entry_enabled("code-reference");
+        self.spotlight_results.retain(|result| match result.category {
+            NativeSpotlightCategory::System => match result.name.as_str() {
+                "File Manager" => show_file_manager,
+                "Settings" => show_settings,
+                "Terminal" => show_terminal,
+                n if n == BUILTIN_TEXT_EDITOR_APP => show_text_editor,
+                n if n == BUILTIN_NUKE_CODES_APP => show_nuke_codes,
+                _ => false,
+            },
+            _ => true,
+        });
         self.spotlight_selected = 0;
     }
 
@@ -283,21 +303,37 @@ impl RobcoNativeApp {
     ) -> Option<DesktopShellAction> {
         match &result.category {
             NativeSpotlightCategory::System => match result.name.as_str() {
-                "File Manager" => Some(DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::file_manager_launch_target(),
-                )),
-                "Settings" => Some(DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::settings_launch_target(),
-                )),
-                "Terminal" => Some(DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::terminal_launch_target(),
-                )),
-                n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::editor_launch_target(),
-                )),
-                n if n == BUILTIN_NUKE_CODES_APP => Some(DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::nuke_codes_launch_target(),
-                )),
+                "File Manager" if self.spotlight_system_entry_enabled("file-browser") => {
+                    Some(DesktopShellAction::LaunchByTarget(
+                        super::launch_registry::file_manager_launch_target(),
+                    ))
+                }
+                "Settings" if self.spotlight_system_entry_enabled("settings-ui") => {
+                    Some(DesktopShellAction::LaunchByTarget(
+                        super::launch_registry::settings_launch_target(),
+                    ))
+                }
+                "Terminal" if self.spotlight_system_entry_enabled("terminal-tool") => {
+                    Some(DesktopShellAction::LaunchByTarget(
+                        super::launch_registry::terminal_launch_target(),
+                    ))
+                }
+                n if n == BUILTIN_TEXT_EDITOR_APP
+                    && self.settings.draft.builtin_menu_visibility.text_editor
+                    && self.spotlight_system_entry_enabled("text-editor") =>
+                {
+                    Some(DesktopShellAction::LaunchByTarget(
+                        super::launch_registry::editor_launch_target(),
+                    ))
+                }
+                n if n == BUILTIN_NUKE_CODES_APP
+                    && self.settings.draft.builtin_menu_visibility.nuke_codes
+                    && self.spotlight_system_entry_enabled("code-reference") =>
+                {
+                    Some(DesktopShellAction::LaunchByTarget(
+                        super::launch_registry::nuke_codes_launch_target(),
+                    ))
+                }
                 _ => None,
             },
             NativeSpotlightCategory::App => {
@@ -318,5 +354,9 @@ impl RobcoNativeApp {
                 .clone()
                 .map(DesktopShellAction::RevealPathInFileManager),
         }
+    }
+
+    fn spotlight_system_entry_enabled(&self, capability: &'static str) -> bool {
+        first_party_capability_enabled_str(install_profile(), capability)
     }
 }

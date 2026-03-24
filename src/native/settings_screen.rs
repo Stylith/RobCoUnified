@@ -4,8 +4,10 @@ use crate::config::{Settings, HEADER_LINES};
 use eframe::egui::{self, Context};
 pub use robcos_native_settings_app::TerminalSettingsEvent;
 use robcos_native_settings_app::{
-    adjust_settings_slider, apply_settings_choice, handle_settings_activation,
-    settings_choice_items, terminal_settings_panel_rows, TerminalSettingsPanel,
+    adjust_settings_slider, apply_settings_choice, handle_settings_activation_with_visibility,
+    settings_choice_items,
+    terminal_settings_panel_rows_with_visibility, TerminalSettingsPanel,
+    TerminalSettingsVisibility,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -15,6 +17,7 @@ pub fn run_terminal_settings_screen(
     panel: &mut TerminalSettingsPanel,
     selected_idx: &mut usize,
     choice_overlay: &mut Option<SettingsChoiceOverlay>,
+    visibility: TerminalSettingsVisibility,
     is_admin: bool,
     shell_status: &str,
     cols: usize,
@@ -28,7 +31,7 @@ pub fn run_terminal_settings_screen(
     status_row: usize,
     content_col: usize,
 ) -> TerminalSettingsEvent {
-    let items = terminal_settings_rows_for_panel(*panel, draft, is_admin);
+    let items = terminal_settings_rows_for_panel(*panel, draft, is_admin, visibility);
     *selected_idx = (*selected_idx).min(items.len().saturating_sub(1));
 
     let mut event = TerminalSettingsEvent::None;
@@ -69,7 +72,14 @@ pub fn run_terminal_settings_screen(
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
             event =
-                handle_settings_activation(*panel, draft, *selected_idx, choice_overlay, is_admin);
+                handle_settings_activation_with_visibility(
+                    *panel,
+                    draft,
+                    *selected_idx,
+                    choice_overlay,
+                    is_admin,
+                    visibility,
+                );
         }
     }
 
@@ -127,12 +137,13 @@ pub fn run_terminal_settings_screen(
                     if choice_overlay.is_some() {
                         *choice_overlay = None;
                     } else {
-                        event = handle_settings_activation(
+                        event = handle_settings_activation_with_visibility(
                             *panel,
                             draft,
                             idx,
                             choice_overlay,
                             is_admin,
+                            visibility,
                         );
                     }
                 }
@@ -189,8 +200,9 @@ fn terminal_settings_rows_for_panel(
     panel: TerminalSettingsPanel,
     draft: &Settings,
     is_admin: bool,
+    visibility: TerminalSettingsVisibility,
 ) -> Vec<String> {
-    terminal_settings_panel_rows(panel, draft, is_admin)
+    terminal_settings_panel_rows_with_visibility(panel, draft, is_admin, visibility)
 }
 
 fn terminal_settings_title(panel: TerminalSettingsPanel) -> &'static str {

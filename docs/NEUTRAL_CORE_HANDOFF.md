@@ -237,6 +237,13 @@ Additional desktop visibility-policy slice:
 - desktop Applications window sections now rebuild against profile-aware builtin visibility, including `File Manager`
 - visibility is still driven by static first-party manifests/runtime entries; no packaging or dynamic loading was introduced in this slice
 
+Additional Spotlight/terminal visibility slice:
+
+- desktop Spotlight still uses the shared search service, but native result filtering now removes system entries that are disabled by addon capability policy or user builtin-visibility settings
+- Spotlight launch resolution for system entries now guards on capability availability instead of assuming every builtin launcher is present
+- terminal Applications builtins now derive from the same effective builtin visibility used by the desktop Applications window
+- terminal Edit Menus now only expose builtin toggles for addons that are actually available in the current install profile
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

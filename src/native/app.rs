@@ -118,6 +118,7 @@ use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_default_panel, desktop_settings_home_rows,
     GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
+    TerminalSettingsVisibility,
 };
 use robcos_native_zeta_invaders_app::{AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame};
 use std::collections::{HashMap, HashSet};
@@ -1150,13 +1151,29 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
+    fn visible_application_builtins(&self) -> (bool, bool, bool) {
         let profile = crate::config::install_profile();
         let show_file_manager = first_party_capability_enabled_str(profile, "file-browser");
         let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
             && first_party_capability_enabled_str(profile, "text-editor");
         let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
             && first_party_capability_enabled_str(profile, "code-reference");
+        (show_file_manager, show_text_editor, show_nuke_codes)
+    }
+
+    fn terminal_settings_visibility(&self) -> TerminalSettingsVisibility {
+        let profile = crate::config::install_profile();
+        TerminalSettingsVisibility {
+            default_apps: first_party_capability_enabled_str(profile, "default-apps-ui"),
+            connections: first_party_capability_enabled_str(profile, "connections-ui"),
+            edit_menus: first_party_capability_enabled_str(profile, "edit-menus-ui"),
+            about: first_party_capability_enabled_str(profile, "about-ui"),
+        }
+    }
+
+    fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
+        let (show_file_manager, show_text_editor, show_nuke_codes) =
+            self.visible_application_builtins();
         let needs_rebuild = self
             .desktop_applications_sections_cache
             .as_ref()
@@ -6213,6 +6230,21 @@ mod tests {
         assert!(!app.spotlight_open);
         assert!(app.terminal_mode.open);
         assert!(app.desktop_window_is_open(DesktopWindow::TerminalMode));
+    }
+
+    #[test]
+    fn spotlight_hides_editor_result_when_builtin_visibility_is_disabled() {
+        let mut app = RobcoNativeApp::default();
+        app.settings.draft.builtin_menu_visibility.text_editor = false;
+        app.spotlight_tab = 1;
+        app.spotlight_query = "editor".to_string();
+
+        app.spotlight_gather_results();
+
+        assert!(!app
+            .spotlight_results
+            .iter()
+            .any(|result| result.name == BUILTIN_TEXT_EDITOR_APP));
     }
 
     #[test]
