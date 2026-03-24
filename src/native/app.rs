@@ -5829,6 +5829,53 @@ mod tests {
     }
 
     #[test]
+    fn closing_drawn_secondary_pty_window_keeps_primary_open() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        let cmd = vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 30".to_string(),
+        ];
+
+        app.open_desktop_pty("Terminal", &cmd);
+        app.open_desktop_pty("ranger", &cmd);
+
+        let secondary_id = app
+            .secondary_windows
+            .iter()
+            .find(|window| window.id.kind == DesktopWindow::PtyApp)
+            .map(|window| window.id)
+            .expect("secondary pty window");
+
+        let mut swapped_state = None;
+        {
+            let slot = app
+                .desktop_pty_slot_mut(secondary_id)
+                .expect("secondary pty slot");
+            std::mem::swap(slot, &mut swapped_state);
+        }
+        std::mem::swap(&mut app.terminal_pty, &mut swapped_state);
+        app.drawing_window_id = Some(secondary_id);
+        app.update_desktop_window_state(DesktopWindow::PtyApp, false);
+        std::mem::swap(&mut app.terminal_pty, &mut swapped_state);
+        {
+            let slot = app
+                .desktop_pty_slot_mut(secondary_id)
+                .expect("secondary pty slot after close");
+            std::mem::swap(slot, &mut swapped_state);
+        }
+        app.drawing_window_id = None;
+
+        assert!(app.terminal_pty.is_some());
+        assert!(app.desktop_pty_state(secondary_id).is_none());
+
+        app.terminate_all_native_pty_children();
+    }
+
+    #[test]
     fn reopening_settings_window_reprimes_component_state() {
         let mut app = RobcoNativeApp::default();
         app.settings.open = true;

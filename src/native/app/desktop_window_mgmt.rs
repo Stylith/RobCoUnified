@@ -516,7 +516,18 @@ impl RobcoNativeApp {
 
     fn close_window_instance_unchecked(&mut self, id: WindowInstanceId) {
         if id.instance > 0 {
-            if let Some(window) = self
+            if self.drawing_window_id == Some(id) {
+                match id.kind {
+                    DesktopWindow::FileManager => self.file_manager.open = false,
+                    DesktopWindow::Editor => self.editor.open = false,
+                    DesktopWindow::PtyApp => {
+                        if let Some(mut pty) = self.terminal_pty.take() {
+                            pty.session.terminate();
+                        }
+                    }
+                    _ => {}
+                }
+            } else if let Some(window) = self
                 .secondary_windows
                 .iter_mut()
                 .find(|window| window.id == id)

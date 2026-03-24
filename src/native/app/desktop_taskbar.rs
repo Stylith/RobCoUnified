@@ -1,8 +1,50 @@
-use super::super::desktop_app::{build_taskbar_entries, DesktopMenuAction, WindowInstanceId};
+use super::super::desktop_app::DesktopWindow;
+use super::super::desktop_app::{
+    build_taskbar_entries, DesktopMenuAction, DesktopTaskbarEntry, WindowInstanceId,
+};
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, RichText, TopBottomPanel};
 
 use super::RobcoNativeApp;
+
+struct TaskbarGroup {
+    kind: DesktopWindow,
+    base_label: String,
+    entries: Vec<DesktopTaskbarEntry>,
+}
+
+fn taskbar_base_label(label: &str) -> &str {
+    let Some((base, suffix)) = label.rsplit_once(" [") else {
+        return label;
+    };
+    let Some(number_text) = suffix.strip_suffix(']') else {
+        return label;
+    };
+    if number_text.chars().all(|ch| ch.is_ascii_digit()) {
+        base
+    } else {
+        label
+    }
+}
+
+fn group_taskbar_entries(entries: Vec<DesktopTaskbarEntry>) -> Vec<TaskbarGroup> {
+    let mut groups = Vec::new();
+    for entry in entries {
+        let base_label = taskbar_base_label(&entry.label).to_string();
+        if let Some(group) = groups.iter_mut().find(|group: &&mut TaskbarGroup| {
+            group.kind == entry.id.kind && group.base_label == base_label
+        }) {
+            group.entries.push(entry);
+        } else {
+            groups.push(TaskbarGroup {
+                kind: entry.id.kind,
+                base_label,
+                entries: vec![entry],
+            });
+        }
+    }
+    groups
+}
 
 impl RobcoNativeApp {
     pub(super) fn draw_desktop_taskbar(&mut self, ctx: &Context) {
@@ -42,21 +84,13 @@ impl RobcoNativeApp {
                         build_taskbar_entries(&open_windows, self.desktop_active_window, |id| {
                             self.desktop_window_title_for_instance(id)
                         });
-                    // Group entries by kind to detect multi-instance window types.
-                    let mut i = 0;
-                    while i < entries.len() {
-                        let kind = entries[i].id.kind;
-                        // Collect all entries for this kind (they're contiguous).
-                        let start = i;
-                        while i < entries.len() && entries[i].id.kind == kind {
-                            i += 1;
-                        }
-                        let group = &entries[start..i];
-                        let has_multiple = group.len() > 1;
+                    let groups = group_taskbar_entries(entries);
+                    for group in groups {
+                        let has_multiple = group.entries.len() > 1;
 
                         if !has_multiple {
                             // Single instance — simple button.
-                            let entry = &group[0];
+                            let entry = &group.entries[0];
                             let response =
                                 Self::desktop_bar_button(ui, &entry.label, entry.inactive, false);
                             if response.clicked() {
@@ -75,24 +109,24 @@ impl RobcoNativeApp {
                         } else {
                             // Multiple instances — show combined button, right-click
                             // pops up an instance picker.
-                            let base_label = &group[0].label;
-                            // Strip "[1]" from base label if present.
-                            let combined_label =
-                                base_label.strip_suffix(" [1]").unwrap_or(base_label);
-                            let any_active = group.iter().any(|e| !e.inactive);
-                            let popup_id = egui::Id::new(("taskbar_instance_popup", kind as u8));
+                            let any_active = group.entries.iter().any(|e| !e.inactive);
+                            let popup_id = egui::Id::new((
+                                "taskbar_instance_popup",
+                                group.kind as u8,
+                                group.base_label.as_str(),
+                            ));
                             let response = Self::desktop_bar_button(
                                 ui,
-                                format!("{} [{}]", combined_label, group.len()),
+                                format!("{} [{}]", group.base_label, group.entries.len()),
                                 !any_active,
                                 false,
                             );
                             if response.clicked() {
                                 // Cycle through instances on click.
                                 let active_idx =
-                                    group.iter().position(|e| !e.inactive).unwrap_or(0);
-                                let next = (active_idx + 1) % group.len();
-                                let next_id = group[next].id;
+                                    group.entries.iter().position(|e| !e.inactive).unwrap_or(0);
+                                let next = (active_idx + 1) % group.entries.len();
+                                let next_id = group.entries[next].id;
                                 self.apply_desktop_menu_action(
                                     ctx,
                                     &DesktopMenuAction::ActivateTaskbarWindow(next_id),
@@ -110,6 +144,7 @@ impl RobcoNativeApp {
                             }
                             // Instance picker popup on right-click.
                             let ids: Vec<(WindowInstanceId, String, bool)> = group
+                                .entries
                                 .iter()
                                 .map(|e| (e.id, e.label.clone(), e.inactive))
                                 .collect();
@@ -236,5 +271,50 @@ impl RobcoNativeApp {
             visuals.expansion = 0.0;
         }
         ui.set_style(style);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taskbar_base_label_only_strips_numeric_instance_suffix() {
+        assert_eq!(taskbar_base_label("Terminal [2]"), "Terminal");
+        assert_eq!(taskbar_base_label("spotify_player"), "spotify_player");
+        assert_eq!(taskbar_base_label("App [beta]"), "App [beta]");
+    }
+
+    #[test]
+    fn group_taskbar_entries_separates_named_pty_apps() {
+        let groups = group_taskbar_entries(vec![
+            DesktopTaskbarEntry {
+                id: WindowInstanceId::primary(DesktopWindow::PtyApp),
+                label: "Terminal".to_string(),
+                inactive: false,
+            },
+            DesktopTaskbarEntry {
+                id: WindowInstanceId {
+                    kind: DesktopWindow::PtyApp,
+                    instance: 1,
+                },
+                label: "ranger".to_string(),
+                inactive: true,
+            },
+            DesktopTaskbarEntry {
+                id: WindowInstanceId {
+                    kind: DesktopWindow::PtyApp,
+                    instance: 2,
+                },
+                label: "Terminal [2]".to_string(),
+                inactive: true,
+            },
+        ]);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].base_label, "Terminal");
+        assert_eq!(groups[0].entries.len(), 2);
+        assert_eq!(groups[1].base_label, "ranger");
+        assert_eq!(groups[1].entries.len(), 1);
     }
 }
