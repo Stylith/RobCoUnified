@@ -2658,6 +2658,12 @@ impl RobcoNativeApp {
         ));
     }
 
+    pub(super) fn launch_nuke_codes_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::nuke_codes_launch_target(),
+        ));
+    }
+
     pub(super) fn launch_settings_via_registry(&mut self) {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
@@ -2755,6 +2761,9 @@ impl RobcoNativeApp {
                     Some(NativeDesktopLaunch::OpenWindow(window)) => {
                         self.open_or_spawn_desktop_window(window);
                     }
+                    Some(NativeDesktopLaunch::OpenNukeCodes) => {
+                        self.open_desktop_nuke_codes();
+                    }
                     Some(NativeDesktopLaunch::OpenSettingsPanel(Some(panel))) => {
                         self.open_desktop_settings_panel(panel);
                     }
@@ -2770,7 +2779,7 @@ impl RobcoNativeApp {
                 self.launch_editor_via_registry();
             }
             DesktopShellAction::OpenNukeCodes => {
-                self.open_desktop_nuke_codes();
+                self.launch_nuke_codes_via_registry();
             }
             DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
             DesktopShellAction::OpenConnectionsSettings => {
@@ -5988,6 +5997,16 @@ mod tests {
     }
 
     #[test]
+    fn nuke_codes_launch_target_opens_nuke_codes_window() {
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+
+        app.launch_nuke_codes_via_registry();
+
+        assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
+    }
+
+    #[test]
     fn desktop_menu_open_settings_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
@@ -6043,6 +6062,18 @@ mod tests {
     }
 
     #[test]
+    fn desktop_program_request_open_nuke_codes_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+
+        app.apply_desktop_program_request(DesktopProgramRequest::OpenNukeCodes {
+            close_window: true,
+        });
+
+        assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
+    }
+
+    #[test]
     fn open_text_editor_action_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
@@ -6050,6 +6081,42 @@ mod tests {
 
         assert!(app.editor.open);
         assert!(app.desktop_window_is_open(DesktopWindow::Editor));
+    }
+
+    #[test]
+    fn open_nuke_codes_action_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+
+        app.execute_desktop_shell_action(DesktopShellAction::OpenNukeCodes);
+
+        assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
+    }
+
+    #[test]
+    fn start_leaf_nuke_codes_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+
+        app.run_start_leaf_action(NativeStartLeafAction::LaunchNukeCodes);
+
+        assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
+    }
+
+    #[test]
+    fn spotlight_nuke_codes_result_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
+        app.spotlight_open = true;
+
+        app.spotlight_activate_result(&NativeSpotlightResult {
+            name: BUILTIN_NUKE_CODES_APP.to_string(),
+            category: NativeSpotlightCategory::System,
+            path: None,
+        });
+
+        assert!(!app.spotlight_open);
+        assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
     }
 
     #[test]

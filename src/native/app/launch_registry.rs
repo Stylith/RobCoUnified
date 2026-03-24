@@ -5,6 +5,7 @@ use crate::platform::{AddonEntrypoint, CapabilityId, LaunchTarget};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeDesktopLaunch {
     OpenWindow(DesktopWindow),
+    OpenNukeCodes,
     OpenSettingsPanel(Option<NativeSettingsPanel>),
 }
 
@@ -17,6 +18,12 @@ pub(super) fn file_manager_launch_target() -> LaunchTarget {
 pub(super) fn editor_launch_target() -> LaunchTarget {
     LaunchTarget::Capability {
         capability: CapabilityId::from("text-editor"),
+    }
+}
+
+pub(super) fn nuke_codes_launch_target() -> LaunchTarget {
+    LaunchTarget::Capability {
+        capability: CapabilityId::from("code-reference"),
     }
 }
 
@@ -56,6 +63,7 @@ fn resolve_static_route(route: &str) -> Option<NativeDesktopLaunch> {
     match route {
         "editor" => Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor)),
         "file-manager" => Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager)),
+        "nuke-codes" => Some(NativeDesktopLaunch::OpenNukeCodes),
         "settings" => Some(NativeDesktopLaunch::OpenSettingsPanel(None)),
         _ => None,
     }
@@ -64,12 +72,13 @@ fn resolve_static_route(route: &str) -> Option<NativeDesktopLaunch> {
 #[cfg(test)]
 mod tests {
     use super::{
-        editor_launch_target, file_manager_launch_target, resolve_desktop_launch_target,
+        editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
+        resolve_desktop_launch_target,
         settings_launch_target,
         NativeDesktopLaunch,
     };
-    use crate::native::desktop_app::DesktopWindow;
     use crate::platform::{AddonId, LaunchTarget};
+    use crate::native::desktop_app::DesktopWindow;
     use crate::native::NativeSettingsPanel;
 
     #[test]
@@ -85,6 +94,14 @@ mod tests {
         assert_eq!(
             resolve_desktop_launch_target(&editor_launch_target()),
             Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor))
+        );
+    }
+
+    #[test]
+    fn nuke_codes_capability_resolves_to_nuke_codes_route() {
+        assert_eq!(
+            resolve_desktop_launch_target(&nuke_codes_launch_target()),
+            Some(NativeDesktopLaunch::OpenNukeCodes)
         );
     }
 

@@ -293,9 +293,9 @@ impl RobcoNativeApp {
                 n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::LaunchByTarget(
                     super::launch_registry::editor_launch_target(),
                 )),
-                n if n == BUILTIN_NUKE_CODES_APP => {
-                    Some(DesktopShellAction::OpenWindow(DesktopWindow::NukeCodes))
-                }
+                n if n == BUILTIN_NUKE_CODES_APP => Some(DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::nuke_codes_launch_target(),
+                )),
                 _ => None,
             },
             NativeSpotlightCategory::App => {

@@ -14,7 +14,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Phase status:
   - Phase 0 contract layer: complete
   - Phase 1 runtime adoption: started
-  - Current adopted slice: generic desktop-side Settings, File Manager, and Editor launch now route through capability-based launch targets instead of directly opening shell windows
+  - Current adopted slice: generic desktop-side Settings, File Manager, Editor, and Nuke Codes launch now route through capability-based launch targets instead of directly opening shell windows
 
 Important constraint summary:
 
@@ -104,9 +104,13 @@ Follow-up adoption work has now started in the native shell:
 - the desktop Start/Spotlight Editor action now launches through `LaunchTarget::Capability("text-editor")`
 - the desktop program-request `OpenTextEditor` path now launches through the same capability path
 - the retained shell-level `OpenTextEditor` action now delegates to the same capability path
+- the desktop Start/Spotlight Nuke Codes action now launches through `LaunchTarget::Capability("code-reference")`
+- the desktop program-request `OpenNukeCodes` path now launches through the same capability path
+- the retained shell-level `OpenNukeCodes` action now delegates to the same capability path
 - the runtime still ends up opening the same existing Settings window, so visible behavior is unchanged
 - the runtime still ends up opening the same existing File Manager window, so visible behavior is unchanged
 - the runtime still ends up opening the same existing Editor window, so visible behavior is unchanged
+- the runtime still ends up opening the same existing Nuke Codes window, including its background prefetch path, so visible behavior is unchanged
 - panel-specific settings entry points still open panels directly for now
 - path-specific editor opens still route directly because they carry file payload
 
@@ -181,6 +185,8 @@ The additional menu/context tests verify:
 - desktop program-request File Manager uses the registry-backed launch path
 - desktop program-request Editor uses the registry-backed launch path
 - shell-level OpenTextEditor now uses the registry-backed launch path
+- desktop program-request Nuke Codes uses the registry-backed launch path
+- shell-level OpenNukeCodes now uses the registry-backed launch path
 
 ## Why This Was The Correct First Step
 
@@ -341,11 +347,15 @@ Current Phase 1 progress:
 - done: routed Editor Spotlight launch through capability lookup
 - done: routed desktop program-request Editor through capability lookup
 - done: routed shell-level OpenTextEditor through capability lookup
+- done: routed Nuke Codes Start launch through capability lookup
+- done: routed Nuke Codes Spotlight launch through capability lookup
+- done: routed desktop program-request Nuke Codes through capability lookup
+- done: routed shell-level OpenNukeCodes through capability lookup
 - done: added focused resolver and app integration tests
 - not done: panel-specific Settings opens still use direct panel routing
 - not done: path-specific File Manager opens still use direct file-manager actions
 - not done: path-specific Editor opens still use direct editor actions
-- not done: no fourth app has been migrated yet
+- not done: no payload-carrying fourth app has been migrated yet
 
 Exit criteria:
 
@@ -638,13 +648,13 @@ Important context:
 - The first contract step is already implemented in crates/shared/src/platform/ and src/native/addons.rs.
 - The first runtime adoption slice is also implemented in src/native/app/launch_registry.rs and wires Settings Start/Spotlight launches through capability lookup.
 - Do not redesign those contracts unless there is a concrete bug.
-- The next task is to use the completed Settings/File Manager/Editor pattern as the template for the next app slice.
+- The next task is to use the completed Settings/File Manager/Editor/Nuke Codes pattern as the template for the next app slice.
 - Preserve current behavior and avoid broad rewrites.
 - Do not introduce dynamic plugin loading.
 - Prefer migration layers over replacing large parts of src/native/app.rs in one pass.
 
 Goal for this session:
-- migrate the next app using the same adapter pattern already used for Settings, File Manager, and Editor
+- migrate the next app using the same adapter pattern already used for Settings, File Manager, Editor, and Nuke Codes
 - keep shell behavior unchanged
 - add focused tests
 ```

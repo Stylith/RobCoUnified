@@ -409,7 +409,9 @@ impl RobcoNativeApp {
     pub(super) fn run_start_leaf_action(&mut self, action: NativeStartLeafAction) {
         let action = match action {
             NativeStartLeafAction::None => return,
-            NativeStartLeafAction::LaunchNukeCodes => DesktopShellAction::OpenNukeCodes,
+            NativeStartLeafAction::LaunchNukeCodes => DesktopShellAction::LaunchByTarget(
+                super::launch_registry::nuke_codes_launch_target(),
+            ),
             NativeStartLeafAction::OpenTextEditor => {
                 DesktopShellAction::LaunchByTarget(super::launch_registry::editor_launch_target())
             }

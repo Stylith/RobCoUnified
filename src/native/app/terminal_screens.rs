@@ -220,7 +220,7 @@ impl RobcoNativeApp {
                 self.launch_editor_via_registry();
             }
             DesktopProgramRequest::OpenNukeCodes { close_window: _ } => {
-                self.open_desktop_nuke_codes();
+                self.launch_nuke_codes_via_registry();
             }
             DesktopProgramRequest::OpenFileManager => {
                 self.launch_file_manager_via_registry();
