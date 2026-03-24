@@ -290,7 +290,9 @@ impl RobcoNativeApp {
                     super::launch_registry::settings_launch_target(),
                 )),
                 "Terminal" => Some(DesktopShellAction::OpenWindow(DesktopWindow::TerminalMode)),
-                n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::OpenTextEditor),
+                n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::editor_launch_target(),
+                )),
                 n if n == BUILTIN_NUKE_CODES_APP => {
                     Some(DesktopShellAction::OpenWindow(DesktopWindow::NukeCodes))
                 }

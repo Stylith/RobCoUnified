@@ -4,7 +4,6 @@ use super::super::connections_screen::{
     draw_terminal_connections_screen, TerminalConnectionsRequest,
 };
 use super::super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
-use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_default_apps_service::apply_default_app_binding;
 use super::super::desktop_documents_service::document_category_path;
 use super::super::desktop_launcher_service::{
@@ -218,7 +217,7 @@ impl RobcoNativeApp {
     pub(super) fn apply_desktop_program_request(&mut self, request: DesktopProgramRequest) {
         match request {
             DesktopProgramRequest::OpenTextEditor { close_window: _ } => {
-                self.open_or_spawn_desktop_window(DesktopWindow::Editor);
+                self.launch_editor_via_registry();
             }
             DesktopProgramRequest::OpenNukeCodes { close_window: _ } => {
                 self.open_desktop_nuke_codes();

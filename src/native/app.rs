@@ -2652,6 +2652,12 @@ impl RobcoNativeApp {
         ));
     }
 
+    pub(super) fn launch_editor_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::editor_launch_target(),
+        ));
+    }
+
     pub(super) fn launch_settings_via_registry(&mut self) {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
@@ -2761,7 +2767,7 @@ impl RobcoNativeApp {
                 }
             }
             DesktopShellAction::OpenTextEditor => {
-                self.open_or_spawn_desktop_window(DesktopWindow::Editor);
+                self.launch_editor_via_registry();
             }
             DesktopShellAction::OpenNukeCodes => {
                 self.open_desktop_nuke_codes();
@@ -5972,6 +5978,16 @@ mod tests {
     }
 
     #[test]
+    fn editor_launch_target_opens_editor_window() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_editor_via_registry();
+
+        assert!(app.editor.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Editor));
+    }
+
+    #[test]
     fn desktop_menu_open_settings_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
@@ -6012,6 +6028,28 @@ mod tests {
 
         assert!(app.file_manager.open);
         assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
+    }
+
+    #[test]
+    fn desktop_program_request_open_text_editor_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+
+        app.apply_desktop_program_request(DesktopProgramRequest::OpenTextEditor {
+            close_window: true,
+        });
+
+        assert!(app.editor.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Editor));
+    }
+
+    #[test]
+    fn open_text_editor_action_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+
+        app.execute_desktop_shell_action(DesktopShellAction::OpenTextEditor);
+
+        assert!(app.editor.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Editor));
     }
 
     #[test]

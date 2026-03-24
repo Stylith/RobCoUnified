@@ -14,6 +14,12 @@ pub(super) fn file_manager_launch_target() -> LaunchTarget {
     }
 }
 
+pub(super) fn editor_launch_target() -> LaunchTarget {
+    LaunchTarget::Capability {
+        capability: CapabilityId::from("text-editor"),
+    }
+}
+
 pub(super) fn settings_launch_target() -> LaunchTarget {
     LaunchTarget::Capability {
         capability: CapabilityId::from("settings-ui"),
@@ -48,6 +54,7 @@ pub(super) fn unresolved_launch_target_status(target: &LaunchTarget) -> String {
 
 fn resolve_static_route(route: &str) -> Option<NativeDesktopLaunch> {
     match route {
+        "editor" => Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor)),
         "file-manager" => Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager)),
         "settings" => Some(NativeDesktopLaunch::OpenSettingsPanel(None)),
         _ => None,
@@ -57,7 +64,8 @@ fn resolve_static_route(route: &str) -> Option<NativeDesktopLaunch> {
 #[cfg(test)]
 mod tests {
     use super::{
-        file_manager_launch_target, resolve_desktop_launch_target, settings_launch_target,
+        editor_launch_target, file_manager_launch_target, resolve_desktop_launch_target,
+        settings_launch_target,
         NativeDesktopLaunch,
     };
     use crate::native::desktop_app::DesktopWindow;
@@ -69,6 +77,14 @@ mod tests {
         assert_eq!(
             resolve_desktop_launch_target(&file_manager_launch_target()),
             Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager))
+        );
+    }
+
+    #[test]
+    fn editor_capability_resolves_to_editor_window() {
+        assert_eq!(
+            resolve_desktop_launch_target(&editor_launch_target()),
+            Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor))
         );
     }
 

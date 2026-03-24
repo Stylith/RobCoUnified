@@ -14,7 +14,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Phase status:
   - Phase 0 contract layer: complete
   - Phase 1 runtime adoption: started
-  - Current adopted slice: generic desktop-side Settings and File Manager launch now route through capability-based launch targets instead of directly opening shell windows
+  - Current adopted slice: generic desktop-side Settings, File Manager, and Editor launch now route through capability-based launch targets instead of directly opening shell windows
 
 Important constraint summary:
 
@@ -101,9 +101,14 @@ Follow-up adoption work has now started in the native shell:
 - the desktop Spotlight File Manager action now launches through the same capability path
 - the desktop menu bar File Manager action now launches through the same capability path
 - the desktop program-request `OpenFileManager` path now launches through the same capability path
+- the desktop Start/Spotlight Editor action now launches through `LaunchTarget::Capability("text-editor")`
+- the desktop program-request `OpenTextEditor` path now launches through the same capability path
+- the retained shell-level `OpenTextEditor` action now delegates to the same capability path
 - the runtime still ends up opening the same existing Settings window, so visible behavior is unchanged
 - the runtime still ends up opening the same existing File Manager window, so visible behavior is unchanged
+- the runtime still ends up opening the same existing Editor window, so visible behavior is unchanged
 - panel-specific settings entry points still open panels directly for now
+- path-specific editor opens still route directly because they carry file payload
 
 ## Files Added Or Changed
 
@@ -158,6 +163,10 @@ Additional verified slice:
 - `cargo test -p robcos file_manager_launch_target_opens_file_manager_window --lib`
 - `cargo test -p robcos desktop_menu_open_file_manager_uses_registry_launch --lib`
 - `cargo test -p robcos desktop_program_request_open_file_manager_uses_registry_launch --lib`
+- `cargo test -p robcos editor_capability_resolves_to_editor_window --lib`
+- `cargo test -p robcos editor_launch_target_opens_editor_window --lib`
+- `cargo test -p robcos desktop_program_request_open_text_editor_uses_registry_launch --lib`
+- `cargo test -p robcos open_text_editor_action_uses_registry_launch --lib`
 
 Those two tests verify:
 
@@ -170,6 +179,8 @@ The additional menu/context tests verify:
 - desktop context menu Settings uses the registry-backed launch path
 - desktop menu bar File Manager uses the registry-backed launch path
 - desktop program-request File Manager uses the registry-backed launch path
+- desktop program-request Editor uses the registry-backed launch path
+- shell-level OpenTextEditor now uses the registry-backed launch path
 
 ## Why This Was The Correct First Step
 
@@ -326,10 +337,15 @@ Current Phase 1 progress:
 - done: routed File Manager Spotlight launch through capability lookup
 - done: routed desktop menu bar File Manager through capability lookup
 - done: routed desktop program-request File Manager through capability lookup
+- done: routed Editor Start launch through capability lookup
+- done: routed Editor Spotlight launch through capability lookup
+- done: routed desktop program-request Editor through capability lookup
+- done: routed shell-level OpenTextEditor through capability lookup
 - done: added focused resolver and app integration tests
 - not done: panel-specific Settings opens still use direct panel routing
 - not done: path-specific File Manager opens still use direct file-manager actions
-- not done: no third app has been migrated yet
+- not done: path-specific Editor opens still use direct editor actions
+- not done: no fourth app has been migrated yet
 
 Exit criteria:
 
@@ -579,9 +595,12 @@ All three platforms should share one runtime model, with different install-profi
 
 The next Codex task should be:
 
-1. use the same pattern for Editor
-2. add an editor launch target and runtime mapping
-3. migrate the generic desktop Editor entry points
+1. choose the next low-risk first-party app with a true desktop surface
+2. likely candidates:
+   - Nuke Codes
+   - Installer
+   - Connections
+3. migrate only generic launch entry points first
 4. keep visible behavior unchanged
 
 Do not jump to third-party manifests or dynamic loading yet.
@@ -600,7 +619,7 @@ When resuming:
    - any menu/start/spotlight launch helpers
 4. inspect `src/native/app/launch_registry.rs`
 5. keep Settings as the reference pattern
-6. migrate Editor as the next app
+6. migrate the next lowest-risk app after Editor
 7. verify no visible behavior change
 
 ## Suggested Prompt For The Next Codex Session
@@ -619,13 +638,13 @@ Important context:
 - The first contract step is already implemented in crates/shared/src/platform/ and src/native/addons.rs.
 - The first runtime adoption slice is also implemented in src/native/app/launch_registry.rs and wires Settings Start/Spotlight launches through capability lookup.
 - Do not redesign those contracts unless there is a concrete bug.
-- The next task is to use the completed Settings/File Manager pattern as the template for Editor.
+- The next task is to use the completed Settings/File Manager/Editor pattern as the template for the next app slice.
 - Preserve current behavior and avoid broad rewrites.
 - Do not introduce dynamic plugin loading.
 - Prefer migration layers over replacing large parts of src/native/app.rs in one pass.
 
 Goal for this session:
-- migrate Editor using the same adapter pattern already used for Settings and File Manager
+- migrate the next app using the same adapter pattern already used for Settings, File Manager, and Editor
 - keep shell behavior unchanged
 - add focused tests
 ```
