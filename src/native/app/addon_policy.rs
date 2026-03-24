@@ -1,3 +1,4 @@
+use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
 use super::*;
 
 impl RobcoNativeApp {

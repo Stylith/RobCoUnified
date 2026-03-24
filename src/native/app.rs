@@ -1,35 +1,25 @@
 use super::background::{BackgroundResult, BackgroundTasks};
 use super::connections_screen::TerminalConnectionsState;
-use super::data::{home_dir_fallback, logs_dir, save_text_file};
+use super::data::home_dir_fallback;
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
 use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::DiscoveredConnection;
-use super::desktop_documents_service::{
-    add_document_category as add_desktop_document_category,
-    delete_document_category as delete_desktop_document_category, document_category_names,
-    rename_document_category as rename_desktop_document_category,
-};
-use super::desktop_file_service::load_text_document;
 use super::desktop_launcher_service::{
-    add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
-    rename_catalog_entry, resolve_catalog_launch, ProgramCatalog, BUILTIN_RED_MENACE_GAME,
-    BUILTIN_ZETA_INVADERS_GAME,
+    ProgramCatalog, BUILTIN_RED_MENACE_GAME, BUILTIN_ZETA_INVADERS_GAME,
 };
 #[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::restore_current_user_from_last_session;
 use super::desktop_settings_service::load_settings_snapshot;
-use super::desktop_status_service::{clear_shell_status, shell_status};
+use super::desktop_status_service::shell_status;
 use super::desktop_surface_service::{DesktopIconGridLayout, DesktopSurfaceEntry};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
-use super::editor_app::{EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE};
+use super::editor_app::{EditorCommand, EditorWindow, EDITOR_APP_TITLE};
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
 use super::file_manager_app::{
-    self, FileManagerCommandRequest, FileManagerEditRuntime, FileManagerOpenTarget,
-    FileManagerPickerCommit, FileManagerPromptRequest, FileManagerSettingsUpdate,
-    NativeFileManagerDragPayload,
+    FileManagerEditRuntime, FileManagerPickerCommit, NativeFileManagerDragPayload,
 };
 use super::file_manager_desktop::{self, FileManagerDesktopFooterAction};
 use super::first_party_capability_enabled_str;
@@ -46,23 +36,19 @@ use super::retro_ui::{
     configure_visuals, configure_visuals_for_settings, current_palette, palette_for_settings,
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
-use super::terminal_command_palette::{CommandPaletteAction, CommandPaletteState};
+use super::terminal_command_palette::CommandPaletteState;
 use super::terminal_open_with_picker;
 use crate::config::SavedConnection;
 use crate::config::{
-    desktop_dir as robco_desktop_dir, DesktopFileManagerSettings, DesktopIconSortMode,
-    HackingDifficulty, OpenMode, Settings,
+    DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, OpenMode, Settings,
 };
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
-use anyhow::Result;
-use chrono::Local;
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     RichText, TextEdit, TextStyle, TextureHandle,
 };
 use egui_wgpu::CrtEffects;
-use robcos_native_file_manager_app::FileManagerAction;
 use robcos_native_programs_app::{
     build_desktop_applications_sections, DesktopApplicationsSections, DesktopProgramRequest,
 };
@@ -75,8 +61,7 @@ use robcos_native_settings_app::{
 };
 use robcos_native_zeta_invaders_app::{AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame};
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
@@ -84,6 +69,7 @@ use std::time::{Duration, Instant};
 mod addon_policy;
 mod asset_helpers;
 mod desktop_component_host;
+mod desktop_file_runtime;
 mod desktop_installer_ui;
 mod desktop_menu_bar;
 mod desktop_runtime;
@@ -92,7 +78,10 @@ mod desktop_start_menu;
 mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
+mod document_browser_runtime;
 mod document_runtime;
+mod edit_menu_runtime;
+mod editor_runtime;
 mod launch_registry;
 mod launch_runtime;
 mod prompt_runtime;
@@ -829,88 +818,6 @@ impl RobcoNativeApp {
         egui_winit::set_app_cursor_mode(cursor_mode);
     }
 
-    fn append_startup_profile_marker(marker: &str) {
-        let Some(path) = std::env::var_os("ROBCOS_STARTUP_PROFILE_LOG") else {
-            return;
-        };
-        let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        else {
-            return;
-        };
-        let timestamp_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or(0);
-        let _ = writeln!(file, "{timestamp_ms} {marker}");
-    }
-
-    fn maybe_write_startup_profile_markers(&mut self) {
-        if !self.startup_profile_session_logged && self.session.is_some() {
-            Self::append_startup_profile_marker("session_ready");
-            self.startup_profile_session_logged = true;
-        }
-        if !self.startup_profile_desktop_logged && self.session.is_some() && self.desktop_mode_open
-        {
-            Self::append_startup_profile_marker("desktop_ready");
-            self.startup_profile_desktop_logged = true;
-        }
-    }
-
-    fn maybe_trace_repaint_causes(&mut self, ctx: &Context) {
-        let Some(path) = std::env::var_os("ROBCOS_REPAINT_TRACE_LOG") else {
-            return;
-        };
-        let pass = ctx.cumulative_pass_nr();
-        if pass == 0 || pass == self.repaint_trace_last_pass {
-            return;
-        }
-        self.repaint_trace_last_pass = pass;
-        let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        else {
-            return;
-        };
-        let timestamp_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or(0);
-        let causes = ctx.repaint_causes();
-        let cause_text = if causes.is_empty() {
-            "none".to_string()
-        } else {
-            causes
-                .into_iter()
-                .map(|cause| cause.to_string())
-                .collect::<Vec<_>>()
-                .join(" | ")
-        };
-        let requested = ctx.has_requested_repaint();
-        let input_summary = ctx.input(|input| {
-            format!(
-                "events={} pointer_delta=({:.2},{:.2}) motion={:?} latest_pos={:?}",
-                input.events.len(),
-                input.pointer.delta().x,
-                input.pointer.delta().y,
-                input.pointer.motion(),
-                input.pointer.latest_pos(),
-            )
-        });
-        let mode = if self.desktop_mode_open {
-            "desktop"
-        } else {
-            "terminal"
-        };
-        let _ = writeln!(
-            file,
-            "{timestamp_ms} pass={pass} mode={mode} requested={requested} causes={cause_text} input={input_summary}"
-        );
-    }
-
     fn sync_native_appearance(&mut self, ctx: &Context) {
         let key = NativeAppearanceKey {
             theme: self.settings.draft.theme.clone(),
@@ -935,227 +842,6 @@ impl RobcoNativeApp {
 
     fn terminal_layout(&self) -> TerminalLayout {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
-    }
-
-    fn file_manager_move_paths_to_dir(
-        &mut self,
-        paths: Vec<PathBuf>,
-        target_dir: &Path,
-    ) -> Result<String> {
-        self.file_manager_runtime
-            .move_paths_to_dir(&mut self.file_manager, paths, target_dir)
-    }
-
-    fn file_manager_drop_allowed(paths: &[PathBuf], target_dir: &Path) -> bool {
-        FileManagerEditRuntime::drop_allowed(paths, target_dir)
-    }
-
-    fn file_manager_handle_drop_to_dir(&mut self, paths: Vec<PathBuf>, target_dir: PathBuf) {
-        self.shell_status = match self.file_manager_move_paths_to_dir(paths, &target_dir) {
-            Ok(message) => message,
-            Err(err) => format!("File action failed: {err}"),
-        };
-        let desktop_dir = robco_desktop_dir();
-        if target_dir == desktop_dir || target_dir.starts_with(&desktop_dir) {
-            self.invalidate_desktop_surface_cache();
-        }
-    }
-
-    fn desktop_entry_row(entry: &DesktopSurfaceEntry) -> FileEntryRow {
-        FileEntryRow {
-            path: entry.path.clone(),
-            label: entry.label.clone(),
-            is_dir: entry.is_dir(),
-        }
-    }
-
-    fn create_desktop_folder(&mut self) {
-        let desktop_dir = robco_desktop_dir();
-        self.shell_status = match self
-            .file_manager_runtime
-            .create_folder_in_dir(&desktop_dir, "New Folder")
-        {
-            Ok(path) => {
-                self.invalidate_desktop_surface_cache();
-                format!(
-                    "Created {} on the desktop.",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("folder")
-                )
-            }
-            Err(err) => format!("Desktop folder create failed: {err}"),
-        };
-    }
-
-    fn paste_to_desktop(&mut self) {
-        let desktop_dir = robco_desktop_dir();
-        self.shell_status = match self
-            .file_manager_runtime
-            .paste_clipboard_into_dir(&desktop_dir)
-        {
-            Ok((count, last_dst)) => {
-                self.invalidate_desktop_surface_cache();
-                if count == 1 {
-                    format!(
-                        "Pasted {} onto the desktop.",
-                        last_dst
-                            .as_ref()
-                            .and_then(|path| path.file_name())
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("item")
-                    )
-                } else {
-                    format!("Pasted {count} items onto the desktop.")
-                }
-            }
-            Err(err) => format!("Desktop paste failed: {err}"),
-        };
-    }
-
-    fn open_desktop_surface_path(&mut self, path: PathBuf) {
-        if path.is_dir() {
-            self.open_file_manager_at(path);
-            return;
-        }
-        match file_manager_app::open_target_for_file_manager_action(
-            FileManagerAction::OpenFile(path),
-            &self.live_desktop_file_manager_settings,
-        ) {
-            Ok(FileManagerOpenTarget::NoOp) => {}
-            Ok(FileManagerOpenTarget::Launch(launch)) => {
-                self.shell_status = self.launch_open_with_request(launch);
-            }
-            Ok(FileManagerOpenTarget::OpenInEditor(path)) => {
-                self.open_file_with_default_app_or_editor(path);
-            }
-            Err(status) => self.shell_status = status,
-        }
-    }
-
-    fn open_desktop_item_properties(&mut self, path: PathBuf) {
-        let name_draft = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("item")
-            .to_string();
-        self.desktop_selected_icon = Some(DesktopIconSelection::Surface(format!(
-            "desktop_item:{name_draft}"
-        )));
-        self.desktop_item_properties = Some(DesktopItemPropertiesState {
-            is_dir: path.is_dir(),
-            path,
-            name_draft,
-        });
-    }
-
-    fn rename_desktop_item(&mut self, path: PathBuf) {
-        self.open_desktop_item_properties(path);
-    }
-
-    fn delete_desktop_item(&mut self, path: PathBuf) {
-        let label = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("item")
-            .to_string();
-        let row = FileEntryRow {
-            path: path.clone(),
-            label,
-            is_dir: path.is_dir(),
-        };
-        self.shell_status = match self.file_manager_runtime.delete_entries(vec![row]) {
-            Ok(count) => {
-                self.desktop_item_properties = None;
-                self.desktop_selected_icon = None;
-                self.invalidate_desktop_surface_cache();
-                if count == 1 {
-                    "Moved desktop item to trash.".to_string()
-                } else {
-                    format!("Moved {count} desktop items to trash.")
-                }
-            }
-            Err(err) => format!("Desktop delete failed: {err}"),
-        };
-    }
-
-    fn open_desktop_surface_with_prompt(&mut self, path: PathBuf) {
-        let ext_key = file_manager_app::open_with_extension_key(&path);
-        self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
-            path, ext_key, false,
-        ));
-    }
-
-    fn run_file_manager_command(&mut self, command: FileManagerCommand) {
-        let home_path = self.file_manager_home_path();
-        match file_manager_app::run_command(
-            command,
-            &mut self.file_manager,
-            &mut self.file_manager_runtime,
-            &home_path,
-        ) {
-            FileManagerCommandRequest::None => {}
-            FileManagerCommandRequest::ActivateSelection => {
-                self.activate_file_manager_selection();
-            }
-            FileManagerCommandRequest::OpenPrompt(request) => {
-                self.open_file_manager_prompt(request);
-            }
-            FileManagerCommandRequest::ApplyDisplaySettings(update) => {
-                self.apply_file_manager_display_settings_update(update);
-            }
-            FileManagerCommandRequest::ReportStatus(status) => {
-                self.shell_status = status;
-            }
-        }
-    }
-
-    fn attach_generic_context_menu(
-        action: &mut Option<ContextMenuAction>,
-        response: &egui::Response,
-    ) {
-        response.context_menu(|ui| {
-            Self::apply_context_menu_style(ui);
-            ui.set_min_width(118.0);
-            ui.set_max_width(160.0);
-
-            if ui.button("Copy").clicked() {
-                *action = Some(ContextMenuAction::GenericCopy);
-                ui.close_menu();
-            }
-            if ui.button("Paste").clicked() {
-                *action = Some(ContextMenuAction::GenericPaste);
-                ui.close_menu();
-            }
-
-            Self::retro_separator(ui);
-
-            if ui.button("Select All").clicked() {
-                *action = Some(ContextMenuAction::GenericSelectAll);
-                ui.close_menu();
-            }
-        });
-    }
-
-    fn draw_editor_save_as_window(&mut self, _ctx: &egui::Context) {}
-
-    fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
-        match resolve_catalog_launch(name, catalog) {
-            Ok(launch) => self.open_desktop_pty(&launch.title, &launch.argv),
-            Err(err) => self.shell_status = err,
-        }
-    }
-
-    fn open_embedded_catalog_launch(
-        &mut self,
-        name: &str,
-        catalog: ProgramCatalog,
-        return_screen: TerminalScreen,
-    ) {
-        match resolve_catalog_launch(name, catalog) {
-            Ok(launch) => self.open_embedded_pty(&launch.title, &launch.argv, return_screen),
-            Err(err) => self.shell_status = err,
-        }
     }
 
     fn open_desktop_nuke_codes(&mut self) {
@@ -1227,461 +913,6 @@ impl RobcoNativeApp {
         } else {
             dt.min(1.0 / 20.0)
         }
-    }
-
-    fn open_manual_file(&mut self, path: &str, status_label: &str) {
-        let manual = PathBuf::from(path);
-        match load_text_document(manual) {
-            Ok(document) => {
-                self.editor.path = Some(document.path);
-                self.editor.text = document.text;
-                self.editor.dirty = false;
-                self.editor.cancel_close_confirmation();
-                self.editor.status = format!("Opened {status_label}.");
-                self.open_desktop_window(DesktopWindow::Editor);
-            }
-            Err(status) => {
-                self.shell_status = format!("{status_label} unavailable: {status}");
-            }
-        }
-    }
-
-    fn apply_fm_palette_action(&mut self, action: CommandPaletteAction) {
-        match action {
-            CommandPaletteAction::FmOpenSelected => {
-                self.run_file_manager_command(FileManagerCommand::OpenSelected);
-            }
-            CommandPaletteAction::FmNewFolder => {
-                self.run_file_manager_command(FileManagerCommand::NewFolder);
-            }
-            CommandPaletteAction::FmHome => {
-                self.run_file_manager_command(FileManagerCommand::OpenHome);
-            }
-            CommandPaletteAction::FmCopy => {
-                self.run_file_manager_command(FileManagerCommand::Copy);
-            }
-            CommandPaletteAction::FmCut => {
-                self.run_file_manager_command(FileManagerCommand::Cut);
-            }
-            CommandPaletteAction::FmPaste => {
-                self.run_file_manager_command(FileManagerCommand::Paste);
-            }
-            CommandPaletteAction::FmDuplicate => {
-                self.run_file_manager_command(FileManagerCommand::Duplicate);
-            }
-            CommandPaletteAction::FmRename => {
-                self.run_file_manager_command(FileManagerCommand::Rename);
-            }
-            CommandPaletteAction::FmMoveTo => {
-                self.run_file_manager_command(FileManagerCommand::Move);
-            }
-            CommandPaletteAction::FmDelete => {
-                self.run_file_manager_command(FileManagerCommand::Delete);
-            }
-            CommandPaletteAction::FmUndo => {
-                self.run_file_manager_command(FileManagerCommand::Undo);
-            }
-            CommandPaletteAction::FmRedo => {
-                self.run_file_manager_command(FileManagerCommand::Redo);
-            }
-            CommandPaletteAction::FmClearSearch => {
-                self.run_file_manager_command(FileManagerCommand::ClearSearch);
-            }
-            CommandPaletteAction::FmNewDocument => {
-                self.run_editor_command(EditorCommand::NewDocument);
-            }
-            CommandPaletteAction::FmToggleHiddenFiles => {
-                self.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
-            }
-            CommandPaletteAction::FmOpenWith => {
-                self.open_terminal_open_with_picker();
-            }
-            CommandPaletteAction::FmClose => {
-                self.navigate_to_screen(self.terminal_nav.browser_return_screen);
-                self.apply_status_update(clear_shell_status());
-            }
-            _ => {}
-        }
-    }
-
-    fn open_terminal_open_with_picker(&mut self) {
-        let Some(row) =
-            file_manager_app::selected_file(self.file_manager.selected_rows_for_action())
-        else {
-            self.shell_status = "Select a file first.".to_string();
-            return;
-        };
-        let ext_key = file_manager_app::open_with_extension_key(&row.path);
-        let settings = load_settings_snapshot();
-        let saved_commands =
-            robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
-                &settings.desktop_file_manager,
-                &ext_key,
-            );
-        self.terminal_open_with_picker = Some(terminal_open_with_picker::OpenWithPickerState::new(
-            row.path,
-            ext_key,
-            saved_commands,
-        ));
-    }
-
-    fn apply_open_with_picker_launch(&mut self, command: String) {
-        let Some(picker) = self.terminal_open_with_picker.take() else {
-            return;
-        };
-        match file_manager_app::prepare_open_with_launch(&picker.path, &command) {
-            Ok(launch) => {
-                let ext_key = picker.ext_key.clone();
-                self.shell_status = self.launch_open_with_request(launch);
-                self.apply_file_manager_settings_update(
-                    FileManagerSettingsUpdate::RecordOpenWithCommand { ext_key, command },
-                );
-            }
-            Err(err) => {
-                self.shell_status = format!("Open failed: {err}");
-            }
-        }
-    }
-
-    fn apply_open_with_picker_other(&mut self) {
-        let Some(picker) = self.terminal_open_with_picker.take() else {
-            return;
-        };
-        self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
-            picker.path,
-            picker.ext_key,
-            false,
-        ));
-    }
-
-    fn run_editor_text_command(
-        &mut self,
-        ctx: &Context,
-        text_edit_id: Id,
-        command: EditorTextCommand,
-    ) {
-        let key = match command {
-            EditorTextCommand::Undo => egui::Key::Z,
-            EditorTextCommand::Redo => egui::Key::Y,
-            EditorTextCommand::Cut => egui::Key::X,
-            EditorTextCommand::Copy => egui::Key::C,
-            EditorTextCommand::Paste => egui::Key::V,
-            EditorTextCommand::SelectAll => egui::Key::A,
-        };
-        ctx.memory_mut(|m| m.request_focus(text_edit_id));
-        ctx.input_mut(|i| {
-            i.events.push(egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::COMMAND,
-            })
-        });
-    }
-
-    fn editor_find_next(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
-        if self.editor.ui.find_query.is_empty() {
-            return;
-        }
-        let text = self.editor.text.clone();
-        let query = self.editor.ui.find_query.clone();
-        // Collect all match byte positions
-        let matches: Vec<usize> = text
-            .char_indices()
-            .filter_map(|(byte_idx, _)| {
-                if text[byte_idx..].starts_with(query.as_str()) {
-                    Some(byte_idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if matches.is_empty() {
-            self.editor.status = format!("Not found: {}", query);
-            return;
-        }
-        let idx = self.editor.ui.find_occurrence % matches.len();
-        self.editor.ui.find_occurrence = idx + 1;
-        let byte_start = matches[idx];
-        let byte_end = byte_start + query.len();
-        // Convert byte offsets to char counts
-        let char_start = text[..byte_start].chars().count();
-        let char_end = text[..byte_end].chars().count();
-        // Set TextEdit cursor/selection
-        let mut state = egui::text_edit::TextEditState::load(ctx, text_edit_id).unwrap_or_default();
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(char_start),
-                egui::text::CCursor::new(char_end),
-            )));
-        state.store(ctx, text_edit_id);
-        ctx.memory_mut(|m| m.request_focus(text_edit_id));
-        self.editor.status = format!("Match {} of {}", idx + 1, matches.len());
-    }
-
-    fn editor_replace_one(&mut self, ctx: &egui::Context, text_edit_id: egui::Id) {
-        if self.editor.ui.find_query.is_empty() {
-            return;
-        }
-        let query = self.editor.ui.find_query.clone();
-        let replacement = self.editor.ui.replace_query.clone();
-        if let Some(pos) = self.editor.text.find(&query) {
-            self.editor
-                .text
-                .replace_range(pos..pos + query.len(), &replacement);
-            self.editor.dirty = true;
-        }
-        self.editor_find_next(ctx, text_edit_id);
-    }
-
-    fn editor_replace_all(&mut self) {
-        if self.editor.ui.find_query.is_empty() {
-            return;
-        }
-        let query = self.editor.ui.find_query.clone();
-        let replacement = self.editor.ui.replace_query.clone();
-        let count = self.editor.text.matches(query.as_str()).count();
-        if count > 0 {
-            self.editor.text = self.editor.text.replace(query.as_str(), &replacement);
-            self.editor.dirty = true;
-            self.editor.status = format!("Replaced {} occurrences.", count);
-        } else {
-            self.editor.status = format!("Not found: {}", query);
-        }
-    }
-
-    fn push_editor_recent_file(&mut self, path: &std::path::Path) {
-        if let Some(s) = path.to_str() {
-            let s = s.to_string();
-            self.settings.draft.editor_recent_files.retain(|p| p != &s);
-            self.settings.draft.editor_recent_files.insert(0, s);
-            self.settings.draft.editor_recent_files.truncate(10);
-        }
-    }
-
-    fn save_editor_to_current_path(&mut self) -> bool {
-        let Some(path) = self.editor.path.clone() else {
-            self.open_editor_save_as_picker();
-            return false;
-        };
-        match save_text_file(&path, &self.editor.text) {
-            Ok(()) => {
-                self.editor.dirty = false;
-                self.editor.status = format!(
-                    "Saved {}.",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("document")
-                );
-                self.editor.cancel_close_confirmation();
-                self.push_editor_recent_file(&path);
-                true
-            }
-            Err(err) => {
-                self.editor.status = format!("Save failed: {err}");
-                false
-            }
-        }
-    }
-
-    fn save_editor(&mut self) {
-        let _ = self.save_editor_to_current_path();
-    }
-
-    fn confirm_editor_close_save(&mut self) {
-        if self.editor.path.is_some() {
-            if self.save_editor_to_current_path() {
-                self.close_current_editor_window_unchecked();
-            } else {
-                self.editor.prompt_close_confirmation();
-            }
-            return;
-        }
-
-        self.editor.queue_close_after_save();
-        self.open_editor_save_as_picker();
-        if self.editor.save_as_input.is_none() {
-            self.editor.prompt_close_confirmation();
-        }
-    }
-
-    fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
-        match target {
-            EditMenuTarget::Applications => catalog_names(ProgramCatalog::Applications),
-            EditMenuTarget::Documents => document_category_names(),
-            EditMenuTarget::Network => catalog_names(ProgramCatalog::Network),
-            EditMenuTarget::Games => catalog_names(ProgramCatalog::Games),
-        }
-    }
-
-    fn program_catalog_for_edit_target(target: EditMenuTarget) -> Option<ProgramCatalog> {
-        match target {
-            EditMenuTarget::Applications => Some(ProgramCatalog::Applications),
-            EditMenuTarget::Network => Some(ProgramCatalog::Network),
-            EditMenuTarget::Games => Some(ProgramCatalog::Games),
-            EditMenuTarget::Documents => None,
-        }
-    }
-
-    fn add_program_entry(&mut self, target: EditMenuTarget, name: String, command: String) {
-        let Ok(argv) = parse_catalog_command_line(command.trim()) else {
-            self.shell_status = "Error: invalid command line".to_string();
-            return;
-        };
-        match target {
-            EditMenuTarget::Documents => {
-                self.shell_status = "Error: invalid target for command entry.".to_string();
-                return;
-            }
-            other => {
-                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
-                    self.shell_status = "Error: invalid target for command entry.".to_string();
-                    return;
-                };
-                self.shell_status = add_catalog_entry(catalog, name, argv);
-                self.invalidate_program_catalog_cache();
-                self.invalidate_edit_menu_entries_cache(other);
-            }
-        }
-    }
-
-    fn delete_program_entry(&mut self, target: EditMenuTarget, name: &str) {
-        match target {
-            EditMenuTarget::Documents => {
-                self.delete_document_category(name);
-                return;
-            }
-            other => {
-                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
-                    return;
-                };
-                self.shell_status = delete_catalog_entry(catalog, name);
-                self.invalidate_program_catalog_cache();
-                self.invalidate_edit_menu_entries_cache(other);
-            }
-        }
-    }
-
-    fn rename_program_entry(&mut self, target: EditMenuTarget, old_name: &str, new_name: &str) {
-        let new_name = new_name.trim();
-        if new_name.is_empty() {
-            self.shell_status = "Name cannot be empty.".to_string();
-            return;
-        }
-        if new_name == old_name {
-            self.shell_status = "Name unchanged.".to_string();
-            return;
-        }
-
-        match target {
-            EditMenuTarget::Documents => {
-                match rename_desktop_document_category(old_name, new_name) {
-                    Ok(status) => {
-                        self.shell_status = status;
-                        self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
-                    }
-                    Err(err) => self.shell_status = err,
-                }
-            }
-            other => {
-                let Some(catalog) = Self::program_catalog_for_edit_target(other) else {
-                    return;
-                };
-                match rename_catalog_entry(catalog, old_name, new_name) {
-                    Ok(status) => {
-                        self.shell_status = status;
-                        self.invalidate_program_catalog_cache();
-                        self.invalidate_edit_menu_entries_cache(other);
-                    }
-                    Err(err) => self.shell_status = err,
-                }
-            }
-        }
-    }
-
-    fn add_document_category(&mut self, name: String, path_raw: String) {
-        match add_desktop_document_category(name, &path_raw) {
-            Ok(status) => {
-                self.shell_status = status;
-                self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
-            }
-            Err(err) => self.shell_status = err,
-        }
-    }
-
-    fn delete_document_category(&mut self, name: &str) {
-        self.shell_status = delete_desktop_document_category(name);
-        self.invalidate_edit_menu_entries_cache(EditMenuTarget::Documents);
-    }
-
-    fn sorted_document_categories() -> Vec<String> {
-        document_category_names()
-    }
-
-    fn open_document_browser_at(&mut self, dir: PathBuf, return_screen: TerminalScreen) {
-        if !dir.is_dir() {
-            self.shell_status = format!("Error: '{}' not found.", dir.display());
-            return;
-        }
-        self.file_manager.set_cwd(dir);
-        self.file_manager.selected = None;
-        self.terminal_nav.browser_idx = 0;
-        self.terminal_nav.browser_return_screen = return_screen;
-        self.navigate_to_screen(TerminalScreen::DocumentBrowser);
-    }
-
-    fn open_log_view(&mut self) {
-        self.open_document_browser_at(logs_dir(), TerminalScreen::Logs);
-    }
-
-    fn normalize_new_file_name(raw: &str, default_stem: &str) -> Option<String> {
-        let candidate = if raw.trim().is_empty() {
-            default_stem.to_string()
-        } else {
-            raw.trim().to_string()
-        };
-        let mut normalized = String::new();
-        let mut last_was_sep = false;
-        for ch in candidate.chars() {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                normalized.push(ch);
-                last_was_sep = false;
-            } else if ch.is_whitespace() && !normalized.is_empty() && !last_was_sep {
-                normalized.push('_');
-                last_was_sep = true;
-            }
-        }
-        let normalized = normalized.trim_matches(['_', '.', ' ']).to_string();
-        if normalized.is_empty() || normalized == "." || normalized == ".." {
-            return None;
-        }
-        if std::path::Path::new(&normalized).extension().is_some() {
-            Some(normalized)
-        } else {
-            Some(format!("{normalized}.txt"))
-        }
-    }
-
-    fn create_or_open_log(&mut self, raw_name: &str) {
-        let default_stem = Local::now().format("%Y-%m-%d").to_string();
-        let Some(name) = Self::normalize_new_file_name(raw_name, &default_stem) else {
-            self.shell_status = "Error: Invalid document name.".to_string();
-            return;
-        };
-        let path = logs_dir().join(name);
-        let existing = if path.exists() {
-            std::fs::read_to_string(&path).unwrap_or_default()
-        } else {
-            String::new()
-        };
-        self.editor.path = Some(path);
-        self.editor.text = existing;
-        self.editor.dirty = false;
-        self.open_desktop_window(DesktopWindow::Editor);
-        self.editor.status = "Opened log.".to_string();
-        self.shell_status = "Opened log editor.".to_string();
     }
 }
 

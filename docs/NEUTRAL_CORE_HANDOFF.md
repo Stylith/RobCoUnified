@@ -339,6 +339,36 @@ Additional asset-helper extraction slice:
 - that module now owns settings panel icons, installer/game icons, file-manager row/preview icon selection, and the small file-manager selection helper methods that sit beside those assets, instead of leaving that mixed asset/support block in the root coordinator
 - focused regressions passed for file-manager preview scaling, lazy SVG preview loading, and file-manager navigation/selection behavior after the extraction
 
+Additional desktop-file-runtime extraction slice:
+
+- desktop/file-manager surface interaction helpers moved out of `src/native/app.rs` into `src/native/app/desktop_file_runtime.rs`
+- that module now owns file-manager drop handling, desktop file/folder actions, desktop surface open/delete/property helpers, file-manager command dispatch, and the generic context-menu bridge instead of leaving that interaction block in the root coordinator
+- focused regressions passed for file-manager navigation/clipboard behavior and desktop file-manager reveal behavior after the extraction
+
+Additional editor-runtime extraction slice:
+
+- editor text-command, find/replace, save, and close-confirmation helpers moved out of `src/native/app.rs` into `src/native/app/editor_runtime.rs`
+- that module now owns the shared editor helper block used by desktop presenters, desktop menus, document runtime, and save/close flows, which keeps editor behavior centralized without leaving another cohesive utility block in the root coordinator
+- focused regressions passed for editor search/replace command flow, dirty-close confirmation, and save/save-as behavior after the extraction
+
+Additional edit-menu-runtime extraction slice:
+
+- edit-menu/program-catalog/document-category helpers moved out of `src/native/app.rs` into `src/native/app/edit_menu_runtime.rs`
+- that module now owns catalog add/rename/delete handling and document-category edits used by desktop Settings, desktop surface actions, and terminal edit-menu flows, which keeps that cross-mode editing logic aligned instead of leaving it mixed into the root coordinator
+- focused regressions passed for terminal edit-menu add/delete flows and cached edit-menu entry invalidation after the extraction
+
+Additional document-browser-runtime extraction slice:
+
+- document-browser and log helpers moved out of `src/native/app.rs` into `src/native/app/document_browser_runtime.rs`
+- that module now owns document-category listing, document-browser opening, log-browser opening, log-name normalization, and log-editor launch flow used by terminal documents/logs screens and prompt handling, which keeps document browsing aligned across the terminal/menu shell without leaving another mixed helper block in the root coordinator
+- focused regressions passed for terminal document-browser navigation and log creation/opening behavior after the extraction
+
+Additional final coordinator-helper extraction slice:
+
+- startup/repaint tracing helpers moved out of `src/native/app.rs` into `src/native/app/frame_runtime.rs`
+- catalog-launch and manual-file open helpers moved into `src/native/app/launch_runtime.rs`, and terminal document-browser open-with/palette helpers moved into `src/native/app/document_runtime.rs`
+- this leaves `src/native/app.rs` much closer to the intended root-coordinator role: state, default construction, a few core runtime helpers, and the test module rather than a mix of utility flows
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

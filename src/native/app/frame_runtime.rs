@@ -10,11 +10,95 @@ use super::super::menu::{
 use super::super::prompt::{draw_terminal_flash, draw_terminal_flash_boxed, FlashAction};
 use super::RobcoNativeApp;
 use eframe::egui::{self, Align2, Color32, Context, Id, Key, RichText};
+use std::io::Write;
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use super::software_cursor::draw_software_cursor;
 
 impl RobcoNativeApp {
+    fn append_startup_profile_marker(marker: &str) {
+        let Some(path) = std::env::var_os("ROBCOS_STARTUP_PROFILE_LOG") else {
+            return;
+        };
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        else {
+            return;
+        };
+        let timestamp_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "{timestamp_ms} {marker}");
+    }
+
+    pub(super) fn maybe_write_startup_profile_markers(&mut self) {
+        if !self.startup_profile_session_logged && self.session.is_some() {
+            Self::append_startup_profile_marker("session_ready");
+            self.startup_profile_session_logged = true;
+        }
+        if !self.startup_profile_desktop_logged && self.session.is_some() && self.desktop_mode_open
+        {
+            Self::append_startup_profile_marker("desktop_ready");
+            self.startup_profile_desktop_logged = true;
+        }
+    }
+
+    pub(super) fn maybe_trace_repaint_causes(&mut self, ctx: &Context) {
+        let Some(path) = std::env::var_os("ROBCOS_REPAINT_TRACE_LOG") else {
+            return;
+        };
+        let pass = ctx.cumulative_pass_nr();
+        if pass == 0 || pass == self.repaint_trace_last_pass {
+            return;
+        }
+        self.repaint_trace_last_pass = pass;
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        else {
+            return;
+        };
+        let timestamp_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let causes = ctx.repaint_causes();
+        let cause_text = if causes.is_empty() {
+            "none".to_string()
+        } else {
+            causes
+                .into_iter()
+                .map(|cause| cause.to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        let requested = ctx.has_requested_repaint();
+        let input_summary = ctx.input(|input| {
+            format!(
+                "events={} pointer_delta=({:.2},{:.2}) motion={:?} latest_pos={:?}",
+                input.events.len(),
+                input.pointer.delta().x,
+                input.pointer.delta().y,
+                input.pointer.motion(),
+                input.pointer.latest_pos(),
+            )
+        });
+        let mode = if self.desktop_mode_open {
+            "desktop"
+        } else {
+            "terminal"
+        };
+        let _ = writeln!(
+            file,
+            "{timestamp_ms} pass={pass} mode={mode} requested={requested} causes={cause_text} input={input_summary}"
+        );
+    }
+
     pub(super) fn process_desktop_pty_input_early(&mut self, ctx: &Context) {
         let active_id = self.desktop_active_window.filter(|id| {
             self.desktop_mode_open && id.kind == super::super::desktop_app::DesktopWindow::PtyApp

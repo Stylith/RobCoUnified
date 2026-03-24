@@ -1,7 +1,7 @@
 use super::super::data::home_dir_fallback;
 use super::super::desktop_app::{DesktopShellAction, DesktopWindow};
-use super::super::desktop_file_service::reveal_path_location;
-use super::super::desktop_launcher_service::ProgramCatalog;
+use super::super::desktop_file_service::{load_text_document, reveal_path_location};
+use super::super::desktop_launcher_service::{resolve_catalog_launch, ProgramCatalog};
 use super::super::editor_app::EditorWindow;
 use super::super::file_manager::NativeFileManagerState;
 use super::super::file_manager_app::FileManagerEditRuntime;
@@ -216,6 +216,42 @@ impl RobcoNativeApp {
             }
             NativeTerminalLaunch::OpenNukeCodes => {
                 self.open_nuke_codes_screen(return_screen);
+            }
+        }
+    }
+
+    pub(super) fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
+        match resolve_catalog_launch(name, catalog) {
+            Ok(launch) => self.open_desktop_pty(&launch.title, &launch.argv),
+            Err(err) => self.shell_status = err,
+        }
+    }
+
+    pub(super) fn open_embedded_catalog_launch(
+        &mut self,
+        name: &str,
+        catalog: ProgramCatalog,
+        return_screen: TerminalScreen,
+    ) {
+        match resolve_catalog_launch(name, catalog) {
+            Ok(launch) => self.open_embedded_pty(&launch.title, &launch.argv, return_screen),
+            Err(err) => self.shell_status = err,
+        }
+    }
+
+    pub(super) fn open_manual_file(&mut self, path: &str, status_label: &str) {
+        let manual = std::path::PathBuf::from(path);
+        match load_text_document(manual) {
+            Ok(document) => {
+                self.editor.path = Some(document.path);
+                self.editor.text = document.text;
+                self.editor.dirty = false;
+                self.editor.cancel_close_confirmation();
+                self.editor.status = format!("Opened {status_label}.");
+                self.open_desktop_window(DesktopWindow::Editor);
+            }
+            Err(status) => {
+                self.shell_status = format!("{status_label} unavailable: {status}");
             }
         }
     }

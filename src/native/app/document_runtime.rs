@@ -6,19 +6,21 @@ use super::super::desktop_settings_service::{
     load_settings_snapshot,
 };
 use super::super::desktop_shortcuts_service::set_shortcut_icon as set_desktop_shortcut_icon;
+use super::super::desktop_status_service::clear_shell_status;
 use super::super::desktop_surface_service::set_wallpaper_path as set_desktop_wallpaper_path;
 use super::super::editor_app::{EditorCommand, EditorTextAlign, EditorWindow};
 use super::super::file_manager::{FileEntryRow, FileManagerCommand};
 use super::super::file_manager_app::{
     self, FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode,
-    FileManagerPickerCommit, FileManagerSelectionActivation, FileManagerSettingsUpdate,
-    OpenWithLaunchRequest,
+    FileManagerPickerCommit, FileManagerPromptRequest, FileManagerSelectionActivation,
+    FileManagerSettingsUpdate, OpenWithLaunchRequest,
 };
 use super::super::file_manager_desktop::{
     self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest,
 };
 use super::super::prompt::TerminalPromptAction;
 use super::super::terminal_command_palette::CommandPaletteAction;
+use super::super::terminal_open_with_picker::OpenWithPickerState;
 use super::RobcoNativeApp;
 use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
 use anyhow::Result;
@@ -84,6 +86,111 @@ impl RobcoNativeApp {
             Ok(location) => self.apply_file_manager_location(location),
             Err(status) => self.shell_status = status,
         }
+    }
+
+    pub(super) fn apply_fm_palette_action(&mut self, action: CommandPaletteAction) {
+        match action {
+            CommandPaletteAction::FmOpenSelected => {
+                self.run_file_manager_command(FileManagerCommand::OpenSelected);
+            }
+            CommandPaletteAction::FmNewFolder => {
+                self.run_file_manager_command(FileManagerCommand::NewFolder);
+            }
+            CommandPaletteAction::FmHome => {
+                self.run_file_manager_command(FileManagerCommand::OpenHome);
+            }
+            CommandPaletteAction::FmCopy => {
+                self.run_file_manager_command(FileManagerCommand::Copy);
+            }
+            CommandPaletteAction::FmCut => {
+                self.run_file_manager_command(FileManagerCommand::Cut);
+            }
+            CommandPaletteAction::FmPaste => {
+                self.run_file_manager_command(FileManagerCommand::Paste);
+            }
+            CommandPaletteAction::FmDuplicate => {
+                self.run_file_manager_command(FileManagerCommand::Duplicate);
+            }
+            CommandPaletteAction::FmRename => {
+                self.run_file_manager_command(FileManagerCommand::Rename);
+            }
+            CommandPaletteAction::FmMoveTo => {
+                self.run_file_manager_command(FileManagerCommand::Move);
+            }
+            CommandPaletteAction::FmDelete => {
+                self.run_file_manager_command(FileManagerCommand::Delete);
+            }
+            CommandPaletteAction::FmUndo => {
+                self.run_file_manager_command(FileManagerCommand::Undo);
+            }
+            CommandPaletteAction::FmRedo => {
+                self.run_file_manager_command(FileManagerCommand::Redo);
+            }
+            CommandPaletteAction::FmClearSearch => {
+                self.run_file_manager_command(FileManagerCommand::ClearSearch);
+            }
+            CommandPaletteAction::FmNewDocument => {
+                self.run_editor_command(EditorCommand::NewDocument);
+            }
+            CommandPaletteAction::FmToggleHiddenFiles => {
+                self.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
+            }
+            CommandPaletteAction::FmOpenWith => {
+                self.open_terminal_open_with_picker();
+            }
+            CommandPaletteAction::FmClose => {
+                self.navigate_to_screen(self.terminal_nav.browser_return_screen);
+                self.apply_status_update(clear_shell_status());
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn open_terminal_open_with_picker(&mut self) {
+        let Some(row) =
+            file_manager_app::selected_file(self.file_manager.selected_rows_for_action())
+        else {
+            self.shell_status = "Select a file first.".to_string();
+            return;
+        };
+        let ext_key = file_manager_app::open_with_extension_key(&row.path);
+        let settings = load_settings_snapshot();
+        let saved_commands =
+            robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
+                &settings.desktop_file_manager,
+                &ext_key,
+            );
+        self.terminal_open_with_picker =
+            Some(OpenWithPickerState::new(row.path, ext_key, saved_commands));
+    }
+
+    pub(super) fn apply_open_with_picker_launch(&mut self, command: String) {
+        let Some(picker) = self.terminal_open_with_picker.take() else {
+            return;
+        };
+        match file_manager_app::prepare_open_with_launch(&picker.path, &command) {
+            Ok(launch) => {
+                let ext_key = picker.ext_key.clone();
+                self.shell_status = self.launch_open_with_request(launch);
+                self.apply_file_manager_settings_update(
+                    FileManagerSettingsUpdate::RecordOpenWithCommand { ext_key, command },
+                );
+            }
+            Err(err) => {
+                self.shell_status = format!("Open failed: {err}");
+            }
+        }
+    }
+
+    pub(super) fn apply_open_with_picker_other(&mut self) {
+        let Some(picker) = self.terminal_open_with_picker.take() else {
+            return;
+        };
+        self.open_file_manager_prompt(FileManagerPromptRequest::open_with_new_command(
+            picker.path,
+            picker.ext_key,
+            false,
+        ));
     }
 
     fn default_editor_save_name(&self) -> String {
