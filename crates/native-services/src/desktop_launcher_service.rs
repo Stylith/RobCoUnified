@@ -1,7 +1,9 @@
 use crate::config::{load_apps, load_games, load_networks, save_apps, save_games, save_networks};
 use crate::default_apps::parse_custom_command_line;
-use crate::launcher::json_to_cmd;
+use crate::launcher::{command_exists, json_to_cmd};
 use serde_json::{Map, Value};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 fn resolve_program_command(name: &str, source: &Map<String, Value>) -> Result<Vec<String>, String> {
     let Some(value) = source.get(name) else {
@@ -25,6 +27,130 @@ pub enum ProgramCatalog {
 pub struct ResolvedProgramLaunch {
     pub title: String,
     pub argv: Vec<String>,
+}
+
+pub const ROBCO_FUN_MENU_LABEL: &str = "RobCo Fun";
+pub const BUILTIN_ZETA_INVADERS_GAME: &str = "Zeta Invaders";
+pub const BUILTIN_RED_MENACE_GAME: &str = "Red Menace";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameMenuGroups {
+    pub robco_fun: Vec<String>,
+    pub other_games: Vec<String>,
+}
+
+fn builtin_robco_fun_game_specs(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        BUILTIN_ZETA_INVADERS_GAME => {
+            Some(("robcos-native-zeta-invaders-app", "robcos-zeta-invaders"))
+        }
+        BUILTIN_RED_MENACE_GAME => Some(("robcos-native-red-menace-app", "robcos-red-menace")),
+        _ => None,
+    }
+}
+
+pub fn is_robco_fun_game(name: &str) -> bool {
+    builtin_robco_fun_game_specs(name).is_some()
+}
+
+pub fn robco_fun_game_names() -> Vec<String> {
+    vec![
+        BUILTIN_ZETA_INVADERS_GAME.to_string(),
+        BUILTIN_RED_MENACE_GAME.to_string(),
+    ]
+}
+
+pub fn grouped_game_menu_names() -> GameMenuGroups {
+    let mut other_games = sorted_source_names(&load_games());
+    other_games.retain(|name| !is_robco_fun_game(name));
+    GameMenuGroups {
+        robco_fun: robco_fun_game_names(),
+        other_games,
+    }
+}
+
+pub fn all_game_menu_names() -> Vec<String> {
+    let groups = grouped_game_menu_names();
+    groups
+        .robco_fun
+        .into_iter()
+        .chain(groups.other_games)
+        .collect()
+}
+
+fn sibling_binary_file_name(binary_stem: &str, _current_exe: &Path) -> OsString {
+    #[cfg(target_os = "windows")]
+    {
+        if _current_exe
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        {
+            return OsString::from(format!("{binary_stem}.exe"));
+        }
+    }
+
+    OsString::from(binary_stem)
+}
+
+fn sibling_binary_dirs(current_exe: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = current_exe.parent() {
+        dirs.push(parent.to_path_buf());
+        if parent.file_name().and_then(|name| name.to_str()) == Some("deps") {
+            if let Some(grandparent) = parent.parent() {
+                dirs.push(grandparent.to_path_buf());
+            }
+        }
+    }
+    dirs
+}
+
+fn sibling_binary_path(binary_stem: &str) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    let file_name = sibling_binary_file_name(binary_stem, &current_exe);
+    sibling_binary_dirs(&current_exe)
+        .into_iter()
+        .map(|dir| dir.join(&file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn workspace_manifest_path() -> Option<PathBuf> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("Cargo.toml");
+    manifest.is_file().then_some(manifest)
+}
+
+fn built_in_game_argv(name: &str) -> Option<Vec<String>> {
+    let (package, binary) = builtin_robco_fun_game_specs(name)?;
+    if let Some(path) = sibling_binary_path(binary) {
+        return Some(vec![path.to_string_lossy().to_string()]);
+    }
+    if command_exists(binary) {
+        return Some(vec![binary.to_string()]);
+    }
+    if let Some(manifest) = workspace_manifest_path() {
+        return Some(vec![
+            "cargo".to_string(),
+            "run".to_string(),
+            "--manifest-path".to_string(),
+            manifest.to_string_lossy().to_string(),
+            "-p".to_string(),
+            package.to_string(),
+            "--bin".to_string(),
+            binary.to_string(),
+        ]);
+    }
+    Some(vec![binary.to_string()])
+}
+
+fn resolve_builtin_game_launch(name: &str) -> Option<ResolvedProgramLaunch> {
+    built_in_game_argv(name).map(|argv| ResolvedProgramLaunch {
+        title: name.to_string(),
+        argv,
+    })
 }
 
 fn load_catalog_source(catalog: ProgramCatalog) -> Map<String, Value> {
@@ -67,7 +193,16 @@ pub fn resolve_catalog_launch(
     name: &str,
     catalog: ProgramCatalog,
 ) -> Result<ResolvedProgramLaunch, String> {
-    resolve_program_launch_from_source(name, &load_catalog_source(catalog))
+    match catalog {
+        ProgramCatalog::Games => {
+            let source = load_games();
+            resolve_program_launch_from_source(name, &source)
+                .or_else(|_| resolve_builtin_game_launch(name).ok_or_else(|| format!("Unknown program '{name}'.")))
+        }
+        ProgramCatalog::Applications | ProgramCatalog::Network => {
+            resolve_program_launch_from_source(name, &load_catalog_source(catalog))
+        }
+    }
 }
 
 pub fn resolve_catalog_command_line(name: &str, catalog: ProgramCatalog) -> Option<String> {
@@ -243,5 +378,25 @@ mod tests {
 
         assert_eq!(err, "Beta already exists.");
         assert!(source.contains_key("Alpha"));
+    }
+
+    #[test]
+    fn robco_fun_game_names_are_stable() {
+        assert_eq!(
+            robco_fun_game_names(),
+            vec![
+                BUILTIN_ZETA_INVADERS_GAME.to_string(),
+                BUILTIN_RED_MENACE_GAME.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn builtin_game_launch_builds_non_empty_command() {
+        let launch = resolve_builtin_game_launch(BUILTIN_ZETA_INVADERS_GAME)
+            .expect("expected zeta invaders launch command");
+
+        assert_eq!(launch.title, BUILTIN_ZETA_INVADERS_GAME);
+        assert!(!launch.argv.is_empty());
     }
 }

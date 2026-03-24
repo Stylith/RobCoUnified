@@ -37,6 +37,12 @@ pub enum EditorTextCommand {
     SelectAll,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorCloseConfirmState {
+    Prompting,
+    SaveThenClose,
+}
+
 #[derive(Debug, Clone)]
 pub struct EditorUiState {
     pub show_line_numbers: bool,
@@ -107,6 +113,7 @@ pub struct EditorWindow {
     pub font_size: f32,
     pub ui: EditorUiState,
     pub save_as_input: Option<String>,
+    pub close_confirm: Option<EditorCloseConfirmState>,
 }
 
 impl Default for EditorWindow {
@@ -121,6 +128,7 @@ impl Default for EditorWindow {
             font_size: 16.0,
             ui: EditorUiState::default(),
             save_as_input: None,
+            close_confirm: None,
         }
     }
 }
@@ -131,6 +139,8 @@ impl EditorWindow {
         self.text.clear();
         self.dirty = false;
         self.status = NEW_DESKTOP_DOCUMENT_STATUS.to_string();
+        self.save_as_input = None;
+        self.close_confirm = None;
     }
 
     pub fn prepare_new_document_at(&mut self, path: PathBuf) {
@@ -138,6 +148,31 @@ impl EditorWindow {
         self.text.clear();
         self.dirty = false;
         self.status = NEW_DOCUMENT_STATUS.to_string();
+        self.save_as_input = None;
+        self.close_confirm = None;
+    }
+
+    pub fn prompt_close_confirmation(&mut self) {
+        self.close_confirm = Some(EditorCloseConfirmState::Prompting);
+    }
+
+    pub fn queue_close_after_save(&mut self) {
+        self.close_confirm = Some(EditorCloseConfirmState::SaveThenClose);
+    }
+
+    pub fn cancel_close_confirmation(&mut self) {
+        self.close_confirm = None;
+    }
+
+    pub fn close_confirmation_visible(&self) -> bool {
+        matches!(self.close_confirm, Some(EditorCloseConfirmState::Prompting))
+    }
+
+    pub fn should_close_after_save(&self) -> bool {
+        matches!(
+            self.close_confirm,
+            Some(EditorCloseConfirmState::SaveThenClose)
+        )
     }
 
     #[cfg(test)]
@@ -147,6 +182,8 @@ impl EditorWindow {
         self.text.clear();
         self.dirty = false;
         self.status.clear();
+        self.save_as_input = None;
+        self.close_confirm = None;
     }
 }
 
@@ -178,6 +215,7 @@ mod tests {
         assert_eq!(editor.font_size, 22.0);
         assert!(!editor.ui.find_open);
         assert!(editor.save_as_input.is_none());
+        assert!(editor.close_confirm.is_none());
     }
 
     #[test]
@@ -195,6 +233,7 @@ mod tests {
                 ..EditorUiState::default()
             },
             save_as_input: Some("doc.txt".to_string()),
+            close_confirm: Some(EditorCloseConfirmState::Prompting),
         };
 
         editor.reset_closed_state();
@@ -205,7 +244,24 @@ mod tests {
         assert!(!editor.dirty);
         assert!(editor.status.is_empty());
         assert!(editor.ui.find_open);
-        assert_eq!(editor.save_as_input, Some("doc.txt".to_string()));
+        assert!(editor.save_as_input.is_none());
+        assert!(editor.close_confirm.is_none());
+    }
+
+    #[test]
+    fn close_confirmation_helpers_track_prompt_state() {
+        let mut editor = EditorWindow::default();
+
+        editor.prompt_close_confirmation();
+        assert!(editor.close_confirmation_visible());
+        assert!(!editor.should_close_after_save());
+
+        editor.queue_close_after_save();
+        assert!(!editor.close_confirmation_visible());
+        assert!(editor.should_close_after_save());
+
+        editor.cancel_close_confirmation();
+        assert!(editor.close_confirm.is_none());
     }
 
     #[test]

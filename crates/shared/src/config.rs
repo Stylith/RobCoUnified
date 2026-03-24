@@ -821,6 +821,8 @@ pub struct DisplayEffectsSettings {
     pub burn_in: f32,
     #[serde(default = "default_crt_glow_line")]
     pub glow_line: f32,
+    #[serde(default = "default_crt_glow_line_speed")]
+    pub glow_line_speed: f32,
     #[serde(default = "default_crt_brightness")]
     pub brightness: f32,
     #[serde(default = "default_crt_contrast")]
@@ -845,6 +847,7 @@ impl DisplayEffectsSettings {
                 jitter: 0.0,
                 burn_in: 0.0,
                 glow_line: 0.0,
+                glow_line_speed: default_crt_glow_line_speed(),
                 brightness: 1.0,
                 contrast: 1.0,
                 phosphor_softness: 0.0,
@@ -862,6 +865,7 @@ impl DisplayEffectsSettings {
                 jitter: 0.003,
                 burn_in: 0.04,
                 glow_line: 0.06,
+                glow_line_speed: 0.5,
                 brightness: 1.0,
                 contrast: 1.05,
                 phosphor_softness: 0.08,
@@ -879,6 +883,7 @@ impl DisplayEffectsSettings {
                 jitter: default_crt_jitter(),
                 burn_in: default_crt_burn_in(),
                 glow_line: default_crt_glow_line(),
+                glow_line_speed: default_crt_glow_line_speed(),
                 brightness: default_crt_brightness(),
                 contrast: default_crt_contrast(),
                 phosphor_softness: default_crt_phosphor_softness(),
@@ -896,6 +901,7 @@ impl DisplayEffectsSettings {
                 jitter: 0.024,
                 burn_in: 0.26,
                 glow_line: 0.18,
+                glow_line_speed: 0.62,
                 brightness: 0.98,
                 contrast: 1.14,
                 phosphor_softness: 0.28,
@@ -913,6 +919,7 @@ impl DisplayEffectsSettings {
                 jitter: 0.065,
                 burn_in: 0.58,
                 glow_line: 0.42,
+                glow_line_speed: 0.9,
                 brightness: 0.94,
                 contrast: 1.2,
                 phosphor_softness: 0.45,
@@ -993,6 +1000,10 @@ fn default_crt_glow_line() -> f32 {
     0.12
 }
 
+fn default_crt_glow_line_speed() -> f32 {
+    0.72
+}
+
 fn default_crt_brightness() -> f32 {
     1.0
 }
@@ -1043,8 +1054,10 @@ pub struct Settings {
     pub pty_shell_preferred: BTreeMap<String, bool>,
     #[serde(default = "default_desktop_wallpaper")]
     pub desktop_wallpaper: String,
-    #[serde(default)]
+    #[serde(default = "default_desktop_show_cursor")]
     pub desktop_show_cursor: bool,
+    #[serde(default = "default_desktop_cursor_scale")]
+    pub desktop_cursor_scale: f32,
     #[serde(default)]
     pub desktop_icon_style: DesktopIconStyle,
     #[serde(default)]
@@ -1085,6 +1098,14 @@ fn default_desktop_wallpaper() -> String {
     "RobCo".to_string()
 }
 
+const fn default_desktop_show_cursor() -> bool {
+    true
+}
+
+fn default_desktop_cursor_scale() -> f32 {
+    1.0
+}
+
 const fn default_system_sound_volume() -> u8 {
     100
 }
@@ -1119,7 +1140,8 @@ impl Default for Settings {
             desktop_cli_profiles: DesktopCliProfiles::default(),
             pty_shell_preferred: BTreeMap::new(),
             desktop_wallpaper: default_desktop_wallpaper(),
-            desktop_show_cursor: false,
+            desktop_show_cursor: default_desktop_show_cursor(),
+            desktop_cursor_scale: default_desktop_cursor_scale(),
             desktop_icon_style: DesktopIconStyle::Win95,
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
@@ -1141,6 +1163,7 @@ impl Default for Settings {
 
 fn apply_legacy_settings_migrations(settings: &mut Settings) {
     settings.system_sound_volume = settings.system_sound_volume.clamp(0, 100);
+    settings.desktop_cursor_scale = settings.desktop_cursor_scale.clamp(0.5, 2.5);
     if settings.hide_builtin_apps_in_menus {
         settings.builtin_menu_visibility.nuke_codes = false;
         settings.builtin_menu_visibility.text_editor = false;
@@ -1156,6 +1179,8 @@ fn apply_legacy_settings_migrations(settings: &mut Settings) {
     settings.display_effects.jitter = settings.display_effects.jitter.clamp(0.0, 0.12);
     settings.display_effects.burn_in = settings.display_effects.burn_in.clamp(0.0, 1.0);
     settings.display_effects.glow_line = settings.display_effects.glow_line.clamp(0.0, 1.0);
+    settings.display_effects.glow_line_speed =
+        settings.display_effects.glow_line_speed.clamp(0.2, 2.0);
     settings.display_effects.brightness = settings.display_effects.brightness.clamp(0.5, 1.4);
     settings.display_effects.contrast = settings.display_effects.contrast.clamp(0.7, 1.5);
     settings.display_effects.phosphor_softness =
@@ -1481,12 +1506,17 @@ mod tests {
         display_effects.remove("jitter");
         display_effects.remove("burn_in");
         display_effects.remove("glow_line");
+        display_effects.remove("glow_line_speed");
 
         let decoded: Settings = serde_json::from_value(value).expect("decode settings");
         assert!((decoded.display_effects.bloom - default_crt_bloom()).abs() < f32::EPSILON);
         assert!((decoded.display_effects.jitter - default_crt_jitter()).abs() < f32::EPSILON);
         assert!((decoded.display_effects.burn_in - default_crt_burn_in()).abs() < f32::EPSILON);
         assert!((decoded.display_effects.glow_line - default_crt_glow_line()).abs() < f32::EPSILON);
+        assert!(
+            (decoded.display_effects.glow_line_speed - default_crt_glow_line_speed()).abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]

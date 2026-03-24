@@ -114,6 +114,7 @@ pub enum PromptOutcome {
         name: String,
         confirmed: bool,
     },
+    EditorSaveAsPath(String),
     NewLogName(String),
     Noop,
 }
@@ -283,6 +284,9 @@ pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptO
                         previous,
                         command: prompt.buffer,
                     },
+                    TerminalPromptAction::EditorSaveAsPath => {
+                        PromptOutcome::EditorSaveAsPath(prompt.buffer)
+                    }
                     TerminalPromptAction::NewLogName => PromptOutcome::NewLogName(prompt.buffer),
                     TerminalPromptAction::Noop => PromptOutcome::Noop,
                     TerminalPromptAction::ConfirmDeleteUser { .. }

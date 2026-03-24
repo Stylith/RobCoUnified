@@ -14,6 +14,15 @@ pub enum TerminalDocumentBrowserRequest {
     OpenFile(PathBuf),
 }
 
+fn selected_browser_path(
+    file_manager: &NativeFileManagerState,
+    selected_idx: usize,
+) -> Option<PathBuf> {
+    let rows = browser_rows(file_manager);
+    let idx = selected_idx.min(rows.len().saturating_sub(1));
+    rows.get(idx).and_then(|row| row.path.clone())
+}
+
 /// Strip the file extension and replace underscores with spaces for display.
 fn prettify_file_label(name: &str) -> String {
     let without_ext = match name.rfind('.') {
@@ -84,9 +93,7 @@ pub fn activate_browser_selection(
     file_manager: &mut NativeFileManagerState,
     selected_idx: usize,
 ) -> TerminalDocumentBrowserRequest {
-    let rows = browser_rows(file_manager);
-    let idx = selected_idx.min(rows.len().saturating_sub(1));
-    let Some(path) = rows.get(idx).and_then(|row| row.path.clone()) else {
+    let Some(path) = selected_browser_path(file_manager, selected_idx) else {
         return TerminalDocumentBrowserRequest::None;
     };
     file_manager.select(Some(path));
@@ -95,6 +102,10 @@ pub fn activate_browser_selection(
         FileManagerAction::ChangedDir => TerminalDocumentBrowserRequest::ChangedDir,
         FileManagerAction::OpenFile(path) => TerminalDocumentBrowserRequest::OpenFile(path),
     }
+}
+
+pub fn sync_browser_selection(file_manager: &mut NativeFileManagerState, selected_idx: usize) {
+    file_manager.select(selected_browser_path(file_manager, selected_idx));
 }
 
 #[cfg(test)]
@@ -118,5 +129,33 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "../");
         assert!(rows[0].path.is_some());
+    }
+
+    #[test]
+    fn sync_browser_selection_tracks_highlighted_row() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("robcos_native_document_browser_sync_test_{unique}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let alpha = dir.join("alpha.txt");
+        let beta = dir.join("beta.txt");
+        fs::write(&alpha, "alpha").expect("write alpha");
+        fs::write(&beta, "beta").expect("write beta");
+
+        let mut state = NativeFileManagerState::new(dir.clone());
+        let rows = browser_rows(&state);
+        let beta_idx = rows
+            .iter()
+            .position(|row| row.path.as_ref() == Some(&beta))
+            .expect("beta row present");
+
+        sync_browser_selection(&mut state, beta_idx);
+
+        assert_eq!(state.selected, Some(beta));
+
+        fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 }

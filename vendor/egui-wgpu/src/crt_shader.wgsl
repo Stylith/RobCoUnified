@@ -8,6 +8,7 @@ struct CrtUniforms {
     params1: vec4<f32>, // vignette, noise, brightness, contrast
     params2: vec4<f32>, // screen_width, screen_height, phosphor_softness, flicker
     params3: vec4<f32>, // bloom, burn_in, jitter, glow_line
+    params4: vec4<f32>, // glow_line_speed, theme_r, theme_g, theme_b
 };
 
 struct FragmentOutput {
@@ -129,6 +130,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let burn_in = crt.params3.y;
     let jitter = crt.params3.z;
     let glow_line = crt.params3.w;
+    let glow_line_speed = max(crt.params4.x, 0.05);
+    let theme_tint = clamp(crt.params4.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
+    let phosphor_tint = max(theme_tint, vec3<f32>(0.001));
 
     let texel = vec2<f32>(1.0 / screen_width, 1.0 / screen_height);
     let curved_uv = apply_curvature(in.uv, curvature);
@@ -159,9 +163,10 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         vec2<f32>(floor(in.position.x * 0.75), floor(in.position.y * 0.75) + floor(time * 6.0)),
     );
     let screen_breath = 0.5 + 0.5 * sin(in.uv.y * 12.0 + time * 0.8);
-    var phosphor_bg = vec3<f32>(0.0, 0.018, 0.007) * (1.0 + burn_in * 0.5 + noise * 1.4);
-    phosphor_bg += vec3<f32>(0.0, 0.011, 0.004) * screen_breath * 0.45;
-    phosphor_bg += vec3<f32>(0.0, 0.008, 0.003) * max(screen_noise - 0.5, 0.0) * (0.5 + noise * 1.8);
+    var phosphor_bg = phosphor_tint * 0.018 * (1.0 + burn_in * 0.5 + noise * 1.4);
+    phosphor_bg += phosphor_tint * 0.011 * screen_breath * 0.45;
+    phosphor_bg +=
+        phosphor_tint * 0.008 * max(screen_noise - 0.5, 0.0) * (0.5 + noise * 1.8);
     color = max(color, phosphor_bg);
 
     let persistence = clamp(0.22 + burn_in * 0.7, 0.0, 0.95);
@@ -231,14 +236,16 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     if (glow_line > 0.0) {
-        let sweep_head = fract(time * 0.72);
-        let sweep_core_dist = wrapped_vertical_distance(in.uv.y, sweep_head);
+        let sweep_head = fract(time * glow_line_speed);
+        let sweep_y = curved_uv.y;
+        let sweep_core_dist = wrapped_vertical_distance(sweep_y, sweep_head);
         let sweep_core = exp(-pow(sweep_core_dist * (240.0 + glow_line * 240.0), 2.0));
-        let trail_dist = fract(sweep_head - in.uv.y + 1.0);
+        let trail_dist = fract(sweep_head - sweep_y + 1.0);
         let sweep_trail = exp(-trail_dist * (8.0 + glow_line * 14.0))
             * (1.0 - smoothstep(0.22, 0.94, trail_dist));
         let sweep = sweep_core * 1.0 + sweep_trail * 0.8;
-        let sweep_tint = vec3<f32>(0.03, 0.14, 0.05) + phosphor_bg * 8.0 + bright_pass(color) * 0.18;
+        let sweep_tint =
+            phosphor_tint * (0.12 + glow_line * 0.2) + phosphor_bg * 7.5 + bright_pass(color) * 0.18;
         color += sweep_tint * sweep * glow_line * 0.78;
     }
 

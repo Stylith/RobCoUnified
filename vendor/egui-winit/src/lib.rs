@@ -54,14 +54,60 @@ fn crt_pointer_curve_lock() -> &'static RwLock<Option<f32>> {
     CRT_POINTER_CURVE.get_or_init(|| RwLock::new(None))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppCursorMode {
+    System,
+    Software,
+    Hidden,
+}
+
+fn app_cursor_mode_lock() -> &'static RwLock<AppCursorMode> {
+    static APP_CURSOR_MODE: OnceLock<RwLock<AppCursorMode>> = OnceLock::new();
+    APP_CURSOR_MODE.get_or_init(|| RwLock::new(AppCursorMode::System))
+}
+
+fn app_cursor_icon_lock() -> &'static RwLock<Option<egui::CursorIcon>> {
+    static APP_CURSOR_ICON: OnceLock<RwLock<Option<egui::CursorIcon>>> = OnceLock::new();
+    APP_CURSOR_ICON.get_or_init(|| RwLock::new(None))
+}
+
 pub fn set_crt_pointer_curve(curvature: Option<f32>) {
     if let Ok(mut slot) = crt_pointer_curve_lock().write() {
         *slot = curvature.filter(|value| *value > 0.0);
     }
 }
 
+pub fn set_app_cursor_mode(mode: AppCursorMode) {
+    if let Ok(mut slot) = app_cursor_mode_lock().write() {
+        *slot = mode;
+    }
+}
+
+pub fn current_app_cursor_mode() -> AppCursorMode {
+    app_cursor_mode_lock()
+        .read()
+        .map(|slot| *slot)
+        .unwrap_or(AppCursorMode::System)
+}
+
+pub fn current_app_cursor_icon() -> Option<egui::CursorIcon> {
+    app_cursor_icon_lock().read().ok().and_then(|slot| *slot)
+}
+
 fn current_crt_pointer_curve() -> Option<f32> {
     crt_pointer_curve_lock().read().ok().and_then(|slot| *slot)
+}
+
+fn set_current_app_cursor_icon(cursor_icon: Option<egui::CursorIcon>) {
+    if let Ok(mut slot) = app_cursor_icon_lock().write() {
+        *slot = cursor_icon;
+    }
+}
+
+fn enforce_app_cursor_mode(window: &Window) {
+    if !matches!(current_app_cursor_mode(), AppCursorMode::System) {
+        window.set_cursor_visible(false);
+    }
 }
 
 fn apply_crt_pointer_curve(
@@ -125,6 +171,7 @@ pub struct State {
     pointer_pos_in_points: Option<egui::Pos2>,
     any_pointer_button_down: bool,
     current_cursor_icon: Option<egui::CursorIcon>,
+    current_app_cursor_mode: AppCursorMode,
 
     clipboard: clipboard::Clipboard,
 
@@ -174,6 +221,7 @@ impl State {
             pointer_pos_in_points: None,
             any_pointer_button_down: false,
             current_cursor_icon: None,
+            current_app_cursor_mode: current_app_cursor_mode(),
 
             clipboard: clipboard::Clipboard::new(
                 display_target.display_handle().ok().map(|h| h.as_raw()),
@@ -330,7 +378,7 @@ impl State {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                self.on_mouse_button_input(*state, *button);
+                self.on_mouse_button_input(window, *state, *button);
                 EventResponse {
                     repaint: true,
                     consumed: self.egui_ctx.wants_pointer_input(),
@@ -352,6 +400,8 @@ impl State {
             }
             WindowEvent::CursorLeft { .. } => {
                 self.pointer_pos_in_points = None;
+                self.current_cursor_icon = None;
+                set_current_app_cursor_icon(None);
                 self.egui_input.events.push(egui::Event::PointerGone);
                 EventResponse {
                     repaint: true,
@@ -584,9 +634,11 @@ impl State {
 
     fn on_mouse_button_input(
         &mut self,
+        window: &Window,
         state: winit::event::ElementState,
         button: winit::event::MouseButton,
     ) {
+        enforce_app_cursor_mode(window);
         if let Some(pos) = self.pointer_pos_in_points {
             if let Some(button) = translate_mouse_button(button) {
                 let pressed = state == winit::event::ElementState::Pressed;
@@ -632,6 +684,7 @@ impl State {
         window: &Window,
         pos_in_pixels: winit::dpi::PhysicalPosition<f64>,
     ) {
+        enforce_app_cursor_mode(window);
         let pixels_per_point = pixels_per_point(&self.egui_ctx, window);
         let raw_pos_in_points = egui::pos2(
             pos_in_pixels.x as f32 / pixels_per_point,
@@ -709,6 +762,7 @@ impl State {
                     // First move the pointer to the right location
                     self.on_cursor_moved(window, touch.location);
                     self.on_mouse_button_input(
+                        window,
                         winit::event::ElementState::Pressed,
                         winit::event::MouseButton::Left,
                     );
@@ -719,6 +773,7 @@ impl State {
                 winit::event::TouchPhase::Ended => {
                     self.pointer_touch_id = None;
                     self.on_mouse_button_input(
+                        window,
                         winit::event::ElementState::Released,
                         winit::event::MouseButton::Left,
                     );
@@ -936,25 +991,39 @@ impl State {
     }
 
     fn set_cursor_icon(&mut self, window: &Window, cursor_icon: egui::CursorIcon) {
-        if self.current_cursor_icon == Some(cursor_icon) {
+        let app_cursor_mode = current_app_cursor_mode();
+        if self.current_cursor_icon == Some(cursor_icon)
+            && self.current_app_cursor_mode == app_cursor_mode
+            && matches!(app_cursor_mode, AppCursorMode::System)
+        {
             // Prevent flickering near frame boundary when Windows OS tries to control cursor icon for window resizing.
             // On other platforms: just early-out to save CPU.
             return;
         }
+        self.current_app_cursor_mode = app_cursor_mode;
 
         let is_pointer_in_window = self.pointer_pos_in_points.is_some();
         if is_pointer_in_window {
             self.current_cursor_icon = Some(cursor_icon);
+            set_current_app_cursor_icon(Some(cursor_icon));
 
-            if let Some(winit_cursor_icon) = translate_cursor(cursor_icon) {
-                window.set_cursor_visible(true);
-                window.set_cursor(winit_cursor_icon);
-            } else {
-                window.set_cursor_visible(false);
+            match app_cursor_mode {
+                AppCursorMode::System => {
+                    if let Some(winit_cursor_icon) = translate_cursor(cursor_icon) {
+                        window.set_cursor_visible(true);
+                        window.set_cursor(winit_cursor_icon);
+                    } else {
+                        window.set_cursor_visible(false);
+                    }
+                }
+                AppCursorMode::Software | AppCursorMode::Hidden => {
+                    enforce_app_cursor_mode(window);
+                }
             }
         } else {
             // Remember to set the cursor again once the cursor returns to the screen:
             self.current_cursor_icon = None;
+            set_current_app_cursor_icon(None);
         }
     }
 }
@@ -1558,7 +1627,8 @@ fn process_viewport_command(
                 log::warn!("{command:?}: {err}");
             }
         }
-        ViewportCommand::CursorVisible(v) => window.set_cursor_visible(v),
+        ViewportCommand::CursorVisible(v) => window
+            .set_cursor_visible(v && matches!(current_app_cursor_mode(), AppCursorMode::System)),
         ViewportCommand::MousePassthrough(passthrough) => {
             if let Err(err) = window.set_cursor_hittest(!passthrough) {
                 log::warn!("{command:?}: {err}");

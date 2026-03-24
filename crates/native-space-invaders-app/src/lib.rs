@@ -5,10 +5,12 @@ use egui::{
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
 use std::{collections::HashMap, path::PathBuf};
 
-pub const BUILTIN_SPACE_INVADERS_GAME: &str = "Space Invaders";
+pub const BUILTIN_ZETA_INVADERS_GAME: &str = "Zeta Invaders";
 
 const WORLD_W: f32 = 224.0;
 const WORLD_H: f32 = 256.0;
+const ZETA_STAGE_W: f32 = 826.0;
+const ZETA_STAGE_H: f32 = 700.0;
 const SWARM_MARGIN: f32 = 16.0;
 const PLAYER_SIZE: Vec2 = Vec2::new(14.0, 12.0);
 const ALIEN_SIZE: Vec2 = Vec2::new(12.0, 10.0);
@@ -16,15 +18,18 @@ const UFO_SIZE: Vec2 = Vec2::new(14.0, 8.0);
 const BULLET_HITBOX_SIZE: Vec2 = Vec2::new(2.0, 6.0);
 const PLAYER_BULLET_DRAW_SIZE: Vec2 = Vec2::new(0.9, 7.5);
 const ALIEN_BULLET_DRAW_SIZE: Vec2 = Vec2::new(1.2, 7.5);
-const BARRIER_CELL_SIZE: Vec2 = Vec2::new(4.0, 4.0);
-const BARRIER_COLS: usize = 6;
-const BARRIER_ROWS: usize = 4;
+const BARN_PIECE_SIZE: Vec2 = Vec2::new(12.0 * WORLD_W / ZETA_STAGE_W, 12.0 * WORLD_H / ZETA_STAGE_H);
+const BARN_COLS: usize = 6;
+const BARN_ROWS: usize = 3;
 const PLAYER_Y: f32 = 226.0;
-const BARRIER_Y: f32 = 184.0;
+const BARN_Y: f32 = 540.0 * WORLD_H / ZETA_STAGE_H;
 const PLAYER_SPEED: f32 = 110.0;
 const PLAYER_BULLET_SPEED: f32 = 210.0;
-const ALIEN_BULLET_SPEED: f32 = 105.0;
+const ALIEN_SLOW_BULLET_SPEED: f32 = PLAYER_BULLET_SPEED * (260.0 / 420.0);
+const ALIEN_FAST_BULLET_SPEED: f32 = PLAYER_BULLET_SPEED * (345.0 / 420.0);
+const ALIEN_SLOW_BULLET_CHANCE: f64 = 0.7;
 const UFO_SPEED: f32 = 48.0;
+const UFO_SCORE: u32 = 400;
 const ALIEN_STEP_X: f32 = 3.0;
 const ALIEN_STEP_DOWN: f32 = 4.0;
 const ALIEN_SPACING_X: f32 = 16.0;
@@ -115,14 +120,17 @@ pub struct GameInput {
     pub pause: bool,
 }
 
+#[derive(Clone)]
 pub struct SpaceInvadersGame {
     config: SpaceInvadersConfig,
     theme: Theme,
     rng: SmallRng,
     fire_held: bool,
+    high_score: u32,
     state: GameState,
 }
 
+#[derive(Clone)]
 pub struct AtlasTextures {
     textures: HashMap<FrameId, TextureHandle>,
     catalog: SpriteCatalog,
@@ -159,6 +167,24 @@ enum FrameId {
     BarrierDamage2,
     BarrierDamage3,
     BarrierChunk,
+    BarnPiece00,
+    BarnPiece01,
+    BarnPiece02,
+    BarnPiece03,
+    BarnPiece04,
+    BarnPiece05,
+    BarnPiece06,
+    BarnPiece07,
+    BarnPiece08,
+    BarnPiece09,
+    BarnPiece10,
+    BarnPiece11,
+    BarnPiece12,
+    BarnPiece13,
+    BarnPiece14,
+    BarnPiece15,
+    BarnPiece16,
+    BarnPiece17,
     UfoIdle,
     UfoFlash,
     UfoExplosion,
@@ -242,6 +268,14 @@ struct Bullet {
     prev_pos: Vec2,
     vel: Vec2,
     age: f32,
+    kind: BulletKind,
+}
+
+#[derive(Clone, Copy)]
+enum BulletKind {
+    Player,
+    AlienSlow,
+    AlienFast,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -269,9 +303,9 @@ struct AlienFormation {
 }
 
 #[derive(Clone)]
-struct Barrier {
+struct Barn {
     origin: Vec2,
-    cells: [u8; BARRIER_ROWS * BARRIER_COLS],
+    pieces_alive: [bool; BARN_ROWS * BARN_COLS],
 }
 
 #[derive(Clone, Copy)]
@@ -309,12 +343,13 @@ struct PlayerExplosion {
     duration: f32,
 }
 
+#[derive(Clone)]
 struct GameState {
     player: Player,
     player_bullet: Option<Bullet>,
     alien_bullets: Vec<Bullet>,
     formation: AlienFormation,
-    barriers: Vec<Barrier>,
+    barns: Vec<Barn>,
     effects: Vec<Effect>,
     ufo: Option<Ufo>,
     player_explosion: Option<PlayerExplosion>,
@@ -336,6 +371,7 @@ impl SpaceInvadersGame {
             theme,
             rng: SmallRng::from_entropy(),
             fire_held: false,
+            high_score: 0,
             state: GameState::new(),
         }
     }
@@ -370,6 +406,10 @@ impl SpaceInvadersGame {
 
     pub fn wave(&self) -> u32 {
         self.state.wave
+    }
+
+    pub fn high_score(&self) -> u32 {
+        self.high_score
     }
 
     pub fn update(&mut self, input: &GameInput, dt: f32) {
@@ -471,7 +511,7 @@ impl SpaceInvadersGame {
         painter.rect_stroke(world, 0.0, Stroke::new(2.0, self.theme.neutral));
 
         self.draw_hud(&painter, world, atlas);
-        self.draw_barriers(&painter, world, atlas);
+        self.draw_barns(&painter, world, atlas);
         self.draw_ufo(&painter, world, atlas);
         self.draw_aliens(&painter, world, atlas);
         self.draw_player_bullet(&painter, world, atlas);
@@ -511,10 +551,16 @@ impl SpaceInvadersGame {
                 prev_pos: bullet_pos,
                 vel: vec2(0.0, -PLAYER_BULLET_SPEED),
                 age: 0.0,
+                kind: BulletKind::Player,
             });
             self.state.player.flash_timer = PLAYER_FLASH_SECS;
             self.state.player.reload_timer = PLAYER_RELOAD_SECS;
         }
+    }
+
+    fn add_score(&mut self, points: u32) {
+        self.state.score = self.state.score.saturating_add(points);
+        self.high_score = self.high_score.max(self.state.score);
     }
 
     fn update_swarm(&mut self, dt: f32) {
@@ -558,12 +604,25 @@ impl SpaceInvadersGame {
         let Some(origin) = self.random_bottom_shooter_pos() else {
             return;
         };
+        let bullet_kind = if self.rng.gen_bool(ALIEN_SLOW_BULLET_CHANCE) {
+            BulletKind::AlienSlow
+        } else {
+            BulletKind::AlienFast
+        };
         let bullet_pos = origin + vec2(0.0, ALIEN_SIZE.y * 0.45);
         self.state.alien_bullets.push(Bullet {
             pos: bullet_pos,
             prev_pos: bullet_pos,
-            vel: vec2(0.0, ALIEN_BULLET_SPEED + self.state.wave as f32 * 6.0),
+            vel: vec2(
+                0.0,
+                match bullet_kind {
+                    BulletKind::AlienSlow => ALIEN_SLOW_BULLET_SPEED,
+                    BulletKind::AlienFast => ALIEN_FAST_BULLET_SPEED,
+                    BulletKind::Player => PLAYER_BULLET_SPEED,
+                } + self.state.wave as f32 * 6.0,
+            ),
             age: 0.0,
+            kind: bullet_kind,
         });
         self.state.alien_shot_timer = self.alien_shot_interval();
     }
@@ -601,7 +660,7 @@ impl SpaceInvadersGame {
                     self.state.ufo = Some(Ufo {
                         pos: vec2(start_x, 24.0),
                         direction,
-                        score_value: *[50, 100, 150, 300].choose(&mut self.rng).unwrap_or(&100),
+                        score_value: UFO_SCORE,
                         state: UfoState::Flying,
                     });
                 }
@@ -668,7 +727,7 @@ impl SpaceInvadersGame {
             return;
         }
 
-        if self.hit_barrier(bullet_rect, true) {
+        if self.hit_barn(bullet_rect, true) {
             self.state.player_bullet = None;
         }
     }
@@ -682,7 +741,7 @@ impl SpaceInvadersGame {
         for bullet in bullets {
             let bullet_rect = swept_rect(bullet.prev_pos, bullet.pos, BULLET_HITBOX_SIZE);
 
-            if self.hit_barrier(bullet_rect, false) {
+            if self.hit_barn(bullet_rect, false) {
                 continue;
             }
 
@@ -710,9 +769,10 @@ impl SpaceInvadersGame {
             return false;
         }
 
-        self.state.score = self.state.score.saturating_add(ufo.score_value);
+        let score_value = ufo.score_value;
         let explosion_pos = ufo.pos;
         ufo.state = UfoState::Exploding { timer: 0.45 };
+        self.add_score(score_value);
         self.spawn_effect(explosion_pos, EffectKind::Spark);
         true
     }
@@ -730,41 +790,20 @@ impl SpaceInvadersGame {
         let alien = &mut self.state.formation.aliens[index];
         alien.alive = false;
         let alien_pos = alien_world_pos(*alien, formation_offset);
-        self.state.score = self
-            .state
-            .score
-            .saturating_add(alien_kind_score(alien.kind));
+        let score_value = alien_kind_score(alien.kind);
+        self.add_score(score_value);
         self.spawn_effect(alien_pos, EffectKind::ExplosionSmall);
         true
     }
 
-    fn hit_barrier(&mut self, bullet_rect: Rect, from_below: bool) -> bool {
-        for barrier in &mut self.state.barriers {
-            let mut indices: Vec<usize> = (0..barrier.cells.len()).collect();
-            indices.sort_by_key(|idx| {
-                let row = idx / BARRIER_COLS;
-                if from_below {
-                    usize::MAX - row
-                } else {
-                    row
-                }
-            });
-
-            for idx in indices {
-                if barrier.cells[idx] == 0 {
-                    continue;
-                }
-                let cell_rect = barrier.cell_rect(idx);
-                if !cell_rect.intersects(bullet_rect) {
-                    continue;
-                }
-                barrier.cells[idx] = barrier.cells[idx].saturating_sub(1);
-                if barrier.cells[idx] == 0 {
-                    let center = cell_rect.center().to_vec2();
-                    self.spawn_effect(center, EffectKind::Spark);
-                }
-                return true;
-            }
+    fn hit_barn(&mut self, bullet_rect: Rect, from_below: bool) -> bool {
+        for barn in &mut self.state.barns {
+            let Some(idx) = barn.destroy_piece_from_hit(bullet_rect, from_below) else {
+                continue;
+            };
+            let center = barn.piece_rect(idx).center().to_vec2();
+            self.spawn_effect(center, EffectKind::Spark);
+            return true;
         }
         false
     }
@@ -894,7 +933,7 @@ impl SpaceInvadersGame {
         self.state.phase = GamePhase::Ready;
         self.state.phase_timer = READY_SECS;
         self.state.formation = build_formation();
-        self.state.barriers = build_barriers();
+        self.state.barns = build_barns();
         self.state.player.pos = player_spawn_pos();
         self.state.player.visual_dir = 0;
         self.state.player.flash_timer = 0.0;
@@ -915,14 +954,22 @@ impl SpaceInvadersGame {
             self.theme.ui,
         );
 
-        let wave_icon = world_icon_rect(world, vec2(WORLD_W * 0.5, 10.0));
+        painter.text(
+            world_point(world, vec2(WORLD_W * 0.5, 10.0)),
+            Align2::CENTER_CENTER,
+            format!("HI {:05}", self.high_score),
+            FontId::new(14.0, FontFamily::Monospace),
+            self.theme.ui,
+        );
+
+        let wave_icon = world_icon_rect(world, vec2(WORLD_W * 0.5 - 14.0, 24.0));
         atlas.paint_frame(painter, wave_icon, FrameId::WaveIcon, self.theme, false);
         painter.text(
             wave_icon.right_center() + vec2(8.0, 0.0),
             Align2::LEFT_CENTER,
             format!("W{:02}", self.state.wave),
-            FontId::new(14.0, FontFamily::Monospace),
-            self.theme.ui,
+            FontId::new(12.0, FontFamily::Monospace),
+            self.theme.neutral,
         );
 
         let mut life_x = WORLD_W - 16.0;
@@ -933,17 +980,16 @@ impl SpaceInvadersGame {
         }
     }
 
-    fn draw_barriers(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
-        for barrier in &self.state.barriers {
-            for idx in 0..barrier.cells.len() {
-                let hp = barrier.cells[idx];
-                if hp == 0 {
+    fn draw_barns(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
+        for barn in &self.state.barns {
+            for idx in 0..barn.pieces_alive.len() {
+                if !barn.pieces_alive[idx] {
                     continue;
                 }
-                let cell_rect = barrier.cell_rect(idx);
-                let world_rect = world_rect_from_game_rect(world, cell_rect);
-                let frame = barrier_frame_for_cell(barrier, idx, hp);
-                atlas.paint_frame(painter, world_rect, frame, self.theme, false);
+                let piece_rect = barn.piece_rect(idx);
+                let world_rect = world_rect_from_game_rect(world, piece_rect);
+                let (frame, flip_x) = barn_piece_visual(idx);
+                atlas.paint_frame(painter, world_rect, frame, self.theme, flip_x);
             }
         }
     }
@@ -1021,7 +1067,12 @@ impl SpaceInvadersGame {
 
     fn draw_alien_bullets(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
         for bullet in &self.state.alien_bullets {
-            let frame = atlas.animation_frame_for_tick(AnimationId::AlienBullet, bullet.age * 60.0);
+            let anim_ticks = match bullet.kind {
+                BulletKind::AlienSlow => bullet.age * 42.0,
+                BulletKind::AlienFast => bullet.age * 72.0,
+                BulletKind::Player => bullet.age * 60.0,
+            };
+            let frame = atlas.animation_frame_for_tick(AnimationId::AlienBullet, anim_ticks);
             atlas.paint_frame(
                 painter,
                 world_rect_from_entity(world, bullet.pos, ALIEN_BULLET_DRAW_SIZE),
@@ -1343,6 +1394,132 @@ impl AtlasTextures {
             TintRole::Barrier,
             "barrier_chunk.png"
         );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece00,
+            TintRole::Barrier,
+            "barn_piece_00.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece01,
+            TintRole::Barrier,
+            "barn_piece_01.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece02,
+            TintRole::Barrier,
+            "barn_piece_02.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece03,
+            TintRole::Barrier,
+            "barn_piece_03.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece04,
+            TintRole::Barrier,
+            "barn_piece_04.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece05,
+            TintRole::Barrier,
+            "barn_piece_05.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece06,
+            TintRole::Barrier,
+            "barn_piece_06.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece07,
+            TintRole::Barrier,
+            "barn_piece_07.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece08,
+            TintRole::Barrier,
+            "barn_piece_08.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece09,
+            TintRole::Barrier,
+            "barn_piece_09.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece10,
+            TintRole::Barrier,
+            "barn_piece_10.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece11,
+            TintRole::Barrier,
+            "barn_piece_11.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece12,
+            TintRole::Barrier,
+            "barn_piece_12.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece13,
+            TintRole::Barrier,
+            "barn_piece_13.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece14,
+            TintRole::Barrier,
+            "barn_piece_14.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece15,
+            TintRole::Barrier,
+            "barn_piece_15.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece16,
+            TintRole::Barrier,
+            "barn_piece_16.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
+        atlas.load_frame(
+            ctx,
+            FrameId::BarnPiece17,
+            TintRole::Barrier,
+            "barn_piece_17.png",
+            include_bytes!("../assets/png/barrier_full.png"),
+        );
         load_frame_asset!(
             atlas,
             ctx,
@@ -1588,7 +1765,7 @@ impl GameState {
             player_bullet: None,
             alien_bullets: Vec::new(),
             formation: build_formation(),
-            barriers: build_barriers(),
+            barns: build_barns(),
             effects: Vec::new(),
             ufo: None,
             player_explosion: None,
@@ -1604,41 +1781,62 @@ impl GameState {
     }
 }
 
-impl Barrier {
-    fn cell_rect(&self, idx: usize) -> Rect {
-        let row = idx / BARRIER_COLS;
-        let col = idx % BARRIER_COLS;
+impl Barn {
+    fn piece_rect(&self, idx: usize) -> Rect {
+        let row = idx / BARN_COLS;
+        let col = idx % BARN_COLS;
+        const COLUMN_X_OFFSETS: [f32; BARN_COLS] = [
+            0.0 * WORLD_W / ZETA_STAGE_W,
+            12.0 * WORLD_W / ZETA_STAGE_W,
+            24.0 * WORLD_W / ZETA_STAGE_W,
+            60.0 * WORLD_W / ZETA_STAGE_W,
+            48.0 * WORLD_W / ZETA_STAGE_W,
+            36.0 * WORLD_W / ZETA_STAGE_W,
+        ];
+        const ROW_Y_OFFSETS: [f32; BARN_ROWS] = [
+            0.0 * WORLD_H / ZETA_STAGE_H,
+            12.0 * WORLD_H / ZETA_STAGE_H,
+            24.0 * WORLD_H / ZETA_STAGE_H,
+        ];
         Rect::from_min_size(
             pos2(
-                self.origin.x + col as f32 * BARRIER_CELL_SIZE.x,
-                self.origin.y + row as f32 * BARRIER_CELL_SIZE.y,
+                self.origin.x + COLUMN_X_OFFSETS[col],
+                self.origin.y + ROW_Y_OFFSETS[row],
             ),
-            BARRIER_CELL_SIZE,
+            BARN_PIECE_SIZE,
         )
     }
 
-    fn neighbor_count(&self, idx: usize) -> usize {
-        let row = idx / BARRIER_COLS;
-        let col = idx % BARRIER_COLS;
-        let mut count = 0usize;
-
-        for dy in [-1isize, 0, 1] {
-            for dx in [-1isize, 0, 1] {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-                let nr = row as isize + dy;
-                let nc = col as isize + dx;
-                if nr < 0 || nc < 0 || nr >= BARRIER_ROWS as isize || nc >= BARRIER_COLS as isize {
-                    continue;
-                }
-                let nidx = nr as usize * BARRIER_COLS + nc as usize;
-                if self.cells[nidx] > 0 {
-                    count += 1;
-                }
-            }
+    fn destroy_piece_from_hit(&mut self, bullet_rect: Rect, from_below: bool) -> Option<usize> {
+        let bullet_center_x = bullet_rect.center().x;
+        let mut hits: Vec<usize> = (0..self.pieces_alive.len())
+            .filter(|&idx| self.pieces_alive[idx] && self.piece_rect(idx).intersects(bullet_rect))
+            .collect();
+        if hits.is_empty() {
+            return None;
         }
-        count
+
+        hits.sort_by(|a, b| {
+            let row_a = a / BARN_COLS;
+            let row_b = b / BARN_COLS;
+            let row_order = if from_below {
+                row_b.cmp(&row_a)
+            } else {
+                row_a.cmp(&row_b)
+            };
+            row_order.then_with(|| {
+                let ax = self.piece_rect(*a).center().x;
+                let bx = self.piece_rect(*b).center().x;
+                (ax - bullet_center_x)
+                    .abs()
+                    .partial_cmp(&(bx - bullet_center_x).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+
+        let idx = hits[0];
+        self.pieces_alive[idx] = false;
+        Some(idx)
     }
 }
 
@@ -1682,18 +1880,15 @@ fn build_formation() -> AlienFormation {
     }
 }
 
-fn build_barriers() -> Vec<Barrier> {
-    let template: [u8; BARRIER_ROWS * BARRIER_COLS] = [
-        0, 4, 4, 4, 4, 0, //
-        4, 4, 4, 4, 4, 4, //
-        4, 4, 0, 0, 4, 4, //
-        4, 0, 0, 0, 0, 4,
-    ];
-    [18.0, 68.0, 118.0, 168.0]
-        .into_iter()
-        .map(|x| Barrier {
-            origin: vec2(x, BARRIER_Y),
-            cells: template,
+fn build_barns() -> Vec<Barn> {
+    let start_x = 100.0 * WORLD_W / ZETA_STAGE_W;
+    let barn_width = 72.0 * WORLD_W / ZETA_STAGE_W;
+    let end_x = (ZETA_STAGE_W - 100.0) * WORLD_W / ZETA_STAGE_W - barn_width;
+    let step_x = (end_x - start_x) / 3.0;
+    (0..4)
+        .map(|i| Barn {
+            origin: vec2(start_x + step_x * i as f32, BARN_Y),
+            pieces_alive: [true; BARN_ROWS * BARN_COLS],
         })
         .collect()
 }
@@ -1734,15 +1929,40 @@ fn alien_kind_score(kind: AlienKind) -> u32 {
     }
 }
 
-fn barrier_frame_for_cell(barrier: &Barrier, idx: usize, hp: u8) -> FrameId {
-    if barrier.neighbor_count(idx) <= 1 {
-        return FrameId::BarrierChunk;
+fn barn_piece_frame(idx: usize) -> FrameId {
+    match idx {
+        0 => FrameId::BarnPiece00,
+        1 => FrameId::BarnPiece01,
+        2 => FrameId::BarnPiece02,
+        3 => FrameId::BarnPiece03,
+        4 => FrameId::BarnPiece04,
+        5 => FrameId::BarnPiece05,
+        6 => FrameId::BarnPiece06,
+        7 => FrameId::BarnPiece07,
+        8 => FrameId::BarnPiece08,
+        9 => FrameId::BarnPiece09,
+        10 => FrameId::BarnPiece10,
+        11 => FrameId::BarnPiece11,
+        12 => FrameId::BarnPiece12,
+        13 => FrameId::BarnPiece13,
+        14 => FrameId::BarnPiece14,
+        15 => FrameId::BarnPiece15,
+        16 => FrameId::BarnPiece16,
+        _ => FrameId::BarnPiece17,
     }
-    match hp {
-        4 => FrameId::BarrierFull,
-        3 => FrameId::BarrierDamage1,
-        2 => FrameId::BarrierDamage2,
-        _ => FrameId::BarrierDamage3,
+}
+
+fn barn_piece_visual(idx: usize) -> (FrameId, bool) {
+    let row = idx / BARN_COLS;
+    let col = idx % BARN_COLS;
+    if col < BARN_COLS / 2 {
+        (barn_piece_frame(row + col * BARN_ROWS), false)
+    } else {
+        // The right half is positioned outer-to-inner in piece_rect(),
+        // so its art mapping must follow columns 0,1,2 again rather than
+        // reversing 2,1,0.
+        let mirrored_col = col - (BARN_COLS / 2);
+        (barn_piece_frame(row + mirrored_col * BARN_ROWS), true)
     }
 }
 
@@ -1891,17 +2111,44 @@ mod tests {
     }
 
     #[test]
-    fn barrier_cells_take_damage_and_disappear() {
-        let mut barrier = build_barriers().remove(0);
-        let idx = 1;
-        assert_eq!(barrier.cells[idx], 4);
-        barrier.cells[idx] = barrier.cells[idx].saturating_sub(1);
-        assert_eq!(
-            barrier_frame_for_cell(&barrier, idx, barrier.cells[idx]),
-            FrameId::BarrierDamage1
-        );
-        barrier.cells[idx] = 0;
-        assert_eq!(barrier.cells[idx], 0);
+    fn barns_destroy_bottom_piece_for_player_fire() {
+        let mut barn = build_barns().remove(0);
+        let bottom_piece = BARN_COLS * (BARN_ROWS - 1) + 2;
+        let top_piece = 2;
+        let hit_rect = barn.piece_rect(bottom_piece);
+
+        let destroyed = barn.destroy_piece_from_hit(hit_rect, true);
+
+        assert_eq!(destroyed, Some(bottom_piece));
+        assert!(!barn.pieces_alive[bottom_piece]);
+        assert!(barn.pieces_alive[top_piece]);
+    }
+
+    #[test]
+    fn barns_destroy_top_piece_for_alien_fire() {
+        let mut barn = build_barns().remove(0);
+        let top_piece = 3;
+        let bottom_piece = BARN_COLS * (BARN_ROWS - 1) + 3;
+        let hit_rect = barn.piece_rect(top_piece);
+
+        let destroyed = barn.destroy_piece_from_hit(hit_rect, false);
+
+        assert_eq!(destroyed, Some(top_piece));
+        assert!(!barn.pieces_alive[top_piece]);
+        assert!(barn.pieces_alive[bottom_piece]);
+    }
+
+    #[test]
+    fn high_score_persists_across_game_reset() {
+        let mut game = SpaceInvadersGame::new(SpaceInvadersConfig::default());
+        game.add_score(400);
+        assert_eq!(game.score(), 400);
+        assert_eq!(game.high_score(), 400);
+
+        game.reset();
+
+        assert_eq!(game.score(), 0);
+        assert_eq!(game.high_score(), 400);
     }
 
     #[test]

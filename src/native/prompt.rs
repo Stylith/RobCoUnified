@@ -111,6 +111,7 @@ pub enum TerminalPromptAction {
         target: EditMenuTarget,
         name: String,
     },
+    EditorSaveAsPath,
     NewLogName,
     Noop,
 }

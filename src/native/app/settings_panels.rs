@@ -151,6 +151,12 @@ impl RobcoNativeApp {
                             .changed();
                         tuning_changed |= ui
                             .add(
+                                egui::Slider::new(&mut effects.glow_line_speed, 0.2..=2.0)
+                                    .text("Glow Line Speed"),
+                            )
+                            .changed();
+                        tuning_changed |= ui
+                            .add(
                                 egui::Slider::new(&mut effects.phosphor_softness, 0.0..=1.0)
                                     .text("Phosphor Softness"),
                             )

@@ -1,5 +1,5 @@
 [package]
-name = "robcos-native-space-invaders-app"
+name = "robcos-native-zeta-invaders-app"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
@@ -9,7 +9,7 @@ publish = false
 path = "src/lib.rs"
 
 [[bin]]
-name = "robcos-space-invaders"
+name = "robcos-zeta-invaders"
 path = "src/main.rs"
 
 [dependencies]

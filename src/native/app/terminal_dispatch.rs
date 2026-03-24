@@ -200,6 +200,9 @@ impl RobcoNativeApp {
                 self.terminal_nav.network_idx = plan.selected_idx
             }
             TerminalSelectionIndexTarget::Games => self.terminal_nav.games_idx = plan.selected_idx,
+            TerminalSelectionIndexTarget::GamesRobcoFun => {
+                self.terminal_nav.robco_fun_games_idx = plan.selected_idx
+            }
             TerminalSelectionIndexTarget::ProgramInstallerRoot => {
                 self.terminal_installer.root_idx = plan.selected_idx;
             }
@@ -248,6 +251,7 @@ impl RobcoNativeApp {
                 .map(|pty| pty.return_screen)
                 .unwrap_or(TerminalScreen::MainMenu),
             nuke_codes_return_screen: self.terminal_nav.nuke_codes_return_screen,
+            game_return_screen: self.terminal_nav.game_return_screen,
             browser_return_screen: self.terminal_nav.browser_return_screen,
         });
         match action {
@@ -489,6 +493,10 @@ impl RobcoNativeApp {
             PromptOutcome::NewLogName(name) => {
                 self.terminal_prompt = None;
                 self.create_or_open_log(&name);
+            }
+            PromptOutcome::EditorSaveAsPath(path) => {
+                self.terminal_prompt = None;
+                self.save_editor_from_prompt_path(&path);
             }
             PromptOutcome::Noop => {
                 self.terminal_prompt = None;

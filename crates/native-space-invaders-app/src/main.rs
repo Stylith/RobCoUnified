@@ -3,13 +3,13 @@ use eframe::{
     egui::{self, Color32, Context, Frame, IconData, ViewportBuilder},
     App,
 };
-use robcos_native_space_invaders_app::{
+use robcos_native_zeta_invaders_app::{
     input_from_ctx, AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame,
 };
 use std::time::Instant;
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
-const APP_TITLE: &str = "Space Invaders";
+const APP_TITLE: &str = "Zeta Invaders";
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [820.0, 920.0];
 const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 560.0];
 

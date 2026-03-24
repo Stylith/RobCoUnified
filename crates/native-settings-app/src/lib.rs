@@ -118,6 +118,7 @@ enum SettingsRowId {
     CrtJitter,
     CrtBurnIn,
     CrtGlowLine,
+    CrtGlowLineSpeed,
     CrtPhosphorSoftness,
     CrtBrightness,
     CrtContrast,
@@ -412,6 +413,7 @@ pub fn handle_settings_activation(
         | SettingsRowId::CrtJitter
         | SettingsRowId::CrtBurnIn
         | SettingsRowId::CrtGlowLine
+        | SettingsRowId::CrtGlowLineSpeed
         | SettingsRowId::CrtPhosphorSoftness
         | SettingsRowId::CrtBrightness
         | SettingsRowId::CrtContrast => TerminalSettingsEvent::None,
@@ -647,6 +649,14 @@ pub fn adjust_settings_slider(
             0.05,
             &mut draft.display_effects.preset,
         ),
+        SettingsRowId::CrtGlowLineSpeed => adjust_crt_value(
+            &mut draft.display_effects.glow_line_speed,
+            delta,
+            0.2,
+            2.0,
+            0.05,
+            &mut draft.display_effects.preset,
+        ),
         SettingsRowId::CrtPhosphorSoftness => adjust_crt_value(
             &mut draft.display_effects.phosphor_softness,
             delta,
@@ -783,7 +793,7 @@ fn terminal_settings_rows_with_ids(
             ));
             rows.push((
                 format!(
-                    "Native UI Highlighting: {} [toggle]",
+                    "Extended Highlighting: {} [toggle]",
                     if draft.native_terminal_ui_highlighting {
                         "On"
                     } else {
@@ -868,6 +878,13 @@ fn terminal_settings_rows_with_ids(
                             draft.display_effects.glow_line
                         ),
                         SettingsRowId::CrtGlowLine,
+                    ),
+                    (
+                        format!(
+                            "CRT Glow Line Speed: {:.2} [adjust]",
+                            draft.display_effects.glow_line_speed
+                        ),
+                        SettingsRowId::CrtGlowLineSpeed,
                     ),
                     (
                         format!(
@@ -1222,6 +1239,9 @@ mod tests {
         assert!(rows
             .iter()
             .any(|(_, id)| matches!(id, SettingsRowId::CrtGlowLine)));
+        assert!(rows
+            .iter()
+            .any(|(_, id)| matches!(id, SettingsRowId::CrtGlowLineSpeed)));
         assert!(rows
             .iter()
             .any(|(_, id)| matches!(id, SettingsRowId::CrtContrast)));

@@ -27,12 +27,14 @@ use crate::config::{
     WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use eframe::egui::{self, Context, Id, Key, Layout, RichText, TextEdit};
+use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
 use robcos_native_settings_app::{
     desktop_settings_back_target, desktop_settings_connections_nav_items,
     desktop_settings_user_management_nav_items, settings_panel_title, NativeSettingsPanel,
     SettingsHomeTileAction,
 };
+use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
 use std::path::PathBuf;
 
 impl RobcoNativeApp {
@@ -180,6 +182,9 @@ impl RobcoNativeApp {
         }
         // If the file manager was closed while in a pick mode, cancel the pick.
         if !open {
+            if self.editor.should_close_after_save() {
+                self.editor.prompt_close_confirmation();
+            }
             self.editor.save_as_input = None;
             self.picking_icon_for_shortcut = None;
             self.picking_wallpaper = false;
@@ -478,6 +483,49 @@ impl RobcoNativeApp {
             DesktopWindowRectTracking::FullRect,
             header_action,
         );
+        if self.editor.close_confirmation_visible() {
+            let palette = current_palette();
+            let mut action: Option<&'static str> = None;
+            egui::Window::new("editor_close_confirm")
+                .id(Id::new(("editor_close_confirm", wid.instance, generation)))
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size(egui::vec2(360.0, 132.0))
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .frame(Self::desktop_window_frame())
+                .show(ctx, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Are you sure you want to quit?")
+                            .strong()
+                            .color(palette.fg),
+                    );
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            action = Some("save");
+                        }
+                        if ui.button("Cancel").clicked() {
+                            action = Some("cancel");
+                        }
+                        if ui.button("Quit").clicked() {
+                            action = Some("quit");
+                        }
+                    });
+                });
+
+            match action {
+                Some("save") => self.confirm_editor_close_save(),
+                Some("cancel") => self.editor.cancel_close_confirmation(),
+                Some("quit") => {
+                    self.editor.cancel_close_confirmation();
+                    self.close_current_editor_window_unchecked();
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(super) fn draw_settings(&mut self, ctx: &Context) {
@@ -741,7 +789,9 @@ impl RobcoNativeApp {
                                                     changed = true;
                                                 }
                                                 if ui.button("Browse…").clicked() {
-                                                    let start = wallpaper_browser_start_dir();
+                                                    let start = wallpaper_browser_start_dir(
+                                                        &self.settings.draft.desktop_wallpaper,
+                                                    );
                                                     self.picking_wallpaper = true;
                                                     self.open_embedded_file_manager_at(start);
                                                 }
@@ -999,6 +1049,26 @@ impl RobcoNativeApp {
                                             {
                                                 changed = true;
                                             }
+                                            if self.settings.draft.desktop_show_cursor {
+                                                ui.add_space(6.0);
+                                                ui.scope(|ui| {
+                                                    ui.visuals_mut().selection.bg_fill = palette.fg;
+                                                    ui.visuals_mut().widgets.inactive.bg_fill =
+                                                        palette.dim;
+                                                    changed |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut self
+                                                                    .settings
+                                                                    .draft
+                                                                    .desktop_cursor_scale,
+                                                                0.5..=2.5,
+                                                            )
+                                                            .text("Cursor Size"),
+                                                        )
+                                                        .changed();
+                                                });
+                                            }
                                         });
                                     }
                                     // ── Terminal ───────────────────────────────────────────────
@@ -1070,16 +1140,6 @@ impl RobcoNativeApp {
                                                         CliAcsMode::Ascii => CliAcsMode::Unicode,
                                                         CliAcsMode::Unicode => CliAcsMode::Ascii,
                                                     };
-                                                changed = true;
-                                            }
-                                            ui.add_space(8.0);
-                                            if Self::retro_checkbox_row(
-                                                ui,
-                                                &mut self.settings.draft.native_terminal_ui_highlighting,
-                                                "Native UI Highlighting",
-                                            )
-                                            .clicked()
-                                            {
                                                 changed = true;
                                             }
                                         });
@@ -1390,6 +1450,123 @@ impl RobcoNativeApp {
         self.finish_desktop_window_host(
             ctx,
             DesktopWindow::NukeCodes,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
+    }
+
+    pub(super) fn draw_zeta_invaders_window(&mut self, ctx: &Context) {
+        if !self.zeta_invaders.open || self.desktop_window_is_minimized(DesktopWindow::ZetaInvaders)
+        {
+            return;
+        }
+        let input_enabled = self.active_window_kind() == Some(DesktopWindow::ZetaInvaders)
+            && !self.start_open
+            && !self.spotlight_open
+            && self.terminal_prompt.is_none();
+        let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
+        let input = if input_enabled {
+            zeta_invaders_input_from_ctx(ctx)
+        } else {
+            Default::default()
+        };
+        self.zeta_invaders.game.update(&input, dt);
+        if self.zeta_invaders.atlas.is_none() {
+            self.zeta_invaders.atlas = Some(robcos_native_zeta_invaders_app::AtlasTextures::new(
+                ctx,
+            ));
+        }
+
+        let mut open = self.zeta_invaders.open;
+        let mut header_action = DesktopHeaderAction::None;
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::ZetaInvaders,
+            "Zeta Invaders",
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(480.0, 360.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::ZetaInvaders),
+                default_pos: None,
+                clamp_restore: true,
+            },
+        );
+        let shown = window.show(ctx, |ui| {
+            Self::apply_settings_control_style(ui);
+            header_action = Self::draw_desktop_window_header(ui, "Zeta Invaders", maximized);
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            let atlas = self
+                .zeta_invaders
+                .atlas
+                .as_ref()
+                .expect("zeta invaders atlas should be loaded");
+            self.zeta_invaders.game.draw(ui, atlas);
+        });
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::ZetaInvaders,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
+    }
+
+    pub(super) fn draw_red_menace_window(&mut self, ctx: &Context) {
+        if !self.red_menace.open || self.desktop_window_is_minimized(DesktopWindow::RedMenace) {
+            return;
+        }
+        let input_enabled = self.active_window_kind() == Some(DesktopWindow::RedMenace)
+            && !self.start_open
+            && !self.spotlight_open
+            && self.terminal_prompt.is_none();
+        let dt = Self::next_embedded_game_dt(&mut self.red_menace.last_frame_at);
+        let input = if input_enabled {
+            red_menace_input_from_ctx(ctx)
+        } else {
+            Default::default()
+        };
+        self.red_menace.game.update(&input, dt);
+
+        let mut open = self.red_menace.open;
+        let mut header_action = DesktopHeaderAction::None;
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::RedMenace,
+            "Red Menace",
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(620.0, 460.0),
+                default_size: Self::desktop_default_window_size(DesktopWindow::RedMenace),
+                default_pos: None,
+                clamp_restore: true,
+            },
+        );
+        let shown = window.show(ctx, |ui| {
+            Self::apply_settings_control_style(ui);
+            header_action = Self::draw_desktop_window_header(ui, "Red Menace", maximized);
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            self.red_menace.game.draw(ui);
+        });
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::RedMenace,
             &mut open,
             maximized,
             shown_rect,

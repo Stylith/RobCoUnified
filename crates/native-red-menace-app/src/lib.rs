@@ -945,10 +945,12 @@ impl StageOneState {
     }
 }
 
+#[derive(Clone)]
 struct SpriteFrame {
     texture: TextureHandle,
 }
 
+#[derive(Clone)]
 struct SpriteClip {
     frames: Vec<SpriteFrame>,
     pixel_size: Vec2,
@@ -969,6 +971,7 @@ impl SpriteClip {
     }
 }
 
+#[derive(Clone)]
 struct RedMenaceTextures {
     hero_stand: SpriteClip,
     hero_run: SpriteClip,
@@ -1122,6 +1125,7 @@ impl RedMenaceTextures {
     }
 }
 
+#[derive(Clone)]
 pub struct RedMenaceGame {
     config: RedMenaceConfig,
     theme: Theme,

@@ -3,7 +3,8 @@ use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 pub use robcos_native_document_browser_app::{
-    activate_browser_selection, browser_rows, TerminalDocumentBrowserRequest,
+    activate_browser_selection, browser_rows, sync_browser_selection,
+    TerminalDocumentBrowserRequest,
 };
 
 pub enum DocumentBrowserEvent {

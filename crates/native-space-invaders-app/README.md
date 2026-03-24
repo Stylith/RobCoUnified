@@ -1,12 +1,13 @@
-# Native Space Invaders App
+# Native Zeta Invaders App
 
-Embeddable `egui` Space Invaders game logic for RobCoOS.
+Embeddable `egui` Zeta Invaders game logic for RobCoOS.
 
 - Library crate plus standalone preview binary
 - One PNG file per animation frame under `assets/png/`
 - Runtime `egui` tinting defaults to green
 - PNG assets are loaded from disk first on startup
 - Rendering is host-driven through `egui`
+- Barn cover now uses Zeta-style piece slots: `barn_piece_00.png` through `barn_piece_17.png`
 
 Replace any placeholder frame by editing the matching PNG file in `assets/png/`, then relaunch the app. No `target/` cleanup should be needed.
 
@@ -30,7 +31,7 @@ game.draw(ui, &atlas);
 Standalone preview:
 
 ```bash
-cargo run -p robcos-native-space-invaders-app --bin robcos-space-invaders
+cargo run -p robcos-native-zeta-invaders-app --bin robcos-zeta-invaders
 ```
 
 Controls:

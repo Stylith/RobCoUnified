@@ -49,6 +49,8 @@ robcos-native-edit-menus-app = { path = "crates/native-edit-menus-app" }
 robcos-native-document-browser-app = { path = "crates/native-document-browser-app" }
 robcos-native-about-app = { path = "crates/native-about-app" }
 robcos-native-nuke-codes-app = { path = "crates/native-nuke-codes-app" }
+robcos-native-zeta-invaders-app = { path = "crates/native-space-invaders-app" }
+robcos-native-red-menace-app = { path = "crates/native-red-menace-app" }
 
 [build-dependencies]
 winres        = "0.1"

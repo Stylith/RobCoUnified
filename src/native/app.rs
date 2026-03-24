@@ -18,7 +18,8 @@ use super::desktop_file_service::{
 };
 use super::desktop_launcher_service::{
     add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
-    rename_catalog_entry, resolve_catalog_launch, ProgramCatalog,
+    rename_catalog_entry, resolve_catalog_launch, ProgramCatalog, BUILTIN_RED_MENACE_GAME,
+    BUILTIN_ZETA_INVADERS_GAME,
 };
 #[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
@@ -87,8 +88,8 @@ use super::pty_screen::{
     TERMINAL_MODE_PTY_CELL_W,
 };
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_settings, current_palette, FIXED_PTY_CELL_H,
-    FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_settings, current_palette, palette_for_settings,
+    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::shell_screen::draw_login_screen;
 use super::terminal_command_palette::{CommandPaletteAction, CommandPaletteState};
@@ -109,6 +110,7 @@ use eframe::egui::{
 };
 use egui_wgpu::CrtEffects;
 use robcos_native_file_manager_app::FileManagerAction;
+use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_programs_app::{
     build_desktop_applications_sections, resolve_desktop_games_request,
     DesktopApplicationsSections, DesktopProgramRequest,
@@ -117,6 +119,7 @@ use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_default_panel, desktop_settings_home_rows,
     GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
 };
+use robcos_native_zeta_invaders_app::{AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -132,12 +135,14 @@ mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
 mod session_management;
+mod software_cursor;
 mod terminal_dispatch;
 mod terminal_screens;
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod settings_panels;
+use software_cursor::draw_software_cursor;
 
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
@@ -191,6 +196,42 @@ struct ApplicationsWindow {
 struct TerminalModeWindow {
     open: bool,
     status: String,
+}
+
+#[derive(Clone)]
+struct ZetaInvadersWindow {
+    open: bool,
+    game: SpaceInvadersGame,
+    atlas: Option<AtlasTextures>,
+    last_frame_at: Option<Instant>,
+}
+
+impl Default for ZetaInvadersWindow {
+    fn default() -> Self {
+        Self {
+            open: false,
+            game: SpaceInvadersGame::new(SpaceInvadersConfig::default()),
+            atlas: None,
+            last_frame_at: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RedMenaceWindow {
+    open: bool,
+    game: RedMenaceGame,
+    last_frame_at: Option<Instant>,
+}
+
+impl Default for RedMenaceWindow {
+    fn default() -> Self {
+        Self {
+            open: false,
+            game: RedMenaceGame::new(RedMenaceConfig::default()),
+            last_frame_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,6 +486,11 @@ fn apply_native_appearance_for_settings(ctx: &Context, settings: &Settings) {
     apply_native_text_style(ctx);
 }
 
+fn crt_theme_tint(settings: &Settings) -> [f32; 3] {
+    let [r, g, b, _] = palette_for_settings(settings).fg.to_array();
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
+}
+
 fn apply_native_display_effects_for_settings(settings: &Settings) {
     let display_effects = &settings.display_effects;
     if !display_effects.enabled {
@@ -452,6 +498,7 @@ fn apply_native_display_effects_for_settings(settings: &Settings) {
         egui_winit::set_crt_pointer_curve(None);
         return;
     }
+    let theme_tint = crt_theme_tint(settings);
     egui_winit::set_crt_pointer_curve(
         (display_effects.curvature > 0.0).then_some(display_effects.curvature),
     );
@@ -466,9 +513,11 @@ fn apply_native_display_effects_for_settings(settings: &Settings) {
         jitter: display_effects.jitter,
         burn_in: display_effects.burn_in,
         glow_line: display_effects.glow_line,
+        glow_line_speed: display_effects.glow_line_speed,
         brightness: display_effects.brightness,
         contrast: display_effects.contrast,
         phosphor_softness: display_effects.phosphor_softness,
+        theme_tint,
     }));
 }
 
@@ -498,6 +547,8 @@ pub struct RobcoNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    zeta_invaders: ZetaInvadersWindow,
+    red_menace: RedMenaceWindow,
     desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -544,12 +595,15 @@ pub struct RobcoNativeApp {
     picking_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     shortcut_icon_missing: HashSet<String>,
+    file_manager_preview_texture: Option<egui::TextureHandle>,
+    file_manager_preview_loaded_for: String,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
     desktop_surface_entries_cache: Option<DesktopSurfaceEntriesCache>,
     settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     settings_home_rows_cache_standard: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
     desktop_applications_sections_cache: Option<DesktopApplicationsSectionsCache>,
     edit_menu_entries_cache: EditMenuEntriesCache,
+    pending_settings_panel: Option<NativeSettingsPanel>,
     sorted_user_records_cache: Option<Arc<Vec<(String, UserRecord)>>>,
     sorted_usernames_cache: Option<Arc<Vec<String>>>,
     saved_network_connections_cache: Option<Arc<Vec<SavedConnection>>>,
@@ -582,6 +636,8 @@ pub(super) struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
+    zeta_invaders: ZetaInvadersWindow,
+    red_menace: RedMenaceWindow,
     desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -679,6 +735,8 @@ impl Default for RobcoNativeApp {
                 user_delete_confirm: String::new(),
             },
             applications: ApplicationsWindow::default(),
+            zeta_invaders: ZetaInvadersWindow::default(),
+            red_menace: RedMenaceWindow::default(),
             desktop_nuke_codes_open: false,
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
@@ -722,6 +780,8 @@ impl Default for RobcoNativeApp {
             picking_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
             shortcut_icon_missing: HashSet::new(),
+            file_manager_preview_texture: None,
+            file_manager_preview_loaded_for: String::new(),
             desktop_icon_layout_cache: None,
             desktop_surface_entries_cache: None,
             settings_home_rows_cache_admin: None,
@@ -733,6 +793,7 @@ impl Default for RobcoNativeApp {
                 network: None,
                 games: None,
             },
+            pending_settings_panel: None,
             sorted_user_records_cache: None,
             sorted_usernames_cache: None,
             saved_network_connections_cache: None,
@@ -764,6 +825,15 @@ impl Default for RobcoNativeApp {
 impl RobcoNativeApp {
     fn sync_native_display_effects(&self) {
         apply_native_display_effects_for_settings(&self.settings.draft);
+    }
+
+    fn sync_native_cursor_mode(&self) {
+        let cursor_mode = if self.desktop_mode_open && self.settings.draft.desktop_show_cursor {
+            egui_winit::AppCursorMode::Software
+        } else {
+            egui_winit::AppCursorMode::Hidden
+        };
+        egui_winit::set_app_cursor_mode(cursor_mode);
     }
 
     fn apply_autologin_open_mode(&mut self) {
@@ -983,9 +1053,10 @@ impl RobcoNativeApp {
                         super::settings_standalone::standalone_settings_panel_from_arg(&p)
                     });
                     if let Some(panel) = panel {
-                        self.settings.panel = panel;
+                        self.open_desktop_settings_panel(panel);
+                    } else {
+                        self.open_desktop_settings_window();
                     }
-                    self.open_desktop_window(DesktopWindow::Settings);
                 }
                 super::ipc::IpcMessage::AppClosed { .. } | super::ipc::IpcMessage::Ping => {}
             }
@@ -1188,6 +1259,21 @@ impl RobcoNativeApp {
         painter.image(texture.id(), rect, uv, tint);
     }
 
+    fn fit_texture_rect(texture: &TextureHandle, bounds: egui::Rect) -> egui::Rect {
+        let image_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
+        if image_size.x <= 0.0
+            || image_size.y <= 0.0
+            || bounds.width() <= 0.0
+            || bounds.height() <= 0.0
+        {
+            return bounds;
+        }
+        let scale = (bounds.width() / image_size.x)
+            .min(bounds.height() / image_size.y)
+            .min(1.0);
+        egui::Rect::from_center_size(bounds.center(), image_size * scale)
+    }
+
     fn reset_desktop_settings_window(&mut self) {
         let draft = load_settings_snapshot();
         let defaults = build_desktop_settings_ui_defaults(
@@ -1278,7 +1364,11 @@ impl RobcoNativeApp {
     }
 
     pub(crate) fn desktop_component_settings_on_open(&mut self, _was_open: bool) {
+        let requested_panel = self.pending_settings_panel.take();
         self.reset_desktop_settings_window();
+        if let Some(panel) = requested_panel {
+            self.settings.panel = panel;
+        }
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
     }
 
@@ -1308,6 +1398,7 @@ impl RobcoNativeApp {
         self.desktop_window_states.clear();
         self.close_desktop_overlays();
         self.terminal_prompt = None;
+        self.pending_settings_panel = None;
         self.desktop_mode_open = desktop_mode_open;
         self.desktop_active_window = None;
         self.apply_status_update(clear_shell_status());
@@ -1396,10 +1487,57 @@ impl RobcoNativeApp {
             self.draw_file_manager(ctx);
         }
         self.draw_terminal_prompt_overlay_global(ctx);
+        self.maybe_intercept_viewport_close_for_unsaved_editor(ctx);
         if !self.editor.open && !self.file_manager.open && self.terminal_prompt.is_none() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    fn dirty_editor_window_for_close_request(&self) -> Option<WindowInstanceId> {
+        if let Some(active) = self.desktop_active_window {
+            if active.kind == DesktopWindow::Editor {
+                if active.instance == 0 {
+                    if self.editor.open && self.editor.dirty {
+                        return Some(active);
+                    }
+                } else if self.secondary_windows.iter().any(|window| {
+                    window.id == active
+                        && matches!(&window.app, SecondaryWindowApp::Editor(editor) if editor.open && editor.dirty)
+                }) {
+                    return Some(active);
+                }
+            }
+        }
+        if self.editor.open && self.editor.dirty {
+            return Some(WindowInstanceId::primary(DesktopWindow::Editor));
+        }
+        self.secondary_windows
+            .iter()
+            .find_map(|window| match &window.app {
+                SecondaryWindowApp::Editor(editor) if editor.open && editor.dirty => {
+                    Some(window.id)
+                }
+                _ => None,
+            })
+    }
+
+    fn maybe_intercept_viewport_close_for_unsaved_editor(&mut self, ctx: &Context) {
+        if !self.desktop_mode_open {
+            if ctx.input(|i| i.viewport().close_requested()) {
+                self.persist_snapshot();
+            }
+            return;
+        }
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        if let Some(id) = self.dirty_editor_window_for_close_request() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request_close_window_instance(id);
+        } else {
+            self.persist_snapshot();
+        }
     }
 
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
@@ -1412,6 +1550,36 @@ impl RobcoNativeApp {
 
     pub(crate) fn desktop_component_applications_draw(&mut self, ctx: &Context) {
         self.draw_applications(ctx);
+    }
+
+    pub(crate) fn desktop_component_zeta_invaders_is_open(&self) -> bool {
+        self.zeta_invaders.open
+    }
+
+    pub(crate) fn desktop_component_zeta_invaders_set_open(&mut self, open: bool) {
+        self.zeta_invaders.open = open;
+        if !open {
+            self.zeta_invaders.last_frame_at = None;
+        }
+    }
+
+    pub(crate) fn desktop_component_zeta_invaders_draw(&mut self, ctx: &Context) {
+        self.draw_zeta_invaders_window(ctx);
+    }
+
+    pub(crate) fn desktop_component_red_menace_is_open(&self) -> bool {
+        self.red_menace.open
+    }
+
+    pub(crate) fn desktop_component_red_menace_set_open(&mut self, open: bool) {
+        self.red_menace.open = open;
+        if !open {
+            self.red_menace.last_frame_at = None;
+        }
+    }
+
+    pub(crate) fn desktop_component_red_menace_draw(&mut self, ctx: &Context) {
+        self.draw_red_menace_window(ctx);
     }
 
     pub(crate) fn prepare_standalone_applications_window(
@@ -1502,6 +1670,7 @@ impl RobcoNativeApp {
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
         self.sync_native_display_effects();
+        self.sync_native_cursor_mode();
         let pty_last =
             self.active_window_kind() == Some(DesktopWindow::PtyApp) && self.terminal_pty.is_some();
         if pty_last {
@@ -1811,11 +1980,61 @@ impl RobcoNativeApp {
             .unwrap_or(false);
         if is_svg {
             let key = row.path.to_string_lossy().to_string();
-            if let Some(tex) = self.shortcut_icon_cache.get(&key) {
-                return Some(tex.clone());
-            }
+            return self.load_cached_shortcut_icon(ctx, &key, &row.path, 32);
         }
         self.file_manager_texture_for_row(ctx, row)
+    }
+
+    fn clear_file_manager_preview_texture(&mut self) {
+        self.file_manager_preview_texture = None;
+        self.file_manager_preview_loaded_for.clear();
+    }
+
+    fn path_supports_file_manager_image_preview(path: &Path) -> bool {
+        matches!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "svg"
+        )
+    }
+
+    fn file_manager_preview_texture(
+        &mut self,
+        ctx: &Context,
+        row: &super::file_manager::FileEntryRow,
+    ) -> Option<TextureHandle> {
+        if row.is_dir
+            || row.is_parent_dir()
+            || !Self::path_supports_file_manager_image_preview(&row.path)
+        {
+            self.clear_file_manager_preview_texture();
+            return None;
+        }
+        let is_svg = row
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false);
+        if is_svg {
+            let key = format!("{}#preview", row.path.to_string_lossy());
+            return self.load_cached_shortcut_icon(ctx, &key, &row.path, 192);
+        }
+        let loaded_for = row.path.to_string_lossy().to_string();
+        if self.file_manager_preview_loaded_for != loaded_for {
+            self.file_manager_preview_texture = Self::load_tinted_image_texture(
+                ctx,
+                format!("file_manager_preview::{loaded_for}"),
+                &row.path,
+                Some(192),
+            );
+            self.file_manager_preview_loaded_for.clear();
+            self.file_manager_preview_loaded_for.push_str(&loaded_for);
+        }
+        self.file_manager_preview_texture.clone()
     }
 
     fn split_file_name(name: &str) -> (&str, &str) {
@@ -2121,25 +2340,133 @@ impl RobcoNativeApp {
             .to_string()
     }
 
-    fn open_editor_save_as_picker(&mut self) {
-        let Some(session) = &self.session else {
-            self.editor.status = "No active session.".to_string();
-            return;
-        };
-        let start_dir = self
-            .editor
+    fn editor_save_base_dir(&self) -> PathBuf {
+        self.editor
             .path
             .as_ref()
             .and_then(|path| path.parent().map(Path::to_path_buf))
-            .unwrap_or_else(|| word_processor_dir(&session.username));
-        self.editor.save_as_input = Some(self.default_editor_save_name());
-        self.open_embedded_file_manager_at(start_dir);
-        if let Some(path) = self.editor.path.clone() {
-            self.file_manager.select(Some(path));
+            .or_else(|| {
+                self.session
+                    .as_ref()
+                    .map(|session| word_processor_dir(&session.username))
+            })
+            .unwrap_or_else(home_dir_fallback)
+    }
+
+    fn default_editor_save_target(&self) -> PathBuf {
+        self.editor.path.clone().unwrap_or_else(|| {
+            self.editor_save_base_dir()
+                .join(self.default_editor_save_name())
+        })
+    }
+
+    fn expand_tilde_path(raw: &str) -> PathBuf {
+        if let Some(rest) = raw.strip_prefix('~') {
+            return PathBuf::from(format!("{}{}", home_dir_fallback().display(), rest));
         }
-        self.editor.status =
-            "Choose a folder in My Computer, enter a file name, then click Save Here.".to_string();
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::FileManager));
+        PathBuf::from(raw)
+    }
+
+    fn resolve_editor_save_target(&self, raw_path: &str) -> Result<PathBuf, String> {
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            return Err("Enter a file path first.".to_string());
+        }
+        let expanded = Self::expand_tilde_path(trimmed);
+        let target = if expanded.is_absolute() {
+            expanded
+        } else {
+            self.editor_save_base_dir().join(expanded)
+        };
+        let Some(file_name) = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty() && *name != "." && *name != "..")
+        else {
+            return Err("Enter a file path, not just a folder.".to_string());
+        };
+        if file_name.contains(std::path::MAIN_SEPARATOR) {
+            return Err("Enter a valid file path.".to_string());
+        }
+        Ok(target)
+    }
+
+    fn open_editor_save_as_picker(&mut self) {
+        if self.desktop_mode_open {
+            let start_dir = self.editor_save_base_dir();
+            self.editor.save_as_input = Some(self.default_editor_save_name());
+            self.open_embedded_file_manager_at(start_dir);
+            if let Some(path) = self.editor.path.clone() {
+                self.file_manager.select(Some(path));
+            }
+            self.editor.status =
+                "Choose a folder in My Computer, enter a file name, then click Save Here."
+                    .to_string();
+            self.desktop_active_window =
+                Some(WindowInstanceId::primary(DesktopWindow::FileManager));
+            return;
+        }
+
+        let default_target = self.default_editor_save_target();
+        self.open_input_prompt_with_buffer(
+            "Save As",
+            "Enter file path:",
+            default_target.display().to_string(),
+            TerminalPromptAction::EditorSaveAsPath,
+        );
+        self.editor.status = "Enter a file path and press Enter to save.".to_string();
+    }
+
+    fn save_editor_as_target(
+        &mut self,
+        requested_target: PathBuf,
+        close_file_manager: bool,
+    ) -> bool {
+        let Some(file_name) = requested_target.file_name().and_then(|name| name.to_str()) else {
+            self.editor.status = "Enter a file path, not just a folder.".to_string();
+            return false;
+        };
+        let target = if let Some(parent) = requested_target.parent() {
+            Self::unique_path_in_dir(parent, file_name)
+        } else {
+            requested_target.clone()
+        };
+        let renamed_to_avoid_collision = target != requested_target;
+        match save_text_file(&target, &self.editor.text) {
+            Ok(()) => {
+                let label = target
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("document")
+                    .to_string();
+                self.editor.path = Some(target.clone());
+                self.editor.dirty = false;
+                self.editor.status = if renamed_to_avoid_collision {
+                    format!("Name already existed. Saved as {label}.")
+                } else {
+                    format!("Saved {label}.")
+                };
+                let should_close_after_save = self.editor.should_close_after_save();
+                self.editor.cancel_close_confirmation();
+                self.push_editor_recent_file(&target);
+                self.editor.save_as_input = None;
+                if close_file_manager {
+                    self.file_manager.open = false;
+                }
+                if should_close_after_save {
+                    self.close_current_editor_window_unchecked();
+                } else if self.desktop_mode_open {
+                    self.open_desktop_window(DesktopWindow::Editor);
+                } else {
+                    self.editor.open = true;
+                }
+                true
+            }
+            Err(err) => {
+                self.editor.status = format!("Save failed: {err}");
+                false
+            }
+        }
     }
 
     fn complete_editor_save_as_from_picker(&mut self) {
@@ -2160,31 +2487,18 @@ impl RobcoNativeApp {
             return;
         }
         let requested_target = self.file_manager.cwd.join(file_name);
-        let target = Self::unique_path_in_dir(&self.file_manager.cwd, file_name);
-        let renamed_to_avoid_collision = target != requested_target;
-        match save_text_file(&target, &self.editor.text) {
-            Ok(()) => {
-                let label = target
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("document")
-                    .to_string();
-                self.editor.path = Some(target.clone());
-                self.editor.dirty = false;
-                self.editor.status = if renamed_to_avoid_collision {
-                    format!("Name already existed. Saved as {label}.")
-                } else {
-                    format!("Saved {label}.")
-                };
-                self.push_editor_recent_file(&target);
-                self.editor.save_as_input = None;
-                self.file_manager.open = false;
-                self.open_desktop_window(DesktopWindow::Editor);
+        let _ = self.save_editor_as_target(requested_target, true);
+    }
+
+    fn save_editor_from_prompt_path(&mut self, raw_path: &str) -> bool {
+        let target = match self.resolve_editor_save_target(raw_path) {
+            Ok(target) => target,
+            Err(status) => {
+                self.editor.status = status;
+                return false;
             }
-            Err(err) => {
-                self.editor.status = format!("Save failed: {err}");
-            }
-        }
+        };
+        self.save_editor_as_target(target, false)
     }
 
     fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
@@ -2217,6 +2531,65 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::NukeCodes);
     }
 
+    fn builtin_game_window(name: &str) -> Option<DesktopWindow> {
+        match name {
+            BUILTIN_ZETA_INVADERS_GAME => Some(DesktopWindow::ZetaInvaders),
+            BUILTIN_RED_MENACE_GAME => Some(DesktopWindow::RedMenace),
+            _ => None,
+        }
+    }
+
+    fn builtin_game_terminal_screen(name: &str) -> Option<TerminalScreen> {
+        match name {
+            BUILTIN_ZETA_INVADERS_GAME => Some(TerminalScreen::ZetaInvaders),
+            BUILTIN_RED_MENACE_GAME => Some(TerminalScreen::RedMenace),
+            _ => None,
+        }
+    }
+
+    pub(super) fn open_hosted_robco_fun_game(&mut self, name: &str) -> bool {
+        let Some(window) = Self::builtin_game_window(name) else {
+            return false;
+        };
+        self.desktop_mode_open = true;
+        self.close_desktop_overlays();
+        self.open_desktop_window(window);
+        self.shell_status = format!("Opened {name}.");
+        true
+    }
+
+    pub(super) fn open_terminal_robco_fun_game(
+        &mut self,
+        name: &str,
+        return_screen: TerminalScreen,
+    ) -> bool {
+        let Some(screen) = Self::builtin_game_terminal_screen(name) else {
+            return false;
+        };
+        self.terminal_nav.game_return_screen = return_screen;
+        self.navigate_to_screen(screen);
+        match screen {
+            TerminalScreen::ZetaInvaders => self.zeta_invaders.last_frame_at = None,
+            TerminalScreen::RedMenace => self.red_menace.last_frame_at = None,
+            _ => {}
+        }
+        self.apply_status_update(shell_status(format!("Opened {name}.")));
+        true
+    }
+
+    pub(super) fn next_embedded_game_dt(last_frame_at: &mut Option<Instant>) -> f32 {
+        let now = Instant::now();
+        let dt = last_frame_at
+            .replace(now)
+            .map(|previous| (now - previous).as_secs_f32())
+            .unwrap_or(1.0 / 60.0);
+        if !(0.0..=0.25).contains(&dt) {
+            1.0 / 60.0
+        } else {
+            dt.min(1.0 / 20.0)
+        }
+    }
+
     /// Open a desktop window if not already open, otherwise spawn a secondary
     /// embedded instance inside the shell.
     pub(super) fn open_or_spawn_desktop_window(&mut self, window: DesktopWindow) {
@@ -2239,6 +2612,16 @@ impl RobcoNativeApp {
         } else {
             self.open_desktop_window(window);
         }
+    }
+
+    pub(super) fn open_desktop_settings_window(&mut self) {
+        self.pending_settings_panel = None;
+        self.open_desktop_window(DesktopWindow::Settings);
+    }
+
+    pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
+        self.pending_settings_panel = Some(panel);
+        self.open_desktop_window(DesktopWindow::Settings);
     }
 
     fn spawn_secondary_window(&mut self, kind: DesktopWindow, app: SecondaryWindowApp) {
@@ -2273,9 +2656,7 @@ impl RobcoNativeApp {
                 if connections_macos_disabled() {
                     self.shell_status = connections_macos_disabled_hint().to_string();
                 } else {
-                    self.reset_desktop_settings_window();
-                    self.settings.panel = NativeSettingsPanel::Connections;
-                    self.open_desktop_window(DesktopWindow::Settings);
+                    self.open_desktop_settings_panel(NativeSettingsPanel::Connections);
                 }
             }
             DesktopShellAction::LaunchConfiguredApp(name) => {
@@ -2296,6 +2677,9 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::LaunchGameProgram(name) => {
+                if self.open_hosted_robco_fun_game(&name) {
+                    return;
+                }
                 let request = resolve_desktop_games_request(&name);
                 self.apply_desktop_program_request(request);
             }
@@ -2336,6 +2720,7 @@ impl RobcoNativeApp {
                 self.editor.path = Some(document.path);
                 self.editor.text = document.text;
                 self.editor.dirty = false;
+                self.editor.cancel_close_confirmation();
                 self.editor.status = format!("Opened {status_label}.");
                 self.open_desktop_window(DesktopWindow::Editor);
             }
@@ -2371,6 +2756,7 @@ impl RobcoNativeApp {
         let terminal_defaults = terminal_runtime_defaults();
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
+        self.pending_settings_panel = None;
         self.start_open = !launch_default_desktop;
         self.start_selected_root = 0;
         self.start_system_selected = 0;
@@ -2610,12 +2996,22 @@ impl RobcoNativeApp {
         prompt: impl Into<String>,
         action: TerminalPromptAction,
     ) {
+        self.open_input_prompt_with_buffer(title, prompt, String::new(), action);
+    }
+
+    fn open_input_prompt_with_buffer(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        buffer: String,
+        action: TerminalPromptAction,
+    ) {
         crate::sound::play_navigate();
         self.terminal_prompt = Some(TerminalPrompt {
             kind: TerminalPromptKind::Input,
             title: title.into(),
             prompt: prompt.into(),
-            buffer: String::new(),
+            buffer,
             confirm_yes: true,
             action,
         });
@@ -2836,6 +3232,7 @@ impl RobcoNativeApp {
                 self.editor.path = Some(document.path.clone());
                 self.editor.text = document.text;
                 self.editor.dirty = false;
+                self.editor.cancel_close_confirmation();
                 self.editor.status = "Opened document.".to_string();
                 self.push_editor_recent_file(&document.path);
                 self.open_desktop_window(DesktopWindow::Editor);
@@ -3244,14 +3641,10 @@ impl RobcoNativeApp {
         }
     }
 
-    fn save_editor(&mut self) {
+    fn save_editor_to_current_path(&mut self) -> bool {
         let Some(path) = self.editor.path.clone() else {
-            if self.desktop_mode_open {
-                self.open_editor_save_as_picker();
-            } else {
-                self.editor.status = "No document path set.".to_string();
-            }
-            return;
+            self.open_editor_save_as_picker();
+            return false;
         };
         match save_text_file(&path, &self.editor.text) {
             Ok(()) => {
@@ -3262,10 +3655,36 @@ impl RobcoNativeApp {
                         .and_then(|name| name.to_str())
                         .unwrap_or("document")
                 );
+                self.editor.cancel_close_confirmation();
+                self.push_editor_recent_file(&path);
+                true
             }
-            Err(err) => self.editor.status = format!("Save failed: {err}"),
+            Err(err) => {
+                self.editor.status = format!("Save failed: {err}");
+                false
+            }
         }
-        self.push_editor_recent_file(&path);
+    }
+
+    fn save_editor(&mut self) {
+        let _ = self.save_editor_to_current_path();
+    }
+
+    fn confirm_editor_close_save(&mut self) {
+        if self.editor.path.is_some() {
+            if self.save_editor_to_current_path() {
+                self.close_current_editor_window_unchecked();
+            } else {
+                self.editor.prompt_close_confirmation();
+            }
+            return;
+        }
+
+        self.editor.queue_close_after_save();
+        self.open_editor_save_as_picker();
+        if self.editor.save_as_input.is_none() {
+            self.editor.prompt_close_confirmation();
+        }
     }
 
     fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
@@ -3795,7 +4214,9 @@ impl RobcoNativeApp {
                 if let Some(path_str) =
                     set_desktop_shortcut_icon(&mut self.settings.draft, shortcut_idx, &path)
                 {
-                    self.shortcut_icon_cache.remove(&path_str);
+                    // Keep any already-loaded texture alive through the current frame.
+                    // Dropping the cached handle here can destroy the egui-managed
+                    // texture before wgpu submits draw calls that still reference it.
                     self.shortcut_icon_missing.remove(&path_str);
                     if let Some(props) = &mut self.shortcut_properties {
                         if props.shortcut_idx == shortcut_idx {
@@ -3811,6 +4232,7 @@ impl RobcoNativeApp {
                 set_desktop_wallpaper_path(&mut self.settings.draft, &path);
                 self.picking_wallpaper = false;
                 self.file_manager.open = false;
+                self.persist_native_settings();
             }
         }
     }
@@ -3916,6 +4338,50 @@ impl RobcoNativeApp {
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
         }
     }
+
+    fn draw_terminal_runtime(&mut self, ctx: &Context) {
+        self.draw_terminal_status_bar(ctx);
+        if self.terminal_nav.suppress_next_menu_submit {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::Enter);
+                i.consume_key(egui::Modifiers::NONE, Key::Space);
+            });
+            self.terminal_nav.suppress_next_menu_submit = false;
+        }
+
+        // The terminal editor uses a fullscreen CentralPanel. When it is open,
+        // the background terminal screen should remain visible only as state,
+        // not continue reacting to keyboard input underneath the editor.
+        if !self.editor.open {
+            match self.terminal_nav.screen {
+                TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
+                TerminalScreen::Applications => self.draw_terminal_applications(ctx),
+                TerminalScreen::Documents => self.draw_terminal_documents(ctx),
+                TerminalScreen::Logs => self.draw_terminal_logs(ctx),
+                TerminalScreen::Network => self.draw_terminal_network(ctx),
+                TerminalScreen::Games => self.draw_terminal_games(ctx),
+                TerminalScreen::GamesRobcoFun => self.draw_terminal_robco_fun_games(ctx),
+                TerminalScreen::ZetaInvaders => self.draw_terminal_zeta_invaders(ctx),
+                TerminalScreen::RedMenace => self.draw_terminal_red_menace(ctx),
+                TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
+                TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
+                TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
+                TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
+                TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+                TerminalScreen::EditMenus => self.draw_terminal_edit_menus(ctx),
+                TerminalScreen::Connections => self.draw_terminal_connections(ctx),
+                TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
+                TerminalScreen::About => self.draw_terminal_about(ctx),
+                TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
+            }
+        }
+
+        self.draw_file_manager(ctx);
+        self.draw_editor(ctx);
+        self.draw_settings(ctx);
+        self.draw_applications(ctx);
+        self.draw_terminal_mode(ctx);
+    }
 }
 
 impl eframe::App for RobcoNativeApp {
@@ -3938,6 +4404,7 @@ impl eframe::App for RobcoNativeApp {
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_native_appearance(ctx);
         self.sync_native_display_effects();
+        self.sync_native_cursor_mode();
 
         if let Some(flash) = &self.terminal_flash {
             if Instant::now() >= flash.until {
@@ -4022,8 +4489,14 @@ impl eframe::App for RobcoNativeApp {
             && !self.editor.open
         {
             let is_browser = matches!(self.terminal_nav.screen, TerminalScreen::DocumentBrowser);
+            let is_terminal_game = matches!(
+                self.terminal_nav.screen,
+                TerminalScreen::ZetaInvaders | TerminalScreen::RedMenace
+            );
             let back = if is_browser {
                 ctx.input(|i| i.key_pressed(Key::Escape))
+            } else if is_terminal_game {
+                ctx.input(|i| i.key_pressed(Key::Tab))
             } else {
                 ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
             };
@@ -4050,53 +4523,20 @@ impl eframe::App for RobcoNativeApp {
             self.draw_desktop_taskbar(ctx);
             self.draw_desktop(ctx);
         } else {
-            self.draw_terminal_status_bar(ctx);
-            if self.terminal_nav.suppress_next_menu_submit {
-                ctx.input_mut(|i| {
-                    i.consume_key(egui::Modifiers::NONE, Key::Enter);
-                    i.consume_key(egui::Modifiers::NONE, Key::Space);
-                });
-                self.terminal_nav.suppress_next_menu_submit = false;
-            }
-            match self.terminal_nav.screen {
-                TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
-                TerminalScreen::Applications => self.draw_terminal_applications(ctx),
-                TerminalScreen::Documents => self.draw_terminal_documents(ctx),
-                TerminalScreen::Logs => self.draw_terminal_logs(ctx),
-                TerminalScreen::Network => self.draw_terminal_network(ctx),
-                TerminalScreen::Games => self.draw_terminal_games(ctx),
-                TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
-                TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
-                TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
-                TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
-                TerminalScreen::Settings => self.draw_terminal_settings(ctx),
-                TerminalScreen::EditMenus => self.draw_terminal_edit_menus(ctx),
-                TerminalScreen::Connections => self.draw_terminal_connections(ctx),
-                TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
-                TerminalScreen::About => self.draw_terminal_about(ctx),
-                TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
-            }
+            self.draw_terminal_runtime(ctx);
         }
         if self.desktop_mode_open {
             self.draw_desktop_windows(ctx);
             self.draw_start_panel(ctx);
             self.draw_start_menu_rename_window(ctx);
             self.draw_spotlight(ctx);
-        } else {
-            self.draw_file_manager(ctx);
-            self.draw_editor(ctx);
-            self.draw_settings(ctx);
-            self.draw_applications(ctx);
-            self.draw_terminal_mode(ctx);
         }
         self.draw_shortcut_properties_window(ctx);
         self.draw_desktop_item_properties_window(ctx);
         self.draw_editor_save_as_window(ctx);
         self.draw_terminal_prompt_overlay_global(ctx);
 
-        if ctx.input(|i| i.viewport().close_requested()) {
-            self.persist_snapshot();
-        }
+        self.maybe_intercept_viewport_close_for_unsaved_editor(ctx);
 
         if self.session.is_some() && self.editor.open && self.editor.dirty {
             egui::Area::new(Id::new("native_unsaved_badge"))
@@ -4104,6 +4544,10 @@ impl eframe::App for RobcoNativeApp {
                 .show(ctx, |ui| {
                     ui.label(RichText::new("Unsaved changes").color(Color32::LIGHT_RED));
                 });
+        }
+
+        if self.desktop_mode_open && self.settings.draft.desktop_show_cursor {
+            draw_software_cursor(ctx, self.settings.draft.desktop_cursor_scale);
         }
 
         // Animated CRT effects need a real frame cadence. Without this, the
@@ -4120,7 +4564,7 @@ impl eframe::App for RobcoNativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FileManagerSortMode, FileManagerViewMode};
+    use crate::config::{DesktopShortcut, FileManagerSortMode, FileManagerViewMode};
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
     use crate::native::file_manager_app::FileManagerClipboardMode;
     use std::collections::HashMap;
@@ -4482,12 +4926,13 @@ mod tests {
         assert_eq!(app.shell_status, "Closed session 3.");
     }
 
-    fn terminal_submenu_screens() -> [TerminalScreen; 13] {
+    fn terminal_submenu_screens() -> [TerminalScreen; 14] {
         [
             TerminalScreen::Applications,
             TerminalScreen::Documents,
             TerminalScreen::Network,
             TerminalScreen::Games,
+            TerminalScreen::GamesRobcoFun,
             TerminalScreen::NukeCodes,
             TerminalScreen::ProgramInstaller,
             TerminalScreen::Logs,
@@ -4781,7 +5226,202 @@ mod tests {
     }
 
     #[test]
-    fn closing_desktop_editor_resets_document_for_next_launch() {
+    fn terminal_document_browser_commands_use_highlighted_row_selection() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("terminal_browser_delete");
+        let keep = temp.path.join("alpha.txt");
+        let target = temp.path.join("beta.txt");
+        std::fs::write(&keep, "alpha").expect("write keep file");
+        std::fs::write(&target, "beta").expect("write target file");
+
+        let mut app = RobcoNativeApp::default();
+        app.open_document_browser_at(temp.path.clone(), TerminalScreen::Documents);
+        let rows = crate::native::document_browser::browser_rows(&app.file_manager);
+        let target_idx = rows
+            .iter()
+            .position(|row| row.path.as_ref() == Some(&target))
+            .expect("target row present");
+        app.terminal_nav.browser_idx = target_idx;
+
+        crate::native::document_browser::sync_browser_selection(
+            &mut app.file_manager,
+            app.terminal_nav.browser_idx,
+        );
+        app.run_file_manager_command(FileManagerCommand::Delete);
+
+        assert!(keep.exists());
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn terminal_editor_blocks_logs_menu_space_shortcut() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.terminal_nav.screen = TerminalScreen::Logs;
+        app.terminal_nav.logs_idx = 0;
+        app.editor.open = true;
+        app.editor.text = "existing log".to_string();
+        app.editor.path = Some(PathBuf::from("/tmp/log.txt"));
+
+        let ctx = Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1024.0, 768.0),
+            )),
+            events: vec![egui::Event::Key {
+                key: Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.draw_terminal_runtime(ctx);
+        });
+
+        assert!(app.editor.open);
+        assert!(app.terminal_prompt.is_none());
+        assert_eq!(app.terminal_nav.screen, TerminalScreen::Logs);
+    }
+
+    #[test]
+    fn wallpaper_picker_commit_persists_before_settings_reset() {
+        let _guard = session_test_guard();
+        let _settings = SettingsRestore::capture();
+        let wallpaper = PathBuf::from("/tmp/robco-wallpaper.png");
+        let wallpaper_str = wallpaper.display().to_string();
+
+        let mut app = RobcoNativeApp::default();
+        app.file_manager.open = true;
+        app.picking_wallpaper = true;
+
+        app.apply_file_manager_picker_commit(FileManagerPickerCommit::SetWallpaper(
+            wallpaper.clone(),
+        ));
+
+        for _ in 0..40 {
+            if crate::config::get_settings().desktop_wallpaper == wallpaper_str {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        app.reset_desktop_settings_window();
+
+        assert_eq!(app.settings.draft.desktop_wallpaper, wallpaper_str);
+        assert_eq!(
+            crate::config::get_settings().desktop_wallpaper,
+            wallpaper_str
+        );
+        assert!(!app.picking_wallpaper);
+        assert!(!app.file_manager.open);
+    }
+
+    #[test]
+    fn svg_preview_texture_lazy_loads_uncached_svg_rows() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("svg_preview_lazy_load");
+        let svg_path = temp.path.join("icon.svg");
+        std::fs::write(
+            &svg_path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" fill="#ffffff"/></svg>"##,
+        )
+        .expect("write svg");
+
+        let mut app = RobcoNativeApp::default();
+        let row = FileEntryRow {
+            path: svg_path.clone(),
+            label: "icon.svg".to_string(),
+            is_dir: false,
+        };
+
+        let preview = app.svg_preview_texture(&Context::default(), &row);
+
+        assert!(preview.is_some());
+        assert!(app
+            .shortcut_icon_cache
+            .contains_key(&svg_path.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn file_manager_preview_texture_downscales_large_wallpaper_images() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("wallpaper_preview_texture");
+        let png_path = temp.path.join("wallpaper.png");
+        image::RgbaImage::from_pixel(640, 320, image::Rgba([255, 255, 255, 255]))
+            .save(&png_path)
+            .expect("write png");
+
+        let row = FileEntryRow {
+            path: png_path.clone(),
+            label: "wallpaper.png".to_string(),
+            is_dir: false,
+        };
+
+        let mut app = RobcoNativeApp::default();
+        let texture = app
+            .file_manager_preview_texture(&Context::default(), &row)
+            .expect("preview texture");
+
+        assert!(texture.size()[0] <= 192);
+        assert!(texture.size()[1] <= 192);
+        assert_eq!(
+            app.file_manager_preview_loaded_for,
+            png_path.to_string_lossy().to_string()
+        );
+    }
+
+    #[test]
+    fn choosing_shortcut_icon_keeps_loaded_texture_cached() {
+        let _guard = session_test_guard();
+        let _settings = SettingsRestore::capture();
+        let temp = TempDirGuard::new("shortcut_icon_cache_lifetime");
+        let svg_path = temp.path.join("icon.svg");
+        std::fs::write(
+            &svg_path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" fill="#ffffff"/></svg>"##,
+        )
+        .expect("write svg");
+
+        let mut app = RobcoNativeApp::default();
+        app.settings.draft.desktop_shortcuts.push(DesktopShortcut {
+            label: "Test".to_string(),
+            app_name: "Test".to_string(),
+            pos_x: None,
+            pos_y: None,
+            launch_command: None,
+            icon_path: None,
+            shortcut_kind: "app".to_string(),
+        });
+        app.file_manager.open = true;
+        app.picking_icon_for_shortcut = Some(0);
+
+        let cache_key = svg_path.to_string_lossy().to_string();
+        let _texture = app
+            .load_cached_shortcut_icon(&Context::default(), &cache_key, &svg_path, 32)
+            .expect("cached svg texture");
+
+        app.apply_file_manager_picker_commit(FileManagerPickerCommit::SetShortcutIcon {
+            shortcut_idx: 0,
+            path: svg_path.clone(),
+        });
+
+        assert!(app.shortcut_icon_cache.contains_key(&cache_key));
+        assert_eq!(
+            app.settings.draft.desktop_shortcuts[0].icon_path.as_deref(),
+            Some(cache_key.as_str())
+        );
+        assert_eq!(app.picking_icon_for_shortcut, None);
+        assert!(!app.file_manager.open);
+    }
+
+    #[test]
+    fn closing_dirty_desktop_editor_opens_confirmation_prompt() {
         let _guard = session_test_guard();
 
         let mut app = RobcoNativeApp::default();
@@ -4798,6 +5438,35 @@ mod tests {
         app.editor.ui.find_occurrence = 3;
 
         app.update_desktop_window_state(DesktopWindow::Editor, false);
+
+        assert!(app.editor.open);
+        assert_eq!(app.editor.path, Some(PathBuf::from("/tmp/existing.txt")));
+        assert_eq!(app.editor.text, "keep me?");
+        assert!(app.editor.dirty);
+        assert_eq!(app.editor.status, "Unsaved changes");
+        assert!(app.editor.close_confirmation_visible());
+    }
+
+    #[test]
+    fn quitting_dirty_desktop_editor_resets_document_for_next_launch() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.editor.open = true;
+        app.editor.path = Some(PathBuf::from("/tmp/existing.txt"));
+        app.editor.text = "keep me?".to_string();
+        app.editor.dirty = true;
+        app.editor.status = "Unsaved changes".to_string();
+        app.editor.ui.find_open = true;
+        app.editor.ui.find_replace_visible = true;
+        app.editor.ui.find_query = "keep".to_string();
+        app.editor.ui.replace_query = "drop".to_string();
+        app.editor.ui.find_occurrence = 3;
+
+        app.update_desktop_window_state(DesktopWindow::Editor, false);
+        app.editor.cancel_close_confirmation();
+        app.close_current_editor_window_unchecked();
 
         assert!(!app.editor.open);
         assert_eq!(app.editor.path, None);
@@ -4849,6 +5518,105 @@ mod tests {
         assert!(!app.file_manager.open);
         assert!(app.editor.open);
         assert!(app.editor.save_as_input.is_none());
+    }
+
+    #[test]
+    fn save_as_picker_can_finish_pending_close_request() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("save_as_then_close");
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.file_manager.cwd = temp.path.clone();
+        app.file_manager.open = true;
+        app.editor.open = true;
+        app.editor.text = "new content".to_string();
+        app.editor.dirty = true;
+        app.editor.save_as_input = Some("document.txt".to_string());
+        app.editor.queue_close_after_save();
+
+        app.complete_editor_save_as_from_picker();
+
+        let saved = temp.path.join("document.txt");
+        assert_eq!(
+            std::fs::read_to_string(&saved).expect("read saved document"),
+            "new content"
+        );
+        assert!(!app.editor.open);
+        assert_eq!(app.editor.path, None);
+        assert!(app.editor.text.is_empty());
+        assert!(!app.editor.dirty);
+        assert!(app.editor.close_confirm.is_none());
+        assert!(!app.file_manager.open);
+    }
+
+    #[test]
+    fn terminal_save_as_opens_path_prompt_instead_of_file_manager() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("terminal_save_as_prompt");
+        let existing = temp.path.join("draft.txt");
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.editor.open = true;
+        app.editor.path = Some(existing.clone());
+
+        app.open_editor_save_as_picker();
+
+        assert!(!app.file_manager.open);
+        assert!(matches!(
+            app.terminal_prompt.as_ref().map(|prompt| &prompt.action),
+            Some(TerminalPromptAction::EditorSaveAsPath)
+        ));
+        assert_eq!(
+            app.terminal_prompt
+                .as_ref()
+                .map(|prompt| prompt.buffer.as_str()),
+            Some(existing.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn terminal_save_as_prompt_saves_relative_to_current_document_directory() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("terminal_save_as_relative");
+        let current = temp.path.join("current.txt");
+        let expected = temp.path.join("archive").join("copied.txt");
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.editor.open = true;
+        app.editor.path = Some(current);
+        app.editor.text = "saved from prompt".to_string();
+        app.editor.dirty = true;
+        app.file_manager.open = true;
+
+        assert!(app.save_editor_from_prompt_path("archive/copied.txt"));
+
+        assert_eq!(
+            std::fs::read_to_string(&expected).expect("read saved prompt target"),
+            "saved from prompt"
+        );
+        assert_eq!(app.editor.path, Some(expected));
+        assert!(!app.editor.dirty);
+        assert!(app.file_manager.open);
+    }
+
+    #[test]
+    fn terminal_save_without_path_opens_save_as_prompt() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.editor.open = true;
+        app.editor.text = "unsaved".to_string();
+        app.editor.dirty = true;
+
+        assert!(!app.save_editor_to_current_path());
+        assert!(matches!(
+            app.terminal_prompt.as_ref().map(|prompt| &prompt.action),
+            Some(TerminalPromptAction::EditorSaveAsPath)
+        ));
     }
 
     #[test]
@@ -4921,6 +5689,7 @@ mod tests {
     fn reopening_settings_window_reprimes_component_state() {
         let mut app = RobcoNativeApp::default();
         app.settings.open = true;
+        app.settings.panel = NativeSettingsPanel::Appearance;
         let state =
             app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
         state.restore_pos = Some([24.0, 48.0]);
@@ -4935,6 +5704,7 @@ mod tests {
 
         let state = app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Settings));
         assert!(app.settings.open);
+        assert_eq!(app.settings.panel, desktop_settings_default_panel());
         assert_eq!(state.restore_pos, None);
         assert_eq!(state.restore_size, None);
         assert!(!state.apply_restore);
@@ -4942,6 +5712,17 @@ mod tests {
         assert!(!state.minimized);
         assert!(!state.user_resized);
         assert_ne!(state.generation, 7);
+    }
+
+    #[test]
+    fn change_appearance_context_menu_opens_settings_appearance_panel() {
+        let mut app = RobcoNativeApp::default();
+        app.context_menu_action = Some(ContextMenuAction::ChangeAppearance);
+
+        app.dispatch_context_menu_action(&Context::default());
+
+        assert!(app.settings.open);
+        assert_eq!(app.settings.panel, NativeSettingsPanel::Appearance);
     }
 
     #[test]
@@ -5217,5 +5998,39 @@ mod tests {
         assert!(app.file_manager.open);
         assert_eq!(app.file_manager.cwd, temp.path);
         assert_eq!(app.file_manager.selected, Some(file_path));
+    }
+
+    #[test]
+    fn robco_fun_game_launch_opens_hosted_desktop_window() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+
+        assert!(app.open_hosted_robco_fun_game(BUILTIN_ZETA_INVADERS_GAME));
+
+        assert!(app.desktop_mode_open);
+        assert!(app.zeta_invaders.open);
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::ZetaInvaders))
+        );
+    }
+
+    #[test]
+    fn terminal_game_request_routes_robco_fun_games_into_terminal_screen() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.apply_terminal_program_request(
+            robcos_native_programs_app::TerminalProgramRequest::LaunchCatalog {
+                name: BUILTIN_RED_MENACE_GAME.to_string(),
+                catalog: ProgramCatalog::Games,
+            },
+            TerminalScreen::GamesRobcoFun,
+        );
+
+        assert!(!app.desktop_mode_open);
+        assert_eq!(app.terminal_nav.screen, TerminalScreen::RedMenace);
+        assert_eq!(app.terminal_nav.game_return_screen, TerminalScreen::GamesRobcoFun);
     }
 }

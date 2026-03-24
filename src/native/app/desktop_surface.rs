@@ -95,12 +95,20 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    pub(super) fn load_wallpaper_texture(ctx: &Context, path: &str) -> Option<TextureHandle> {
-        if path.trim().is_empty() {
-            return None;
-        }
+    pub(super) fn load_tinted_image_texture(
+        ctx: &Context,
+        texture_id: impl Into<String>,
+        path: &Path,
+        max_side_px: Option<u32>,
+    ) -> Option<TextureHandle> {
         let bytes = std::fs::read(path).ok()?;
-        let image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+        let mut image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+        if let Some(max_side_px) = max_side_px {
+            let longest_side = image.width().max(image.height());
+            if longest_side > max_side_px {
+                image = image::imageops::thumbnail(&image, max_side_px, max_side_px);
+            }
+        }
         let (width, height) = image.dimensions();
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for pixel in image.pixels() {
@@ -110,11 +118,14 @@ impl RobcoNativeApp {
         }
         let color_image =
             egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
-        Some(ctx.load_texture(
-            "desktop_wallpaper",
-            color_image,
-            egui::TextureOptions::LINEAR,
-        ))
+        Some(ctx.load_texture(texture_id.into(), color_image, egui::TextureOptions::LINEAR))
+    }
+
+    pub(super) fn load_wallpaper_texture(ctx: &Context, path: &str) -> Option<TextureHandle> {
+        if path.trim().is_empty() {
+            return None;
+        }
+        Self::load_tinted_image_texture(ctx, "desktop_wallpaper", Path::new(path), None)
     }
 
     pub(super) fn build_asset_cache(ctx: &Context) -> AssetCache {
@@ -384,11 +395,10 @@ impl RobcoNativeApp {
                 self.create_desktop_folder();
             }
             ContextMenuAction::ChangeAppearance => {
-                self.settings.panel = NativeSettingsPanel::Appearance;
-                self.open_desktop_window(DesktopWindow::Settings);
+                self.open_desktop_settings_panel(NativeSettingsPanel::Appearance);
             }
             ContextMenuAction::OpenSettings => {
-                self.open_desktop_window(DesktopWindow::Settings);
+                self.open_desktop_settings_window();
             }
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}

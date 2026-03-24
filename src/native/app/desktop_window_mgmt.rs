@@ -5,6 +5,8 @@ use super::super::desktop_app::{
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
 
+use crate::native::editor_app::EditorWindow;
+
 use super::{RobcoNativeApp, SecondaryWindowApp};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -493,8 +495,23 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn close_desktop_window(&mut self, window: DesktopWindow) {
-        let id = self.current_window_id(window);
+    fn editor_window_mut_for_id(&mut self, id: WindowInstanceId) -> Option<&mut EditorWindow> {
+        if id.kind != DesktopWindow::Editor {
+            return None;
+        }
+        if id.instance == 0 {
+            return Some(&mut self.editor);
+        }
+        self.secondary_windows
+            .iter_mut()
+            .find(|sw| sw.id == id)
+            .and_then(|sw| match &mut sw.app {
+                SecondaryWindowApp::Editor(editor) => Some(editor),
+                SecondaryWindowApp::FileManager { .. } => None,
+            })
+    }
+
+    fn close_window_instance_unchecked(&mut self, id: WindowInstanceId) {
         if id.instance > 0 {
             // Secondary: mark for removal (handled after swap-draw).
             self.desktop_window_states.remove(&id);
@@ -503,6 +520,7 @@ impl RobcoNativeApp {
             }
             return;
         }
+        let window = id.kind;
         let was_open = self.desktop_window_is_open(window);
         self.set_desktop_window_open(window, false);
         if was_open {
@@ -513,28 +531,46 @@ impl RobcoNativeApp {
         }
     }
 
+    pub(super) fn request_close_window_instance(&mut self, id: WindowInstanceId) {
+        if self.desktop_mode_open {
+            if let Some(editor) = self.editor_window_mut_for_id(id) {
+                if editor.dirty {
+                    editor.open = true;
+                    editor.prompt_close_confirmation();
+                    self.desktop_active_window = Some(id);
+                    return;
+                }
+            }
+        }
+        self.close_window_instance_unchecked(id);
+    }
+
+    pub(super) fn close_current_editor_window_unchecked(&mut self) {
+        let id = self.current_window_id(DesktopWindow::Editor);
+        self.close_window_instance_unchecked(id);
+    }
+
+    pub(super) fn close_desktop_window(&mut self, window: DesktopWindow) {
+        let id = self.current_window_id(window);
+        self.request_close_window_instance(id);
+    }
+
     pub(super) fn update_desktop_window_state(&mut self, window: DesktopWindow, open: bool) {
         let id = self.current_window_id(window);
+        if !open {
+            self.request_close_window_instance(id);
+            return;
+        }
         if id.instance > 0 {
             // Secondary instance: set_open updates the swapped-in state.
             // The swap-draw pipeline will check is_open after swap-back
             // and remove closed secondaries.
-            if !open {
-                (desktop_component_binding(window).set_open)(self, false);
-                self.desktop_window_states.remove(&id);
-                if self.desktop_active_window == Some(id) {
-                    self.desktop_active_window = self.first_open_desktop_window();
-                }
-            }
             return;
         }
         let was_open = self.desktop_window_is_open(window);
         self.set_desktop_window_open(window, open);
-        if was_open && !open {
-            self.handle_closed_desktop_window(window);
-        }
-        if !open && self.desktop_active_window == Some(id) {
-            self.desktop_active_window = self.first_open_desktop_window();
+        if !was_open {
+            self.desktop_active_window = Some(id);
         }
     }
 
@@ -687,11 +723,7 @@ impl RobcoNativeApp {
 
     /// Close a specific secondary window by ID.
     pub(super) fn close_secondary_window(&mut self, id: WindowInstanceId) {
-        self.secondary_windows.retain(|sw| sw.id != id);
-        self.desktop_window_states.remove(&id);
-        if self.desktop_active_window == Some(id) {
-            self.desktop_active_window = self.first_open_desktop_window();
-        }
+        self.request_close_window_instance(id);
     }
 
     /// Close every desktop window and secondary instance.

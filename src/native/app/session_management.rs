@@ -50,6 +50,8 @@ impl RobcoNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             applications: self.applications.clone(),
+            zeta_invaders: self.zeta_invaders.clone(),
+            red_menace: self.red_menace.clone(),
             desktop_nuke_codes_open: self.desktop_nuke_codes_open,
             desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
@@ -115,6 +117,8 @@ impl RobcoNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.applications = parked.applications;
+        self.zeta_invaders = parked.zeta_invaders;
+        self.red_menace = parked.red_menace;
         self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;

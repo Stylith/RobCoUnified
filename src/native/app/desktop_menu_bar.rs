@@ -105,7 +105,7 @@ impl RobcoNativeApp {
                 self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
             }
             DesktopMenuAction::OpenSettings => {
-                self.open_or_spawn_desktop_window(DesktopWindow::Settings);
+                self.open_desktop_settings_window();
             }
             DesktopMenuAction::ToggleStartMenu => {
                 if self.start_open {

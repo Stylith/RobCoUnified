@@ -7,7 +7,10 @@ use super::super::default_apps_screen::{draw_default_apps_screen, TerminalDefaul
 use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_default_apps_service::apply_default_app_binding;
 use super::super::desktop_documents_service::document_category_path;
-use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
+use super::super::desktop_launcher_service::{
+    catalog_names, grouped_game_menu_names, robco_fun_game_names, ProgramCatalog,
+    ROBCO_FUN_MENU_LABEL,
+};
 use super::super::desktop_session_service::session_tabs as native_session_tabs;
 use super::super::desktop_settings_service::cycle_hacking_difficulty_in_settings;
 use super::super::desktop_status_service::{clear_shell_status, saved_shell_status};
@@ -15,8 +18,8 @@ use super::super::desktop_user_service::{
     create_user as create_desktop_user, update_user_auth_method,
 };
 use super::super::document_browser::{
-    activate_browser_selection, draw_terminal_document_browser, DocumentBrowserEvent,
-    TerminalDocumentBrowserRequest,
+    activate_browser_selection, draw_terminal_document_browser, sync_browser_selection,
+    DocumentBrowserEvent, TerminalDocumentBrowserRequest,
 };
 use super::super::edit_menus_screen::{
     draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest,
@@ -33,7 +36,7 @@ use super::super::menu::{
     UserManagementExecutionPlan, UserManagementMode,
 };
 use super::super::nuke_codes_screen::{draw_nuke_codes_screen, NukeCodesEvent};
-use super::super::programs_screen::draw_programs_menu;
+use super::super::programs_screen::{draw_programs_menu, ProgramMenuEvent};
 use super::super::prompt::{draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction};
 use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, RetroScreen};
@@ -48,6 +51,7 @@ use super::RobcoNativeApp;
 use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, TopBottomPanel};
+use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesView};
 use robcos_native_programs_app::{
     build_terminal_application_entries, build_terminal_game_entries,
@@ -55,6 +59,7 @@ use robcos_native_programs_app::{
     resolve_terminal_games_request, DesktopProgramRequest, TerminalProgramRequest,
 };
 use robcos_native_settings_app::TerminalSettingsPanel;
+use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
 use std::time::Duration;
 
 impl RobcoNativeApp {
@@ -159,6 +164,11 @@ impl RobcoNativeApp {
                 self.shell_status = "Opened File Manager.".to_string();
             }
             TerminalProgramRequest::LaunchCatalog { name, catalog } => {
+                if catalog == ProgramCatalog::Games
+                    && self.open_terminal_robco_fun_game(&name, launch_return_screen)
+                {
+                    return;
+                }
                 self.open_embedded_catalog_launch(&name, catalog, launch_return_screen);
             }
         }
@@ -176,9 +186,46 @@ impl RobcoNativeApp {
                 self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
             }
             DesktopProgramRequest::LaunchCatalog { name, catalog, .. } => {
+                if catalog == ProgramCatalog::Games && self.open_hosted_robco_fun_game(&name) {
+                    return;
+                }
                 self.open_desktop_catalog_launch(&name, catalog);
             }
         }
+    }
+
+    pub(super) fn draw_terminal_zeta_invaders(&mut self, ctx: &Context) {
+        let input = zeta_invaders_input_from_ctx(ctx);
+        let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
+        self.zeta_invaders.game.update(&input, dt);
+        if self.zeta_invaders.atlas.is_none() {
+            self.zeta_invaders.atlas = Some(robcos_native_zeta_invaders_app::AtlasTextures::new(
+                ctx,
+            ));
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(current_palette().bg))
+            .show(ctx, |ui| {
+                let atlas = self
+                    .zeta_invaders
+                    .atlas
+                    .as_ref()
+                    .expect("zeta invaders atlas should be loaded");
+                self.zeta_invaders.game.draw(ui, atlas);
+            });
+    }
+
+    pub(super) fn draw_terminal_red_menace(&mut self, ctx: &Context) {
+        let input = red_menace_input_from_ctx(ctx);
+        let dt = Self::next_embedded_game_dt(&mut self.red_menace.last_frame_at);
+        self.red_menace.game.update(&input, dt);
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(current_palette().bg))
+            .show(ctx, |ui| {
+                self.red_menace.game.draw(ui);
+            });
     }
 
     pub(super) fn draw_terminal_documents(&mut self, ctx: &Context) {
@@ -287,6 +334,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_document_browser(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        sync_browser_selection(&mut self.file_manager, self.terminal_nav.browser_idx);
         // If open-with picker is open, handle it as overlay
         if let Some(ref mut picker) = self.terminal_open_with_picker {
             if picker.open {
@@ -884,7 +932,12 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let entries = build_terminal_game_entries(&catalog_names(ProgramCatalog::Games));
+        let groups = grouped_game_menu_names();
+        let mut entries = Vec::new();
+        if !groups.robco_fun.is_empty() {
+            entries.push(ROBCO_FUN_MENU_LABEL.to_string());
+        }
+        entries.extend(groups.other_games);
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -903,8 +956,56 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         );
-        let request = resolve_terminal_games_request(event);
-        self.apply_terminal_program_request(request, TerminalScreen::Games);
+        match event {
+            ProgramMenuEvent::None => {}
+            ProgramMenuEvent::Back => {
+                self.navigate_to_screen(TerminalScreen::MainMenu);
+                self.apply_status_update(clear_shell_status());
+            }
+            ProgramMenuEvent::Launch(name) if name == ROBCO_FUN_MENU_LABEL => {
+                self.navigate_to_screen(TerminalScreen::GamesRobcoFun);
+                self.terminal_nav.robco_fun_games_idx = 0;
+                self.apply_status_update(clear_shell_status());
+            }
+            other => {
+                let request = resolve_terminal_games_request(other);
+                self.apply_terminal_program_request(request, TerminalScreen::Games);
+            }
+        }
+    }
+
+    pub(super) fn draw_terminal_robco_fun_games(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
+        let entries = build_terminal_game_entries(&robco_fun_game_names());
+        let event = draw_programs_menu(
+            ctx,
+            "Games",
+            Some(ROBCO_FUN_MENU_LABEL),
+            &entries,
+            &mut self.terminal_nav.robco_fun_games_idx,
+            &self.shell_status,
+            layout.cols,
+            layout.rows,
+            layout.header_start_row,
+            layout.separator_top_row,
+            layout.title_row,
+            layout.separator_bottom_row,
+            layout.subtitle_row,
+            layout.menu_start_row,
+            layout.status_row,
+            layout.content_col,
+        );
+        match event {
+            ProgramMenuEvent::None => {}
+            ProgramMenuEvent::Back => {
+                self.navigate_to_screen(TerminalScreen::Games);
+                self.apply_status_update(clear_shell_status());
+            }
+            other => {
+                let request = resolve_terminal_games_request(other);
+                self.apply_terminal_program_request(request, TerminalScreen::GamesRobcoFun);
+            }
+        }
     }
 
     pub(super) fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {

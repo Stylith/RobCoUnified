@@ -115,7 +115,20 @@ pub fn desktop_builtin_icons() -> &'static [DesktopBuiltinIconEntry] {
     &DESKTOP_BUILTIN_ICONS
 }
 
-pub fn wallpaper_browser_start_dir() -> PathBuf {
+pub fn wallpaper_browser_start_dir(current_wallpaper: &str) -> PathBuf {
+    let trimmed = current_wallpaper.trim();
+    if !trimmed.is_empty() {
+        let candidate = PathBuf::from(trimmed);
+        if let Some(parent) = candidate
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            if candidate.extension().is_some() || candidate.is_file() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
     dirs::picture_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -415,5 +428,23 @@ mod tests {
         assert_eq!(entries[1].kind, DesktopSurfaceItemKind::Folder);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wallpaper_browser_start_dir_prefers_current_wallpaper_parent() {
+        let dir = unique_temp_dir("wallpaper-dir");
+        let wallpaper = dir.join("wallpaper.png");
+
+        let start = wallpaper_browser_start_dir(&wallpaper.to_string_lossy());
+
+        assert_eq!(start, dir);
+        let _ = fs::remove_dir_all(start);
+    }
+
+    #[test]
+    fn wallpaper_browser_start_dir_falls_back_for_builtin_wallpaper_names() {
+        let start = wallpaper_browser_start_dir("RobCo");
+
+        assert!(!start.as_os_str().is_empty());
     }
 }

@@ -802,6 +802,19 @@ impl RobcoNativeApp {
         known_app_count: usize,
     ) {
         let palette = current_palette();
+        if matches!(
+            desktop_model.action_mode,
+            file_manager_desktop::FileManagerDesktopActionMode::WallpaperPicker
+        ) {
+            egui::SidePanel::right(Id::new(("fm_preview", generation)))
+                .frame(egui::Frame::none())
+                .resizable(false)
+                .width_range(220.0..=280.0)
+                .default_width(240.0)
+                .show_inside(ui, |ui| {
+                    self.draw_file_manager_wallpaper_preview_panel(ctx, ui);
+                });
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show_inside(ui, |ui| {
@@ -992,5 +1005,60 @@ impl RobcoNativeApp {
                     }
                 }
             });
+    }
+
+    fn draw_file_manager_wallpaper_preview_panel(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+        let palette = current_palette();
+        let selected_row = self.file_manager.selected_row();
+        let preview_texture = selected_row
+            .as_ref()
+            .and_then(|row| self.file_manager_preview_texture(ctx, row));
+
+        ui.label(RichText::new("Preview").strong().color(palette.fg));
+        ui.small(RichText::new("Theme-tinted wallpaper preview").color(palette.dim));
+        ui.add_space(8.0);
+
+        egui::Frame::none()
+            .fill(palette.panel)
+            .stroke(egui::Stroke::new(1.0, palette.fg))
+            .inner_margin(egui::Margin::same(8.0))
+            .show(ui, |ui| {
+                let box_height = (ui.available_height() - 32.0).clamp(160.0, 240.0);
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), box_height),
+                    egui::Sense::hover(),
+                );
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, 0.0, palette.bg);
+                painter.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, palette.fg));
+
+                if let Some(texture) = preview_texture.as_ref() {
+                    let image_rect = Self::fit_texture_rect(texture, rect.shrink(10.0));
+                    Self::paint_tinted_texture(&painter, texture, image_rect, palette.fg);
+                } else {
+                    let message = match selected_row.as_ref() {
+                        Some(row) if row.is_dir || row.is_parent_dir() => {
+                            "Select an image file to preview it here."
+                        }
+                        Some(row) if !Self::path_supports_file_manager_image_preview(&row.path) => {
+                            "Preview is available for image files."
+                        }
+                        Some(_) => "Preview unavailable for this file.",
+                        None => "Select an image file to preview it here.",
+                    };
+                    painter.text(
+                        rect.center(),
+                        Align2::CENTER_CENTER,
+                        message,
+                        FontId::new(16.0, FontFamily::Monospace),
+                        palette.dim,
+                    );
+                }
+            });
+
+        if let Some(row) = selected_row {
+            ui.add_space(8.0);
+            ui.label(RichText::new(row.label).color(palette.fg));
+        }
     }
 }
