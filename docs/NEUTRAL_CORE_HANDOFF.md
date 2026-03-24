@@ -244,6 +244,24 @@ Additional Spotlight/terminal visibility slice:
 - terminal Applications builtins now derive from the same effective builtin visibility used by the desktop Applications window
 - terminal Edit Menus now only expose builtin toggles for addons that are actually available in the current install profile
 
+Additional desktop Settings visibility slice:
+
+- desktop Settings home tiles now have an explicit visibility model in `crates/native-settings-app/src/lib.rs`
+- native desktop settings now derive that visibility from the same addon/profile policy used by Start, Spotlight, Applications, and terminal Settings
+- disabled desktop Settings subpanels such as Connections now coerce back to the default Settings home panel instead of remaining directly targetable through stale state
+
+Additional `app.rs` extraction slice:
+
+- addon/profile visibility helpers and their caches were extracted from `src/native/app.rs` into `src/native/app/addon_policy.rs`
+- the native app root remains behaviorally identical for these paths, but the coordinator now delegates one more cohesive responsibility area to a dedicated submodule
+
+Additional terminal settings capability-routing slice:
+
+- terminal Settings no longer emits hardcoded screen-specific events for addon-backed tools such as Connections, Default Apps, Edit Menus, and About
+- `crates/native-settings-app/src/lib.rs` now emits capability-based terminal settings events for those addon-backed destinations
+- native terminal runtime now resolves those capability requests against the first-party addon registry for the active install profile before opening a terminal screen
+- this means terminal menu mode has started using the same capability contract as desktop launch paths, not just the same visibility policy
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

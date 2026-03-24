@@ -23,6 +23,7 @@ use super::super::document_browser::{
 use super::super::edit_menus_screen::{
     draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest,
 };
+use super::super::first_party_addon_registry_for_profile;
 use super::super::file_manager::FileManagerCommand;
 use super::super::installer_screen::{
     draw_installer_screen, settle_view_after_package_command, InstallerEvent,
@@ -58,6 +59,7 @@ use robcos_native_programs_app::{
 };
 use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::TerminalSettingsPanel;
+use robcos_shared::platform::CapabilityId;
 use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
 use std::time::Duration;
 
@@ -662,31 +664,8 @@ impl RobcoNativeApp {
                     self.apply_status_update(clear_shell_status());
                 }
             }
-            TerminalSettingsEvent::OpenConnections => {
-                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
-                    TerminalScreen::Connections,
-                    0,
-                    true,
-                ));
-            }
-            TerminalSettingsEvent::OpenEditMenus => {
-                self.navigate_to_screen(TerminalScreen::EditMenus);
-                self.terminal_edit_menus.reset();
-                self.apply_status_update(clear_shell_status());
-            }
-            TerminalSettingsEvent::OpenDefaultApps => {
-                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
-                    TerminalScreen::DefaultApps,
-                    0,
-                    true,
-                ));
-            }
-            TerminalSettingsEvent::OpenAbout => {
-                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
-                    TerminalScreen::About,
-                    0,
-                    true,
-                ));
+            TerminalSettingsEvent::OpenCapability(capability) => {
+                self.open_terminal_addon_capability(capability);
             }
             TerminalSettingsEvent::EnterUserManagement => {
                 self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
@@ -695,6 +674,38 @@ impl RobcoNativeApp {
                     true,
                 ));
             }
+        }
+    }
+
+    fn open_terminal_addon_capability(&mut self, capability: CapabilityId) {
+        let Some(screen) = self.terminal_screen_for_addon_capability(&capability) else {
+            crate::sound::play_error();
+            self.shell_status = format!(
+                "Capability '{capability}' is not available in terminal mode."
+            );
+            return;
+        };
+        if matches!(screen, TerminalScreen::EditMenus) {
+            self.terminal_edit_menus.reset();
+        }
+        self.apply_terminal_screen_open_plan(terminal_screen_open_plan(screen, 0, true));
+    }
+
+    pub(super) fn terminal_screen_for_addon_capability(
+        &self,
+        capability: &CapabilityId,
+    ) -> Option<TerminalScreen> {
+        let registry = first_party_addon_registry_for_profile(crate::config::install_profile());
+        if registry.by_capability(capability).is_empty() {
+            return None;
+        }
+
+        match capability.as_str() {
+            "connections-ui" => Some(TerminalScreen::Connections),
+            "edit-menus-ui" => Some(TerminalScreen::EditMenus),
+            "default-apps-ui" => Some(TerminalScreen::DefaultApps),
+            "about-ui" => Some(TerminalScreen::About),
+            _ => None,
         }
     }
 

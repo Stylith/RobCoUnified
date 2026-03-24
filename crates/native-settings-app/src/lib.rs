@@ -9,17 +9,15 @@ use robcos_shared::config::{
 };
 use robcos_shared::connections::macos_connections_disabled;
 use robcos_shared::core::auth::AuthMethod;
+use robcos_shared::platform::CapabilityId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalSettingsEvent {
     None,
     Persist,
     Back,
     OpenPanel(TerminalSettingsPanel),
-    OpenConnections,
-    OpenEditMenus,
-    OpenDefaultApps,
-    OpenAbout,
+    OpenCapability(CapabilityId),
     EnterUserManagement,
 }
 
@@ -29,6 +27,25 @@ pub enum TerminalSettingsPanel {
     General,
     Appearance,
     AppearanceEffects,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DesktopSettingsVisibility {
+    pub default_apps: bool,
+    pub connections: bool,
+    pub edit_menus: bool,
+    pub about: bool,
+}
+
+impl Default for DesktopSettingsVisibility {
+    fn default() -> Self {
+        Self {
+            default_apps: true,
+            connections: !macos_connections_disabled(),
+            edit_menus: true,
+            about: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,59 +232,78 @@ pub fn build_desktop_settings_ui_defaults(
 }
 
 pub fn desktop_settings_home_rows(is_admin: bool) -> Vec<Vec<SettingsHomeTile>> {
+    desktop_settings_home_rows_with_visibility(is_admin, DesktopSettingsVisibility::default())
+}
+
+pub fn desktop_settings_home_rows_with_visibility(
+    is_admin: bool,
+    visibility: DesktopSettingsVisibility,
+) -> Vec<Vec<SettingsHomeTile>> {
+    let mut first_row = vec![
+        SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::General),
+            label: "General",
+            icon: "[*]",
+            enabled: true,
+        },
+        SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Appearance),
+            label: "Appearance",
+            icon: "[A]",
+            enabled: true,
+        },
+    ];
+    if visibility.default_apps {
+        first_row.push(SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::DefaultApps),
+            label: "Default Apps",
+            icon: "[D]",
+            enabled: true,
+        });
+    }
+    if visibility.connections {
+        first_row.push(SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Connections),
+            label: "Connections",
+            icon: "[C]",
+            enabled: true,
+        });
+    }
+
+    let mut second_row = vec![
+        SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::CliProfiles),
+            label: "CLI Profiles",
+            icon: "[=]",
+            enabled: true,
+        },
+    ];
+    if visibility.edit_menus {
+        second_row.push(SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::EditMenus),
+            label: "Edit Menus",
+            icon: "[M]",
+            enabled: true,
+        });
+    }
+    second_row.push(SettingsHomeTile {
+        action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::UserManagement),
+        label: "User Management",
+        icon: "[U]",
+        enabled: is_admin,
+    });
+    if visibility.about {
+        second_row.push(SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::About),
+            label: "About",
+            icon: "[i]",
+            enabled: true,
+        });
+    }
+
     vec![
-        vec![
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::General),
-                label: "General",
-                icon: "[*]",
-                enabled: true,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Appearance),
-                label: "Appearance",
-                icon: "[A]",
-                enabled: true,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::DefaultApps),
-                label: "Default Apps",
-                icon: "[D]",
-                enabled: true,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Connections),
-                label: "Connections",
-                icon: "[C]",
-                enabled: true,
-            },
-        ],
-        vec![
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::CliProfiles),
-                label: "CLI Profiles",
-                icon: "[=]",
-                enabled: true,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::EditMenus),
-                label: "Edit Menus",
-                icon: "[M]",
-                enabled: true,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::UserManagement),
-                label: "User Management",
-                icon: "[U]",
-                enabled: is_admin,
-            },
-            SettingsHomeTile {
-                action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::About),
-                label: "About",
-                icon: "[i]",
-                enabled: true,
-            },
-        ],
+        first_row,
+        second_row,
         vec![SettingsHomeTile {
             action: SettingsHomeTileAction::CloseWindow,
             label: "Close",
@@ -275,6 +311,21 @@ pub fn desktop_settings_home_rows(is_admin: bool) -> Vec<Vec<SettingsHomeTile>> 
             enabled: true,
         }],
     ]
+}
+
+pub fn desktop_settings_panel_enabled(
+    panel: NativeSettingsPanel,
+    visibility: DesktopSettingsVisibility,
+) -> bool {
+    match panel {
+        NativeSettingsPanel::DefaultApps => visibility.default_apps,
+        NativeSettingsPanel::Connections
+        | NativeSettingsPanel::ConnectionsNetwork
+        | NativeSettingsPanel::ConnectionsBluetooth => visibility.connections,
+        NativeSettingsPanel::EditMenus => visibility.edit_menus,
+        NativeSettingsPanel::About => visibility.about,
+        _ => true,
+    }
 }
 
 pub fn desktop_settings_connections_nav_items() -> [SettingsPanelNavItem; 2] {
@@ -479,10 +530,18 @@ pub fn handle_settings_activation_with_visibility(
             *choice_overlay = Some(open_settings_choice(draft, SettingsChoiceKind::WindowMode));
             TerminalSettingsEvent::None
         }
-        SettingsRowId::Connections => TerminalSettingsEvent::OpenConnections,
-        SettingsRowId::EditMenus => TerminalSettingsEvent::OpenEditMenus,
-        SettingsRowId::DefaultApps => TerminalSettingsEvent::OpenDefaultApps,
-        SettingsRowId::About => TerminalSettingsEvent::OpenAbout,
+        SettingsRowId::Connections => {
+            TerminalSettingsEvent::OpenCapability(CapabilityId::from("connections-ui"))
+        }
+        SettingsRowId::EditMenus => {
+            TerminalSettingsEvent::OpenCapability(CapabilityId::from("edit-menus-ui"))
+        }
+        SettingsRowId::DefaultApps => {
+            TerminalSettingsEvent::OpenCapability(CapabilityId::from("default-apps-ui"))
+        }
+        SettingsRowId::About => {
+            TerminalSettingsEvent::OpenCapability(CapabilityId::from("about-ui"))
+        }
         SettingsRowId::UserManagement => {
             if is_admin {
                 TerminalSettingsEvent::EnterUserManagement
@@ -1051,7 +1110,8 @@ mod tests {
                     &mut overlay,
                     false,
                 ),
-                TerminalSettingsEvent::OpenConnections
+                TerminalSettingsEvent::OpenCapability(capability)
+                    if capability == CapabilityId::from("connections-ui")
             ));
         }
         let general_idx = user_rows
@@ -1108,7 +1168,8 @@ mod tests {
                 &mut overlay,
                 false,
             ),
-            TerminalSettingsEvent::OpenEditMenus
+            TerminalSettingsEvent::OpenCapability(capability)
+                if capability == CapabilityId::from("edit-menus-ui")
         ));
         assert!(matches!(
             handle_settings_activation(
@@ -1118,7 +1179,8 @@ mod tests {
                 &mut overlay,
                 false,
             ),
-            TerminalSettingsEvent::OpenDefaultApps
+            TerminalSettingsEvent::OpenCapability(capability)
+                if capability == CapabilityId::from("default-apps-ui")
         ));
         assert!(matches!(
             handle_settings_activation(
@@ -1128,7 +1190,8 @@ mod tests {
                 &mut overlay,
                 false,
             ),
-            TerminalSettingsEvent::OpenAbout
+            TerminalSettingsEvent::OpenCapability(capability)
+                if capability == CapabilityId::from("about-ui")
         ));
         assert!(matches!(
             handle_settings_activation(
@@ -1389,6 +1452,56 @@ mod tests {
             tile.action,
             SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::UserManagement)
         );
+    }
+
+    #[test]
+    fn desktop_settings_home_rows_respect_visibility() {
+        let rows = desktop_settings_home_rows_with_visibility(
+            false,
+            DesktopSettingsVisibility {
+                default_apps: false,
+                connections: false,
+                edit_menus: false,
+                about: false,
+            },
+        );
+
+        assert!(!rows[0].iter().any(|tile| tile.label == "Default Apps"));
+        assert!(!rows[0].iter().any(|tile| tile.label == "Connections"));
+        assert!(!rows[1].iter().any(|tile| tile.label == "Edit Menus"));
+        assert!(!rows[1].iter().any(|tile| tile.label == "About"));
+        assert!(rows[1].iter().any(|tile| tile.label == "User Management"));
+    }
+
+    #[test]
+    fn desktop_settings_panel_enabled_matches_visibility() {
+        let visibility = DesktopSettingsVisibility {
+            default_apps: false,
+            connections: false,
+            edit_menus: false,
+            about: false,
+        };
+
+        assert!(!desktop_settings_panel_enabled(
+            NativeSettingsPanel::DefaultApps,
+            visibility
+        ));
+        assert!(!desktop_settings_panel_enabled(
+            NativeSettingsPanel::ConnectionsBluetooth,
+            visibility
+        ));
+        assert!(!desktop_settings_panel_enabled(
+            NativeSettingsPanel::EditMenus,
+            visibility
+        ));
+        assert!(!desktop_settings_panel_enabled(
+            NativeSettingsPanel::About,
+            visibility
+        ));
+        assert!(desktop_settings_panel_enabled(
+            NativeSettingsPanel::Appearance,
+            visibility
+        ));
     }
 
     #[test]

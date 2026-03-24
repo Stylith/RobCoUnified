@@ -116,9 +116,10 @@ use robcos_native_programs_app::{
 };
 use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_settings_app::{
-    build_desktop_settings_ui_defaults, desktop_settings_default_panel, desktop_settings_home_rows,
-    GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
-    TerminalSettingsVisibility,
+    build_desktop_settings_ui_defaults, desktop_settings_default_panel,
+    desktop_settings_home_rows_with_visibility, desktop_settings_panel_enabled,
+    DesktopSettingsVisibility, GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile,
+    TerminalSettingsPanel, TerminalSettingsVisibility,
 };
 use robcos_native_zeta_invaders_app::{AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame};
 use std::collections::{HashMap, HashSet};
@@ -135,6 +136,7 @@ mod desktop_start_menu;
 mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
+mod addon_policy;
 mod launch_registry;
 mod session_management;
 mod software_cursor;
@@ -293,6 +295,11 @@ struct DesktopApplicationsSectionsCache {
     show_text_editor: bool,
     show_nuke_codes: bool,
     sections: Arc<DesktopApplicationsSections>,
+}
+
+struct SettingsHomeRowsCache {
+    visibility: DesktopSettingsVisibility,
+    rows: Arc<Vec<Vec<SettingsHomeTile>>>,
 }
 
 struct EditMenuEntriesCache {
@@ -605,8 +612,8 @@ pub struct RobcoNativeApp {
     file_manager_preview_loaded_for: String,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
     desktop_surface_entries_cache: Option<DesktopSurfaceEntriesCache>,
-    settings_home_rows_cache_admin: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
-    settings_home_rows_cache_standard: Option<Arc<Vec<Vec<SettingsHomeTile>>>>,
+    settings_home_rows_cache_admin: Option<SettingsHomeRowsCache>,
+    settings_home_rows_cache_standard: Option<SettingsHomeRowsCache>,
     desktop_applications_sections_cache: Option<DesktopApplicationsSectionsCache>,
     edit_menu_entries_cache: EditMenuEntriesCache,
     pending_settings_panel: Option<NativeSettingsPanel>,
@@ -1137,75 +1144,6 @@ impl RobcoNativeApp {
         self.last_native_appearance = Some(key);
     }
 
-    fn settings_home_rows_for_session(
-        &mut self,
-        is_admin: bool,
-    ) -> Arc<Vec<Vec<SettingsHomeTile>>> {
-        let cache = if is_admin {
-            &mut self.settings_home_rows_cache_admin
-        } else {
-            &mut self.settings_home_rows_cache_standard
-        };
-        cache
-            .get_or_insert_with(|| Arc::new(desktop_settings_home_rows(is_admin)))
-            .clone()
-    }
-
-    fn visible_application_builtins(&self) -> (bool, bool, bool) {
-        let profile = crate::config::install_profile();
-        let show_file_manager = first_party_capability_enabled_str(profile, "file-browser");
-        let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
-            && first_party_capability_enabled_str(profile, "text-editor");
-        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
-            && first_party_capability_enabled_str(profile, "code-reference");
-        (show_file_manager, show_text_editor, show_nuke_codes)
-    }
-
-    fn terminal_settings_visibility(&self) -> TerminalSettingsVisibility {
-        let profile = crate::config::install_profile();
-        TerminalSettingsVisibility {
-            default_apps: first_party_capability_enabled_str(profile, "default-apps-ui"),
-            connections: first_party_capability_enabled_str(profile, "connections-ui"),
-            edit_menus: first_party_capability_enabled_str(profile, "edit-menus-ui"),
-            about: first_party_capability_enabled_str(profile, "about-ui"),
-        }
-    }
-
-    fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
-        let (show_file_manager, show_text_editor, show_nuke_codes) =
-            self.visible_application_builtins();
-        let needs_rebuild = self
-            .desktop_applications_sections_cache
-            .as_ref()
-            .is_none_or(|cache| {
-                cache.show_file_manager != show_file_manager
-                    || cache.show_text_editor != show_text_editor
-                    || cache.show_nuke_codes != show_nuke_codes
-            });
-        if needs_rebuild {
-            let configured_names = catalog_names(ProgramCatalog::Applications);
-            let sections = Arc::new(build_desktop_applications_sections(
-                show_file_manager,
-                show_text_editor,
-                show_nuke_codes,
-                &configured_names,
-                BUILTIN_TEXT_EDITOR_APP,
-                BUILTIN_NUKE_CODES_APP,
-            ));
-            self.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
-                show_file_manager,
-                show_text_editor,
-                show_nuke_codes,
-                sections,
-            });
-        }
-        self.desktop_applications_sections_cache
-            .as_ref()
-            .expect("desktop applications sections cache initialized")
-            .sections
-            .clone()
-    }
-
     fn edit_menu_entries_cached(&mut self, target: EditMenuTarget) -> Arc<Vec<String>> {
         let cached = match target {
             EditMenuTarget::Applications => self.edit_menu_entries_cache.applications.clone(),
@@ -1416,7 +1354,7 @@ impl RobcoNativeApp {
         let requested_panel = self.pending_settings_panel.take();
         self.reset_desktop_settings_window();
         if let Some(panel) = requested_panel {
-            self.settings.panel = panel;
+            self.settings.panel = self.coerce_desktop_settings_panel(panel);
         }
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
     }
@@ -1462,7 +1400,9 @@ impl RobcoNativeApp {
         self.reset_desktop_settings_window();
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
         self.settings.open = true;
-        self.settings.panel = panel.unwrap_or_else(desktop_settings_default_panel);
+        self.settings.panel = self.coerce_desktop_settings_panel(
+            panel.unwrap_or_else(desktop_settings_default_panel),
+        );
         self.file_manager.open = false;
         self.picking_icon_for_shortcut = None;
         self.picking_wallpaper = false;
@@ -2714,7 +2654,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
-        self.pending_settings_panel = Some(panel);
+        self.pending_settings_panel = Some(self.coerce_desktop_settings_panel(panel));
         self.open_desktop_window(DesktopWindow::Settings);
     }
 
@@ -6015,6 +5955,45 @@ mod tests {
         assert!(app.settings.open);
         assert!(app.desktop_window_is_open(DesktopWindow::Settings));
         assert_eq!(app.settings.panel, desktop_settings_default_panel());
+    }
+
+    #[test]
+    fn terminal_settings_capability_maps_to_terminal_screen() {
+        let app = RobcoNativeApp::default();
+
+        assert_eq!(
+            app.terminal_screen_for_addon_capability(&crate::platform::CapabilityId::from(
+                "default-apps-ui"
+            )),
+            Some(TerminalScreen::DefaultApps)
+        );
+    }
+
+    #[test]
+    fn terminal_unknown_capability_is_not_routable() {
+        let app = RobcoNativeApp::default();
+
+        assert_eq!(
+            app.terminal_screen_for_addon_capability(&crate::platform::CapabilityId::from(
+                "made-up-capability"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn disabled_settings_panel_coerces_to_home_panel() {
+        let panel = RobcoNativeApp::coerce_desktop_settings_panel_for_visibility(
+            NativeSettingsPanel::Connections,
+            DesktopSettingsVisibility {
+                default_apps: true,
+                connections: false,
+                edit_menus: true,
+                about: true,
+            },
+        );
+
+        assert_eq!(panel, desktop_settings_default_panel());
     }
 
     #[test]
