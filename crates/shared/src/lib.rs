@@ -4,6 +4,7 @@ pub mod core;
 pub mod default_apps;
 pub mod diag;
 pub mod launcher;
+pub mod platform;
 pub mod pty;
 pub mod session;
 pub mod sound;

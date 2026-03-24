@@ -1,4 +1,5 @@
 mod about_screen;
+mod addons;
 pub mod app;
 mod applications_standalone;
 mod background;
@@ -44,6 +45,7 @@ pub use robcos_native_services::{
 };
 pub use robcos_native_settings_app::NativeSettingsPanel;
 
+pub use addons::{first_party_addon_manifests, first_party_addon_registry};
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
 pub use applications_standalone::RobcoNativeApplicationsApp;
 pub use editor_standalone::RobcoNativeEditorApp;
