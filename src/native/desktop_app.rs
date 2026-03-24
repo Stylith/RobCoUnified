@@ -41,6 +41,19 @@ pub enum DesktopMenuSection {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopWindowTileAction {
+    LeftHalf,
+    RightHalf,
+    TopHalf,
+    BottomHalf,
+    TopLeftQuarter,
+    TopRightQuarter,
+    BottomLeftQuarter,
+    BottomRightQuarter,
+    Center,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopMenuAction {
     EditorCommand(EditorCommand),
@@ -66,6 +79,7 @@ pub enum DesktopMenuAction {
     ToggleStartMenu,
     CloseActiveDesktopWindow,
     MinimizeActiveDesktopWindow,
+    TileActiveDesktopWindow(DesktopWindowTileAction),
     ActivateDesktopWindow(WindowInstanceId),
     ActivateTaskbarWindow(WindowInstanceId),
     OpenManual {
@@ -431,6 +445,59 @@ pub fn build_app_control_menu(has_active_window: bool) -> Vec<DesktopMenuItem> {
     items
 }
 
+pub fn build_window_tiling_menu_section(has_active_window: bool) -> Vec<DesktopMenuItem> {
+    let tile_item = |label: &str, action: DesktopWindowTileAction| {
+        if has_active_window {
+            DesktopMenuItem::Action {
+                label: label.to_string(),
+                action: DesktopMenuAction::TileActiveDesktopWindow(action),
+            }
+        } else {
+            DesktopMenuItem::Disabled {
+                label: label.to_string(),
+            }
+        }
+    };
+
+    vec![
+        tile_item(
+            "Tile Left Half (Ctrl/Cmd+Alt+Left)",
+            DesktopWindowTileAction::LeftHalf,
+        ),
+        tile_item(
+            "Tile Right Half (Ctrl/Cmd+Alt+Right)",
+            DesktopWindowTileAction::RightHalf,
+        ),
+        tile_item(
+            "Tile Top Half (Ctrl/Cmd+Alt+Up)",
+            DesktopWindowTileAction::TopHalf,
+        ),
+        tile_item(
+            "Tile Bottom Half (Ctrl/Cmd+Alt+Down)",
+            DesktopWindowTileAction::BottomHalf,
+        ),
+        DesktopMenuItem::Separator,
+        tile_item(
+            "Tile Top Left Quarter",
+            DesktopWindowTileAction::TopLeftQuarter,
+        ),
+        tile_item(
+            "Tile Top Right Quarter",
+            DesktopWindowTileAction::TopRightQuarter,
+        ),
+        tile_item(
+            "Tile Bottom Left Quarter",
+            DesktopWindowTileAction::BottomLeftQuarter,
+        ),
+        tile_item(
+            "Tile Bottom Right Quarter",
+            DesktopWindowTileAction::BottomRightQuarter,
+        ),
+        DesktopMenuItem::Separator,
+        tile_item("Center Window", DesktopWindowTileAction::Center),
+    ]
+}
+
 pub fn build_help_menu_section() -> Vec<DesktopMenuItem> {
     vec![
         DesktopMenuItem::Action {
@@ -769,6 +836,26 @@ mod tests {
         assert!(inactive.iter().any(|item| matches!(
             item,
             DesktopMenuItem::Label { label } if label == "No active app"
+        )));
+    }
+
+    #[test]
+    fn window_tiling_menu_reflects_focus_state() {
+        let active = build_window_tiling_menu_section(true);
+        let inactive = build_window_tiling_menu_section(false);
+
+        assert!(active.iter().any(|item| matches!(
+            item,
+            DesktopMenuItem::Action {
+                label,
+                action: DesktopMenuAction::TileActiveDesktopWindow(
+                    DesktopWindowTileAction::LeftHalf
+                ),
+            } if label.contains("Tile Left Half")
+        )));
+        assert!(inactive.iter().any(|item| matches!(
+            item,
+            DesktopMenuItem::Disabled { label } if label.contains("Tile Left Half")
         )));
     }
 

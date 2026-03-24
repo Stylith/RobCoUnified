@@ -1,6 +1,6 @@
 use super::super::desktop_app::{
     desktop_component_binding, desktop_component_spec, desktop_components, DesktopWindow,
-    WindowInstanceId,
+    DesktopWindowTileAction, WindowInstanceId,
 };
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
@@ -31,6 +31,7 @@ pub(super) enum DesktopHeaderAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DesktopWindowRectTracking {
     FullRect,
+    #[allow(dead_code)]
     PositionOnly,
 }
 
@@ -205,14 +206,128 @@ impl RobcoNativeApp {
         self.desktop_active_window = Some(id);
     }
 
+    pub(super) fn tile_active_desktop_window(
+        &mut self,
+        ctx: &Context,
+        target: DesktopWindowTileAction,
+    ) -> bool {
+        let Some(id) = self.desktop_active_window else {
+            return false;
+        };
+        self.tile_window_instance(ctx, id, target)
+    }
+
+    pub(super) fn tile_window_instance(
+        &mut self,
+        ctx: &Context,
+        id: WindowInstanceId,
+        target: DesktopWindowTileAction,
+    ) -> bool {
+        if !self.is_window_instance_open(id)
+            || self.desktop_window_state(id).minimized
+            || id.kind == DesktopWindow::TerminalMode
+        {
+            return false;
+        }
+
+        let min_size = self.desktop_window_min_size_for_instance(id);
+        let restore_size = self
+            .desktop_window_state(id)
+            .restore_size
+            .map(|size| egui::vec2(size[0], size[1]))
+            .unwrap_or_else(|| Self::desktop_default_window_size(id.kind));
+        let workspace = Self::desktop_workspace_rect(ctx);
+        let (pos, size) =
+            Self::desktop_window_tiled_geometry(workspace, target, min_size, restore_size);
+        let generation = self.next_desktop_window_generation();
+        let state = self.desktop_window_state_mut(id);
+        state.restore_pos = Some([pos.x, pos.y]);
+        state.restore_size = Some([size.x, size.y]);
+        state.user_resized = true;
+        state.apply_restore = true;
+        state.maximized = false;
+        state.minimized = false;
+        state.generation = generation;
+        self.desktop_active_window = Some(id);
+        true
+    }
+
+    pub(super) fn handle_desktop_window_tiling_shortcuts(&mut self, ctx: &Context) -> bool {
+        if !self.desktop_mode_open
+            || self.terminal_prompt.is_some()
+            || self.start_open
+            || self.spotlight_open
+        {
+            return false;
+        }
+
+        let Some(id) = self.desktop_active_window else {
+            return false;
+        };
+        if !self.is_window_instance_open(id)
+            || self.desktop_window_state(id).minimized
+            || id.kind == DesktopWindow::TerminalMode
+        {
+            return false;
+        }
+
+        let shortcut = ctx.input(|i| {
+            if !i.modifiers.command || !i.modifiers.alt || i.modifiers.shift {
+                return None;
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                Some((
+                    egui::Key::ArrowLeft,
+                    DesktopWindowTileAction::LeftHalf,
+                    i.modifiers,
+                ))
+            } else if i.key_pressed(egui::Key::ArrowRight) {
+                Some((
+                    egui::Key::ArrowRight,
+                    DesktopWindowTileAction::RightHalf,
+                    i.modifiers,
+                ))
+            } else if i.key_pressed(egui::Key::ArrowUp) {
+                Some((
+                    egui::Key::ArrowUp,
+                    DesktopWindowTileAction::TopHalf,
+                    i.modifiers,
+                ))
+            } else if i.key_pressed(egui::Key::ArrowDown) {
+                Some((
+                    egui::Key::ArrowDown,
+                    DesktopWindowTileAction::BottomHalf,
+                    i.modifiers,
+                ))
+            } else {
+                None
+            }
+        });
+        let Some((key, target, modifiers)) = shortcut else {
+            return false;
+        };
+        ctx.input_mut(|i| {
+            i.consume_key(modifiers, key);
+        });
+        self.tile_window_instance(ctx, id, target)
+    }
+
     // ── Static helpers ──────────────────────────────────────────────────
 
     pub(super) fn desktop_window_restore_size(rect: egui::Rect) -> egui::Vec2 {
+        Self::desktop_window_content_size(rect.size())
+    }
+
+    fn desktop_window_content_size(outer_size: egui::Vec2) -> egui::Vec2 {
         let margin = Self::desktop_window_frame().total_margin().sum();
         egui::vec2(
-            (rect.width() - margin.x).max(160.0),
-            (rect.height() - margin.y).max(120.0),
+            (outer_size.x - margin.x).max(160.0),
+            (outer_size.y - margin.y).max(120.0),
         )
+    }
+
+    fn desktop_window_outer_size(content_size: egui::Vec2) -> egui::Vec2 {
+        content_size + Self::desktop_window_frame().total_margin().sum()
     }
 
     pub(super) fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
@@ -254,6 +369,14 @@ impl RobcoNativeApp {
         egui::vec2(760.0, 520.0)
     }
 
+    pub(super) fn desktop_settings_window_min_size() -> egui::Vec2 {
+        egui::vec2(520.0, 360.0)
+    }
+
+    pub(super) fn desktop_installer_window_min_size() -> egui::Vec2 {
+        egui::vec2(500.0, 400.0)
+    }
+
     pub(super) fn desktop_default_window_pos(ctx: &Context, size: egui::Vec2) -> egui::Pos2 {
         let workspace = Self::desktop_workspace_rect(ctx);
         let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
@@ -266,10 +389,10 @@ impl RobcoNativeApp {
         size: egui::Vec2,
         min_size: egui::Vec2,
     ) -> egui::Vec2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
-        egui::vec2(
-            size.x.clamp(min_size.x, workspace.width().max(min_size.x)),
-            size.y.clamp(min_size.y, workspace.height().max(min_size.y)),
+        Self::desktop_clamp_window_size_to_workspace(
+            Self::desktop_workspace_rect(ctx),
+            size,
+            min_size,
         )
     }
 
@@ -278,7 +401,25 @@ impl RobcoNativeApp {
         pos: egui::Pos2,
         size: egui::Vec2,
     ) -> egui::Pos2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
+        Self::desktop_clamp_window_pos_to_workspace(Self::desktop_workspace_rect(ctx), pos, size)
+    }
+
+    fn desktop_clamp_window_size_to_workspace(
+        workspace: egui::Rect,
+        size: egui::Vec2,
+        min_size: egui::Vec2,
+    ) -> egui::Vec2 {
+        egui::vec2(
+            size.x.clamp(min_size.x, workspace.width().max(min_size.x)),
+            size.y.clamp(min_size.y, workspace.height().max(min_size.y)),
+        )
+    }
+
+    fn desktop_clamp_window_pos_to_workspace(
+        workspace: egui::Rect,
+        pos: egui::Pos2,
+        size: egui::Vec2,
+    ) -> egui::Pos2 {
         egui::pos2(
             pos.x.clamp(
                 workspace.left(),
@@ -289,6 +430,113 @@ impl RobcoNativeApp {
                 (workspace.bottom() - size.y).max(workspace.top()),
             ),
         )
+    }
+
+    fn desktop_window_min_size_for_instance(&self, id: WindowInstanceId) -> egui::Vec2 {
+        match id.kind {
+            DesktopWindow::FileManager => Self::desktop_file_manager_window_min_size(),
+            DesktopWindow::Editor => egui::vec2(400.0, 300.0),
+            DesktopWindow::Settings => Self::desktop_settings_window_min_size(),
+            DesktopWindow::Applications => egui::vec2(320.0, 250.0),
+            DesktopWindow::NukeCodes => egui::vec2(300.0, 200.0),
+            DesktopWindow::Installer => Self::desktop_installer_window_min_size(),
+            DesktopWindow::ZetaInvaders => egui::vec2(480.0, 360.0),
+            DesktopWindow::RedMenace => egui::vec2(620.0, 460.0),
+            DesktopWindow::PtyApp => self
+                .desktop_pty_state(id)
+                .map(Self::native_pty_window_min_size)
+                .unwrap_or_else(|| egui::vec2(640.0, 300.0)),
+            DesktopWindow::TerminalMode => {
+                Self::desktop_default_window_size(DesktopWindow::TerminalMode)
+            }
+        }
+    }
+
+    fn desktop_window_tiled_geometry(
+        workspace: egui::Rect,
+        target: DesktopWindowTileAction,
+        min_size: egui::Vec2,
+        restore_size: egui::Vec2,
+    ) -> (egui::Pos2, egui::Vec2) {
+        #[derive(Clone, Copy)]
+        enum HorizontalAnchor {
+            Left,
+            Center,
+            Right,
+        }
+
+        #[derive(Clone, Copy)]
+        enum VerticalAnchor {
+            Top,
+            Center,
+            Bottom,
+        }
+
+        let min_outer = Self::desktop_window_outer_size(min_size);
+        let restore_outer = Self::desktop_window_outer_size(restore_size);
+        let (requested_outer, h_anchor, v_anchor) = match target {
+            DesktopWindowTileAction::LeftHalf => (
+                egui::vec2(workspace.width() * 0.5, workspace.height()),
+                HorizontalAnchor::Left,
+                VerticalAnchor::Top,
+            ),
+            DesktopWindowTileAction::RightHalf => (
+                egui::vec2(workspace.width() * 0.5, workspace.height()),
+                HorizontalAnchor::Right,
+                VerticalAnchor::Top,
+            ),
+            DesktopWindowTileAction::TopHalf => (
+                egui::vec2(workspace.width(), workspace.height() * 0.5),
+                HorizontalAnchor::Left,
+                VerticalAnchor::Top,
+            ),
+            DesktopWindowTileAction::BottomHalf => (
+                egui::vec2(workspace.width(), workspace.height() * 0.5),
+                HorizontalAnchor::Left,
+                VerticalAnchor::Bottom,
+            ),
+            DesktopWindowTileAction::TopLeftQuarter => (
+                egui::vec2(workspace.width() * 0.5, workspace.height() * 0.5),
+                HorizontalAnchor::Left,
+                VerticalAnchor::Top,
+            ),
+            DesktopWindowTileAction::TopRightQuarter => (
+                egui::vec2(workspace.width() * 0.5, workspace.height() * 0.5),
+                HorizontalAnchor::Right,
+                VerticalAnchor::Top,
+            ),
+            DesktopWindowTileAction::BottomLeftQuarter => (
+                egui::vec2(workspace.width() * 0.5, workspace.height() * 0.5),
+                HorizontalAnchor::Left,
+                VerticalAnchor::Bottom,
+            ),
+            DesktopWindowTileAction::BottomRightQuarter => (
+                egui::vec2(workspace.width() * 0.5, workspace.height() * 0.5),
+                HorizontalAnchor::Right,
+                VerticalAnchor::Bottom,
+            ),
+            DesktopWindowTileAction::Center => (
+                restore_outer,
+                HorizontalAnchor::Center,
+                VerticalAnchor::Center,
+            ),
+        };
+        let outer_size =
+            Self::desktop_clamp_window_size_to_workspace(workspace, requested_outer, min_outer);
+        let pos = egui::pos2(
+            match h_anchor {
+                HorizontalAnchor::Left => workspace.left(),
+                HorizontalAnchor::Center => workspace.center().x - outer_size.x * 0.5,
+                HorizontalAnchor::Right => workspace.right() - outer_size.x,
+            },
+            match v_anchor {
+                VerticalAnchor::Top => workspace.top(),
+                VerticalAnchor::Center => workspace.center().y - outer_size.y * 0.5,
+                VerticalAnchor::Bottom => workspace.bottom() - outer_size.y,
+            },
+        );
+        let pos = Self::desktop_clamp_window_pos_to_workspace(workspace, pos, outer_size);
+        (pos, Self::desktop_window_content_size(outer_size))
     }
 
     // ── Window builders ─────────────────────────────────────────────────
@@ -769,5 +1017,40 @@ impl RobcoNativeApp {
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
         self.desktop_nuke_codes_open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::desktop_app::DesktopWindowTileAction;
+    use super::RobcoNativeApp;
+    use eframe::egui;
+
+    #[test]
+    fn tiled_geometry_anchors_quarters_and_center() {
+        let workspace =
+            egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(1000.0, 700.0));
+        let min_size = egui::vec2(320.0, 240.0);
+        let restore_size = egui::vec2(480.0, 360.0);
+
+        let (top_right_pos, top_right_size) = RobcoNativeApp::desktop_window_tiled_geometry(
+            workspace,
+            DesktopWindowTileAction::TopRightQuarter,
+            min_size,
+            restore_size,
+        );
+        let top_right_outer = RobcoNativeApp::desktop_window_outer_size(top_right_size);
+        assert_eq!(top_right_pos.y, workspace.top());
+        assert!((top_right_pos.x + top_right_outer.x - workspace.right()).abs() < 0.01);
+
+        let (center_pos, center_size) = RobcoNativeApp::desktop_window_tiled_geometry(
+            workspace,
+            DesktopWindowTileAction::Center,
+            min_size,
+            restore_size,
+        );
+        let center_outer = RobcoNativeApp::desktop_window_outer_size(center_size);
+        assert!((center_pos.x + center_outer.x * 0.5 - workspace.center().x).abs() < 0.01);
+        assert!((center_pos.y + center_outer.y * 0.5 - workspace.center().y).abs() < 0.01);
     }
 }

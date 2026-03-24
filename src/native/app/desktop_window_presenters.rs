@@ -535,11 +535,23 @@ impl RobcoNativeApp {
         let wid = self.current_window_id(DesktopWindow::Settings);
         let mut open = self.settings.open;
         let maximized = self.desktop_window_is_maximized(DesktopWindow::Settings);
-        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Settings);
         let mut header_action = DesktopHeaderAction::None;
         let egui_id = self.desktop_window_egui_id(wid);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Settings);
+        let min_size = Self::desktop_settings_window_min_size();
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let state = self.desktop_window_state(wid);
+        let live_size = state
+            .restore_size
+            .map(|size| egui::vec2(size[0], size[1]))
+            .unwrap_or(default_size);
+        let live_pos = state
+            .restore_pos
+            .map(|pos| egui::pos2(pos[0], pos[1]))
+            .unwrap_or(default_pos);
+        if state.apply_restore {
+            self.desktop_window_state_mut(wid).apply_restore = false;
+        }
         let mut window = egui::Window::new("Settings")
             .id(egui_id)
             .open(&mut open)
@@ -554,10 +566,10 @@ impl RobcoNativeApp {
                 .movable(false)
                 .fixed_pos(rect.min)
                 .fixed_size(rect.size());
-        } else if let Some((pos, _size)) = restore {
-            // Restore pos after un-maximize, but keep fixed content size.
-            let pos = Self::desktop_clamp_window_pos(ctx, pos, default_size);
-            window = window.current_pos(pos);
+        } else {
+            let size = Self::desktop_clamp_window_size(ctx, live_size, min_size);
+            let pos = Self::desktop_clamp_window_pos(ctx, live_pos, size);
+            window = window.current_pos(pos).fixed_size(size);
         }
         let mut close_requested = false;
         let shown = window.show(ctx, |ui| {
@@ -1281,7 +1293,7 @@ impl RobcoNativeApp {
             maximized,
             shown_rect,
             shown_contains_pointer,
-            DesktopWindowRectTracking::PositionOnly,
+            DesktopWindowRectTracking::FullRect,
             header_action,
         );
     }

@@ -4420,17 +4420,21 @@ impl RobcoNativeApp {
         let mut early_pty_close = None;
         let mut consumed_pty_input = false;
         if let Some(active_id) = active_id {
+            let handled_tile_shortcut = self.handle_desktop_window_tiling_shortcuts(ctx);
             if let Some(state) = self
                 .desktop_pty_slot_mut(active_id)
                 .and_then(|slot| slot.as_mut())
             {
-                if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
-                    early_pty_close = Some(active_id);
+                if !handled_tile_shortcut {
+                    if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
+                        early_pty_close = Some(active_id);
+                    }
+                    if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P))
+                    {
+                        state.show_perf_overlay = !state.show_perf_overlay;
+                    }
+                    handle_pty_input(ctx, &mut state.session);
                 }
-                if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
-                    state.show_perf_overlay = !state.show_perf_overlay;
-                }
-                handle_pty_input(ctx, &mut state.session);
                 consumed_pty_input = true;
             }
         }
@@ -4627,6 +4631,7 @@ impl eframe::App for RobcoNativeApp {
                     self.close_desktop_overlays();
                 }
             }
+            self.handle_desktop_window_tiling_shortcuts(ctx);
             self.handle_start_menu_keyboard(ctx);
             self.handle_desktop_file_manager_shortcuts(ctx);
             self.draw_top_bar(ctx);

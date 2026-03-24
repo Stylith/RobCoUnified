@@ -1,8 +1,8 @@
 use super::super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
-    build_window_menu_entries, build_window_menu_section, desktop_app_menu_name,
-    hosted_app_for_window, DesktopHostedApp, DesktopMenuAction, DesktopMenuBuildContext,
-    DesktopMenuItem, DesktopMenuSection, DesktopWindow,
+    build_window_menu_entries, build_window_menu_section, build_window_tiling_menu_section,
+    desktop_app_menu_name, hosted_app_for_window, DesktopHostedApp, DesktopMenuAction,
+    DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection, DesktopWindow,
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
 use super::super::retro_ui::{current_palette, RetroPalette};
@@ -128,6 +128,9 @@ impl RobcoNativeApp {
                     self.set_window_instance_minimized(id, true);
                 }
             }
+            DesktopMenuAction::TileActiveDesktopWindow(target) => {
+                self.tile_active_desktop_window(ctx, *target);
+            }
             DesktopMenuAction::ActivateDesktopWindow(id) => {
                 if id.kind == DesktopWindow::Editor
                     && !self.desktop_window_is_open(DesktopWindow::Editor)
@@ -231,11 +234,20 @@ impl RobcoNativeApp {
     pub(super) fn draw_top_bar_window_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
         let menu = ui.menu_button("Window", |ui| {
             Self::apply_top_dropdown_menu_style(ui);
+            let has_active_window = self.desktop_active_window.is_some_and(|id| {
+                self.is_window_instance_open(id)
+                    && !self.desktop_window_state(id).minimized
+                    && id.kind != DesktopWindow::TerminalMode
+            });
+            let mut items = build_window_tiling_menu_section(has_active_window);
             let open_windows = self.all_open_window_instances();
             let entries = build_window_menu_entries(&open_windows, self.desktop_active_window);
-            let items = build_window_menu_section(&entries, |id| {
+            if !items.is_empty() {
+                items.push(DesktopMenuItem::Separator);
+            }
+            items.extend(build_window_menu_section(&entries, |id| {
                 self.desktop_window_title_for_instance(id)
-            });
+            }));
             self.draw_desktop_menu_items(ui, ctx, &items);
         });
         if menu.response.clicked() {

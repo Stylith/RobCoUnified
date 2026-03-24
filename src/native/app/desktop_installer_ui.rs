@@ -39,19 +39,28 @@ impl RobcoNativeApp {
         let generation = self.desktop_window_generation(wid);
         let egui_id = self.desktop_window_egui_id(wid);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Installer);
+        let min_size = Self::desktop_installer_window_min_size();
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
         let workspace_rect = Self::desktop_workspace_rect(ctx);
-        let live_pos = {
-            let state = self.desktop_window_state(wid);
-            state.restore_pos.map(|pos| egui::pos2(pos[0], pos[1]))
-        };
+        let state = self.desktop_window_state(wid);
+        let live_pos = state
+            .restore_pos
+            .map(|pos| egui::pos2(pos[0], pos[1]))
+            .unwrap_or(default_pos);
+        let live_size = state
+            .restore_size
+            .map(|size| egui::vec2(size[0], size[1]))
+            .unwrap_or(default_size);
+        if state.apply_restore {
+            self.desktop_window_state_mut(wid).apply_restore = false;
+        }
         let mut window = egui::Window::new("Program Installer")
             .id(egui_id)
             .open(&mut open)
             .title_bar(false)
             .frame(Self::desktop_window_frame())
             .resizable(false)
-            .min_size([500.0, 400.0])
+            .min_size([min_size.x, min_size.y])
             .max_size(workspace_rect.size())
             .constrain_to(workspace_rect)
             .default_pos(default_pos)
@@ -63,9 +72,9 @@ impl RobcoNativeApp {
                 .fixed_pos(workspace_rect.min)
                 .fixed_size(workspace_rect.size());
         } else {
-            window = window
-                .current_pos(live_pos.unwrap_or(default_pos))
-                .fixed_size(default_size);
+            let size = Self::desktop_clamp_window_size(ctx, live_size, min_size);
+            let pos = Self::desktop_clamp_window_pos(ctx, live_pos, size);
+            window = window.current_pos(pos).fixed_size(size);
         }
 
         let palette = current_palette();
@@ -268,11 +277,7 @@ impl RobcoNativeApp {
             .is_some_and(|inner| inner.response.contains_pointer());
         if let Some(rect) = shown_rect {
             if !maximized {
-                let state = self.desktop_window_state_mut(DesktopWindow::Installer.into());
-                state.restore_pos = Some([rect.min.x, rect.min.y]);
-                state.restore_size = Some([default_size.x, default_size.y]);
-                state.user_resized = false;
-                state.apply_restore = false;
+                self.note_desktop_window_rect(DesktopWindow::Installer, rect);
             }
             self.maybe_activate_desktop_window_from_click(
                 ctx,
