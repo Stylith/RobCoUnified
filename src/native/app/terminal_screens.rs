@@ -47,7 +47,6 @@ use super::super::terminal_command_palette::{
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
 use super::launch_registry::{
     editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
-    resolve_terminal_launch_target, unresolved_terminal_launch_target_status, NativeTerminalLaunch,
 };
 use super::retro_footer_height;
 use super::RobcoNativeApp;
@@ -678,48 +677,6 @@ impl RobcoNativeApp {
                     0,
                     true,
                 ));
-            }
-        }
-    }
-
-    pub(super) fn execute_terminal_launch_target(
-        &mut self,
-        target: LaunchTarget,
-        return_screen: TerminalScreen,
-    ) {
-        let Some(launch) = resolve_terminal_launch_target(&target) else {
-            crate::sound::play_error();
-            self.shell_status = unresolved_terminal_launch_target_status(&target);
-            return;
-        };
-        match launch {
-            NativeTerminalLaunch::OpenScreen(TerminalScreen::Settings) => {
-                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
-            }
-            NativeTerminalLaunch::OpenScreen(screen) => {
-                if matches!(screen, TerminalScreen::EditMenus) {
-                    self.terminal_edit_menus.reset();
-                }
-                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(screen, 0, true));
-            }
-            NativeTerminalLaunch::OpenEmbeddedTerminalShell => {
-                self.open_embedded_terminal_shell();
-            }
-            NativeTerminalLaunch::OpenDocumentBrowser => {
-                self.terminal_nav.browser_idx = 0;
-                self.terminal_nav.browser_return_screen = return_screen;
-                self.navigate_to_screen(TerminalScreen::DocumentBrowser);
-                self.shell_status = "Opened File Manager.".to_string();
-            }
-            NativeTerminalLaunch::OpenEditor => {
-                self.editor.open = true;
-                if self.editor.path.is_none() {
-                    self.new_document();
-                }
-                self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
-            }
-            NativeTerminalLaunch::OpenNukeCodes => {
-                self.open_nuke_codes_screen(return_screen);
             }
         }
     }

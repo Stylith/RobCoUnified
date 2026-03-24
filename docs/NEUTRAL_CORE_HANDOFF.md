@@ -269,6 +269,12 @@ Additional shared terminal launch-registry slice:
 - terminal settings capability launches, terminal Applications builtin launches, and terminal main-menu launches for Settings, Program Installer, and Terminal now consume that shared terminal registry path
 - terminal mode still has older direct screen routing for non-addon sections like Documents, Network, Games, and user-management flows, but addon-backed entry points are no longer maintained as a separate terminal-only lookup table
 
+Additional launch-runtime extraction slice:
+
+- desktop launch helpers and shell-action execution moved out of `src/native/app.rs` into `src/native/app/launch_runtime.rs`
+- the shared terminal launch executor for addon-backed terminal routes moved into that same runtime module, so desktop and terminal launch behavior now live beside each other instead of being split across `app.rs` and `terminal_screens.rs`
+- this does not change runtime behavior, but it gives the coordinator a cleaner seam for the later `ShellState` / runtime extraction work
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

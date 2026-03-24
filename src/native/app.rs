@@ -13,7 +13,7 @@ use super::desktop_documents_service::{
     rename_document_category as rename_desktop_document_category,
 };
 use super::desktop_file_service::{
-    load_text_document, open_directory_location, reveal_path_location, FileManagerLocation,
+    load_text_document, open_directory_location, FileManagerLocation,
 };
 use super::desktop_launcher_service::{
     add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
@@ -111,8 +111,7 @@ use eframe::egui::{
 use egui_wgpu::CrtEffects;
 use robcos_native_file_manager_app::FileManagerAction;
 use robcos_native_programs_app::{
-    build_desktop_applications_sections, resolve_desktop_games_request,
-    DesktopApplicationsSections, DesktopProgramRequest,
+    build_desktop_applications_sections, DesktopApplicationsSections, DesktopProgramRequest,
 };
 use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_settings_app::{
@@ -138,15 +137,14 @@ mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
 mod launch_registry;
+mod launch_runtime;
 mod session_management;
 mod software_cursor;
 mod terminal_dispatch;
 mod terminal_screens;
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
-use launch_registry::{
-    resolve_desktop_launch_target, resolve_terminal_launch_target, unresolved_launch_target_status,
-    NativeDesktopLaunch, NativeTerminalLaunch,
-};
+#[cfg(test)]
+use launch_registry::{resolve_terminal_launch_target, NativeTerminalLaunch};
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod settings_panels;
@@ -2582,82 +2580,6 @@ impl RobcoNativeApp {
         }
     }
 
-    /// Open a desktop window if not already open, otherwise spawn a secondary
-    /// embedded instance inside the shell.
-    pub(super) fn open_or_spawn_desktop_window(&mut self, window: DesktopWindow) {
-        if !self.desktop_window_is_open(window) {
-            self.open_desktop_window(window);
-            return;
-        }
-        // Already open — try to create a secondary embedded instance.
-        let secondary_app = match window {
-            DesktopWindow::FileManager => Some(SecondaryWindowApp::FileManager {
-                state: NativeFileManagerState::new(home_dir_fallback()),
-                runtime: FileManagerEditRuntime::default(),
-            }),
-            DesktopWindow::Editor => Some(SecondaryWindowApp::Editor(EditorWindow::default())),
-            // Window types that don't support multi-instance: just focus existing.
-            _ => None,
-        };
-        if let Some(app) = secondary_app {
-            self.spawn_secondary_window(window, app);
-        } else {
-            self.open_desktop_window(window);
-        }
-    }
-
-    pub(super) fn open_desktop_settings_window(&mut self) {
-        self.pending_settings_panel = None;
-        self.open_desktop_window(DesktopWindow::Settings);
-    }
-
-    pub(super) fn launch_file_manager_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::file_manager_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_editor_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::editor_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_nuke_codes_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::nuke_codes_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_terminal_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::terminal_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_programs_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::programs_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_settings_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::settings_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_connections_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::connections_launch_target(),
-        ));
-    }
-
-    pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
-        self.pending_settings_panel = Some(self.coerce_desktop_settings_panel(panel));
-        self.open_desktop_window(DesktopWindow::Settings);
-    }
-
     fn spawn_secondary_window(
         &mut self,
         kind: DesktopWindow,
@@ -2731,88 +2653,6 @@ impl RobcoNativeApp {
             if let SecondaryWindowApp::Pty(state) = &mut window.app {
                 if let Some(mut pty) = state.take() {
                     pty.session.terminate();
-                }
-            }
-        }
-    }
-
-    fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
-        match action {
-            DesktopShellAction::LaunchByTarget(target) => {
-                match resolve_desktop_launch_target(&target) {
-                    Some(NativeDesktopLaunch::OpenWindow(window)) => {
-                        self.open_or_spawn_desktop_window(window);
-                    }
-                    Some(NativeDesktopLaunch::OpenNukeCodes) => {
-                        self.open_desktop_nuke_codes();
-                    }
-                    Some(NativeDesktopLaunch::OpenSettingsPanel(Some(panel))) => {
-                        self.open_desktop_settings_panel(panel);
-                    }
-                    Some(NativeDesktopLaunch::OpenSettingsPanel(None)) => {
-                        self.open_desktop_settings_window();
-                    }
-                    None => {
-                        self.shell_status = unresolved_launch_target_status(&target);
-                    }
-                }
-            }
-            DesktopShellAction::OpenTextEditor => {
-                self.launch_editor_via_registry();
-            }
-            DesktopShellAction::OpenNukeCodes => {
-                self.launch_nuke_codes_via_registry();
-            }
-            DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
-            DesktopShellAction::LaunchConfiguredApp(name) => {
-                self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
-                    name,
-                    catalog: ProgramCatalog::Applications,
-                    close_window: true,
-                });
-            }
-            DesktopShellAction::OpenFileManagerAt(path) => {
-                self.open_file_manager_at(path);
-            }
-            DesktopShellAction::LaunchNetworkProgram(name) => {
-                self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
-                    name,
-                    catalog: ProgramCatalog::Network,
-                    close_window: true,
-                });
-            }
-            DesktopShellAction::LaunchGameProgram(name) => {
-                if self.open_hosted_robco_fun_game(&name) {
-                    return;
-                }
-                let request = resolve_desktop_games_request(&name);
-                self.apply_desktop_program_request(request);
-            }
-            DesktopShellAction::OpenPathInEditor(path) => {
-                self.open_path_in_editor(path);
-            }
-            DesktopShellAction::RevealPathInFileManager(path) => {
-                if self.desktop_window_is_open(DesktopWindow::FileManager) {
-                    // Spawn a new embedded instance at the parent directory.
-                    let dir = path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(home_dir_fallback);
-                    self.spawn_secondary_window(
-                        DesktopWindow::FileManager,
-                        SecondaryWindowApp::FileManager {
-                            state: NativeFileManagerState::new(dir),
-                            runtime: FileManagerEditRuntime::default(),
-                        },
-                    );
-                } else {
-                    match reveal_path_location(path) {
-                        Ok(location) => {
-                            self.apply_file_manager_location(location);
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                        }
-                        Err(status) => self.shell_status = status,
-                    }
                 }
             }
         }
