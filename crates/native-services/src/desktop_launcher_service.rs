@@ -196,8 +196,10 @@ pub fn resolve_catalog_launch(
     match catalog {
         ProgramCatalog::Games => {
             let source = load_games();
-            resolve_program_launch_from_source(name, &source)
-                .or_else(|_| resolve_builtin_game_launch(name).ok_or_else(|| format!("Unknown program '{name}'.")))
+            resolve_program_launch_from_source(name, &source).or_else(|_| {
+                resolve_builtin_game_launch(name)
+                    .ok_or_else(|| format!("Unknown program '{name}'."))
+            })
         }
         ProgramCatalog::Applications | ProgramCatalog::Network => {
             resolve_program_launch_from_source(name, &load_catalog_source(catalog))

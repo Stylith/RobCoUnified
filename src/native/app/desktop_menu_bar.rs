@@ -233,10 +233,9 @@ impl RobcoNativeApp {
             Self::apply_top_dropdown_menu_style(ui);
             let open_windows = self.all_open_window_instances();
             let entries = build_window_menu_entries(&open_windows, self.desktop_active_window);
-            let items = build_window_menu_section(
-                &entries,
-                self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-            );
+            let items = build_window_menu_section(&entries, |id| {
+                self.desktop_window_title_for_instance(id)
+            });
             self.draw_desktop_menu_items(ui, ctx, &items);
         });
         if menu.response.clicked() {
@@ -274,10 +273,9 @@ impl RobcoNativeApp {
     pub(super) fn draw_top_bar(&mut self, ctx: &Context) {
         let palette = current_palette();
         Self::apply_global_retro_menu_chrome(ctx, &palette);
-        let app_menu_name = desktop_app_menu_name(
-            self.desktop_active_window,
-            self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-        );
+        let app_menu_name = desktop_app_menu_name(self.desktop_active_window, |id| {
+            self.desktop_window_title_for_instance(id)
+        });
         let active_app = self.active_desktop_app();
         TopBottomPanel::top("native_top_bar")
             .exact_height(30.0)

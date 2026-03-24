@@ -334,7 +334,7 @@ impl RobcoNativeApp {
             {
                 self.desktop_installer.status = status.clone();
                 self.open_desktop_pty("Program Installer", &argv);
-                if let Some(pty) = self.terminal_pty.as_mut() {
+                if let Some(pty) = self.active_desktop_pty_state_mut() {
                     pty.completion_message = completion_message;
                 }
             }

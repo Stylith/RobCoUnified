@@ -4,8 +4,8 @@ use super::super::desktop_launcher_service::{
     grouped_game_menu_names, is_robco_fun_game, robco_fun_game_names, ROBCO_FUN_MENU_LABEL,
 };
 use super::super::desktop_search_service::{
-    start_application_entries, start_document_entries, start_network_entries, NativeStartLeafAction,
-    NativeStartLeafEntry,
+    start_application_entries, start_document_entries, start_network_entries,
+    NativeStartLeafAction, NativeStartLeafEntry,
 };
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
@@ -346,10 +346,15 @@ impl RobcoNativeApp {
                         action: NativeStartLeafAction::None,
                     });
                 }
-                items.extend(groups.other_games.into_iter().map(|label| NativeStartLeafEntry {
-                    action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
-                    label,
-                }));
+                items.extend(
+                    groups
+                        .other_games
+                        .into_iter()
+                        .map(|label| NativeStartLeafEntry {
+                            action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
+                            label,
+                        }),
+                );
                 if items.is_empty() {
                     items.push(NativeStartLeafEntry {
                         label: "(No games installed)".to_string(),
@@ -532,8 +537,12 @@ impl RobcoNativeApp {
                                 } else {
                                     item.label.clone()
                                 };
-                                let response =
-                                    Self::start_menu_row(ui, &display_label, selected, LEAF_W - 16.0);
+                                let response = Self::start_menu_row(
+                                    ui,
+                                    &display_label,
+                                    selected,
+                                    LEAF_W - 16.0,
+                                );
                                 if response.hovered() {
                                     self.start_leaf_selected = idx;
                                     if leaf == StartLeaf::Games
@@ -660,10 +669,12 @@ impl RobcoNativeApp {
                     self.start_system_selected = self
                         .start_system_selected
                         .min(items.len().saturating_sub(1));
-                    let anchor_bottom = leaf_rect.map(|rect| rect.bottom()).unwrap_or(root_rect.bottom());
+                    let anchor_bottom = leaf_rect
+                        .map(|rect| rect.bottom())
+                        .unwrap_or(root_rect.bottom());
                     let sub_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
-                    let sub_y = leaf_branch_anchor_y
-                        .clamp(screen.top() + EDGE_PAD, anchor_bottom - sub_h);
+                    let sub_y =
+                        leaf_branch_anchor_y.clamp(screen.top() + EDGE_PAD, anchor_bottom - sub_h);
                     egui::Area::new(Id::new("native_start_robco_fun_submenu_panel"))
                         .fixed_pos([leaf_branch_x, sub_y])
                         .interactable(true)
@@ -678,8 +689,12 @@ impl RobcoNativeApp {
                                     ui.set_max_width(LEAF_W);
                                     for (idx, item) in items.iter().enumerate() {
                                         let selected = self.start_system_selected == idx;
-                                        let response =
-                                            Self::start_menu_row(ui, &item.label, selected, LEAF_W - 16.0);
+                                        let response = Self::start_menu_row(
+                                            ui,
+                                            &item.label,
+                                            selected,
+                                            LEAF_W - 16.0,
+                                        );
                                         if response.hovered() {
                                             self.start_system_selected = idx;
                                         }

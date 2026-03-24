@@ -50,19 +50,60 @@ use super::retro_footer_height;
 use super::RobcoNativeApp;
 use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
 use chrono::{Local, Timelike};
-use eframe::egui::{self, Color32, Context, Id, Layout, RichText, TopBottomPanel};
-use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
+use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
 use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesView};
 use robcos_native_programs_app::{
     build_terminal_application_entries, build_terminal_game_entries,
     resolve_terminal_applications_request, resolve_terminal_catalog_request,
     resolve_terminal_games_request, DesktopProgramRequest, TerminalProgramRequest,
 };
+use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::TerminalSettingsPanel;
 use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
 use std::time::Duration;
 
 impl RobcoNativeApp {
+    fn draw_terminal_game_shell<F>(ctx: &Context, title: &str, controls: &str, draw_game: F)
+    where
+        F: FnOnce(&mut egui::Ui),
+    {
+        let palette = current_palette();
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.bg)
+                    .inner_margin(egui::Margin::symmetric(16.0, 12.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title).monospace().strong().color(palette.fg));
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("TAB BACK")
+                                .monospace()
+                                .small()
+                                .color(palette.dim),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(controls)
+                        .monospace()
+                        .small()
+                        .color(palette.dim),
+                );
+                ui.add_space(10.0);
+                egui::Frame::none()
+                    .stroke(Stroke::new(1.0, palette.dim))
+                    .inner_margin(egui::Margin::same(10.0))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                        draw_game(ui);
+                    });
+            });
+    }
+
     pub(super) fn draw_terminal_main_menu(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let activated = draw_main_menu_screen(
@@ -199,21 +240,23 @@ impl RobcoNativeApp {
         let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
         self.zeta_invaders.game.update(&input, dt);
         if self.zeta_invaders.atlas.is_none() {
-            self.zeta_invaders.atlas = Some(robcos_native_zeta_invaders_app::AtlasTextures::new(
-                ctx,
-            ));
+            self.zeta_invaders.atlas =
+                Some(robcos_native_zeta_invaders_app::AtlasTextures::new(ctx));
         }
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg))
-            .show(ctx, |ui| {
+        Self::draw_terminal_game_shell(
+            ctx,
+            "ZETA INVADERS",
+            "ARROWS/A D MOVE   SPACE FIRE   ENTER START   ESC PAUSE",
+            |ui| {
                 let atlas = self
                     .zeta_invaders
                     .atlas
                     .as_ref()
                     .expect("zeta invaders atlas should be loaded");
                 self.zeta_invaders.game.draw(ui, atlas);
-            });
+            },
+        );
     }
 
     pub(super) fn draw_terminal_red_menace(&mut self, ctx: &Context) {
@@ -221,11 +264,14 @@ impl RobcoNativeApp {
         let dt = Self::next_embedded_game_dt(&mut self.red_menace.last_frame_at);
         self.red_menace.game.update(&input, dt);
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(current_palette().bg))
-            .show(ctx, |ui| {
+        Self::draw_terminal_game_shell(
+            ctx,
+            "RED MENACE",
+            "ARROWS/WASD MOVE   SPACE ACTION/JUMP   ENTER START",
+            |ui| {
                 self.red_menace.game.draw(ui);
-            });
+            },
+        );
     }
 
     pub(super) fn draw_terminal_documents(&mut self, ctx: &Context) {

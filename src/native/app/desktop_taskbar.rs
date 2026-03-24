@@ -38,11 +38,10 @@ impl RobcoNativeApp {
                     ui.label(RichText::new("|").monospace().color(Color32::BLACK));
                     ui.add_space(8.0);
                     let open_windows = self.all_open_window_instances();
-                    let entries = build_taskbar_entries(
-                        &open_windows,
-                        self.desktop_active_window,
-                        self.terminal_pty.as_ref().map(|pty| pty.title.as_str()),
-                    );
+                    let entries =
+                        build_taskbar_entries(&open_windows, self.desktop_active_window, |id| {
+                            self.desktop_window_title_for_instance(id)
+                        });
                     // Group entries by kind to detect multi-instance window types.
                     let mut i = 0;
                     while i < entries.len() {

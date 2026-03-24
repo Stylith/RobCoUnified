@@ -450,10 +450,13 @@ pub fn build_help_menu_section() -> Vec<DesktopMenuItem> {
     ]
 }
 
-pub fn build_window_menu_section(
+pub fn build_window_menu_section<F>(
     entries: &[DesktopWindowMenuEntry],
-    pty_title: Option<&str>,
-) -> Vec<DesktopMenuItem> {
+    title_for: F,
+) -> Vec<DesktopMenuItem>
+where
+    F: Fn(WindowInstanceId) -> String,
+{
     if entries.is_empty() {
         return vec![DesktopMenuItem::Label {
             label: "No windows open".to_string(),
@@ -471,10 +474,7 @@ pub fn build_window_menu_section(
                 "closed"
             };
             DesktopMenuItem::Action {
-                label: format!(
-                    "{marker}: {}",
-                    desktop_window_title(entry.id.kind, pty_title)
-                ),
+                label: format!("{marker}: {}", title_for(entry.id)),
                 action: DesktopMenuAction::ActivateDesktopWindow(entry.id),
             }
         })
@@ -503,11 +503,14 @@ pub fn build_window_menu_entries(
     entries
 }
 
-pub fn build_taskbar_entries(
+pub fn build_taskbar_entries<F>(
     open_windows: &[WindowInstanceId],
     active_window: Option<WindowInstanceId>,
-    pty_title: Option<&str>,
-) -> Vec<DesktopTaskbarEntry> {
+    title_for: F,
+) -> Vec<DesktopTaskbarEntry>
+where
+    F: Fn(WindowInstanceId) -> String,
+{
     let mut entries = Vec::new();
     // Iterate each open window instance, grouped by component order.
     for component in desktop_components() {
@@ -525,12 +528,10 @@ pub fn build_taskbar_entries(
             continue;
         }
         let has_multiple = instances.len() > 1;
-        for id in instances {
-            let base_title = component.spec.title(pty_title);
-            let label = if has_multiple && id.instance == 0 {
-                format!("{} [1]", base_title)
-            } else if id.instance > 0 {
-                format!("{} [{}]", base_title, id.instance + 1)
+        for (idx, id) in instances.into_iter().enumerate() {
+            let base_title = title_for(id);
+            let label = if has_multiple {
+                format!("{} [{}]", base_title, idx + 1)
             } else {
                 base_title
             };
@@ -582,12 +583,12 @@ pub fn desktop_window_title(window: DesktopWindow, pty_title: Option<&str>) -> S
     desktop_component_spec(window).title(pty_title)
 }
 
-pub fn desktop_app_menu_name(
-    active_window: Option<WindowInstanceId>,
-    pty_title: Option<&str>,
-) -> String {
+pub fn desktop_app_menu_name<F>(active_window: Option<WindowInstanceId>, title_for: F) -> String
+where
+    F: Fn(WindowInstanceId) -> String,
+{
     active_window
-        .map(|id| desktop_window_title(id.kind, pty_title))
+        .map(title_for)
         .unwrap_or_else(|| "Desktop".to_string())
 }
 
@@ -710,10 +711,11 @@ mod tests {
     fn desktop_component_registry_is_single_source_of_truth() {
         let components = desktop_components();
         assert_eq!(components[0].spec.window, DesktopWindow::FileManager);
-        assert_eq!(components[6].spec.window, DesktopWindow::Installer);
-        assert_eq!(components[7].spec.window, DesktopWindow::TerminalMode);
-        assert!(!components[7].spec.show_in_taskbar);
-        assert!(!components[6].spec.show_in_window_menu);
+        assert_eq!(components[6].spec.window, DesktopWindow::NukeCodes);
+        assert_eq!(components[7].spec.window, DesktopWindow::Installer);
+        assert_eq!(components[8].spec.window, DesktopWindow::TerminalMode);
+        assert!(!components[8].spec.show_in_taskbar);
+        assert!(!components[7].spec.show_in_window_menu);
         assert_eq!(
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"
@@ -782,7 +784,7 @@ mod tests {
                 open: true,
                 active: false,
             }],
-            None,
+            |id| desktop_window_title(id.kind, None),
         );
 
         assert!(items.iter().any(|item| matches!(
@@ -796,7 +798,7 @@ mod tests {
 
     #[test]
     fn empty_window_menu_shows_placeholder() {
-        let items = build_window_menu_section(&[], None);
+        let items = build_window_menu_section(&[], |id| desktop_window_title(id.kind, None));
 
         assert!(matches!(
             items.as_slice(),
@@ -834,7 +836,7 @@ mod tests {
                 WindowInstanceId::primary(DesktopWindow::FileManager),
             ],
             Some(WindowInstanceId::primary(DesktopWindow::Editor)),
-            None,
+            |id| desktop_window_title(id.kind, None),
         );
 
         assert_eq!(entries[0].id.kind, DesktopWindow::FileManager);

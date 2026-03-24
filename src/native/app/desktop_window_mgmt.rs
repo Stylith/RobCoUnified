@@ -69,7 +69,9 @@ impl RobcoNativeApp {
         if id.instance == 0 {
             self.desktop_window_is_open(id.kind)
         } else {
-            self.secondary_windows.iter().any(|sw| sw.id == id)
+            self.secondary_windows
+                .iter()
+                .any(|sw| sw.id == id && sw.is_open())
         }
     }
 
@@ -508,12 +510,27 @@ impl RobcoNativeApp {
             .and_then(|sw| match &mut sw.app {
                 SecondaryWindowApp::Editor(editor) => Some(editor),
                 SecondaryWindowApp::FileManager { .. } => None,
+                SecondaryWindowApp::Pty(_) => None,
             })
     }
 
     fn close_window_instance_unchecked(&mut self, id: WindowInstanceId) {
         if id.instance > 0 {
-            // Secondary: mark for removal (handled after swap-draw).
+            if let Some(window) = self
+                .secondary_windows
+                .iter_mut()
+                .find(|window| window.id == id)
+            {
+                match &mut window.app {
+                    SecondaryWindowApp::FileManager { state, .. } => state.open = false,
+                    SecondaryWindowApp::Editor(editor) => editor.open = false,
+                    SecondaryWindowApp::Pty(state) => {
+                        if let Some(mut pty) = state.take() {
+                            pty.session.terminate();
+                        }
+                    }
+                }
+            }
             self.desktop_window_states.remove(&id);
             if self.desktop_active_window == Some(id) {
                 self.desktop_active_window = self.first_open_desktop_window();
@@ -660,6 +677,11 @@ impl RobcoNativeApp {
                 self.draw_editor(ctx);
                 std::mem::swap(&mut self.editor, editor);
             }
+            SecondaryWindowApp::Pty(state) => {
+                std::mem::swap(&mut self.terminal_pty, state);
+                self.draw_desktop_pty_window(ctx);
+                std::mem::swap(&mut self.terminal_pty, state);
+            }
         }
         self.drawing_window_id = None;
     }
@@ -731,6 +753,7 @@ impl RobcoNativeApp {
         for binding in desktop_components() {
             (binding.set_open)(self, false);
         }
+        Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
         self.secondary_windows.clear();
         self.desktop_window_states.clear();
         self.desktop_active_window = None;

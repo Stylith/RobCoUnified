@@ -18,7 +18,8 @@ const UFO_SIZE: Vec2 = Vec2::new(14.0, 8.0);
 const BULLET_HITBOX_SIZE: Vec2 = Vec2::new(2.0, 6.0);
 const PLAYER_BULLET_DRAW_SIZE: Vec2 = Vec2::new(0.9, 7.5);
 const ALIEN_BULLET_DRAW_SIZE: Vec2 = Vec2::new(1.2, 7.5);
-const BARN_PIECE_SIZE: Vec2 = Vec2::new(12.0 * WORLD_W / ZETA_STAGE_W, 12.0 * WORLD_H / ZETA_STAGE_H);
+const BARN_PIECE_SIZE: Vec2 =
+    Vec2::new(12.0 * WORLD_W / ZETA_STAGE_W, 12.0 * WORLD_H / ZETA_STAGE_H);
 const BARN_COLS: usize = 6;
 const BARN_ROWS: usize = 3;
 const PLAYER_Y: f32 = 226.0;

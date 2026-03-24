@@ -199,10 +199,12 @@ impl RobcoNativeApp {
         if let Some(mut pty) = self.terminal_pty.take() {
             pty.session.terminate();
         }
+        Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
         for parked in self.session_runtime.values_mut() {
             if let Some(mut pty) = parked.terminal_pty.take() {
                 pty.session.terminate();
             }
+            Self::terminate_secondary_window_ptys(&mut parked.secondary_windows);
         }
     }
 
@@ -224,10 +226,12 @@ impl RobcoNativeApp {
         if let Some(mut pty) = self.terminal_pty.take() {
             pty.session.terminate();
         }
+        Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
         if let Some(mut parked) = self.session_runtime.remove(&closing_idx) {
             if let Some(mut pty) = parked.terminal_pty.take() {
                 pty.session.terminate();
             }
+            Self::terminate_secondary_window_ptys(&mut parked.secondary_windows);
         }
 
         // Session indexes are contiguous; shift parked state keys down after removal.

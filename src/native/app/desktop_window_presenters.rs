@@ -27,8 +27,8 @@ use crate::config::{
     WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use eframe::egui::{self, Context, Id, Key, Layout, RichText, TextEdit};
-use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
+use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::{
     desktop_settings_back_target, desktop_settings_connections_nav_items,
     desktop_settings_user_management_nav_items, settings_panel_title, NativeSettingsPanel,
@@ -1476,9 +1476,8 @@ impl RobcoNativeApp {
         };
         self.zeta_invaders.game.update(&input, dt);
         if self.zeta_invaders.atlas.is_none() {
-            self.zeta_invaders.atlas = Some(robcos_native_zeta_invaders_app::AtlasTextures::new(
-                ctx,
-            ));
+            self.zeta_invaders.atlas =
+                Some(robcos_native_zeta_invaders_app::AtlasTextures::new(ctx));
         }
 
         let mut open = self.zeta_invaders.open;
@@ -1580,14 +1579,20 @@ impl RobcoNativeApp {
         if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
             return;
         }
+        let wid = self.current_window_id(DesktopWindow::PtyApp);
         let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
-        let pty_focused = self.active_window_kind() == Some(DesktopWindow::PtyApp);
+        let pty_focused = self.desktop_active_window == Some(wid);
         let Some(pty_state) = self.terminal_pty.as_ref() else {
             self.update_desktop_window_state(DesktopWindow::PtyApp, false);
             return;
         };
         let title = pty_state.title.clone();
+        let window_title = if wid.instance > 0 {
+            format!("{} [{}]", title, wid.instance + 1)
+        } else {
+            title.clone()
+        };
         let min_size = Self::native_pty_window_min_size(pty_state);
         let mut open = true;
         let mut header_action = DesktopHeaderAction::None;
@@ -1595,7 +1600,7 @@ impl RobcoNativeApp {
         let (window, maximized) = self.build_resizable_desktop_window(
             ctx,
             DesktopWindow::PtyApp,
-            title.clone(),
+            window_title.clone(),
             &mut open,
             ResizableDesktopWindowOptions {
                 min_size,
@@ -1612,7 +1617,7 @@ impl RobcoNativeApp {
             // NOTE: do NOT call apply_settings_control_style here — it changes
             // extreme_bg_color and margins, which destabilizes available_size()
             // causing resize oscillation (constant SIGWINCH) for ncurses apps.
-            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            header_action = Self::draw_desktop_window_header(ui, &window_title, maximized);
             let available = ui.available_size();
             let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
             let rows_floor = state.desktop_rows_floor.unwrap_or(20).saturating_add(1) as usize;

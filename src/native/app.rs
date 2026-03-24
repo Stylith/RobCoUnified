@@ -3,7 +3,9 @@ use super::connections_screen::TerminalConnectionsState;
 use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
-use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
+use super::desktop_app::{
+    desktop_component_spec, DesktopShellAction, DesktopWindow, WindowInstanceId,
+};
 use super::desktop_connections_service::{
     connections_macos_disabled, connections_macos_disabled_hint, saved_connections_for_kind,
     DiscoveredConnection,
@@ -110,11 +112,11 @@ use eframe::egui::{
 };
 use egui_wgpu::CrtEffects;
 use robcos_native_file_manager_app::FileManagerAction;
-use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_programs_app::{
     build_desktop_applications_sections, resolve_desktop_games_request,
     DesktopApplicationsSections, DesktopProgramRequest,
 };
+use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_default_panel, desktop_settings_home_rows,
     GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile, TerminalSettingsPanel,
@@ -669,17 +671,16 @@ pub(super) struct ParkedSessionState {
 }
 
 /// App-specific state for a secondary (non-primary) window instance.
-#[derive(Clone)]
 pub(super) enum SecondaryWindowApp {
     FileManager {
         state: NativeFileManagerState,
         runtime: FileManagerEditRuntime,
     },
     Editor(EditorWindow),
+    Pty(Option<NativePtyState>),
 }
 
 /// A secondary window instance — a second (or third, etc.) copy of an app.
-#[derive(Clone)]
 pub(super) struct SecondaryWindow {
     pub(super) id: WindowInstanceId,
     pub(super) app: SecondaryWindowApp,
@@ -690,6 +691,7 @@ impl SecondaryWindow {
         match &self.app {
             SecondaryWindowApp::FileManager { state, .. } => state.open,
             SecondaryWindowApp::Editor(editor) => editor.open,
+            SecondaryWindowApp::Pty(state) => state.is_some(),
         }
     }
 }
@@ -823,6 +825,24 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn reset_zeta_invaders_runtime(&mut self, open: bool) {
+        self.zeta_invaders = ZetaInvadersWindow::default();
+        self.zeta_invaders.open = open;
+    }
+
+    fn reset_red_menace_runtime(&mut self, open: bool) {
+        self.red_menace = RedMenaceWindow::default();
+        self.red_menace.open = open;
+    }
+
+    fn reset_game_for_screen(&mut self, screen: TerminalScreen) {
+        match screen {
+            TerminalScreen::ZetaInvaders => self.reset_zeta_invaders_runtime(false),
+            TerminalScreen::RedMenace => self.reset_red_menace_runtime(false),
+            _ => {}
+        }
+    }
+
     fn sync_native_display_effects(&self) {
         apply_native_display_effects_for_settings(&self.settings.draft);
     }
@@ -1557,9 +1577,10 @@ impl RobcoNativeApp {
     }
 
     pub(crate) fn desktop_component_zeta_invaders_set_open(&mut self, open: bool) {
-        self.zeta_invaders.open = open;
-        if !open {
-            self.zeta_invaders.last_frame_at = None;
+        if open {
+            self.zeta_invaders.open = true;
+        } else {
+            self.reset_zeta_invaders_runtime(false);
         }
     }
 
@@ -1572,9 +1593,10 @@ impl RobcoNativeApp {
     }
 
     pub(crate) fn desktop_component_red_menace_set_open(&mut self, open: bool) {
-        self.red_menace.open = open;
-        if !open {
-            self.red_menace.last_frame_at = None;
+        if open {
+            self.red_menace.open = true;
+        } else {
+            self.reset_red_menace_runtime(false);
         }
     }
 
@@ -2551,6 +2573,11 @@ impl RobcoNativeApp {
         let Some(window) = Self::builtin_game_window(name) else {
             return false;
         };
+        match window {
+            DesktopWindow::ZetaInvaders => self.reset_zeta_invaders_runtime(false),
+            DesktopWindow::RedMenace => self.reset_red_menace_runtime(false),
+            _ => {}
+        }
         self.desktop_mode_open = true;
         self.close_desktop_overlays();
         self.open_desktop_window(window);
@@ -2566,13 +2593,9 @@ impl RobcoNativeApp {
         let Some(screen) = Self::builtin_game_terminal_screen(name) else {
             return false;
         };
+        self.reset_game_for_screen(screen);
         self.terminal_nav.game_return_screen = return_screen;
         self.navigate_to_screen(screen);
-        match screen {
-            TerminalScreen::ZetaInvaders => self.zeta_invaders.last_frame_at = None,
-            TerminalScreen::RedMenace => self.red_menace.last_frame_at = None,
-            _ => {}
-        }
         self.apply_status_update(shell_status(format!("Opened {name}.")));
         true
     }
@@ -2624,7 +2647,11 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::Settings);
     }
 
-    fn spawn_secondary_window(&mut self, kind: DesktopWindow, app: SecondaryWindowApp) {
+    fn spawn_secondary_window(
+        &mut self,
+        kind: DesktopWindow,
+        app: SecondaryWindowApp,
+    ) -> WindowInstanceId {
         let instance = self.next_window_instance;
         self.next_window_instance += 1;
         let id = WindowInstanceId { kind, instance };
@@ -2639,6 +2666,62 @@ impl RobcoNativeApp {
         self.desktop_active_window = Some(id);
         if self.desktop_mode_open {
             self.close_desktop_overlays();
+        }
+        id
+    }
+
+    fn desktop_pty_slot_mut(
+        &mut self,
+        id: WindowInstanceId,
+    ) -> Option<&mut Option<NativePtyState>> {
+        if id.kind != DesktopWindow::PtyApp {
+            return None;
+        }
+        if id.instance == 0 {
+            return Some(&mut self.terminal_pty);
+        }
+        self.secondary_windows
+            .iter_mut()
+            .find(|window| window.id == id)
+            .and_then(|window| match &mut window.app {
+                SecondaryWindowApp::Pty(state) => Some(state),
+                _ => None,
+            })
+    }
+
+    fn desktop_pty_state(&self, id: WindowInstanceId) -> Option<&NativePtyState> {
+        if id.kind != DesktopWindow::PtyApp {
+            return None;
+        }
+        if id.instance == 0 {
+            return self.terminal_pty.as_ref();
+        }
+        self.secondary_windows
+            .iter()
+            .find(|window| window.id == id)
+            .and_then(|window| match &window.app {
+                SecondaryWindowApp::Pty(state) => state.as_ref(),
+                _ => None,
+            })
+    }
+
+    fn active_desktop_pty_state_mut(&mut self) -> Option<&mut NativePtyState> {
+        let id = self.desktop_active_window?;
+        self.desktop_pty_slot_mut(id)?.as_mut()
+    }
+
+    fn desktop_window_title_for_instance(&self, id: WindowInstanceId) -> String {
+        let pty_title = self.desktop_pty_state(id).map(|state| state.title.as_str());
+        desktop_component_spec(id.kind).title(pty_title)
+    }
+
+    fn terminate_secondary_window_ptys(windows: &mut [SecondaryWindow]) {
+        for window in windows {
+            if let SecondaryWindowApp::Pty(state) = &mut window.app {
+                if let Some(mut pty) = state.take() {
+                    pty.session.terminate();
+                }
+            }
         }
     }
 
@@ -2766,7 +2849,11 @@ impl RobcoNativeApp {
         self.desktop_mode_open = launch_default_desktop;
         self.apply_terminal_navigation_state(terminal_defaults);
         self.terminal_nuke_codes = NukeCodesView::default();
-        self.terminal_pty = None;
+        if let Some(mut pty) = self.terminal_pty.take() {
+            pty.session.terminate();
+        }
+        Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
+        self.secondary_windows.clear();
         self.terminal_installer.reset();
         self.terminal_edit_menus.reset();
         self.terminal_connections.reset();
@@ -2794,7 +2881,9 @@ impl RobcoNativeApp {
     }
 
     fn navigate_to_screen(&mut self, screen: TerminalScreen) {
-        if self.terminal_nav.screen != screen {
+        let previous = self.terminal_nav.screen;
+        if previous != screen {
+            self.reset_game_for_screen(previous);
             crate::sound::play_navigate();
         }
         self.terminal_nav.screen = screen;
@@ -3066,7 +3155,11 @@ impl RobcoNativeApp {
         plan: TerminalPtyLaunchPlan,
         desktop_window: bool,
     ) {
-        if plan.replace_existing_pty {
+        let spawn_secondary_desktop_pty =
+            desktop_window && self.desktop_window_is_open(DesktopWindow::PtyApp);
+        if !spawn_secondary_desktop_pty
+            && (plan.replace_existing_pty || self.terminal_pty.is_some())
+        {
             if let Some(mut previous) = self.terminal_pty.take() {
                 previous.session.terminate();
             }
@@ -3105,13 +3198,21 @@ impl RobcoNativeApp {
                     state.fixed_font_scale = Some(0.94);
                     state.fixed_font_width_divisor = Some(0.44);
                 }
-                self.terminal_pty = Some(state);
                 if desktop_window {
-                    self.open_desktop_window(DesktopWindow::PtyApp);
-                    let window = self
-                        .desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::PtyApp));
+                    let window_id = if spawn_secondary_desktop_pty {
+                        self.spawn_secondary_window(
+                            DesktopWindow::PtyApp,
+                            SecondaryWindowApp::Pty(Some(state)),
+                        )
+                    } else {
+                        self.terminal_pty = Some(state);
+                        self.open_desktop_window(DesktopWindow::PtyApp);
+                        WindowInstanceId::primary(DesktopWindow::PtyApp)
+                    };
+                    let window = self.desktop_window_state_mut(window_id);
                     window.maximized = profile.open_fullscreen;
                 } else {
+                    self.terminal_pty = Some(state);
                     self.navigate_to_screen(TerminalScreen::PtyApp);
                 }
                 self.shell_status = plan.success_status;
@@ -4311,31 +4412,38 @@ impl RobcoNativeApp {
     }
 
     fn process_desktop_pty_input_early(&mut self, ctx: &Context) {
-        let mut early_pty_close = false;
-        if self.desktop_mode_open && self.active_window_kind() == Some(DesktopWindow::PtyApp) {
-            if let Some(state) = self.terminal_pty.as_mut() {
+        let active_id = self
+            .desktop_active_window
+            .filter(|id| self.desktop_mode_open && id.kind == DesktopWindow::PtyApp);
+        let mut early_pty_close = None;
+        let mut consumed_pty_input = false;
+        if let Some(active_id) = active_id {
+            if let Some(state) = self
+                .desktop_pty_slot_mut(active_id)
+                .and_then(|slot| slot.as_mut())
+            {
                 if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
-                    early_pty_close = true;
+                    early_pty_close = Some(active_id);
                 }
                 if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::P)) {
                     state.show_perf_overlay = !state.show_perf_overlay;
                 }
                 handle_pty_input(ctx, &mut state.session);
-                ctx.input_mut(|i| {
-                    i.events.retain(|e| {
-                        !matches!(
-                            e,
-                            egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
-                        )
-                    });
-                });
+                consumed_pty_input = true;
             }
         }
-        if early_pty_close {
-            if let Some(mut pty) = self.terminal_pty.take() {
-                pty.session.terminate();
-            }
-            self.update_desktop_window_state(DesktopWindow::PtyApp, false);
+        if consumed_pty_input {
+            ctx.input_mut(|i| {
+                i.events.retain(|e| {
+                    !matches!(
+                        e,
+                        egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
+                    )
+                });
+            });
+        }
+        if let Some(id) = early_pty_close {
+            self.request_close_window_instance(id);
         }
     }
 
@@ -5686,6 +5794,39 @@ mod tests {
     }
 
     #[test]
+    fn opening_second_desktop_pty_spawns_secondary_window() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        let cmd = vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 30".to_string(),
+        ];
+
+        app.open_desktop_pty("Terminal", &cmd);
+        assert!(app.terminal_pty.is_some());
+        assert!(app.secondary_windows.is_empty());
+
+        app.open_desktop_pty("Terminal", &cmd);
+
+        assert!(app.terminal_pty.is_some());
+        let secondary = app
+            .secondary_windows
+            .iter()
+            .find(|window| window.id.kind == DesktopWindow::PtyApp)
+            .expect("secondary pty window");
+        assert_eq!(app.desktop_active_window, Some(secondary.id));
+        assert!(matches!(
+            &secondary.app,
+            SecondaryWindowApp::Pty(Some(state)) if state.title == "Terminal"
+        ));
+
+        app.terminate_all_native_pty_children();
+    }
+
+    #[test]
     fn reopening_settings_window_reprimes_component_state() {
         let mut app = RobcoNativeApp::default();
         app.settings.open = true;
@@ -6031,6 +6172,67 @@ mod tests {
 
         assert!(!app.desktop_mode_open);
         assert_eq!(app.terminal_nav.screen, TerminalScreen::RedMenace);
-        assert_eq!(app.terminal_nav.game_return_screen, TerminalScreen::GamesRobcoFun);
+        assert_eq!(
+            app.terminal_nav.game_return_screen,
+            TerminalScreen::GamesRobcoFun
+        );
+    }
+
+    #[test]
+    fn reopening_terminal_game_starts_from_a_fresh_runtime() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        assert!(app.open_terminal_robco_fun_game(
+            BUILTIN_ZETA_INVADERS_GAME,
+            TerminalScreen::GamesRobcoFun
+        ));
+        app.zeta_invaders.game.update(
+            &robcos_native_zeta_invaders_app::GameInput {
+                start: true,
+                ..Default::default()
+            },
+            1.0 / 60.0,
+        );
+        assert_eq!(
+            app.zeta_invaders.game.phase(),
+            robcos_native_zeta_invaders_app::GamePhase::Ready
+        );
+
+        assert!(app.open_terminal_robco_fun_game(
+            BUILTIN_ZETA_INVADERS_GAME,
+            TerminalScreen::GamesRobcoFun
+        ));
+        assert_eq!(
+            app.zeta_invaders.game.phase(),
+            robcos_native_zeta_invaders_app::GamePhase::Title
+        );
+    }
+
+    #[test]
+    fn closing_hosted_game_window_resets_runtime() {
+        let _guard = session_test_guard();
+
+        let mut app = RobcoNativeApp::default();
+        assert!(app.open_hosted_robco_fun_game(BUILTIN_RED_MENACE_GAME));
+        app.red_menace.game.update(
+            &robcos_native_red_menace_app::GameInput {
+                start: true,
+                ..Default::default()
+            },
+            1.0 / 60.0,
+        );
+        assert_eq!(
+            app.red_menace.game.phase(),
+            robcos_native_red_menace_app::GamePhase::Intro
+        );
+
+        app.close_desktop_window(DesktopWindow::RedMenace);
+
+        assert!(!app.red_menace.open);
+        assert_eq!(
+            app.red_menace.game.phase(),
+            robcos_native_red_menace_app::GamePhase::Title
+        );
     }
 }
