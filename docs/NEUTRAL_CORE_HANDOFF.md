@@ -369,6 +369,18 @@ Additional final coordinator-helper extraction slice:
 - catalog-launch and manual-file open helpers moved into `src/native/app/launch_runtime.rs`, and terminal document-browser open-with/palette helpers moved into `src/native/app/document_runtime.rs`
 - this leaves `src/native/app.rs` much closer to the intended root-coordinator role: state, default construction, a few core runtime helpers, and the test module rather than a mix of utility flows
 
+Additional path-authority compatibility slice:
+
+- `crates/shared/src/config.rs` now exposes explicit logical-root helpers for `state_root`, `core_root`, `system_addons_root`, `logical_user_root`, `user_addons_root`, and `cache_root` instead of only the older `base_dir()` compatibility path
+- `src/native/data.rs` now resolves `journal_entries` through the compatibility state root and copies legacy log files forward from the older `base_dir()` location when needed
+- this is intentionally a small first migration step: path authority is now explicit in shared config, but broader settings/user/catalog state still remains on older helpers until the next staged pass
+
+Additional shared state-root migration slice:
+
+- shared config state-file helpers now route through a single compatibility-aware state-root helper instead of directly joining onto `base_dir()`
+- `users_dir`, fallback `desktop_dir`, `global_settings_file`, `about_file`, and non-user-scoped catalog files now resolve under `state_root` while still copying legacy files and directories forward from the older `base_dir()` location when needed
+- this keeps `ROBCOS_BASE_DIR` / `NUCLEON_BASE_DIR` compatibility intact while moving more persistence logic onto the staged path-authority seam
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

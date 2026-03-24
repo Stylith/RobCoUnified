@@ -22,12 +22,45 @@ pub fn platform_paths() -> ResolvedPlatformPaths {
     runtime_environment().paths().clone()
 }
 
+pub fn state_root_dir() -> PathBuf {
+    let dir = runtime_environment().state_root().to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn core_root_dir() -> PathBuf {
+    platform_paths().core_root().to_path_buf()
+}
+
+pub fn system_addons_root_dir() -> PathBuf {
+    platform_paths().system_addons_root().to_path_buf()
+}
+
+pub fn logical_user_root_dir() -> PathBuf {
+    let dir = platform_paths().user_root().to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn user_addons_root_dir() -> PathBuf {
+    let dir = platform_paths().user_addons_root().to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn cache_root_dir() -> PathBuf {
+    let dir = platform_paths().cache_root().to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn runtime_root_dir() -> PathBuf {
     let dir = platform_paths().runtime_root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
+// Legacy compatibility alias for older state-path callers.
 pub fn base_dir() -> PathBuf {
     static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
     BASE_DIR.get_or_init(detect_base_dir).clone()
@@ -200,10 +233,32 @@ fn merge_path_if_missing(from: &Path, to: &Path) {
     }
 }
 
+fn compat_state_path_with_roots(
+    relative: &Path,
+    target_root: &Path,
+    legacy_root: &Path,
+) -> PathBuf {
+    let target = target_root.join(relative);
+    let legacy = legacy_root.join(relative);
+    if target != legacy {
+        merge_path_if_missing(&legacy, &target);
+    }
+    target
+}
+
+fn compat_state_path(relative: impl AsRef<Path>) -> PathBuf {
+    let relative = relative.as_ref();
+    compat_state_path_with_roots(relative, &state_root_dir(), &base_dir())
+}
+
+fn compat_state_dir(relative: impl AsRef<Path>) -> PathBuf {
+    let dir = compat_state_path(relative);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn users_dir() -> PathBuf {
-    let d = base_dir().join("users");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    compat_state_dir("users")
 }
 
 pub fn user_dir(username: &str) -> PathBuf {
@@ -222,9 +277,7 @@ pub fn desktop_dir() -> PathBuf {
     if let Some(username) = get_current_user() {
         desktop_dir_for_username(&username)
     } else {
-        let d = base_dir().join("Desktop");
-        let _ = std::fs::create_dir_all(&d);
-        d
+        compat_state_dir("Desktop")
     }
 }
 
@@ -246,10 +299,10 @@ pub fn take_default_apps_prompt_pending(username: &str) -> bool {
 }
 
 pub fn global_settings_file() -> PathBuf {
-    base_dir().join("settings.json")
+    compat_state_path("settings.json")
 }
 pub fn about_file() -> PathBuf {
-    base_dir().join("about.json")
+    compat_state_path("about.json")
 }
 
 pub const ALLOWED_EXTENSIONS: &[&str] = &[".pdf", ".epub", ".txt", ".mobi", ".azw3"];
@@ -285,7 +338,7 @@ fn user_file(filename: &str) -> PathBuf {
     if let Some(u) = get_current_user() {
         user_dir(&u).join(filename)
     } else {
-        base_dir().join(filename)
+        compat_state_path(filename)
     }
 }
 
@@ -1278,6 +1331,32 @@ pub fn persist_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "robcos_shared_config_{prefix}_{}_{}",
+                std::process::id(),
+                unique
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
     use serde_json::{json, Value};
     use std::fs;
     use std::path::PathBuf;
@@ -1545,6 +1624,46 @@ mod tests {
     fn desktop_dir_for_username_lives_under_user_dir() {
         let desktop = desktop_dir_for_username("adi");
         assert!(desktop.ends_with(Path::new("users").join("adi").join("Desktop")));
+    }
+
+    #[test]
+    fn compat_state_path_with_roots_copies_legacy_file_forward() {
+        let temp = TempDirGuard::new("compat_state_file");
+        let target_root = temp.path.join("target");
+        let legacy_root = temp.path.join("legacy");
+        std::fs::create_dir_all(&legacy_root).expect("create legacy root");
+        std::fs::write(
+            legacy_root.join("settings.json"),
+            "{\"theme\":\"Green (Default)\"}",
+        )
+        .expect("write legacy settings");
+
+        let target =
+            compat_state_path_with_roots(Path::new("settings.json"), &target_root, &legacy_root);
+
+        assert_eq!(
+            std::fs::read_to_string(target).expect("read migrated settings"),
+            "{\"theme\":\"Green (Default)\"}"
+        );
+    }
+
+    #[test]
+    fn compat_state_path_with_roots_copies_legacy_directories_forward() {
+        let temp = TempDirGuard::new("compat_state_dir");
+        let target_root = temp.path.join("target");
+        let legacy_root = temp.path.join("legacy");
+        let legacy_users = legacy_root.join("users").join("alice");
+        std::fs::create_dir_all(&legacy_users).expect("create legacy users dir");
+        std::fs::write(legacy_users.join("profile.json"), "{\"ok\":true}")
+            .expect("write legacy user file");
+
+        let target = compat_state_path_with_roots(Path::new("users"), &target_root, &legacy_root);
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("alice").join("profile.json"))
+                .expect("read migrated user file"),
+            "{\"ok\":true}"
+        );
     }
 }
 
