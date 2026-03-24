@@ -171,6 +171,9 @@ Additional verified slice:
 - `cargo test -p robcos editor_launch_target_opens_editor_window --lib`
 - `cargo test -p robcos desktop_program_request_open_text_editor_uses_registry_launch --lib`
 - `cargo test -p robcos open_text_editor_action_uses_registry_launch --lib`
+- `cargo test -p robcos-shared platform`
+- `cargo test -p robcos roundtrip_ipc_message --lib`
+- `cargo test -p robcos settings_changed_serializes --lib`
 
 Those two tests verify:
 
@@ -187,6 +190,52 @@ The additional menu/context tests verify:
 - shell-level OpenTextEditor now uses the registry-backed launch path
 - desktop program-request Nuke Codes uses the registry-backed launch path
 - shell-level OpenNukeCodes now uses the registry-backed launch path
+
+Additional path-adoption slice:
+
+- shared runtime-path detection now lives in `crates/shared/src/platform/runtime.rs`
+- the shared layer now exposes `RuntimeEnvironment`
+- install-profile parsing now accepts explicit profile strings such as `linux-desktop`, `windows-launcher`, `mac-launcher`, and `portable-dev`
+- config now exposes `runtime_environment()`, `install_profile()`, `platform_paths()`, and `runtime_root_dir()`
+- native IPC now uses the logical `runtime_root` instead of placing `shell.sock` under the legacy data directory
+- native log/journal writes no longer depend on the process working directory; they resolve under `base_dir()/journal_entries`
+
+Additional runtime-registry slice:
+
+- `src/native/addons.rs` now contains an explicit first-party runtime registry separate from manifest metadata
+- desktop launch resolution no longer infers behavior from manifest route strings; it resolves manifest target -> addon id -> runtime registry entry
+- the first Start-menu Program Installer action now launches through `LaunchTarget::Capability("installer-ui")`
+- the Spotlight Terminal system result now launches through `LaunchTarget::Capability("terminal-tool")`
+- native helper methods now exist for registry-backed launches of settings, file manager, editor, nuke codes, terminal, and applications/program catalog
+- the old `DesktopShellAction::OpenWindow(...)` bypass was removed from active code paths
+- shared default-app builtin resolution now accepts first-party addon ids, with legacy `robco_terminal_writer` mapped to `shell.editor` for compatibility
+- native and legacy document-open paths now accept `ResolvedDocumentOpen::BuiltinAddon(...)` instead of the older product-specific builtin enum variant
+
+Additional settings-subtool addon slice:
+
+- first-party addon runtime entries now exist for `shell.default-apps`, `shell.connections`, `shell.edit-menus`, and `shell.about`
+- those addon ids now resolve to Settings subpanels instead of being metadata-only entries
+- desktop launch targets now exist for `default-apps-ui`, `connections-ui`, `edit-menus-ui`, and `about-ui`
+- the desktop Start-menu Connections action now launches through `LaunchTarget::Capability("connections-ui")`
+- the old desktop-only `OpenConnectionsSettings` shell action was removed
+- settings subtools are still hosted inside the Settings window for now, but they now have addon-backed launch identities, which is the intended migration seam
+
+Additional install-profile policy slice:
+
+- first-party addon enablement is now centralized in `src/native/addons.rs`
+- desktop launch resolution is now profile-aware instead of assuming every first-party addon is enabled in every install profile
+- a profile-filtered first-party registry now exists for runtime launch resolution
+- the first concrete policy rule is intentionally narrow: `shell.connections` is disabled for `mac-launcher`, which matches the existing platform limitation there
+- unresolved launch status now distinguishes between “not wired” and “disabled by install profile”
+- broader menu/catalog visibility still needs to move onto this policy layer in a later step; this slice only established the core resolution seam
+
+Additional desktop visibility-policy slice:
+
+- first-party capability enablement helpers now exist beside addon enablement in `src/native/addons.rs`
+- desktop Start System menu visibility now filters through addon capability policy instead of a local macOS-only connections exception
+- desktop Start Applications builtins now respect both user visibility settings and addon capability policy
+- desktop Applications window sections now rebuild against profile-aware builtin visibility, including `File Manager`
+- visibility is still driven by static first-party manifests/runtime entries; no packaging or dynamic loading was introduced in this slice
 
 ## Why This Was The Correct First Step
 

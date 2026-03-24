@@ -150,25 +150,30 @@ pub fn resolve_desktop_applications_action(
 }
 
 pub fn build_desktop_applications_sections(
+    show_file_manager: bool,
     show_text_editor: bool,
     show_nuke_codes: bool,
     configured_names: &[String],
     text_editor_label: &str,
     nuke_codes_label: &str,
 ) -> DesktopApplicationsSections {
-    let builtins = build_terminal_application_entries(
-        show_text_editor,
-        show_nuke_codes,
-        &[],
-        text_editor_label,
-        nuke_codes_label,
-    )
-    .into_iter()
-    .map(|label| DesktopProgramEntry {
-        action: resolve_desktop_applications_action(&label, text_editor_label, nuke_codes_label),
-        label,
-    })
-    .collect();
+    let mut builtin_labels = Vec::new();
+    if show_file_manager {
+        builtin_labels.push(BUILTIN_FILE_MANAGER_APP.to_string());
+    }
+    if show_nuke_codes {
+        builtin_labels.push(nuke_codes_label.to_string());
+    }
+    if show_text_editor {
+        builtin_labels.push(text_editor_label.to_string());
+    }
+    let builtins = builtin_labels
+        .into_iter()
+        .map(|label| DesktopProgramEntry {
+            action: resolve_desktop_applications_action(&label, text_editor_label, nuke_codes_label),
+            label,
+        })
+        .collect();
     let configured = build_terminal_application_entries(
         false,
         false,
@@ -399,6 +404,7 @@ mod tests {
         let sections = build_desktop_applications_sections(
             true,
             true,
+            true,
             &[
                 "Editor".to_string(),
                 "Nuke Codes".to_string(),
@@ -430,6 +436,32 @@ mod tests {
                 label: "Custom".to_string(),
                 action: DesktopApplicationsAction::LaunchConfigured("Custom".to_string()),
             }]
+        );
+    }
+
+    #[test]
+    fn build_desktop_applications_sections_can_hide_file_manager_builtin() {
+        let sections = build_desktop_applications_sections(
+            false,
+            true,
+            true,
+            &[],
+            "Editor",
+            "Nuke Codes",
+        );
+
+        assert_eq!(
+            sections.builtins,
+            vec![
+                DesktopProgramEntry {
+                    label: "Nuke Codes".to_string(),
+                    action: DesktopApplicationsAction::OpenNukeCodes,
+                },
+                DesktopProgramEntry {
+                    label: "Editor".to_string(),
+                    action: DesktopApplicationsAction::OpenTextEditor,
+                }
+            ]
         );
     }
 

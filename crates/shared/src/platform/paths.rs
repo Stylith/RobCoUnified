@@ -131,7 +131,9 @@ impl ResolvedPlatformPaths {
             install_profile: InstallProfile::LinuxDesktop,
             product_dir: product_dir.clone(),
             core_root: PathBuf::from("/usr/share").join(&product_dir),
-            system_addons_root: PathBuf::from("/usr/share").join(&product_dir).join("addons"),
+            system_addons_root: PathBuf::from("/usr/share")
+                .join(&product_dir)
+                .join("addons"),
             user_root: user_base.join("user"),
             user_addons_root: user_base.join("addons"),
             cache_root: env.cache_dir.join(&product_dir),
@@ -234,11 +236,8 @@ mod tests {
             portable_root: None,
         };
 
-        let paths = ResolvedPlatformPaths::from_environment(
-            "nucleon",
-            InstallProfile::LinuxDesktop,
-            env,
-        );
+        let paths =
+            ResolvedPlatformPaths::from_environment("nucleon", InstallProfile::LinuxDesktop, env);
 
         assert_eq!(paths.core_root(), PathBuf::from("/usr/share/nucleon"));
         assert_eq!(
@@ -253,7 +252,10 @@ mod tests {
             paths.user_addons_root(),
             PathBuf::from("/home/alice/.local/share/nucleon/addons")
         );
-        assert_eq!(paths.cache_root(), PathBuf::from("/home/alice/.cache/nucleon"));
+        assert_eq!(
+            paths.cache_root(),
+            PathBuf::from("/home/alice/.cache/nucleon")
+        );
         assert_eq!(
             paths.runtime_root(),
             PathBuf::from("/run/user/1000/nucleon")
@@ -272,11 +274,8 @@ mod tests {
             portable_root: Some(PathBuf::from("/tmp/dev-layout")),
         };
 
-        let paths = ResolvedPlatformPaths::from_environment(
-            "nucleon",
-            InstallProfile::PortableDev,
-            env,
-        );
+        let paths =
+            ResolvedPlatformPaths::from_environment("nucleon", InstallProfile::PortableDev, env);
 
         assert_eq!(
             paths.core_root(),

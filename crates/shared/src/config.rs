@@ -1,3 +1,4 @@
+use crate::platform::{InstallProfile, PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -5,6 +6,27 @@ use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
+
+pub fn runtime_environment() -> RuntimeEnvironment {
+    static RUNTIME_ENVIRONMENT: OnceLock<RuntimeEnvironment> = OnceLock::new();
+    RUNTIME_ENVIRONMENT
+        .get_or_init(RuntimeEnvironment::detect)
+        .clone()
+}
+
+pub fn install_profile() -> InstallProfile {
+    runtime_environment().install_profile()
+}
+
+pub fn platform_paths() -> ResolvedPlatformPaths {
+    runtime_environment().paths().clone()
+}
+
+pub fn runtime_root_dir() -> PathBuf {
+    let dir = platform_paths().runtime_root().to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
 
 pub fn base_dir() -> PathBuf {
     static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();

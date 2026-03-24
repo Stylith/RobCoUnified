@@ -1,4 +1,4 @@
-use super::super::desktop_app::{DesktopShellAction, DesktopWindow};
+use super::super::desktop_app::DesktopShellAction;
 use super::super::desktop_search_service::{
     gather_spotlight_results, spotlight_category_tag, NativeSpotlightCategory,
     NativeSpotlightResult,
@@ -289,7 +289,9 @@ impl RobcoNativeApp {
                 "Settings" => Some(DesktopShellAction::LaunchByTarget(
                     super::launch_registry::settings_launch_target(),
                 )),
-                "Terminal" => Some(DesktopShellAction::OpenWindow(DesktopWindow::TerminalMode)),
+                "Terminal" => Some(DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::terminal_launch_target(),
+                )),
                 n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::LaunchByTarget(
                     super::launch_registry::editor_launch_target(),
                 )),

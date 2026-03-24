@@ -101,7 +101,10 @@ impl AddonRegistry {
     }
 
     pub fn by_file_extension(&self, extension: &str) -> Vec<&AddonManifest> {
-        let normalized = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+        let normalized = extension
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
         self.extension_index
             .get(&normalized)
             .into_iter()

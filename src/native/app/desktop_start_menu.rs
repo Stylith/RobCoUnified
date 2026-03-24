@@ -1,5 +1,4 @@
-use super::super::desktop_app::{DesktopShellAction, DesktopWindow};
-use super::super::desktop_connections_service::connections_macos_disabled;
+use super::super::desktop_app::DesktopShellAction;
 use super::super::desktop_launcher_service::{
     grouped_game_menu_names, is_robco_fun_game, robco_fun_game_names, ROBCO_FUN_MENU_LABEL,
 };
@@ -9,8 +8,11 @@ use super::super::desktop_search_service::{
 };
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
+use super::super::first_party_capability_enabled_str;
 use super::super::prompt::FlashAction;
 use super::super::retro_ui::current_palette;
+use crate::config::install_profile;
+use crate::platform::InstallProfile;
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
 
 use super::RobcoNativeApp;
@@ -113,6 +115,28 @@ pub(super) fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
         7 => Some(StartRootAction::Shutdown),
         _ => None,
     }
+}
+
+fn start_system_action_capability(action: StartSystemAction) -> &'static str {
+    match action {
+        StartSystemAction::ProgramInstaller => "installer-ui",
+        StartSystemAction::Terminal => "terminal-tool",
+        StartSystemAction::FileManager => "file-browser",
+        StartSystemAction::Settings => "settings-ui",
+        StartSystemAction::Connections => "connections-ui",
+    }
+}
+
+pub(super) fn start_system_items_for_profile(
+    profile: InstallProfile,
+) -> Vec<(&'static str, StartSystemAction)> {
+    START_SYSTEM_ITEMS
+        .iter()
+        .copied()
+        .filter(|(_, action)| {
+            first_party_capability_enabled_str(profile, start_system_action_capability(*action))
+        })
+        .collect()
 }
 
 // ── impl RobcoNativeApp ───────────────────────────────────────────────────────
@@ -287,13 +311,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn start_system_items(&self) -> Vec<(&'static str, StartSystemAction)> {
-        START_SYSTEM_ITEMS
-            .iter()
-            .copied()
-            .filter(|(_, action)| {
-                !matches!(action, StartSystemAction::Connections) || !connections_macos_disabled()
-            })
-            .collect()
+        start_system_items_for_profile(install_profile())
     }
 
     pub(super) fn start_leaf_menu_target(
@@ -324,10 +342,13 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<NativeStartLeafEntry> {
+        let profile = install_profile();
         match leaf {
             StartLeaf::Applications => start_application_entries(
-                self.settings.draft.builtin_menu_visibility.nuke_codes,
-                self.settings.draft.builtin_menu_visibility.text_editor,
+                self.settings.draft.builtin_menu_visibility.nuke_codes
+                    && first_party_capability_enabled_str(profile, "code-reference"),
+                self.settings.draft.builtin_menu_visibility.text_editor
+                    && first_party_capability_enabled_str(profile, "text-editor"),
                 EDITOR_APP_TITLE,
                 super::BUILTIN_NUKE_CODES_APP,
             ),
@@ -390,18 +411,18 @@ impl RobcoNativeApp {
         self.close_start_menu();
         let action = match action {
             StartSystemAction::ProgramInstaller => {
-                DesktopShellAction::OpenWindow(DesktopWindow::Installer)
+                DesktopShellAction::LaunchByTarget(super::launch_registry::installer_launch_target())
             }
             StartSystemAction::Terminal => DesktopShellAction::OpenDesktopTerminalShell,
-            StartSystemAction::FileManager => {
-                DesktopShellAction::LaunchByTarget(
-                    super::launch_registry::file_manager_launch_target(),
-                )
-            }
+            StartSystemAction::FileManager => DesktopShellAction::LaunchByTarget(
+                super::launch_registry::file_manager_launch_target(),
+            ),
             StartSystemAction::Settings => {
                 DesktopShellAction::LaunchByTarget(super::launch_registry::settings_launch_target())
             }
-            StartSystemAction::Connections => DesktopShellAction::OpenConnectionsSettings,
+            StartSystemAction::Connections => DesktopShellAction::LaunchByTarget(
+                super::launch_registry::connections_launch_target(),
+            ),
         };
         self.execute_desktop_shell_action(action);
     }
@@ -851,5 +872,31 @@ impl RobcoNativeApp {
             text_color,
         );
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{start_system_items_for_profile, StartSystemAction};
+    use crate::platform::InstallProfile;
+
+    #[test]
+    fn mac_launcher_hides_connections_from_start_system_items() {
+        let items = start_system_items_for_profile(InstallProfile::MacLauncher);
+
+        assert!(!items.iter().any(|(_, action)| matches!(
+            action,
+            StartSystemAction::Connections
+        )));
+    }
+
+    #[test]
+    fn linux_desktop_keeps_connections_in_start_system_items() {
+        let items = start_system_items_for_profile(InstallProfile::LinuxDesktop);
+
+        assert!(items.iter().any(|(_, action)| matches!(
+            action,
+            StartSystemAction::Connections
+        )));
     }
 }

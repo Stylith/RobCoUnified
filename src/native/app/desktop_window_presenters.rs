@@ -452,22 +452,29 @@ impl RobcoNativeApp {
                 EditorTextAlign::Left => egui::Align::LEFT,
             };
 
-            // Fill all remaining space with the TextEdit.
+            // Host the editor inside a bounded scroll region so overflowing text does not
+            // push the outer window taller than the user-sized frame.
             let remaining = ui.available_size();
-            let mut edit = TextEdit::multiline(&mut self.editor.text)
-                .id(text_edit_id)
-                .lock_focus(true)
-                .frame(false)
-                .font(egui::TextStyle::Monospace)
-                .horizontal_align(text_align);
-            if !self.editor.word_wrap {
-                edit = edit.desired_width(f32::INFINITY);
-            }
-            let response = ui.add_sized(remaining, edit);
-            Self::attach_generic_context_menu(&mut self.context_menu_action, &response);
-            if response.changed() {
-                self.editor.dirty = true;
-            }
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .max_height(remaining.y)
+                .max_width(remaining.x)
+                .show(ui, |ui| {
+                    let mut edit = TextEdit::multiline(&mut self.editor.text)
+                        .id(text_edit_id)
+                        .lock_focus(true)
+                        .frame(false)
+                        .font(egui::TextStyle::Monospace)
+                        .horizontal_align(text_align);
+                    if !self.editor.word_wrap {
+                        edit = edit.desired_width(f32::INFINITY);
+                    }
+                    let response = ui.add_sized(remaining, edit);
+                    Self::attach_generic_context_menu(&mut self.context_menu_action, &response);
+                    if response.changed() {
+                        self.editor.dirty = true;
+                    }
+                });
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
@@ -535,23 +542,11 @@ impl RobcoNativeApp {
         let wid = self.current_window_id(DesktopWindow::Settings);
         let mut open = self.settings.open;
         let maximized = self.desktop_window_is_maximized(DesktopWindow::Settings);
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Settings);
         let mut header_action = DesktopHeaderAction::None;
         let egui_id = self.desktop_window_egui_id(wid);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Settings);
-        let min_size = Self::desktop_settings_window_min_size();
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
-        let state = self.desktop_window_state(wid);
-        let live_size = state
-            .restore_size
-            .map(|size| egui::vec2(size[0], size[1]))
-            .unwrap_or(default_size);
-        let live_pos = state
-            .restore_pos
-            .map(|pos| egui::pos2(pos[0], pos[1]))
-            .unwrap_or(default_pos);
-        if state.apply_restore {
-            self.desktop_window_state_mut(wid).apply_restore = false;
-        }
         let mut window = egui::Window::new("Settings")
             .id(egui_id)
             .open(&mut open)
@@ -566,10 +561,11 @@ impl RobcoNativeApp {
                 .movable(false)
                 .fixed_pos(rect.min)
                 .fixed_size(rect.size());
-        } else {
-            let size = Self::desktop_clamp_window_size(ctx, live_size, min_size);
-            let pos = Self::desktop_clamp_window_pos(ctx, live_pos, size);
-            window = window.current_pos(pos).fixed_size(size);
+        } else if let Some((pos, _size)) = restore {
+            // Settings stays fixed-size in desktop mode; only restore position after
+            // un-maximize or other lifecycle hops that bump the egui window ID.
+            let pos = Self::desktop_clamp_window_pos(ctx, pos, default_size);
+            window = window.current_pos(pos);
         }
         let mut close_requested = false;
         let shown = window.show(ctx, |ui| {
@@ -1293,7 +1289,7 @@ impl RobcoNativeApp {
             maximized,
             shown_rect,
             shown_contains_pointer,
-            DesktopWindowRectTracking::FullRect,
+            DesktopWindowRectTracking::PositionOnly,
             header_action,
         );
     }
@@ -1322,61 +1318,52 @@ impl RobcoNativeApp {
             Self::apply_settings_control_style(ui);
             header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
             let sections = self.desktop_applications_sections();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("Built-in");
-                for entry in &sections.builtins {
-                    if Self::retro_full_width_button(ui, entry.label.as_str()).clicked() {
-                        let request = resolve_desktop_applications_request(&entry.action);
-                        close_after_launch = matches!(
-                            request,
-                            DesktopProgramRequest::OpenNukeCodes { close_window: true }
-                                | DesktopProgramRequest::LaunchCatalog {
-                                    close_window: true,
-                                    ..
-                                }
-                        );
-                        self.apply_desktop_program_request(request);
+            let body_max_height = ui.available_height().max(120.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .max_height(body_max_height)
+                .show(ui, |ui| {
+                    ui.heading("Built-in");
+                    for entry in &sections.builtins {
+                        if Self::retro_full_width_button(ui, entry.label.as_str()).clicked() {
+                            let request = resolve_desktop_applications_request(&entry.action);
+                            close_after_launch = matches!(
+                                request,
+                                DesktopProgramRequest::OpenNukeCodes { close_window: true }
+                                    | DesktopProgramRequest::LaunchCatalog {
+                                        close_window: true,
+                                        ..
+                                    }
+                            );
+                            self.apply_desktop_program_request(request);
+                        }
                     }
-                }
-                ui.separator();
-                ui.heading("Configured Apps");
-                for entry in &sections.configured {
-                    if Self::retro_full_width_button(ui, entry.label.as_str()).clicked() {
-                        let request = resolve_desktop_applications_request(&entry.action);
-                        close_after_launch = matches!(
-                            request,
-                            DesktopProgramRequest::OpenNukeCodes { close_window: true }
-                                | DesktopProgramRequest::LaunchCatalog {
-                                    close_window: true,
-                                    ..
-                                }
-                        );
-                        self.apply_desktop_program_request(request);
-                    }
-                }
-                if !self.applications.status.is_empty() {
                     ui.separator();
-                    ui.small(&self.applications.status);
-                }
-            });
+                    ui.heading("Configured Apps");
+                    for entry in &sections.configured {
+                        if Self::retro_full_width_button(ui, entry.label.as_str()).clicked() {
+                            let request = resolve_desktop_applications_request(&entry.action);
+                            close_after_launch = matches!(
+                                request,
+                                DesktopProgramRequest::OpenNukeCodes { close_window: true }
+                                    | DesktopProgramRequest::LaunchCatalog {
+                                        close_window: true,
+                                        ..
+                                    }
+                            );
+                            self.apply_desktop_program_request(request);
+                        }
+                    }
+                    if !self.applications.status.is_empty() {
+                        ui.separator();
+                        ui.small(&self.applications.status);
+                    }
+                });
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown
             .as_ref()
             .is_some_and(|inner| inner.response.contains_pointer());
-        // Context menus are attached to specific content widgets inside the
-        // window closure, not to the outer Area response (which causes
-        // "double use of widget" ID collisions in egui 0.29).
-        self.maybe_activate_desktop_window_from_click(
-            ctx,
-            DesktopWindow::Applications,
-            shown_contains_pointer,
-        );
-        if !maximized {
-            if let Some(rect) = shown_rect {
-                self.note_desktop_window_rect(DesktopWindow::Applications, rect);
-            }
-        }
         if close_after_launch {
             open = false;
         }

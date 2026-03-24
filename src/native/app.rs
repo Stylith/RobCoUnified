@@ -6,10 +6,7 @@ use super::desktop_app::DesktopMenuAction;
 use super::desktop_app::{
     desktop_component_spec, DesktopShellAction, DesktopWindow, WindowInstanceId,
 };
-use super::desktop_connections_service::{
-    connections_macos_disabled, connections_macos_disabled_hint, saved_connections_for_kind,
-    DiscoveredConnection,
-};
+use super::desktop_connections_service::{saved_connections_for_kind, DiscoveredConnection};
 use super::desktop_documents_service::{
     add_document_category as add_desktop_document_category,
     delete_document_category as delete_desktop_document_category, document_category_names,
@@ -66,6 +63,7 @@ use super::file_manager_app::{
 use super::file_manager_desktop::{
     self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest,
 };
+use super::first_party_capability_enabled_str;
 use super::hacking_screen::{draw_hacking_screen, draw_locked_screen, HackingScreenEvent};
 use super::installer_screen::{
     DesktopInstallerNotice, DesktopInstallerState, TerminalInstallerState,
@@ -130,19 +128,21 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 mod desktop_installer_ui;
-mod launch_registry;
 mod desktop_menu_bar;
 mod desktop_spotlight;
 mod desktop_start_menu;
 mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
+mod launch_registry;
 mod session_management;
 mod software_cursor;
 mod terminal_dispatch;
 mod terminal_screens;
-use launch_registry::{resolve_desktop_launch_target, unresolved_launch_target_status, NativeDesktopLaunch};
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
+use launch_registry::{
+    resolve_desktop_launch_target, unresolved_launch_target_status, NativeDesktopLaunch,
+};
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod settings_panels;
@@ -288,6 +288,7 @@ struct DesktopSurfaceEntriesCache {
 }
 
 struct DesktopApplicationsSectionsCache {
+    show_file_manager: bool,
     show_text_editor: bool,
     show_nuke_codes: bool,
     sections: Arc<DesktopApplicationsSections>,
@@ -1150,18 +1151,24 @@ impl RobcoNativeApp {
     }
 
     fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
-        let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor;
-        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes;
+        let profile = crate::config::install_profile();
+        let show_file_manager = first_party_capability_enabled_str(profile, "file-browser");
+        let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
+            && first_party_capability_enabled_str(profile, "text-editor");
+        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
+            && first_party_capability_enabled_str(profile, "code-reference");
         let needs_rebuild = self
             .desktop_applications_sections_cache
             .as_ref()
             .is_none_or(|cache| {
-                cache.show_text_editor != show_text_editor
+                cache.show_file_manager != show_file_manager
+                    || cache.show_text_editor != show_text_editor
                     || cache.show_nuke_codes != show_nuke_codes
             });
         if needs_rebuild {
             let configured_names = catalog_names(ProgramCatalog::Applications);
             let sections = Arc::new(build_desktop_applications_sections(
+                show_file_manager,
                 show_text_editor,
                 show_nuke_codes,
                 &configured_names,
@@ -1169,6 +1176,7 @@ impl RobcoNativeApp {
                 BUILTIN_NUKE_CODES_APP,
             ));
             self.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
+                show_file_manager,
                 show_text_editor,
                 show_nuke_codes,
                 sections,
@@ -2664,9 +2672,27 @@ impl RobcoNativeApp {
         ));
     }
 
+    pub(super) fn launch_terminal_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::terminal_launch_target(),
+        ));
+    }
+
+    pub(super) fn launch_programs_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::programs_launch_target(),
+        ));
+    }
+
     pub(super) fn launch_settings_via_registry(&mut self) {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
+        ));
+    }
+
+    pub(super) fn launch_connections_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::connections_launch_target(),
         ));
     }
 
@@ -2755,7 +2781,6 @@ impl RobcoNativeApp {
 
     fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
         match action {
-            DesktopShellAction::OpenWindow(window) => self.open_or_spawn_desktop_window(window),
             DesktopShellAction::LaunchByTarget(target) => {
                 match resolve_desktop_launch_target(&target) {
                     Some(NativeDesktopLaunch::OpenWindow(window)) => {
@@ -2782,13 +2807,6 @@ impl RobcoNativeApp {
                 self.launch_nuke_codes_via_registry();
             }
             DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
-            DesktopShellAction::OpenConnectionsSettings => {
-                if connections_macos_disabled() {
-                    self.shell_status = connections_macos_disabled_hint().to_string();
-                } else {
-                    self.open_desktop_settings_panel(NativeSettingsPanel::Connections);
-                }
-            }
             DesktopShellAction::LaunchConfiguredApp(name) => {
                 self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
                     name,
@@ -3431,7 +3449,12 @@ impl RobcoNativeApp {
                 }
                 self.shell_status = format!("Opened {display}");
             }
-            Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) | None => {
+            Some(ResolvedDocumentOpen::BuiltinAddon(addon_id))
+                if addon_id.as_str() == "shell.editor" =>
+            {
+                self.open_path_in_editor(path);
+            }
+            Some(ResolvedDocumentOpen::BuiltinAddon(_)) | None => {
                 self.open_path_in_editor(path);
             }
         }
@@ -4727,6 +4750,7 @@ mod tests {
     use crate::config::{DesktopShortcut, FileManagerSortMode, FileManagerViewMode};
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
     use crate::native::file_manager_app::FileManagerClipboardMode;
+    use crate::native::installer_screen::DesktopInstallerView;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -6007,6 +6031,37 @@ mod tests {
     }
 
     #[test]
+    fn terminal_launch_target_opens_terminal_window() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_terminal_via_registry();
+
+        assert!(app.terminal_mode.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::TerminalMode));
+    }
+
+    #[test]
+    fn programs_launch_target_opens_applications_window() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_programs_via_registry();
+
+        assert!(app.applications.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Applications));
+    }
+
+    #[test]
+    fn connections_launch_target_opens_settings_connections_panel() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_connections_via_registry();
+
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, NativeSettingsPanel::Connections);
+    }
+
+    #[test]
     fn desktop_menu_open_settings_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
@@ -6025,6 +6080,31 @@ mod tests {
 
         assert!(app.file_manager.open);
         assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
+    }
+
+    #[test]
+    fn start_menu_program_installer_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.start_open = true;
+
+        app.run_start_system_action(desktop_start_menu::StartSystemAction::ProgramInstaller);
+
+        assert!(!app.start_open);
+        assert!(app.desktop_installer.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Installer));
+    }
+
+    #[test]
+    fn start_menu_connections_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.start_open = true;
+
+        app.run_start_system_action(desktop_start_menu::StartSystemAction::Connections);
+
+        assert!(!app.start_open);
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, NativeSettingsPanel::Connections);
     }
 
     #[test]
@@ -6120,6 +6200,22 @@ mod tests {
     }
 
     #[test]
+    fn spotlight_terminal_result_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.spotlight_open = true;
+
+        app.spotlight_activate_result(&NativeSpotlightResult {
+            name: "Terminal".to_string(),
+            category: NativeSpotlightCategory::System,
+            path: None,
+        });
+
+        assert!(!app.spotlight_open);
+        assert!(app.terminal_mode.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::TerminalMode));
+    }
+
+    #[test]
     fn opening_closed_installer_window_clears_stale_restore_state() {
         let mut app = RobcoNativeApp::default();
         let state =
@@ -6173,6 +6269,150 @@ mod tests {
         assert_eq!(state.restore_pos, Some([32.0, 48.0]));
         assert_eq!(state.restore_size, Some([760.0, 500.0]));
         assert!(app.desktop_window_is_minimized(DesktopWindow::Settings));
+    }
+
+    #[test]
+    fn settings_window_tracks_position_without_replaying_restore_size() {
+        let mut app = RobcoNativeApp::default();
+        app.settings.open = true;
+        app.settings.panel = NativeSettingsPanel::General;
+        let state =
+            app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
+        state.restore_pos = Some([32.0, 48.0]);
+        state.restore_size = Some([1600.0, 1200.0]);
+        state.apply_restore = true;
+
+        let ctx = Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.draw_settings(ctx);
+        });
+
+        let state = app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Settings));
+        assert_eq!(state.restore_size, Some([1600.0, 1200.0]));
+        assert!(!state.apply_restore);
+        assert_eq!(state.restore_pos, Some([32.0, 48.0]));
+    }
+
+    #[test]
+    fn applications_window_does_not_grow_with_long_catalog_lists() {
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.applications.open = true;
+        let sections = DesktopApplicationsSections {
+            builtins: (0..80)
+                .map(|idx| robcos_native_programs_app::DesktopProgramEntry {
+                    label: format!("Builtin App {idx}"),
+                    action: robcos_native_programs_app::DesktopApplicationsAction::OpenFileManager,
+                })
+                .collect(),
+            configured: (0..80)
+                .map(|idx| robcos_native_programs_app::DesktopProgramEntry {
+                    label: format!("Configured App {idx}"),
+                    action: robcos_native_programs_app::DesktopApplicationsAction::OpenFileManager,
+                })
+                .collect(),
+        };
+        app.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
+            show_file_manager: true,
+            show_text_editor: true,
+            show_nuke_codes: true,
+            sections: Arc::new(sections),
+        });
+
+        let ctx = Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.draw_applications(ctx);
+        });
+
+        let state =
+            app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Applications));
+        let default_size = RobcoNativeApp::desktop_default_window_size(DesktopWindow::Applications);
+        let restore_size = state.restore_size.expect("applications restore size");
+        assert!(restore_size[1] <= default_size.y + 1.0);
+    }
+
+    #[test]
+    fn editor_window_does_not_grow_with_many_lines() {
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+        app.editor.open = true;
+        app.editor.text = (0..200)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let ctx = Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.draw_editor(ctx);
+        });
+
+        let state = app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Editor));
+        let default_size = RobcoNativeApp::desktop_default_window_size(DesktopWindow::Editor);
+        let restore_size = state.restore_size.expect("editor restore size");
+        assert!(restore_size[1] <= default_size.y + 1.0);
+    }
+
+    #[test]
+    fn installer_window_tracks_position_without_replaying_restore_size() {
+        let mut app = RobcoNativeApp::default();
+        app.desktop_installer.open = true;
+        app.desktop_installer.view = DesktopInstallerView::SearchResults;
+        app.desktop_installer.search_query = "apps".to_string();
+        app.desktop_installer.search_results = (0..80)
+            .map(|idx| robcos_native_installer_app::SearchResult {
+                raw: format!("pkg-{idx}"),
+                pkg: format!("pkg-{idx}"),
+                description: Some("description".to_string()),
+                installed: false,
+            })
+            .collect();
+        let state =
+            app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Installer));
+        state.restore_pos = Some([24.0, 48.0]);
+        state.restore_size = Some([1200.0, 1600.0]);
+        state.apply_restore = true;
+
+        let ctx = Context::default();
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.draw_installer(ctx);
+        });
+
+        let state = app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Installer));
+        assert_eq!(state.restore_size, Some([1200.0, 1600.0]));
+        assert!(!state.apply_restore);
+        assert_eq!(state.restore_pos, Some([24.0, 48.0]));
     }
 
     #[test]

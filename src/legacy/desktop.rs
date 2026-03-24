@@ -13078,7 +13078,7 @@ fn run_desktop_hub_action(
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "EPY".to_string());
             match resolve_document_open(&path) {
-                Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) => {
+                Some(ResolvedDocumentOpen::BuiltinAddon(_)) => {
                     if let Err(err) =
                         open_desktop_text_editor_window(terminal, state, path.clone(), true)
                     {

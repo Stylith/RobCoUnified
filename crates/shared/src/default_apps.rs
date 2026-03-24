@@ -1,3 +1,4 @@
+use crate::platform::AddonId;
 use std::path::Path;
 
 use crate::config::{
@@ -18,9 +19,9 @@ pub enum DefaultAppChoiceAction {
     PromptCustom,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedDocumentOpen {
-    BuiltinRobcoTerminalWriter,
+    BuiltinAddon(AddonId),
     ExternalArgv(Vec<String>),
 }
 
@@ -29,6 +30,9 @@ pub struct DefaultAppChoice {
     pub label: String,
     pub action: DefaultAppChoiceAction,
 }
+
+pub const FIRST_PARTY_EDITOR_ADDON_ID: &str = "shell.editor";
+pub const LEGACY_TERMINAL_WRITER_BINDING_ID: &str = "robco_terminal_writer";
 
 pub fn slot_label(slot: DefaultAppSlot) -> &'static str {
     match slot {
@@ -119,8 +123,8 @@ fn source_label(source: DefaultAppMenuSource) -> &'static str {
 pub fn binding_label(binding: &DefaultAppBinding) -> String {
     match binding {
         DefaultAppBinding::Builtin { id } => {
-            if id.eq_ignore_ascii_case("robco_terminal_writer") {
-                "Built-in: ROBCO Terminal Writer".to_string()
+            if builtin_editor_addon_id(id).is_some() {
+                "Built-in: Editor".to_string()
             } else {
                 format!("Built-in: {id}")
             }
@@ -192,9 +196,9 @@ fn command_exists_in_path(bin: &str) -> bool {
 pub fn default_app_choices(_slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
     let mut rows = Vec::new();
     rows.push(DefaultAppChoice {
-        label: "Built-in: ROBCO Terminal Writer".to_string(),
+        label: "Built-in: Editor".to_string(),
         action: DefaultAppChoiceAction::Set(DefaultAppBinding::Builtin {
-            id: "robco_terminal_writer".to_string(),
+            id: FIRST_PARTY_EDITOR_ADDON_ID.to_string(),
         }),
     });
     if command_exists_in_path("epy") {
@@ -239,6 +243,16 @@ pub fn default_app_choices(_slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
         action: DefaultAppChoiceAction::PromptCustom,
     });
     rows
+}
+
+fn builtin_editor_addon_id(binding_id: &str) -> Option<AddonId> {
+    if binding_id.eq_ignore_ascii_case(FIRST_PARTY_EDITOR_ADDON_ID)
+        || binding_id.eq_ignore_ascii_case(LEGACY_TERMINAL_WRITER_BINDING_ID)
+    {
+        Some(AddonId::from(FIRST_PARTY_EDITOR_ADDON_ID))
+    } else {
+        None
+    }
 }
 
 pub fn parse_custom_command_line(input: &str) -> Option<Vec<String>> {
@@ -310,8 +324,8 @@ fn resolve_binding_open(
 ) -> Option<ResolvedDocumentOpen> {
     match binding {
         DefaultAppBinding::Builtin { id } => {
-            if id.eq_ignore_ascii_case("robco_terminal_writer") {
-                Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter)
+            if let Some(addon_id) = builtin_editor_addon_id(id) {
+                Some(ResolvedDocumentOpen::BuiltinAddon(addon_id))
             } else if id.eq_ignore_ascii_case("epy") {
                 // Legacy compatibility for older configs.
                 Some(ResolvedDocumentOpen::ExternalArgv(vec!["epy".to_string()]))
@@ -338,7 +352,7 @@ pub fn resolve_document_open(path: &Path) -> Option<ResolvedDocumentOpen> {
     let binding = binding_for_slot(&settings, slot);
     let resolved = resolve_binding_open(&binding, slot)?;
     match resolved {
-        ResolvedDocumentOpen::BuiltinRobcoTerminalWriter => Some(resolved),
+        ResolvedDocumentOpen::BuiltinAddon(_) => Some(resolved),
         ResolvedDocumentOpen::ExternalArgv(mut cmd) => {
             cmd.push(path.display().to_string());
             Some(ResolvedDocumentOpen::ExternalArgv(cmd))
@@ -348,7 +362,12 @@ pub fn resolve_document_open(path: &Path) -> Option<ResolvedDocumentOpen> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_custom_command_line;
+    use super::{
+        parse_custom_command_line, resolve_binding_open, DefaultAppSlot, ResolvedDocumentOpen,
+        FIRST_PARTY_EDITOR_ADDON_ID, LEGACY_TERMINAL_WRITER_BINDING_ID,
+    };
+    use crate::config::DefaultAppBinding;
+    use crate::platform::AddonId;
 
     #[test]
     fn parse_command_line_basic() {
@@ -367,5 +386,39 @@ mod tests {
     fn parse_command_line_rejects_unbalanced_quotes() {
         assert!(parse_custom_command_line("epy \"book.epub").is_none());
         assert!(parse_custom_command_line("epy 'book.epub").is_none());
+    }
+
+    #[test]
+    fn builtin_editor_addon_binding_resolves_to_editor_addon() {
+        let resolved = resolve_binding_open(
+            &DefaultAppBinding::Builtin {
+                id: FIRST_PARTY_EDITOR_ADDON_ID.to_string(),
+            },
+            DefaultAppSlot::TextCode,
+        );
+
+        assert_eq!(
+            resolved,
+            Some(ResolvedDocumentOpen::BuiltinAddon(AddonId::from(
+                FIRST_PARTY_EDITOR_ADDON_ID
+            )))
+        );
+    }
+
+    #[test]
+    fn legacy_terminal_writer_binding_resolves_to_editor_addon() {
+        let resolved = resolve_binding_open(
+            &DefaultAppBinding::Builtin {
+                id: LEGACY_TERMINAL_WRITER_BINDING_ID.to_string(),
+            },
+            DefaultAppSlot::Ebook,
+        );
+
+        assert_eq!(
+            resolved,
+            Some(ResolvedDocumentOpen::BuiltinAddon(AddonId::from(
+                FIRST_PARTY_EDITOR_ADDON_ID
+            )))
+        );
     }
 }

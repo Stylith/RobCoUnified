@@ -42,18 +42,7 @@ impl RobcoNativeApp {
         let min_size = Self::desktop_installer_window_min_size();
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);
         let workspace_rect = Self::desktop_workspace_rect(ctx);
-        let state = self.desktop_window_state(wid);
-        let live_pos = state
-            .restore_pos
-            .map(|pos| egui::pos2(pos[0], pos[1]))
-            .unwrap_or(default_pos);
-        let live_size = state
-            .restore_size
-            .map(|size| egui::vec2(size[0], size[1]))
-            .unwrap_or(default_size);
-        if state.apply_restore {
-            self.desktop_window_state_mut(wid).apply_restore = false;
-        }
+        let restore = self.take_desktop_window_restore_dims(DesktopWindow::Installer);
         let mut window = egui::Window::new("Program Installer")
             .id(egui_id)
             .open(&mut open)
@@ -71,10 +60,11 @@ impl RobcoNativeApp {
                 .resizable(false)
                 .fixed_pos(workspace_rect.min)
                 .fixed_size(workspace_rect.size());
+        } else if let Some((pos, _size)) = restore {
+            let pos = Self::desktop_clamp_window_pos(ctx, pos, default_size);
+            window = window.current_pos(pos).fixed_size(default_size);
         } else {
-            let size = Self::desktop_clamp_window_size(ctx, live_size, min_size);
-            let pos = Self::desktop_clamp_window_pos(ctx, live_pos, size);
-            window = window.current_pos(pos).fixed_size(size);
+            window = window.fixed_size(default_size);
         }
 
         let palette = current_palette();
@@ -277,7 +267,8 @@ impl RobcoNativeApp {
             .is_some_and(|inner| inner.response.contains_pointer());
         if let Some(rect) = shown_rect {
             if !maximized {
-                self.note_desktop_window_rect(DesktopWindow::Installer, rect);
+                let state = self.desktop_window_state_mut(wid);
+                state.restore_pos = Some([rect.min.x, rect.min.y]);
             }
             self.maybe_activate_desktop_window_from_click(
                 ctx,

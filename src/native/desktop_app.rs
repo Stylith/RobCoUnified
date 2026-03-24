@@ -91,12 +91,10 @@ pub enum DesktopMenuAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopShellAction {
-    OpenWindow(DesktopWindow),
     LaunchByTarget(LaunchTarget),
     OpenTextEditor,
     OpenNukeCodes,
     OpenDesktopTerminalShell,
-    OpenConnectionsSettings,
     LaunchConfiguredApp(String),
     OpenFileManagerAt(PathBuf),
     LaunchNetworkProgram(String),

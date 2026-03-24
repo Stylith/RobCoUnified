@@ -1232,7 +1232,7 @@ fn browse_folder(terminal: &mut Term, folder: &Path, title: &str) -> Result<()> 
                             .unwrap_or(false)
                     }) {
                         match resolve_document_open(f) {
-                            Some(ResolvedDocumentOpen::BuiltinRobcoTerminalWriter) => {
+                            Some(ResolvedDocumentOpen::BuiltinAddon(_)) => {
                                 view_text_file(terminal, f)?;
                             }
                             Some(ResolvedDocumentOpen::ExternalArgv(cmd)) => {

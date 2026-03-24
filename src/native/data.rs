@@ -1,3 +1,4 @@
+use crate::config::base_dir;
 use std::path::PathBuf;
 
 pub fn home_dir_fallback() -> PathBuf {
@@ -16,7 +17,7 @@ pub fn word_processor_dir(username: &str) -> PathBuf {
 }
 
 pub fn logs_dir() -> PathBuf {
-    let dir = PathBuf::from("journal_entries");
+    let dir = base_dir().join("journal_entries");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

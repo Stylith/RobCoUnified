@@ -4,9 +4,7 @@ use std::fmt;
 
 macro_rules! string_id {
     ($name:ident) => {
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-        )]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -74,8 +72,13 @@ pub enum AddonTrust {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum AddonEntrypoint {
-    StaticRoute { route: String },
-    StandaloneBinary { binary: String, package: Option<String> },
+    StaticRoute {
+        route: String,
+    },
+    StandaloneBinary {
+        binary: String,
+        package: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,7 +111,9 @@ impl FileAssociation {
 
     pub fn matches_extension(&self, extension: &str) -> bool {
         let normalized = normalize_extension(extension);
-        self.extensions.iter().any(|candidate| candidate == &normalized)
+        self.extensions
+            .iter()
+            .any(|candidate| candidate == &normalized)
     }
 }
 
