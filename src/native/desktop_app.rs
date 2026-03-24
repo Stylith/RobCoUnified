@@ -9,6 +9,7 @@ use super::file_manager_desktop::FILE_MANAGER_APP_TITLE;
 use super::file_manager_menu::build_file_manager_menu_section;
 pub use super::shared_types::{DesktopWindow, WindowInstanceId};
 use crate::config::DesktopFileManagerSettings;
+use crate::platform::LaunchTarget;
 use eframe::egui::Context;
 use std::path::PathBuf;
 
@@ -91,6 +92,7 @@ pub enum DesktopMenuAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopShellAction {
     OpenWindow(DesktopWindow),
+    LaunchByTarget(LaunchTarget),
     OpenTextEditor,
     OpenNukeCodes,
     OpenDesktopTerminalShell,

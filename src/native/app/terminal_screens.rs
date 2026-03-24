@@ -224,7 +224,7 @@ impl RobcoNativeApp {
                 self.open_desktop_nuke_codes();
             }
             DesktopProgramRequest::OpenFileManager => {
-                self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
+                self.launch_file_manager_via_registry();
             }
             DesktopProgramRequest::LaunchCatalog { name, catalog, .. } => {
                 if catalog == ProgramCatalog::Games && self.open_hosted_robco_fun_game(&name) {

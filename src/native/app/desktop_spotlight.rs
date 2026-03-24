@@ -283,8 +283,12 @@ impl RobcoNativeApp {
     ) -> Option<DesktopShellAction> {
         match &result.category {
             NativeSpotlightCategory::System => match result.name.as_str() {
-                "File Manager" => Some(DesktopShellAction::OpenWindow(DesktopWindow::FileManager)),
-                "Settings" => Some(DesktopShellAction::OpenWindow(DesktopWindow::Settings)),
+                "File Manager" => Some(DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::file_manager_launch_target(),
+                )),
+                "Settings" => Some(DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::settings_launch_target(),
+                )),
                 "Terminal" => Some(DesktopShellAction::OpenWindow(DesktopWindow::TerminalMode)),
                 n if n == BUILTIN_TEXT_EDITOR_APP => Some(DesktopShellAction::OpenTextEditor),
                 n if n == BUILTIN_NUKE_CODES_APP => {

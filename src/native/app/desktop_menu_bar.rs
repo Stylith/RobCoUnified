@@ -102,10 +102,10 @@ impl RobcoNativeApp {
                 self.shell_status = file_manager_app::open_with_removed_saved_status(ext_key);
             }
             DesktopMenuAction::OpenFileManager => {
-                self.open_or_spawn_desktop_window(DesktopWindow::FileManager);
+                self.launch_file_manager_via_registry();
             }
             DesktopMenuAction::OpenSettings => {
-                self.open_desktop_settings_window();
+                self.launch_settings_via_registry();
             }
             DesktopMenuAction::ToggleStartMenu => {
                 if self.start_open {

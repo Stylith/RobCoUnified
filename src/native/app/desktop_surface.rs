@@ -398,7 +398,7 @@ impl RobcoNativeApp {
                 self.open_desktop_settings_panel(NativeSettingsPanel::Appearance);
             }
             ContextMenuAction::OpenSettings => {
-                self.open_desktop_settings_window();
+                self.launch_settings_via_registry();
             }
             ContextMenuAction::GenericCopy => {}
             ContextMenuAction::GenericPaste => {}

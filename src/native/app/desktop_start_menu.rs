@@ -394,9 +394,13 @@ impl RobcoNativeApp {
             }
             StartSystemAction::Terminal => DesktopShellAction::OpenDesktopTerminalShell,
             StartSystemAction::FileManager => {
-                DesktopShellAction::OpenWindow(DesktopWindow::FileManager)
+                DesktopShellAction::LaunchByTarget(
+                    super::launch_registry::file_manager_launch_target(),
+                )
             }
-            StartSystemAction::Settings => DesktopShellAction::OpenWindow(DesktopWindow::Settings),
+            StartSystemAction::Settings => {
+                DesktopShellAction::LaunchByTarget(super::launch_registry::settings_launch_target())
+            }
             StartSystemAction::Connections => DesktopShellAction::OpenConnectionsSettings,
         };
         self.execute_desktop_shell_action(action);

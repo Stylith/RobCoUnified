@@ -11,6 +11,10 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Base branch for this work: `experimental`
 - Refactor goal: move from a product-branded, built-in-app shell toward a neutral core platform with first-party and later third-party addons
 - Current strategy: incremental migration, not rewrite
+- Phase status:
+  - Phase 0 contract layer: complete
+  - Phase 1 runtime adoption: started
+  - Current adopted slice: generic desktop-side Settings and File Manager launch now route through capability-based launch targets instead of directly opening shell windows
 
 Important constraint summary:
 
@@ -82,7 +86,24 @@ That file currently defines code-backed manifests for:
 - Zeta Invaders
 - nuke codes
 
-Those manifests are not wired into runtime launch yet. That is intentional. This step establishes the migration target without changing behavior.
+Those manifests were introduced before runtime adoption. The first runtime adoption slice now exists, but only for Settings Start/Spotlight launch paths.
+
+Follow-up adoption work has now started in the native shell:
+
+- `src/native/app/launch_registry.rs` was added as the first runtime launch adapter
+- `DesktopShellAction` now supports a shared `LaunchTarget`
+- the desktop Start menu Settings action now launches through `LaunchTarget::Capability("settings-ui")`
+- the desktop Spotlight Settings action now launches through the same capability path
+- the desktop menu bar Settings action now launches through the same capability path
+- the desktop context menu Settings action now launches through the same capability path
+- the desktop IPC `OpenSettings { panel: None }` path now launches through the same capability path
+- the desktop Start menu File Manager action now launches through `LaunchTarget::Capability("file-browser")`
+- the desktop Spotlight File Manager action now launches through the same capability path
+- the desktop menu bar File Manager action now launches through the same capability path
+- the desktop program-request `OpenFileManager` path now launches through the same capability path
+- the runtime still ends up opening the same existing Settings window, so visible behavior is unchanged
+- the runtime still ends up opening the same existing File Manager window, so visible behavior is unchanged
+- panel-specific settings entry points still open panels directly for now
 
 ## Files Added Or Changed
 
@@ -95,12 +116,18 @@ Added:
 - `crates/shared/src/platform/registry.rs`
 - `crates/shared/src/platform/shell.rs`
 - `src/native/addons.rs`
+- `src/native/app/launch_registry.rs`
 
 Changed:
 
 - `crates/shared/src/lib.rs`
+- `docs/NEUTRAL_CORE_HANDOFF.md`
 - `src/lib.rs`
+- `src/native/app.rs`
+- `src/native/app/desktop_spotlight.rs`
+- `src/native/app/desktop_start_menu.rs`
 - `src/native/mod.rs`
+- `src/native/desktop_app.rs`
 
 ## Verified State
 
@@ -120,6 +147,29 @@ Partially verified:
 - `cargo test -p robcos first_party_registry_exposes_core_capabilities --lib`
 
 That broader root-crate test was started to compile the product layer and GUI dependency graph, but no completed pass/fail result was captured in the previous session. Re-run it on the next machine.
+
+Additional verified slice:
+
+- `cargo test -p robcos settings_capability_resolves_to_settings_panel --lib`
+- `cargo test -p robcos settings_launch_target_opens_settings_window --lib`
+- `cargo test -p robcos desktop_menu_open_settings_uses_registry_launch --lib`
+- `cargo test -p robcos generic_context_menu_open_settings_uses_registry_launch --lib`
+- `cargo test -p robcos file_manager_capability_resolves_to_file_manager_window --lib`
+- `cargo test -p robcos file_manager_launch_target_opens_file_manager_window --lib`
+- `cargo test -p robcos desktop_menu_open_file_manager_uses_registry_launch --lib`
+- `cargo test -p robcos desktop_program_request_open_file_manager_uses_registry_launch --lib`
+
+Those two tests verify:
+
+- the new launch adapter resolves the Settings capability through the first-party addon registry
+- the native shell still opens the existing Settings window when that launch target is used
+
+The additional menu/context tests verify:
+
+- desktop menu bar Settings uses the registry-backed launch path
+- desktop context menu Settings uses the registry-backed launch path
+- desktop menu bar File Manager uses the registry-backed launch path
+- desktop program-request File Manager uses the registry-backed launch path
 
 ## Why This Was The Correct First Step
 
@@ -235,7 +285,7 @@ This phase is complete.
 
 ## Phase 1: Add Runtime Adapters Without Breaking Existing Flows
 
-Status: next
+Status: in progress
 
 Objective:
 
@@ -249,7 +299,7 @@ Concrete tasks:
 2. Back that adapter with `first_party_addon_registry()`.
 3. For now, route resolved addon ids into existing open-window/open-screen functions.
 4. Start with one app only.
-   - Recommended first app: Settings
+   - First adopted app: Settings
 5. Add focused tests for registry lookup and runtime mapping.
 
 Why Settings first:
@@ -263,10 +313,28 @@ Suggested initial output of this phase:
 - one new function or module that maps addon ids/capabilities to the existing runtime open actions
 - one launch path converted from app-name special casing to capability lookup
 
+Current Phase 1 progress:
+
+- done: added a desktop launch adapter
+- done: backed it with `first_party_addon_registry()`
+- done: routed Settings Start menu launch through capability lookup
+- done: routed Settings Spotlight launch through capability lookup
+- done: routed desktop menu bar Settings through capability lookup
+- done: routed desktop context menu Settings through capability lookup
+- done: routed generic desktop IPC Settings open through capability lookup
+- done: routed File Manager Start menu launch through capability lookup
+- done: routed File Manager Spotlight launch through capability lookup
+- done: routed desktop menu bar File Manager through capability lookup
+- done: routed desktop program-request File Manager through capability lookup
+- done: added focused resolver and app integration tests
+- not done: panel-specific Settings opens still use direct panel routing
+- not done: path-specific File Manager opens still use direct file-manager actions
+- not done: no third app has been migrated yet
+
 Exit criteria:
 
-- At least one existing app launch uses registry lookup by capability.
-- No visible behavior regression.
+- at least one app is fully routed through registry-backed launch paths for all major entry points
+- no visible behavior regression
 
 ## Phase 2: Begin Path Migration
 
@@ -511,12 +579,12 @@ All three platforms should share one runtime model, with different install-profi
 
 The next Codex task should be:
 
-1. introduce a small native launch adapter backed by `first_party_addon_registry()`
-2. wire Settings launch through `LaunchTarget::Capability("settings-ui")`
-3. keep the old runtime behavior underneath
-4. add focused tests for the mapping
+1. use the same pattern for Editor
+2. add an editor launch target and runtime mapping
+3. migrate the generic desktop Editor entry points
+4. keep visible behavior unchanged
 
-Do not start with file manager or terminal. Settings is the smallest useful slice.
+Do not jump to third-party manifests or dynamic loading yet.
 
 ## Suggested Continuation Steps For The Next Session
 
@@ -530,9 +598,10 @@ When resuming:
    - `src/native/app.rs`
    - `src/native/desktop_app.rs`
    - any menu/start/spotlight launch helpers
-4. add a single adapter module for registry-backed launch resolution
-5. convert one settings launch path to capability lookup
-6. verify no visible behavior change
+4. inspect `src/native/app/launch_registry.rs`
+5. keep Settings as the reference pattern
+6. migrate Editor as the next app
+7. verify no visible behavior change
 
 ## Suggested Prompt For The Next Codex Session
 
@@ -548,15 +617,15 @@ Read these files first:
 
 Important context:
 - The first contract step is already implemented in crates/shared/src/platform/ and src/native/addons.rs.
+- The first runtime adoption slice is also implemented in src/native/app/launch_registry.rs and wires Settings Start/Spotlight launches through capability lookup.
 - Do not redesign those contracts unless there is a concrete bug.
-- The next task is to add a small runtime adapter that resolves LaunchTarget::Addon / LaunchTarget::Capability through first_party_addon_registry().
-- Start with the Settings app only.
+- The next task is to use the completed Settings/File Manager pattern as the template for Editor.
 - Preserve current behavior and avoid broad rewrites.
 - Do not introduce dynamic plugin loading.
 - Prefer migration layers over replacing large parts of src/native/app.rs in one pass.
 
 Goal for this session:
-- wire one existing Settings launch path through capability-based lookup
+- migrate Editor using the same adapter pattern already used for Settings and File Manager
 - keep shell behavior unchanged
 - add focused tests
 ```

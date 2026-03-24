@@ -130,6 +130,7 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 mod desktop_installer_ui;
+mod launch_registry;
 mod desktop_menu_bar;
 mod desktop_spotlight;
 mod desktop_start_menu;
@@ -140,6 +141,7 @@ mod session_management;
 mod software_cursor;
 mod terminal_dispatch;
 mod terminal_screens;
+use launch_registry::{resolve_desktop_launch_target, unresolved_launch_target_status, NativeDesktopLaunch};
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
@@ -1077,7 +1079,7 @@ impl RobcoNativeApp {
                     if let Some(panel) = panel {
                         self.open_desktop_settings_panel(panel);
                     } else {
-                        self.open_desktop_settings_window();
+                        self.launch_settings_via_registry();
                     }
                 }
                 super::ipc::IpcMessage::AppClosed { .. } | super::ipc::IpcMessage::Ping => {}
@@ -2644,6 +2646,18 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::Settings);
     }
 
+    pub(super) fn launch_file_manager_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::file_manager_launch_target(),
+        ));
+    }
+
+    pub(super) fn launch_settings_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::settings_launch_target(),
+        ));
+    }
+
     pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
         self.pending_settings_panel = Some(panel);
         self.open_desktop_window(DesktopWindow::Settings);
@@ -2730,6 +2744,22 @@ impl RobcoNativeApp {
     fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
         match action {
             DesktopShellAction::OpenWindow(window) => self.open_or_spawn_desktop_window(window),
+            DesktopShellAction::LaunchByTarget(target) => {
+                match resolve_desktop_launch_target(&target) {
+                    Some(NativeDesktopLaunch::OpenWindow(window)) => {
+                        self.open_or_spawn_desktop_window(window);
+                    }
+                    Some(NativeDesktopLaunch::OpenSettingsPanel(Some(panel))) => {
+                        self.open_desktop_settings_panel(panel);
+                    }
+                    Some(NativeDesktopLaunch::OpenSettingsPanel(None)) => {
+                        self.open_desktop_settings_window();
+                    }
+                    None => {
+                        self.shell_status = unresolved_launch_target_status(&target);
+                    }
+                }
+            }
             DesktopShellAction::OpenTextEditor => {
                 self.open_or_spawn_desktop_window(DesktopWindow::Editor);
             }
@@ -5918,6 +5948,70 @@ mod tests {
 
         assert!(app.settings.open);
         assert_eq!(app.settings.panel, NativeSettingsPanel::Appearance);
+    }
+
+    #[test]
+    fn settings_launch_target_opens_settings_window() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_settings_via_registry();
+
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, desktop_settings_default_panel());
+    }
+
+    #[test]
+    fn file_manager_launch_target_opens_file_manager_window() {
+        let mut app = RobcoNativeApp::default();
+
+        app.launch_file_manager_via_registry();
+
+        assert!(app.file_manager.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
+    }
+
+    #[test]
+    fn desktop_menu_open_settings_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+
+        app.apply_desktop_menu_action(&Context::default(), &DesktopMenuAction::OpenSettings);
+
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, desktop_settings_default_panel());
+    }
+
+    #[test]
+    fn desktop_menu_open_file_manager_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+
+        app.apply_desktop_menu_action(&Context::default(), &DesktopMenuAction::OpenFileManager);
+
+        assert!(app.file_manager.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
+    }
+
+    #[test]
+    fn generic_context_menu_open_settings_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+        app.context_menu_action = Some(ContextMenuAction::OpenSettings);
+
+        app.dispatch_context_menu_action(&Context::default());
+
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, desktop_settings_default_panel());
+    }
+
+    #[test]
+    fn desktop_program_request_open_file_manager_uses_registry_launch() {
+        let mut app = RobcoNativeApp::default();
+
+        app.apply_desktop_program_request(DesktopProgramRequest::OpenFileManager);
+
+        assert!(app.file_manager.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
     }
 
     #[test]
