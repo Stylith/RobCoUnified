@@ -129,6 +129,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
+mod addon_policy;
 mod desktop_installer_ui;
 mod desktop_menu_bar;
 mod desktop_spotlight;
@@ -136,7 +137,6 @@ mod desktop_start_menu;
 mod desktop_surface;
 mod desktop_taskbar;
 mod desktop_window_mgmt;
-mod addon_policy;
 mod launch_registry;
 mod session_management;
 mod software_cursor;
@@ -144,7 +144,8 @@ mod terminal_dispatch;
 mod terminal_screens;
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 use launch_registry::{
-    resolve_desktop_launch_target, unresolved_launch_target_status, NativeDesktopLaunch,
+    resolve_desktop_launch_target, resolve_terminal_launch_target, unresolved_launch_target_status,
+    NativeDesktopLaunch, NativeTerminalLaunch,
 };
 mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
@@ -1400,9 +1401,8 @@ impl RobcoNativeApp {
         self.reset_desktop_settings_window();
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
         self.settings.open = true;
-        self.settings.panel = self.coerce_desktop_settings_panel(
-            panel.unwrap_or_else(desktop_settings_default_panel),
-        );
+        self.settings.panel = self
+            .coerce_desktop_settings_panel(panel.unwrap_or_else(desktop_settings_default_panel));
         self.file_manager.open = false;
         self.picking_icon_for_shortcut = None;
         self.picking_wallpaper = false;
@@ -5958,27 +5958,24 @@ mod tests {
     }
 
     #[test]
-    fn terminal_settings_capability_maps_to_terminal_screen() {
-        let app = RobcoNativeApp::default();
+    fn terminal_default_apps_capability_maps_to_terminal_screen() {
+        let target = launch_registry::default_apps_launch_target();
 
         assert_eq!(
-            app.terminal_screen_for_addon_capability(&crate::platform::CapabilityId::from(
-                "default-apps-ui"
-            )),
-            Some(TerminalScreen::DefaultApps)
+            resolve_terminal_launch_target(&target),
+            Some(NativeTerminalLaunch::OpenScreen(
+                TerminalScreen::DefaultApps
+            ))
         );
     }
 
     #[test]
     fn terminal_unknown_capability_is_not_routable() {
-        let app = RobcoNativeApp::default();
+        let target = crate::platform::LaunchTarget::Capability {
+            capability: crate::platform::CapabilityId::from("made-up-capability"),
+        };
 
-        assert_eq!(
-            app.terminal_screen_for_addon_capability(&crate::platform::CapabilityId::from(
-                "made-up-capability"
-            )),
-            None
-        );
+        assert_eq!(resolve_terminal_launch_target(&target), None);
     }
 
     #[test]

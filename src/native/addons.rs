@@ -1,4 +1,5 @@
 use super::desktop_app::DesktopWindow;
+use super::menu::TerminalScreen;
 use super::NativeSettingsPanel;
 use crate::platform::{
     AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonRegistry, CapabilityId,
@@ -13,9 +14,19 @@ pub(crate) enum NativeDesktopRoute {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeTerminalRoute {
+    OpenScreen(TerminalScreen),
+    OpenEmbeddedTerminalShell,
+    OpenDocumentBrowser,
+    OpenEditor,
+    OpenNukeCodes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FirstPartyAddonRuntime {
     pub addon_id: &'static str,
     pub desktop_route: Option<NativeDesktopRoute>,
+    pub terminal_route: Option<NativeTerminalRoute>,
 }
 
 pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
@@ -147,66 +158,84 @@ const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 14] = [
     FirstPartyAddonRuntime {
         addon_id: "shell.settings",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(None)),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::Settings)),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.file-manager",
         desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::FileManager)),
+        terminal_route: Some(NativeTerminalRoute::OpenDocumentBrowser),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.editor",
         desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::Editor)),
+        terminal_route: Some(NativeTerminalRoute::OpenEditor),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.document-browser",
         desktop_route: None,
+        terminal_route: None,
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.terminal",
         desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::TerminalMode)),
+        terminal_route: Some(NativeTerminalRoute::OpenEmbeddedTerminalShell),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.installer",
         desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::Installer)),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(
+            TerminalScreen::ProgramInstaller,
+        )),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.programs",
         desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::Applications)),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(
+            TerminalScreen::Applications,
+        )),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.default-apps",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(Some(
             NativeSettingsPanel::DefaultApps,
         ))),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::DefaultApps)),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.connections",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(Some(
             NativeSettingsPanel::Connections,
         ))),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::Connections)),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.edit-menus",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(Some(
             NativeSettingsPanel::EditMenus,
         ))),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::EditMenus)),
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.about",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(Some(
             NativeSettingsPanel::About,
         ))),
+        terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::About)),
     },
     FirstPartyAddonRuntime {
         addon_id: "games.red-menace",
         desktop_route: None,
+        terminal_route: None,
     },
     FirstPartyAddonRuntime {
         addon_id: "games.zeta-invaders",
         desktop_route: None,
+        terminal_route: None,
     },
     FirstPartyAddonRuntime {
         addon_id: "tools.nuke-codes",
         desktop_route: Some(NativeDesktopRoute::OpenNukeCodes),
+        terminal_route: Some(NativeTerminalRoute::OpenNukeCodes),
     },
 ];
 

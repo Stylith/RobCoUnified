@@ -23,7 +23,6 @@ use super::super::document_browser::{
 use super::super::edit_menus_screen::{
     draw_edit_menus_screen, EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest,
 };
-use super::super::first_party_addon_registry_for_profile;
 use super::super::file_manager::FileManagerCommand;
 use super::super::installer_screen::{
     draw_installer_screen, settle_view_after_package_command, InstallerEvent,
@@ -46,6 +45,10 @@ use super::super::terminal_command_palette::{
     draw_command_palette, CommandPaletteState, CommandPaletteTarget,
 };
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
+use super::launch_registry::{
+    editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
+    resolve_terminal_launch_target, unresolved_terminal_launch_target_status, NativeTerminalLaunch,
+};
 use super::retro_footer_height;
 use super::RobcoNativeApp;
 use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
@@ -59,8 +62,8 @@ use robcos_native_programs_app::{
 };
 use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::TerminalSettingsPanel;
-use robcos_shared::platform::CapabilityId;
 use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
+use robcos_shared::platform::LaunchTarget;
 use std::time::Duration;
 
 impl RobcoNativeApp {
@@ -193,20 +196,19 @@ impl RobcoNativeApp {
                 self.apply_status_update(clear_shell_status());
             }
             TerminalProgramRequest::OpenTextEditor => {
-                self.editor.open = true;
-                if self.editor.path.is_none() {
-                    self.new_document();
-                }
-                self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
+                self.execute_terminal_launch_target(editor_launch_target(), launch_return_screen);
             }
             TerminalProgramRequest::OpenNukeCodes => {
-                self.open_nuke_codes_screen(launch_return_screen);
+                self.execute_terminal_launch_target(
+                    nuke_codes_launch_target(),
+                    launch_return_screen,
+                );
             }
             TerminalProgramRequest::OpenFileManager => {
-                self.terminal_nav.browser_idx = 0;
-                self.terminal_nav.browser_return_screen = launch_return_screen;
-                self.navigate_to_screen(TerminalScreen::DocumentBrowser);
-                self.shell_status = "Opened File Manager.".to_string();
+                self.execute_terminal_launch_target(
+                    file_manager_launch_target(),
+                    launch_return_screen,
+                );
             }
             TerminalProgramRequest::LaunchCatalog { name, catalog } => {
                 if catalog == ProgramCatalog::Games
@@ -665,7 +667,10 @@ impl RobcoNativeApp {
                 }
             }
             TerminalSettingsEvent::OpenCapability(capability) => {
-                self.open_terminal_addon_capability(capability);
+                self.execute_terminal_launch_target(
+                    LaunchTarget::Capability { capability },
+                    TerminalScreen::Settings,
+                );
             }
             TerminalSettingsEvent::EnterUserManagement => {
                 self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
@@ -677,35 +682,45 @@ impl RobcoNativeApp {
         }
     }
 
-    fn open_terminal_addon_capability(&mut self, capability: CapabilityId) {
-        let Some(screen) = self.terminal_screen_for_addon_capability(&capability) else {
+    pub(super) fn execute_terminal_launch_target(
+        &mut self,
+        target: LaunchTarget,
+        return_screen: TerminalScreen,
+    ) {
+        let Some(launch) = resolve_terminal_launch_target(&target) else {
             crate::sound::play_error();
-            self.shell_status = format!(
-                "Capability '{capability}' is not available in terminal mode."
-            );
+            self.shell_status = unresolved_terminal_launch_target_status(&target);
             return;
         };
-        if matches!(screen, TerminalScreen::EditMenus) {
-            self.terminal_edit_menus.reset();
-        }
-        self.apply_terminal_screen_open_plan(terminal_screen_open_plan(screen, 0, true));
-    }
-
-    pub(super) fn terminal_screen_for_addon_capability(
-        &self,
-        capability: &CapabilityId,
-    ) -> Option<TerminalScreen> {
-        let registry = first_party_addon_registry_for_profile(crate::config::install_profile());
-        if registry.by_capability(capability).is_empty() {
-            return None;
-        }
-
-        match capability.as_str() {
-            "connections-ui" => Some(TerminalScreen::Connections),
-            "edit-menus-ui" => Some(TerminalScreen::EditMenus),
-            "default-apps-ui" => Some(TerminalScreen::DefaultApps),
-            "about-ui" => Some(TerminalScreen::About),
-            _ => None,
+        match launch {
+            NativeTerminalLaunch::OpenScreen(TerminalScreen::Settings) => {
+                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+            }
+            NativeTerminalLaunch::OpenScreen(screen) => {
+                if matches!(screen, TerminalScreen::EditMenus) {
+                    self.terminal_edit_menus.reset();
+                }
+                self.apply_terminal_screen_open_plan(terminal_screen_open_plan(screen, 0, true));
+            }
+            NativeTerminalLaunch::OpenEmbeddedTerminalShell => {
+                self.open_embedded_terminal_shell();
+            }
+            NativeTerminalLaunch::OpenDocumentBrowser => {
+                self.terminal_nav.browser_idx = 0;
+                self.terminal_nav.browser_return_screen = return_screen;
+                self.navigate_to_screen(TerminalScreen::DocumentBrowser);
+                self.shell_status = "Opened File Manager.".to_string();
+            }
+            NativeTerminalLaunch::OpenEditor => {
+                self.editor.open = true;
+                if self.editor.path.is_none() {
+                    self.new_document();
+                }
+                self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
+            }
+            NativeTerminalLaunch::OpenNukeCodes => {
+                self.open_nuke_codes_screen(return_screen);
+            }
         }
     }
 

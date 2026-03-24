@@ -40,17 +40,18 @@ impl RobcoNativeApp {
             && self.spotlight_system_entry_enabled("text-editor");
         let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
             && self.spotlight_system_entry_enabled("code-reference");
-        self.spotlight_results.retain(|result| match result.category {
-            NativeSpotlightCategory::System => match result.name.as_str() {
-                "File Manager" => show_file_manager,
-                "Settings" => show_settings,
-                "Terminal" => show_terminal,
-                n if n == BUILTIN_TEXT_EDITOR_APP => show_text_editor,
-                n if n == BUILTIN_NUKE_CODES_APP => show_nuke_codes,
-                _ => false,
-            },
-            _ => true,
-        });
+        self.spotlight_results
+            .retain(|result| match result.category {
+                NativeSpotlightCategory::System => match result.name.as_str() {
+                    "File Manager" => show_file_manager,
+                    "Settings" => show_settings,
+                    "Terminal" => show_terminal,
+                    n if n == BUILTIN_TEXT_EDITOR_APP => show_text_editor,
+                    n if n == BUILTIN_NUKE_CODES_APP => show_nuke_codes,
+                    _ => false,
+                },
+                _ => true,
+            });
         self.spotlight_selected = 0;
     }
 

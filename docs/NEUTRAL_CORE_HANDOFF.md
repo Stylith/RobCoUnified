@@ -262,6 +262,13 @@ Additional terminal settings capability-routing slice:
 - native terminal runtime now resolves those capability requests against the first-party addon registry for the active install profile before opening a terminal screen
 - this means terminal menu mode has started using the same capability contract as desktop launch paths, not just the same visibility policy
 
+Additional shared terminal launch-registry slice:
+
+- first-party addon runtimes in `src/native/addons.rs` now carry both desktop and terminal runtime routes instead of only desktop routes
+- `src/native/app/launch_registry.rs` now resolves terminal launch targets through the same profile-aware addon/runtime registry seam as desktop
+- terminal settings capability launches, terminal Applications builtin launches, and terminal main-menu launches for Settings, Program Installer, and Terminal now consume that shared terminal registry path
+- terminal mode still has older direct screen routing for non-addon sections like Documents, Network, Games, and user-management flows, but addon-backed entry points are no longer maintained as a separate terminal-only lookup table
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

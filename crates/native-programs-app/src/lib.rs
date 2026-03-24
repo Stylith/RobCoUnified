@@ -173,7 +173,11 @@ pub fn build_desktop_applications_sections(
     let builtins = builtin_labels
         .into_iter()
         .map(|label| DesktopProgramEntry {
-            action: resolve_desktop_applications_action(&label, text_editor_label, nuke_codes_label),
+            action: resolve_desktop_applications_action(
+                &label,
+                text_editor_label,
+                nuke_codes_label,
+            ),
             label,
         })
         .collect();
@@ -460,14 +464,8 @@ mod tests {
 
     #[test]
     fn build_desktop_applications_sections_can_hide_file_manager_builtin() {
-        let sections = build_desktop_applications_sections(
-            false,
-            true,
-            true,
-            &[],
-            "Editor",
-            "Nuke Codes",
-        );
+        let sections =
+            build_desktop_applications_sections(false, true, true, &[], "Editor", "Nuke Codes");
 
         assert_eq!(
             sections.builtins,

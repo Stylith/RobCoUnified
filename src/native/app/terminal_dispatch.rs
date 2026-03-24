@@ -24,11 +24,10 @@ use super::super::installer_screen::{
 use super::super::menu::{
     resolve_create_username_prompt, resolve_login_password_submission,
     resolve_terminal_back_action, resolve_user_password_confirm_prompt,
-    resolve_user_password_first_prompt, terminal_screen_open_plan, terminal_settings_refresh_plan,
-    MainMenuSelectionAction, TerminalBackAction, TerminalBackContext, TerminalHackingPlan,
-    TerminalLoginScreenMode, TerminalLoginSelectionPlan, TerminalLoginSubmitAction, TerminalScreen,
-    TerminalScreenOpenPlan, TerminalSelectionIndexTarget, TerminalUserPasswordFlow,
-    UserManagementMode,
+    resolve_user_password_first_prompt, terminal_screen_open_plan, MainMenuSelectionAction,
+    TerminalBackAction, TerminalBackContext, TerminalHackingPlan, TerminalLoginScreenMode,
+    TerminalLoginSelectionPlan, TerminalLoginSubmitAction, TerminalScreen, TerminalScreenOpenPlan,
+    TerminalSelectionIndexTarget, TerminalUserPasswordFlow, UserManagementMode,
 };
 use super::super::prompt::{FlashAction, TerminalPromptAction};
 use super::super::prompt_flow::{handle_prompt_input, PromptOutcome};
@@ -138,13 +137,26 @@ impl RobcoNativeApp {
                 screen,
                 selected_idx,
                 clear_status,
-            } => self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
-                screen,
-                selected_idx,
-                clear_status,
-            )),
+            } => match screen {
+                TerminalScreen::Applications => self.execute_terminal_launch_target(
+                    super::launch_registry::programs_launch_target(),
+                    TerminalScreen::MainMenu,
+                ),
+                TerminalScreen::ProgramInstaller => self.execute_terminal_launch_target(
+                    super::launch_registry::installer_launch_target(),
+                    TerminalScreen::MainMenu,
+                ),
+                _ => self.apply_terminal_screen_open_plan(terminal_screen_open_plan(
+                    screen,
+                    selected_idx,
+                    clear_status,
+                )),
+            },
             MainMenuSelectionAction::OpenTerminalMode => {
-                self.open_embedded_terminal_shell();
+                self.execute_terminal_launch_target(
+                    super::launch_registry::terminal_launch_target(),
+                    TerminalScreen::MainMenu,
+                );
             }
             MainMenuSelectionAction::EnterDesktopMode => {
                 crate::sound::play_login();
@@ -158,7 +170,10 @@ impl RobcoNativeApp {
             MainMenuSelectionAction::RefreshSettingsAndOpen => {
                 let settings = reload_settings_snapshot();
                 self.replace_settings_draft(settings);
-                self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
+                self.execute_terminal_launch_target(
+                    super::launch_registry::settings_launch_target(),
+                    TerminalScreen::MainMenu,
+                );
             }
             MainMenuSelectionAction::BeginLogout => self.begin_logout(),
         }

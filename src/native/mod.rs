@@ -47,7 +47,7 @@ pub use robcos_native_settings_app::NativeSettingsPanel;
 
 pub(crate) use addons::{
     first_party_addon_enabled, first_party_addon_registry_for_profile, first_party_addon_runtime,
-    first_party_capability_enabled_str, NativeDesktopRoute,
+    first_party_capability_enabled_str, NativeDesktopRoute, NativeTerminalRoute,
 };
 pub use addons::{first_party_addon_manifests, first_party_addon_registry};
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};

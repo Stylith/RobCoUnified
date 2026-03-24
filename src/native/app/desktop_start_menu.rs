@@ -884,19 +884,17 @@ mod tests {
     fn mac_launcher_hides_connections_from_start_system_items() {
         let items = start_system_items_for_profile(InstallProfile::MacLauncher);
 
-        assert!(!items.iter().any(|(_, action)| matches!(
-            action,
-            StartSystemAction::Connections
-        )));
+        assert!(!items
+            .iter()
+            .any(|(_, action)| matches!(action, StartSystemAction::Connections)));
     }
 
     #[test]
     fn linux_desktop_keeps_connections_in_start_system_items() {
         let items = start_system_items_for_profile(InstallProfile::LinuxDesktop);
 
-        assert!(items.iter().any(|(_, action)| matches!(
-            action,
-            StartSystemAction::Connections
-        )));
+        assert!(items
+            .iter()
+            .any(|(_, action)| matches!(action, StartSystemAction::Connections)));
     }
 }

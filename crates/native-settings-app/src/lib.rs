@@ -270,14 +270,12 @@ pub fn desktop_settings_home_rows_with_visibility(
         });
     }
 
-    let mut second_row = vec![
-        SettingsHomeTile {
-            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::CliProfiles),
-            label: "CLI Profiles",
-            icon: "[=]",
-            enabled: true,
-        },
-    ];
+    let mut second_row = vec![SettingsHomeTile {
+        action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::CliProfiles),
+        label: "CLI Profiles",
+        icon: "[=]",
+        enabled: true,
+    }];
     if visibility.edit_menus {
         second_row.push(SettingsHomeTile {
             action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::EditMenus),
