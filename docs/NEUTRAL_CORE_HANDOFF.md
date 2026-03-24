@@ -327,6 +327,18 @@ Additional desktop-component-host extraction slice:
 - that module now owns the mechanical bridge between desktop window hosting and the underlying component state/draw hooks, which keeps the root coordinator from carrying another large table of adapter methods
 - representative regressions passed for settings reopen behavior, secondary desktop PTY spawning, and applications-window rendering behavior after the extraction
 
+Additional UI-helper extraction slice:
+
+- shared UI/static helper methods moved out of `src/native/app.rs` into `src/native/app/ui_helpers.rs`
+- that module now owns the reusable egui helpers for SVG loading, tinted icon painting, file-manager label truncation, editor text-edit ids, and retro/settings control widgets instead of leaving that generic support code in the root coordinator
+- focused regressions passed for file-manager preview scaling, file-manager label truncation, and compact desktop icon label rendering after the extraction
+
+Additional asset-helper extraction slice:
+
+- settings/file-manager asset helpers moved out of `src/native/app.rs` into `src/native/app/asset_helpers.rs`
+- that module now owns settings panel icons, installer/game icons, file-manager row/preview icon selection, and the small file-manager selection helper methods that sit beside those assets, instead of leaving that mixed asset/support block in the root coordinator
+- focused regressions passed for file-manager preview scaling, lazy SVG preview loading, and file-manager navigation/selection behavior after the extraction
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

@@ -1,6 +1,6 @@
 use super::background::{BackgroundResult, BackgroundTasks};
 use super::connections_screen::TerminalConnectionsState;
-use super::data::{home_dir_fallback, logs_dir, save_text_file, word_processor_dir};
+use super::data::{home_dir_fallback, logs_dir, save_text_file};
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
 use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
@@ -10,7 +10,7 @@ use super::desktop_documents_service::{
     delete_document_category as delete_desktop_document_category, document_category_names,
     rename_document_category as rename_desktop_document_category,
 };
-use super::desktop_file_service::{load_text_document, FileManagerLocation};
+use super::desktop_file_service::load_text_document;
 use super::desktop_launcher_service::{
     add_catalog_entry, catalog_names, delete_catalog_entry, parse_catalog_command_line,
     rename_catalog_entry, resolve_catalog_launch, ProgramCatalog, BUILTIN_RED_MENACE_GAME,
@@ -20,19 +20,16 @@ use super::desktop_launcher_service::{
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::restore_current_user_from_last_session;
-use super::desktop_settings_service::{
-    apply_file_manager_display_settings_update as apply_desktop_file_manager_display_settings_update,
-    load_settings_snapshot,
-};
+use super::desktop_settings_service::load_settings_snapshot;
 use super::desktop_status_service::{clear_shell_status, shell_status};
 use super::desktop_surface_service::{DesktopIconGridLayout, DesktopSurfaceEntry};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
 use super::editor_app::{EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE};
 use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
 use super::file_manager_app::{
-    self, FileManagerCommandRequest, FileManagerDisplaySettingsUpdate, FileManagerEditRuntime,
-    FileManagerOpenTarget, FileManagerPickerCommit, FileManagerPromptRequest,
-    FileManagerSettingsUpdate, NativeFileManagerDragPayload,
+    self, FileManagerCommandRequest, FileManagerEditRuntime, FileManagerOpenTarget,
+    FileManagerPickerCommit, FileManagerPromptRequest, FileManagerSettingsUpdate,
+    NativeFileManagerDragPayload,
 };
 use super::file_manager_desktop::{self, FileManagerDesktopFooterAction};
 use super::first_party_capability_enabled_str;
@@ -85,6 +82,7 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 mod addon_policy;
+mod asset_helpers;
 mod desktop_component_host;
 mod desktop_installer_ui;
 mod desktop_menu_bar;
@@ -105,6 +103,7 @@ mod software_cursor;
 mod terminal_dispatch;
 mod terminal_runtime;
 mod terminal_screens;
+mod ui_helpers;
 use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
 #[cfg(test)]
 use launch_registry::{resolve_terminal_launch_target, NativeTerminalLaunch};
@@ -924,72 +923,6 @@ impl RobcoNativeApp {
         self.last_native_appearance = Some(key);
     }
 
-    fn load_svg_icon(
-        ctx: &Context,
-        id: &str,
-        svg_bytes: &[u8],
-        size_px: Option<u32>,
-    ) -> TextureHandle {
-        let tree = usvg::Tree::from_data(svg_bytes, &usvg::Options::default())
-            .expect("invalid SVG in src/Icons");
-        let natural = tree.size().to_int_size();
-        let target_size = size_px.unwrap_or(natural.width().max(natural.height()));
-        let scale = target_size as f32 / natural.width().max(natural.height()) as f32;
-        let width = (natural.width() as f32 * scale).round() as u32;
-        let height = (natural.height() as f32 * scale).round() as u32;
-
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).expect("zero-sized SVG icon");
-        resvg::render(
-            &tree,
-            resvg::tiny_skia::Transform::from_scale(scale, scale),
-            &mut pixmap.as_mut(),
-        );
-
-        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-        for pixel in pixmap.pixels() {
-            rgba.extend_from_slice(&[255, 255, 255, pixel.alpha()]);
-        }
-        let image =
-            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
-        ctx.load_texture(id, image, egui::TextureOptions::LINEAR)
-    }
-
-    fn ensure_cached_svg_icon(
-        slot: &mut Option<TextureHandle>,
-        ctx: &Context,
-        id: &str,
-        svg_bytes: &[u8],
-        size_px: Option<u32>,
-    ) -> TextureHandle {
-        slot.get_or_insert_with(|| Self::load_svg_icon(ctx, id, svg_bytes, size_px))
-            .clone()
-    }
-
-    fn paint_tinted_texture(
-        painter: &egui::Painter,
-        texture: &TextureHandle,
-        rect: egui::Rect,
-        tint: Color32,
-    ) {
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        painter.image(texture.id(), rect, uv, tint);
-    }
-
-    fn fit_texture_rect(texture: &TextureHandle, bounds: egui::Rect) -> egui::Rect {
-        let image_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
-        if image_size.x <= 0.0
-            || image_size.y <= 0.0
-            || bounds.width() <= 0.0
-            || bounds.height() <= 0.0
-        {
-            return bounds;
-        }
-        let scale = (bounds.width() / image_size.x)
-            .min(bounds.height() / image_size.y)
-            .min(1.0);
-        egui::Rect::from_center_size(bounds.center(), image_size * scale)
-    }
-
     fn native_pty_window_min_size(state: &NativePtyState) -> egui::Vec2 {
         let cols = state.desktop_cols_floor.unwrap_or(40) as f32;
         // Add one row for the desktop footer/status line that sits under the PTY grid.
@@ -1002,326 +935,6 @@ impl RobcoNativeApp {
 
     fn terminal_layout(&self) -> TerminalLayout {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
-    }
-
-    fn file_manager_home_path(&self) -> PathBuf {
-        if let Some(session) = &self.session {
-            word_processor_dir(&session.username)
-        } else {
-            home_dir_fallback()
-        }
-    }
-
-    fn apply_file_manager_location(&mut self, location: FileManagerLocation) {
-        self.file_manager.set_cwd(location.cwd);
-        if let Some(selected) = location.selected {
-            self.file_manager.select(Some(selected));
-        }
-        self.open_desktop_window(DesktopWindow::FileManager);
-    }
-
-    fn apply_file_manager_display_settings_update(
-        &mut self,
-        update: FileManagerDisplaySettingsUpdate,
-    ) {
-        apply_desktop_file_manager_display_settings_update(&mut self.settings.draft, update);
-        self.sync_runtime_settings_cache();
-        self.file_manager.ensure_selection_valid();
-    }
-
-    fn truncate_file_manager_label(text: &str, max_chars: usize) -> String {
-        let total_chars = text.chars().count();
-        if total_chars <= max_chars {
-            return text.to_string();
-        }
-        if max_chars <= 3 {
-            return ".".repeat(max_chars);
-        }
-        let suffix_budget = ((max_chars - 3) + 1) / 2;
-        let mut suffix: String = text
-            .chars()
-            .skip(total_chars.saturating_sub(suffix_budget))
-            .collect();
-        if total_chars > suffix_budget && suffix.starts_with('.') {
-            suffix.remove(0);
-        }
-        let prefix_budget = max_chars.saturating_sub(3 + suffix.chars().count());
-        let prefix: String = text.chars().take(prefix_budget).collect();
-        format!("{prefix}...{suffix}")
-    }
-
-    fn settings_panel_texture(
-        &mut self,
-        ctx: &Context,
-        panel: NativeSettingsPanel,
-    ) -> Option<TextureHandle> {
-        let cache = self.asset_cache.as_mut()?;
-        let texture = match panel {
-            NativeSettingsPanel::General => cache.icon_general.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_general",
-                    include_bytes!("../Icons/pixel--home-solid.svg"),
-                    Some(64),
-                )
-            }),
-            NativeSettingsPanel::Appearance => cache.icon_appearance.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_appearance",
-                    include_bytes!("../Icons/pixel--image-solid.svg"),
-                    Some(64),
-                )
-            }),
-            NativeSettingsPanel::DefaultApps => cache.icon_default_apps.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_default_apps",
-                    include_bytes!("../Icons/pixel--external-link-solid.svg"),
-                    Some(64),
-                )
-            }),
-            NativeSettingsPanel::Connections => &mut cache.icon_connections,
-            NativeSettingsPanel::CliProfiles => cache.icon_cli_profiles.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_cli_profiles",
-                    include_bytes!("../Icons/pixel--code-solid.svg"),
-                    Some(64),
-                )
-            }),
-            NativeSettingsPanel::EditMenus => cache.icon_edit_menus.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_edit_menus",
-                    include_bytes!("../Icons/pixel--bullet-list-solid.svg"),
-                    Some(64),
-                )
-            }),
-            NativeSettingsPanel::UserManagement => {
-                cache.icon_user_management.get_or_insert_with(|| {
-                    Self::load_svg_icon(
-                        ctx,
-                        "icon_user_management",
-                        include_bytes!("../Icons/pixel--user-solid.svg"),
-                        Some(64),
-                    )
-                })
-            }
-            NativeSettingsPanel::About => cache.icon_about.get_or_insert_with(|| {
-                Self::load_svg_icon(
-                    ctx,
-                    "icon_about",
-                    include_bytes!("../Icons/pixel--info-circle-solid.svg"),
-                    Some(64),
-                )
-            }),
-            _ => return None,
-        };
-        Some(texture.clone())
-    }
-
-    fn installer_games_texture(&mut self, ctx: &Context) -> Option<TextureHandle> {
-        let cache = self.asset_cache.as_mut()?;
-        Some(
-            cache
-                .icon_gaming
-                .get_or_insert_with(|| {
-                    Self::load_svg_icon(
-                        ctx,
-                        "icon_gaming",
-                        include_bytes!("../Icons/pixel--gaming.svg"),
-                        Some(64),
-                    )
-                })
-                .clone(),
-        )
-    }
-
-    fn file_manager_texture_for_row(
-        &mut self,
-        ctx: &Context,
-        row: &super::file_manager::FileEntryRow,
-    ) -> Option<TextureHandle> {
-        let cache = self.asset_cache.as_mut()?;
-        if row.is_parent_dir() {
-            return Some(Self::ensure_cached_svg_icon(
-                &mut cache.icon_folder_open,
-                ctx,
-                "icon_folder_open",
-                include_bytes!("../Icons/pixel--folder-open-solid.svg"),
-                Some(64),
-            ));
-        }
-        if row.is_dir {
-            return Some(Self::ensure_cached_svg_icon(
-                &mut cache.icon_folder,
-                ctx,
-                "icon_folder",
-                include_bytes!("../Icons/pixel--folder-solid.svg"),
-                Some(64),
-            ));
-        }
-        let extension = row
-            .path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        Some(match extension.as_str() {
-            "txt" | "md" | "log" | "toml" | "yaml" | "yml" | "json" | "cfg" | "ini" | "conf"
-            | "ron" | "rs" | "py" | "js" | "ts" | "c" | "cpp" | "h" | "hpp" | "sh" | "bash"
-            | "fish" | "lua" | "rb" => Self::ensure_cached_svg_icon(
-                &mut cache.icon_text,
-                ctx,
-                "icon_text",
-                include_bytes!("../Icons/pixel--newspaper-solid.svg"),
-                Some(64),
-            ),
-            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" => {
-                Self::ensure_cached_svg_icon(
-                    &mut cache.icon_image,
-                    ctx,
-                    "icon_image",
-                    include_bytes!("../Icons/pixel--image-solid.svg"),
-                    Some(64),
-                )
-            }
-            "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" => Self::ensure_cached_svg_icon(
-                &mut cache.icon_audio,
-                ctx,
-                "icon_audio",
-                include_bytes!("../Icons/pixel--music-solid.svg"),
-                Some(64),
-            ),
-            "mp4" | "mkv" | "avi" | "mov" | "webm" => Self::ensure_cached_svg_icon(
-                &mut cache.icon_video,
-                ctx,
-                "icon_video",
-                include_bytes!("../Icons/pixel--media.svg"),
-                Some(64),
-            ),
-            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => Self::ensure_cached_svg_icon(
-                &mut cache.icon_archive,
-                ctx,
-                "icon_archive",
-                include_bytes!("../Icons/pixel--save-solid.svg"),
-                Some(64),
-            ),
-            "exe" | "bin" | "appimage" | "dmg" | "deb" | "rpm" | "app" | "bat" | "cmd" => {
-                Self::ensure_cached_svg_icon(
-                    &mut cache.icon_app,
-                    ctx,
-                    "icon_app",
-                    include_bytes!("../Icons/pixel--programming.svg"),
-                    Some(64),
-                )
-            }
-            _ => Self::ensure_cached_svg_icon(
-                &mut cache.icon_file,
-                ctx,
-                "icon_file",
-                include_bytes!("../Icons/pixel--clipboard-solid.svg"),
-                Some(64),
-            ),
-        })
-    }
-
-    fn file_manager_selected_entries(&self) -> Vec<super::file_manager::FileEntryRow> {
-        self.file_manager.selected_rows_for_action()
-    }
-
-    fn file_manager_selection_count(&self) -> usize {
-        self.file_manager_selected_entries().len()
-    }
-
-    fn file_manager_select_path(&mut self, path: PathBuf, ctrl_toggle: bool, allow_multi: bool) {
-        if allow_multi && ctrl_toggle {
-            self.file_manager.toggle_selected_path(&path);
-        } else {
-            self.file_manager.select(Some(path));
-        }
-    }
-
-    /// Returns the SVG preview from cache if available, otherwise the default asset icon.
-    /// Returns an owned TextureHandle (Arc clone) so callers don't borrow self across &mut calls.
-    fn svg_preview_texture(
-        &mut self,
-        ctx: &Context,
-        row: &super::file_manager::FileEntryRow,
-    ) -> Option<TextureHandle> {
-        let is_svg = row
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("svg"))
-            .unwrap_or(false);
-        if is_svg {
-            let key = row.path.to_string_lossy().to_string();
-            return self.load_cached_shortcut_icon(ctx, &key, &row.path, 32);
-        }
-        self.file_manager_texture_for_row(ctx, row)
-    }
-
-    fn clear_file_manager_preview_texture(&mut self) {
-        self.file_manager_preview_texture = None;
-        self.file_manager_preview_loaded_for.clear();
-    }
-
-    fn path_supports_file_manager_image_preview(path: &Path) -> bool {
-        matches!(
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_str(),
-            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "svg"
-        )
-    }
-
-    fn file_manager_preview_texture(
-        &mut self,
-        ctx: &Context,
-        row: &super::file_manager::FileEntryRow,
-    ) -> Option<TextureHandle> {
-        if row.is_dir
-            || row.is_parent_dir()
-            || !Self::path_supports_file_manager_image_preview(&row.path)
-        {
-            self.clear_file_manager_preview_texture();
-            return None;
-        }
-        let is_svg = row
-            .path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("svg"))
-            .unwrap_or(false);
-        if is_svg {
-            let key = format!("{}#preview", row.path.to_string_lossy());
-            return self.load_cached_shortcut_icon(ctx, &key, &row.path, 192);
-        }
-        let loaded_for = row.path.to_string_lossy().to_string();
-        if self.file_manager_preview_loaded_for != loaded_for {
-            self.file_manager_preview_texture = Self::load_tinted_image_texture(
-                ctx,
-                format!("file_manager_preview::{loaded_for}"),
-                &row.path,
-                Some(192),
-            );
-            self.file_manager_preview_loaded_for.clear();
-            self.file_manager_preview_loaded_for.push_str(&loaded_for);
-        }
-        self.file_manager_preview_texture.clone()
-    }
-
-    fn split_file_name(name: &str) -> (&str, &str) {
-        if let Some((stem, _ext)) = name.rsplit_once('.') {
-            if !stem.is_empty() {
-                return (stem, &name[stem.len()..]);
-            }
-        }
-        (name, "")
     }
 
     fn file_manager_move_paths_to_dir(
@@ -2069,216 +1682,6 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::Editor);
         self.editor.status = "Opened log.".to_string();
         self.shell_status = "Opened log editor.".to_string();
-    }
-
-    fn active_editor_text_edit_id(&self) -> Id {
-        let generation = self.desktop_window_generation(DesktopWindow::Editor.into());
-        Id::new(("editor_text_edit", generation))
-    }
-
-    fn retro_separator(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let desired = egui::vec2(ui.available_width().max(1.0), 2.0);
-        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, palette.fg);
-        ui.add_space(2.0);
-    }
-
-    fn retro_disabled_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
-        let palette = current_palette();
-        ui.add(
-            egui::Button::new(egui::RichText::new(label.into()).color(palette.dim))
-                .sense(egui::Sense::hover()),
-        )
-    }
-
-    fn apply_settings_control_style(ui: &mut egui::Ui) {
-        let palette = current_palette();
-        let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.override_text_color = None;
-        style.visuals.window_fill = Color32::BLACK;
-        style.visuals.panel_fill = Color32::BLACK;
-        style.visuals.faint_bg_color = Color32::BLACK;
-        style.visuals.extreme_bg_color = Color32::BLACK;
-        style.visuals.code_bg_color = Color32::BLACK;
-        style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.selection.bg_fill = palette.fg;
-        style.visuals.selection.stroke = stroke;
-        style.visuals.hyperlink_color = palette.fg;
-        style.visuals.text_cursor.stroke = stroke;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::BLACK;
-        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::BLACK;
-        style.visuals.widgets.noninteractive.bg_stroke = stroke;
-        style.visuals.widgets.noninteractive.fg_stroke = stroke;
-        style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = Color32::BLACK;
-        style.visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
-        style.visuals.widgets.inactive.bg_stroke = stroke;
-        style.visuals.widgets.inactive.fg_stroke = stroke;
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.inactive.expansion = 0.0;
-        style.visuals.widgets.hovered.bg_fill = palette.fg;
-        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
-        style.visuals.widgets.hovered.bg_stroke = stroke;
-        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.hovered.expansion = 0.0;
-        style.visuals.widgets.active.bg_fill = palette.fg;
-        style.visuals.widgets.active.weak_bg_fill = palette.fg;
-        style.visuals.widgets.active.bg_stroke = stroke;
-        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.active.expansion = 0.0;
-        style.visuals.widgets.open.bg_fill = palette.fg;
-        style.visuals.widgets.open.weak_bg_fill = palette.fg;
-        style.visuals.widgets.open.bg_stroke = stroke;
-        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
-        style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
-        style.visuals.widgets.open.expansion = 0.0;
-        ui.set_style(style);
-    }
-
-    fn retro_choice_button(
-        ui: &mut egui::Ui,
-        label: impl Into<String>,
-        selected: bool,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let label = label.into();
-        let button = if selected {
-            egui::Button::new(label.clone())
-                .fill(palette.fg)
-                .stroke(egui::Stroke::new(2.0, palette.fg))
-        } else {
-            egui::Button::new(label.clone()).stroke(egui::Stroke::new(2.0, palette.fg))
-        };
-        let response = ui.add(button);
-        if selected {
-            let font = TextStyle::Button.resolve(ui.style());
-            ui.painter().text(
-                response.rect.center(),
-                Align2::CENTER_CENTER,
-                label,
-                font,
-                Color32::BLACK,
-            );
-        }
-        response
-    }
-
-    fn retro_checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
-        let marker = if *value { "[x]" } else { "[ ]" };
-        let response = ui.add(
-            egui::Button::new(format!("{marker} {label}"))
-                .stroke(egui::Stroke::new(2.0, current_palette().fg)),
-        );
-        if response.clicked() {
-            *value = !*value;
-        }
-        response
-    }
-
-    fn retro_settings_tile(
-        ui: &mut egui::Ui,
-        texture: Option<&TextureHandle>,
-        icon: &str,
-        label: &str,
-        enabled: bool,
-        desired: egui::Vec2,
-        icon_font_size: f32,
-        label_font_size: f32,
-    ) -> egui::Response {
-        let palette = current_palette();
-        let sense = if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        };
-        let (rect, response) = ui.allocate_exact_size(desired, sense);
-        let hovered = enabled && response.hovered();
-        if hovered {
-            ui.painter().rect_filled(rect, 0.0, palette.fg);
-        }
-        let text_color = if hovered { Color32::BLACK } else { palette.fg };
-        if let Some(texture) = texture {
-            let icon_side = (desired.y * 0.34).clamp(24.0, 40.0);
-            let icon_rect = egui::Rect::from_center_size(
-                egui::pos2(rect.center().x, rect.top() + desired.y * 0.34),
-                egui::vec2(icon_side, icon_side),
-            );
-            Self::paint_tinted_texture(ui.painter(), texture, icon_rect, text_color);
-        } else {
-            ui.painter().text(
-                rect.left_top() + egui::vec2(8.0, desired.y * 0.18),
-                Align2::LEFT_TOP,
-                icon,
-                FontId::new(icon_font_size, FontFamily::Monospace),
-                text_color,
-            );
-        }
-        ui.painter().text(
-            egui::pos2(rect.center().x, rect.top() + desired.y * 0.70),
-            Align2::CENTER_CENTER,
-            label,
-            FontId::new(label_font_size, FontFamily::Monospace),
-            text_color,
-        );
-        response
-    }
-
-    fn retro_full_width_button(ui: &mut egui::Ui, label: impl Into<String>) -> egui::Response {
-        let palette = current_palette();
-        ui.add_sized(
-            [ui.available_width().max(160.0), 0.0],
-            egui::Button::new(label.into()).stroke(egui::Stroke::new(2.0, palette.fg)),
-        )
-    }
-
-    fn responsive_input_width(ui: &egui::Ui, fraction: f32, min: f32, max: f32) -> f32 {
-        (ui.available_width() * fraction).clamp(min, max)
-    }
-
-    fn settings_two_columns<R>(
-        ui: &mut egui::Ui,
-        add_contents: impl FnOnce(&mut egui::Ui, &mut egui::Ui) -> R,
-    ) -> R {
-        let total_w = ui.available_width().min(860.0);
-        let column_gap = 18.0;
-        let column_w = ((total_w - column_gap) * 0.5).max(220.0);
-        ui.columns(2, |columns| {
-            let (left_slice, right_slice) = columns.split_at_mut(1);
-            let left = &mut left_slice[0];
-            let right = &mut right_slice[0];
-            left.set_width(column_w);
-            right.set_width(column_w);
-            add_contents(left, right)
-        })
-    }
-
-    fn settings_section<R>(
-        ui: &mut egui::Ui,
-        title: &str,
-        add_contents: impl FnOnce(&mut egui::Ui) -> R,
-    ) -> R {
-        let palette = current_palette();
-        egui::Frame::none()
-            .fill(Color32::BLACK)
-            .stroke(egui::Stroke::new(2.0, palette.fg))
-            .inner_margin(egui::Margin::same(10.0))
-            .show(ui, |ui| {
-                ui.strong(title);
-                ui.add_space(8.0);
-                Self::retro_separator(ui);
-                ui.add_space(8.0);
-                add_contents(ui)
-            })
-            .inner
     }
 }
 
