@@ -15,9 +15,7 @@ use super::super::menu::{
     TerminalUserManagementPromptPlan, TerminalUserPasswordFlow, UserManagementMode,
 };
 use super::super::prompt::{FlashAction, TerminalFlash, TerminalPromptAction};
-use super::super::pty_screen::{
-    spawn_embedded_pty_with_options,
-};
+use super::super::pty_screen::spawn_embedded_pty_with_options;
 use super::RobcoNativeApp;
 use crate::core::auth::{AuthMethod, UserRecord};
 use std::path::Path;

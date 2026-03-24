@@ -298,6 +298,35 @@ Additional terminal-runtime extraction slice:
 - `src/native/app/terminal_dispatch.rs` and `src/native/app/terminal_screens.rs` now call into a dedicated terminal runtime module instead of a large shared block on the root coordinator
 - this gives the native shell parallel `desktop_runtime` and `terminal_runtime` seams, which is closer to the planned coordinator split
 
+Additional prompt-runtime extraction slice:
+
+- terminal prompt construction helpers, file-manager prompt bridging, and prompt/status result plumbing moved out of `src/native/app.rs` into `src/native/app/prompt_runtime.rs`
+- this keeps prompt lifecycle code beside the existing prompt dispatch modules instead of leaving another utility block in the root coordinator
+
+Additional document-runtime extraction slice:
+
+- document open/save flow, file-manager picker flow, editor command handling, and desktop file-manager shortcut/footer handling moved out of `src/native/app.rs` into `src/native/app/document_runtime.rs`
+- that module now owns the shared document/file-manager runtime seam used by both desktop and terminal paths, which keeps editor and file-manager behavior aligned instead of letting one mode drift ahead of the other
+- focused regressions passed for terminal save-as prompt flow, desktop save-as picker behavior, and file-manager prompt/settings behavior after the extraction
+
+Additional runtime-state extraction slice:
+
+- shared cache invalidation, settings-sync, background-result handling, IPC handling, status application, and native settings persistence moved out of `src/native/app.rs` into `src/native/app/runtime_state.rs`
+- that module now owns the cross-mode runtime helpers used by desktop and terminal flows, which is a better fit for the planned `CacheState` / `RuntimeState` split than keeping them in the root coordinator
+- representative regressions passed for file-manager command/prompt flow, settings window reset/reopen behavior, and parked-session restore behavior after the extraction
+
+Additional frame-runtime extraction slice:
+
+- the per-frame shell pass moved out of `src/native/app.rs` into `src/native/app/frame_runtime.rs`, including login drawing, early desktop PTY input handling, terminal runtime drawing, and the main `update` orchestration body
+- `app.rs` now keeps the `eframe::App` hook but delegates the actual frame coordination to a dedicated runtime module, which is much closer to the intended root-coordinator shape
+- representative regressions passed for terminal capability routing, settings reopen behavior, and parked-session restore behavior after this extraction
+
+Additional desktop-component-host extraction slice:
+
+- the desktop window/component host adapter methods moved out of `src/native/app.rs` into `src/native/app/desktop_component_host.rs`
+- that module now owns the mechanical bridge between desktop window hosting and the underlying component state/draw hooks, which keeps the root coordinator from carrying another large table of adapter methods
+- representative regressions passed for settings reopen behavior, secondary desktop PTY spawning, and applications-window rendering behavior after the extraction
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.
