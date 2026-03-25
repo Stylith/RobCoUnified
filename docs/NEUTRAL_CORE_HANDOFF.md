@@ -427,6 +427,43 @@ Additional addon install-state slice:
 - existing launch/runtime resolution still intentionally stays on the static first-party runtime registry and profile policy, so this slice does not yet change launcher behavior
 - this is the intended bridge into later addon-manager/installer work: install scope and manifest discovery now exist, and enablement state now has one shared persistence file instead of scattered future flags
 
+Additional installed-addon inventory slice:
+
+- `src/native/addons.rs` now exposes `installed_addon_inventory()` as the first unified read-only inventory surface for addon-manager/installer UI work
+- each inventory record now carries:
+  - the effective manifest after static/discovered layering
+  - optional manifest source path for discovered entries
+  - explicit enabled override, if present
+  - effective enabled state after applying overrides
+- discovered manifests override static fallback manifests by addon id in the inventory, matching the same layered catalog rules already used for registry construction
+- inventory ordering is now stable and presentation-friendly: display name first, then addon id
+- `set_addon_enabled_override(...)` was added as the first narrow mutation seam for addon-manager UI and policy state changes
+
+Additional installer inventory surface slice:
+
+- the existing Program Installer now exposes an `Installed Addons` view in both terminal mode and desktop mode
+- the installer surface is backed by `installed_addon_inventory()` / `installed_addon_inventory_sections()` rather than ad hoc catalog rebuilding
+- each row currently shows:
+  - addon display name
+  - effective enabled/disabled state
+  - addon scope (`bundled`, `system`, `user`)
+  - subtitle/source metadata in the terminal installer view
+- essential addons are now separated from optional addons in the installer inventory:
+  - essential addons remain visible, but are always marked as required and cannot be disabled
+  - optional addons expose enable/disable actions in both desktop and terminal installer views
+- the terminal menu renderer now supports non-selectable section headers (`### ...`) so the essential/optional split can be shown cleanly without turning section labels into menu actions
+
+Additional addon-policy adoption slice:
+
+- first-party launcher/profile policy now consumes the effective enabled addon catalog instead of the old static first-party manifest list
+- addon-state overrides are now live behavior: disabling a wired optional first-party addon removes it from the profile-aware registry used for capability visibility and launch resolution
+- all current first-party addons except `Red Menace`, `Zeta Invaders`, and `Nuke Codes` are now marked essential in their manifests and ignore disable requests
+- install-profile policy still applies on top of that state, so profile restrictions such as macOS Connections remain authoritative
+- launch-registry status messages now distinguish between:
+  - disabled by install profile
+  - disabled by addon state
+- runtime routing still stays on the static first-party runtime table; this slice only changed policy/availability resolution, not how actual runtime routes are implemented
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

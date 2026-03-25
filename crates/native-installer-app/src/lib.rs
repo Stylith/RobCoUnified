@@ -97,6 +97,7 @@ pub enum InstallerView {
     Root,
     PackageManagerSelect,
     RuntimeTools,
+    AddonInventory,
     RuntimeToolActions { tool: RuntimeTool },
     SearchResults,
     Installed,
@@ -115,6 +116,8 @@ pub struct TerminalInstallerState {
     pub installed_idx: usize,
     pub installed_page: usize,
     pub runtime_tools_idx: usize,
+    pub addons_idx: usize,
+    pub addons_page: usize,
     pub action_idx: usize,
     pub add_menu_idx: usize,
     pub search_results: Vec<SearchResult>,
@@ -139,6 +142,8 @@ impl Default for TerminalInstallerState {
             installed_idx: 0,
             installed_page: 0,
             runtime_tools_idx: 0,
+            addons_idx: 0,
+            addons_page: 0,
             action_idx: 0,
             add_menu_idx: 0,
             search_results: Vec::new(),
@@ -181,6 +186,7 @@ pub enum DesktopInstallerView {
     Home,
     SearchResults,
     Installed,
+    Addons,
     PackageActions { pkg: String, installed: bool },
     AddToMenu { pkg: String },
     RuntimeTools,
@@ -238,6 +244,7 @@ pub struct DesktopInstallerState {
     pub installed_packages: Vec<String>,
     pub installed_filter: String,
     pub installed_page: usize,
+    pub addons_page: usize,
     pub search_page: usize,
     pub status: String,
     pub available_pms: Vec<PackageManager>,
@@ -263,6 +270,7 @@ impl Default for DesktopInstallerState {
             installed_packages: Vec::new(),
             installed_filter: String::new(),
             installed_page: 0,
+            addons_page: 0,
             search_page: 0,
             status: String::new(),
             available_pms: Vec::new(),
@@ -850,6 +858,7 @@ impl DesktopInstallerState {
             DesktopInstallerView::Home => return,
             DesktopInstallerView::SearchResults => DesktopInstallerView::Home,
             DesktopInstallerView::Installed => DesktopInstallerView::Home,
+            DesktopInstallerView::Addons => DesktopInstallerView::Home,
             DesktopInstallerView::PackageActions { .. } => {
                 if self.search_results.is_empty() {
                     DesktopInstallerView::Installed
@@ -1444,6 +1453,7 @@ impl TerminalInstallerState {
             InstallerView::PackageManagerSelect
             | InstallerView::SearchResults
             | InstallerView::Installed
+            | InstallerView::AddonInventory
             | InstallerView::RuntimeTools => {
                 self.view = InstallerView::Root;
                 false
@@ -1714,6 +1724,28 @@ mod tests {
         assert!(state.installed_filter.is_empty());
         assert_eq!(state.search_idx, 0);
         assert_eq!(state.installed_idx, 0);
+    }
+
+    #[test]
+    fn terminal_back_from_addon_inventory_returns_to_root() {
+        let mut state = TerminalInstallerState {
+            view: InstallerView::AddonInventory,
+            ..TerminalInstallerState::default()
+        };
+
+        assert!(!state.back());
+        assert!(matches!(state.view, InstallerView::Root));
+    }
+
+    #[test]
+    fn desktop_go_back_from_addons_returns_home() {
+        let mut state = DesktopInstallerState {
+            view: DesktopInstallerView::Addons,
+            ..DesktopInstallerState::default()
+        };
+
+        state.go_back();
+        assert!(matches!(state.view, DesktopInstallerView::Home));
     }
 
     #[test]

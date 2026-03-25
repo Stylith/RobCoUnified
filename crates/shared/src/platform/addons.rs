@@ -125,6 +125,8 @@ pub struct AddonManifest {
     pub kind: AddonKind,
     pub scope: AddonScope,
     pub trust: AddonTrust,
+    #[serde(default)]
+    pub essential: bool,
     #[serde(default = "default_enabled_by_default")]
     pub enabled_by_default: bool,
     #[serde(default)]
@@ -151,12 +153,18 @@ impl AddonManifest {
             kind,
             scope: AddonScope::Bundled,
             trust: AddonTrust::FirstParty,
+            essential: false,
             enabled_by_default: default_enabled_by_default(),
             capabilities: BTreeSet::new(),
             permissions: BTreeSet::new(),
             file_associations: Vec::new(),
             entrypoint,
         }
+    }
+
+    pub fn essential(mut self) -> Self {
+        self.essential = true;
+        self
     }
 
     pub fn with_capability(mut self, capability: impl Into<CapabilityId>) -> Self {

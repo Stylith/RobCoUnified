@@ -1,5 +1,9 @@
 use super::menu::draw_terminal_menu_screen;
 use crate::config::get_current_user;
+use crate::native::{
+    installed_addon_inventory_sections, set_addon_enabled_override,
+    InstalledAddonInventorySections, InstalledAddonRecord,
+};
 pub use robcos_native_installer_app::{
     add_package_to_menu, apply_filter, apply_search_query, available_runtime_tools,
     build_package_command, runtime_tool_action_for_selection, runtime_tool_actions,
@@ -103,6 +107,21 @@ pub fn draw_installer_screen(
             content_col,
         ),
         InstallerView::RuntimeTools => draw_runtime_tools(
+            ctx,
+            state,
+            shell_status,
+            cols,
+            rows,
+            header_start_row,
+            separator_top_row,
+            title_row,
+            separator_bottom_row,
+            subtitle_row,
+            menu_start_row,
+            status_row,
+            content_col,
+        ),
+        InstallerView::AddonInventory => draw_addon_inventory(
             ctx,
             state,
             shell_status,
@@ -221,6 +240,7 @@ fn draw_root(
         "Search".to_string(),
         "Installed Apps".to_string(),
         "Runtime Tools".to_string(),
+        "Installed Addons".to_string(),
     ];
     if state.available_pms.len() > 1 {
         items.push("Package Manager".to_string());
@@ -266,7 +286,12 @@ fn draw_root(
             state.runtime_tools_idx = 0;
             InstallerEvent::None
         }
-        Some(3) if state.available_pms.len() > 1 => {
+        Some(3) => {
+            state.view = InstallerView::AddonInventory;
+            state.addons_idx = 0;
+            InstallerEvent::None
+        }
+        Some(4) if state.available_pms.len() > 1 => {
             state.pm_select_idx = state.selected_pm_idx;
             state.view = InstallerView::PackageManagerSelect;
             InstallerEvent::None
@@ -341,6 +366,242 @@ fn draw_package_manager_select(
             InstallerEvent::None
         }
         None => InstallerEvent::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_addon_inventory(
+    ctx: &eframe::egui::Context,
+    state: &mut TerminalInstallerState,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> InstallerEvent {
+    #[derive(Clone)]
+    enum AddonRow {
+        Essential(usize),
+        Optional(usize),
+        Prev,
+        Next,
+        Back,
+        Ignore,
+    }
+
+    let sections = installed_addon_inventory_sections();
+    let total = sections.essential.len() + sections.optional.len();
+    let page_size = installer_page_size(menu_start_row, status_row);
+    let total_pages = total.div_ceil(page_size).max(1);
+    state.addons_page = state.addons_page.min(total_pages.saturating_sub(1));
+    let (paged_rows, total, end) = paged_addon_rows(&sections, state.addons_page, page_size);
+
+    let mut items = Vec::new();
+    let mut row_actions = Vec::new();
+    for row in paged_rows {
+        match row {
+            AddonDisplayRow::SectionHeader(label) => {
+                items.push(format!("### {label}"));
+                row_actions.push(AddonRow::Ignore);
+            }
+            AddonDisplayRow::Essential(idx) => {
+                items.push(addon_inventory_menu_label(&sections.essential[idx]));
+                row_actions.push(AddonRow::Essential(idx));
+            }
+            AddonDisplayRow::Optional(idx) => {
+                items.push(addon_inventory_menu_label(&sections.optional[idx]));
+                row_actions.push(AddonRow::Optional(idx));
+            }
+        }
+    }
+    if state.addons_page > 0 {
+        items.push("< Prev Page".to_string());
+        row_actions.push(AddonRow::Prev);
+    }
+    if end < total {
+        items.push("> Next Page".to_string());
+        row_actions.push(AddonRow::Next);
+    }
+    items.push("---".to_string());
+    row_actions.push(AddonRow::Ignore);
+    items.push("Back".to_string());
+    row_actions.push(AddonRow::Back);
+
+    let selectable_rows: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, _)| match row_actions.get(idx) {
+            Some(AddonRow::Ignore) => None,
+            _ => Some(idx),
+        })
+        .collect();
+    let subtitle = selectable_rows
+        .get(state.addons_idx)
+        .copied()
+        .and_then(|raw_idx| match row_actions.get(raw_idx) {
+            Some(AddonRow::Essential(idx)) => {
+                Some(addon_inventory_subtitle(&sections.essential[*idx]))
+            }
+            Some(AddonRow::Optional(idx)) => {
+                Some(addon_inventory_subtitle(&sections.optional[*idx]))
+            }
+            _ => None,
+        });
+    let addon_status = format!(
+        "{} addons tracked   Page {}/{}",
+        total,
+        state.addons_page + 1,
+        total_pages
+    );
+    let status_line = if shell_status.is_empty() {
+        addon_status
+    } else {
+        format!("{addon_status} | {shell_status}")
+    };
+
+    let activated = draw_terminal_menu_screen(
+        ctx,
+        "Installed Addons",
+        subtitle.as_deref(),
+        &items,
+        &mut state.addons_idx,
+        cols,
+        rows,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        content_col,
+        &status_line,
+    );
+
+    match activated {
+        Some(idx) => match row_actions.get(idx) {
+            Some(AddonRow::Essential(_)) => {
+                InstallerEvent::Status("Essential addons are always enabled.".to_string())
+            }
+            Some(AddonRow::Optional(idx)) => {
+                let record = &sections.optional[*idx];
+                let next_enabled = !record.effective_enabled;
+                match set_addon_enabled_override(record.manifest.id.clone(), Some(next_enabled)) {
+                    Ok(()) => InstallerEvent::Status(format!(
+                        "{} {}.",
+                        record.manifest.display_name,
+                        if next_enabled { "enabled" } else { "disabled" }
+                    )),
+                    Err(err) => InstallerEvent::Status(err),
+                }
+            }
+            Some(AddonRow::Prev) => {
+                state.addons_page = state.addons_page.saturating_sub(1);
+                state.addons_idx = 0;
+                InstallerEvent::None
+            }
+            Some(AddonRow::Next) => {
+                state.addons_page = (state.addons_page + 1).min(total_pages.saturating_sub(1));
+                state.addons_idx = 0;
+                InstallerEvent::None
+            }
+            Some(AddonRow::Back) => {
+                state.view = InstallerView::Root;
+                InstallerEvent::None
+            }
+            _ => InstallerEvent::None,
+        },
+        None => InstallerEvent::None,
+    }
+}
+
+enum AddonDisplayRow {
+    SectionHeader(&'static str),
+    Essential(usize),
+    Optional(usize),
+}
+
+fn paged_addon_rows(
+    sections: &InstalledAddonInventorySections,
+    page: usize,
+    page_size: usize,
+) -> (Vec<AddonDisplayRow>, usize, usize) {
+    let total = sections.essential.len() + sections.optional.len();
+    let start = page * page_size;
+    let end = (start + page_size).min(total);
+
+    let essential_start = start.min(sections.essential.len());
+    let essential_end = end.min(sections.essential.len());
+    let optional_start = start
+        .saturating_sub(sections.essential.len())
+        .min(sections.optional.len());
+    let optional_end = end
+        .saturating_sub(sections.essential.len())
+        .min(sections.optional.len());
+
+    let mut visible = Vec::new();
+    if essential_start < essential_end {
+        visible.push(AddonDisplayRow::SectionHeader("Essential Addons"));
+        visible.extend((essential_start..essential_end).map(AddonDisplayRow::Essential));
+    }
+    if optional_start < optional_end {
+        visible.push(AddonDisplayRow::SectionHeader("Optional Addons"));
+        visible.extend((optional_start..optional_end).map(AddonDisplayRow::Optional));
+    }
+
+    (visible, total, end)
+}
+
+fn addon_inventory_menu_label(record: &InstalledAddonRecord) -> String {
+    let state = if record.manifest.essential {
+        "[required]"
+    } else if record.effective_enabled {
+        "[on]"
+    } else {
+        "[off]"
+    };
+    format!(
+        "{state} {} ({})",
+        record.manifest.display_name,
+        addon_scope_label(record)
+    )
+}
+
+fn addon_inventory_subtitle(record: &InstalledAddonRecord) -> String {
+    let source = record
+        .manifest_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "static fallback manifest".to_string());
+    format!(
+        "{} | id={} | source={}",
+        addon_enabled_label(record),
+        record.manifest.id,
+        source
+    )
+}
+
+fn addon_enabled_label(record: &InstalledAddonRecord) -> &'static str {
+    if record.manifest.essential {
+        "required"
+    } else if record.effective_enabled {
+        "enabled"
+    } else {
+        "disabled"
+    }
+}
+
+fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
+    match record.manifest.scope {
+        crate::platform::AddonScope::Bundled => "bundled",
+        crate::platform::AddonScope::System => "system",
+        crate::platform::AddonScope::User => "user",
     }
 }
 

@@ -7,6 +7,9 @@ use super::super::installer_screen::{
     DesktopInstallerView, InstallerCategory, InstallerMenuTarget, InstallerPackageAction,
 };
 use super::super::retro_ui::{current_palette, RetroPalette};
+use super::super::{
+    installed_addon_inventory_sections, set_addon_enabled_override, InstalledAddonRecord,
+};
 use super::DesktopHeaderAction;
 use eframe::egui::{self, Color32, Context, Id, Key, RichText, TextureHandle};
 
@@ -80,6 +83,7 @@ impl RobcoNativeApp {
         let mut deferred_add_to_menu: Option<(String, InstallerMenuTarget)> = None;
         let mut deferred_open_add_to_menu: Option<String> = None;
         let mut deferred_open_runtime_tools = false;
+        let mut deferred_open_addons = false;
 
         let view = self.desktop_installer.view.clone();
         let status = self.desktop_installer.status.clone();
@@ -204,6 +208,7 @@ impl RobcoNativeApp {
                             &mut deferred_search,
                             &mut deferred_load_installed,
                             &mut deferred_open_runtime_tools,
+                            &mut deferred_open_addons,
                             [&tex_apps, &tex_tools, &tex_network, &tex_games],
                         );
                     }
@@ -258,6 +263,14 @@ impl RobcoNativeApp {
                             &mut deferred_confirm_setup,
                         );
                     }
+                    DesktopInstallerView::Addons => {
+                        Self::draw_installer_addons(
+                            ui,
+                            &mut self.desktop_installer,
+                            palette,
+                            &mut deferred_back,
+                        );
+                    }
                 });
         });
 
@@ -307,6 +320,9 @@ impl RobcoNativeApp {
         }
         if deferred_open_runtime_tools {
             self.desktop_installer.view = DesktopInstallerView::RuntimeTools;
+        }
+        if deferred_open_addons {
+            self.desktop_installer.view = DesktopInstallerView::Addons;
         }
         if let Some(pkg) = deferred_open_installed_actions {
             self.desktop_installer.view = DesktopInstallerView::PackageActions {
@@ -468,6 +484,7 @@ impl RobcoNativeApp {
         deferred_search: &mut bool,
         deferred_load_installed: &mut bool,
         deferred_open_runtime_tools: &mut bool,
+        deferred_open_addons: &mut bool,
         icons: [&Option<TextureHandle>; 4], // [apps, tools, network, games]
     ) {
         ui.vertical_centered(|ui| {
@@ -581,6 +598,17 @@ impl RobcoNativeApp {
             );
             if runtime_btn.clicked() {
                 *deferred_open_runtime_tools = true;
+            }
+
+            ui.add_space(8.0);
+
+            let addons_btn = Self::installer_link_button(
+                ui,
+                RichText::new("Installed Addons").color(palette.dim),
+                palette,
+            );
+            if addons_btn.clicked() {
+                *deferred_open_addons = true;
             }
 
             ui.add_space(8.0);
@@ -961,6 +989,209 @@ impl RobcoNativeApp {
                     }
                 });
         });
+    }
+
+    fn draw_installer_addons(
+        ui: &mut egui::Ui,
+        state: &mut DesktopInstallerState,
+        palette: RetroPalette,
+        deferred_back: &mut bool,
+    ) {
+        const HEADER_H: f32 = 28.0;
+        const FOOTER_H: f32 = 40.0;
+        let sections = installed_addon_inventory_sections();
+        let total = sections.essential.len() + sections.optional.len();
+        let row_height = 58.0;
+
+        egui::TopBottomPanel::top("inst_addons_top")
+            .frame(egui::Frame::none())
+            .exact_height(HEADER_H)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(RichText::new("< Back").color(palette.fg))
+                        .clicked()
+                    {
+                        *deferred_back = true;
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Installed Addons").color(palette.fg).strong());
+                });
+            });
+
+        egui::TopBottomPanel::bottom("inst_addons_bottom")
+            .frame(egui::Frame::none())
+            .exact_height(FOOTER_H)
+            .show_inside(ui, |ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{} addons tracked | {} essential | {} optional",
+                        total,
+                        sections.essential.len(),
+                        sections.optional.len()
+                    ))
+                    .color(palette.dim),
+                );
+            });
+
+        let available = ui.available_rect_before_wrap();
+        let body_size = egui::vec2(available.width().max(240.0), available.height().max(120.0));
+        let body_rect = egui::Rect::from_min_size(available.min, body_size);
+        ui.allocate_rect(body_rect, egui::Sense::hover());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+            ui.set_min_size(body_size);
+            ui.set_max_size(body_size);
+            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    let row_width = (ui.available_width() - 2.0).floor().max(220.0);
+                    if !sections.essential.is_empty() {
+                        ui.label(
+                            RichText::new("Essential Addons")
+                                .color(palette.dim)
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
+                        for record in &sections.essential {
+                            Self::draw_installer_addon_row(
+                                ui, palette, row_width, row_height, record,
+                            );
+                        }
+                    }
+
+                    if !sections.optional.is_empty() {
+                        if !sections.essential.is_empty() {
+                            ui.add_space(12.0);
+                            ui.separator();
+                            ui.add_space(12.0);
+                        }
+                        ui.label(RichText::new("Optional Addons").color(palette.dim).strong());
+                        ui.add_space(6.0);
+                        for record in &sections.optional {
+                            let toggled = Self::draw_installer_addon_row(
+                                ui, palette, row_width, row_height, record,
+                            );
+                            if toggled {
+                                let next_enabled = !record.effective_enabled;
+                                let override_value =
+                                    if next_enabled == record.manifest.enabled_by_default {
+                                        None
+                                    } else {
+                                        Some(next_enabled)
+                                    };
+                                match set_addon_enabled_override(
+                                    record.manifest.id.clone(),
+                                    override_value,
+                                ) {
+                                    Ok(()) => {
+                                        state.status = format!(
+                                            "{} {}.",
+                                            record.manifest.display_name,
+                                            if next_enabled { "enabled" } else { "disabled" }
+                                        );
+                                    }
+                                    Err(err) => state.status = err,
+                                }
+                            }
+                        }
+                    }
+                });
+        });
+    }
+
+    fn draw_installer_addon_row(
+        ui: &mut egui::Ui,
+        palette: RetroPalette,
+        row_width: f32,
+        row_height: f32,
+        record: &InstalledAddonRecord,
+    ) -> bool {
+        let (_, row_rect) = ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
+        let mut toggled = false;
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+            let frame = egui::Frame::none()
+                .stroke(egui::Stroke::new(1.0, palette.fg))
+                .inner_margin(egui::Margin::same(2.0));
+            let content_width = (row_width - 4.0).max(80.0);
+            frame.show(ui, |ui| {
+                ui.set_min_width(content_width);
+                ui.set_max_width(content_width);
+                ui.set_min_height(row_height - 8.0);
+                let action_width = if record.manifest.essential {
+                    120.0
+                } else {
+                    112.0
+                };
+                let text_width = (content_width - action_width - 24.0).max(140.0);
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [text_width, 0.0],
+                        egui::Label::new(
+                            RichText::new(&record.manifest.display_name)
+                                .color(palette.fg)
+                                .strong(),
+                        )
+                        .truncate(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if record.manifest.essential {
+                            ui.label(RichText::new("[ required ]").color(palette.fg));
+                        } else if ui
+                            .button(
+                                RichText::new(Self::addon_toggle_label(record)).color(palette.fg),
+                            )
+                            .clicked()
+                        {
+                            toggled = true;
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+                ui.add_sized(
+                    [(content_width - 8.0).max(80.0), 0.0],
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{} | {} | {}",
+                            record.manifest.id,
+                            Self::addon_enabled_chip(record),
+                            Self::addon_scope_label(record)
+                        ))
+                        .color(palette.dim),
+                    )
+                    .truncate(),
+                );
+            });
+        });
+        toggled
+    }
+
+    fn addon_enabled_chip(record: &InstalledAddonRecord) -> &'static str {
+        if record.manifest.essential {
+            "required"
+        } else if record.effective_enabled {
+            "[ enabled ]"
+        } else {
+            "[ disabled ]"
+        }
+    }
+
+    fn addon_toggle_label(record: &InstalledAddonRecord) -> &'static str {
+        if record.effective_enabled {
+            "Disable"
+        } else {
+            "Enable"
+        }
+    }
+
+    fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
+        match record.manifest.scope {
+            crate::platform::AddonScope::Bundled => "bundled",
+            crate::platform::AddonScope::System => "system",
+            crate::platform::AddonScope::User => "user",
+        }
     }
 
     fn draw_installer_package_actions(

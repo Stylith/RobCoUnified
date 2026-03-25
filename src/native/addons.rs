@@ -5,8 +5,10 @@ use crate::config;
 use crate::platform::{
     build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint, AddonId, AddonKind,
     AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonStateOverrides, CapabilityId,
-    FileAssociation, InstallProfile,
+    DiscoveredAddonManifest, FileAssociation, InstallProfile,
 };
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeDesktopRoute {
@@ -34,14 +36,17 @@ pub(crate) struct FirstPartyAddonRuntime {
 pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
     vec![
         base_app_manifest("shell.settings", "Settings", "settings")
+            .essential()
             .with_capability("settings-ui")
             .with_permission("settings.read")
             .with_permission("settings.write"),
         base_app_manifest("shell.file-manager", "File Manager", "file-manager")
+            .essential()
             .with_capability("file-browser")
             .with_permission("filesystem.read")
             .with_permission("filesystem.write"),
         base_app_manifest("shell.editor", "Editor", "editor")
+            .essential()
             .with_capability("text-editor")
             .with_permission("filesystem.read")
             .with_permission("filesystem.write")
@@ -54,6 +59,7 @@ pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
             "Document Browser",
             "document-browser",
         )
+        .essential()
         .with_capability("document-viewer")
         .with_permission("filesystem.read")
         .with_file_association(FileAssociation::new(
@@ -61,23 +67,32 @@ pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
             ["pdf", "epub", "mobi", "azw", "azw3", "rtf"],
         )),
         base_app_manifest("shell.terminal", "Terminal", "terminal")
+            .essential()
             .with_capability("terminal-tool")
             .with_permission("terminal.spawn")
             .with_permission("terminal.execute"),
         base_app_manifest("shell.installer", "Installer", "installer")
+            .essential()
             .with_capability("installer-ui")
             .with_permission("addons.manage"),
-        base_app_manifest("shell.programs", "Programs", "programs").with_capability("app-catalog"),
+        base_app_manifest("shell.programs", "Programs", "programs")
+            .essential()
+            .with_capability("app-catalog"),
         base_app_manifest("shell.default-apps", "Default Apps", "default-apps")
+            .essential()
             .with_capability("default-apps-ui")
             .with_permission("settings.write"),
         base_app_manifest("shell.connections", "Connections", "connections")
+            .essential()
             .with_capability("connections-ui")
             .with_permission("connections.inspect"),
         base_app_manifest("shell.edit-menus", "Edit Menus", "edit-menus")
+            .essential()
             .with_capability("edit-menus-ui")
             .with_permission("settings.write"),
-        base_app_manifest("shell.about", "About", "about").with_capability("about-ui"),
+        base_app_manifest("shell.about", "About", "about")
+            .essential()
+            .with_capability("about-ui"),
         base_game_manifest("games.red-menace", "Red Menace", "red-menace")
             .with_capability("game-launcher"),
         base_game_manifest("games.zeta-invaders", "Zeta Invaders", "zeta-invaders")
@@ -106,8 +121,52 @@ pub fn addon_state_overrides() -> AddonStateOverrides {
     config::load_addon_state_overrides()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledAddonRecord {
+    pub manifest: AddonManifest,
+    pub manifest_path: Option<PathBuf>,
+    pub explicit_enabled: Option<bool>,
+    pub effective_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledAddonInventorySections {
+    pub essential: Vec<InstalledAddonRecord>,
+    pub optional: Vec<InstalledAddonRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FirstPartyAddonDisabledReason {
+    InstallProfile,
+    AddonState,
+}
+
 pub fn effective_addon_enabled(manifest: &AddonManifest) -> bool {
     effective_addon_enabled_with_overrides(manifest, &addon_state_overrides())
+}
+
+pub fn installed_addon_inventory() -> Vec<InstalledAddonRecord> {
+    installed_addon_inventory_with_overrides(
+        first_party_addon_manifests(),
+        discovered_addon_manifest_catalog(),
+        &addon_state_overrides(),
+    )
+}
+
+pub fn installed_addon_inventory_sections() -> InstalledAddonInventorySections {
+    let mut essential = Vec::new();
+    let mut optional = Vec::new();
+    for record in installed_addon_inventory() {
+        if record.manifest.essential {
+            essential.push(record);
+        } else {
+            optional.push(record);
+        }
+    }
+    InstalledAddonInventorySections {
+        essential,
+        optional,
+    }
 }
 
 pub fn installed_enabled_addon_manifest_registry() -> AddonRegistry {
@@ -117,10 +176,33 @@ pub fn installed_enabled_addon_manifest_registry() -> AddonRegistry {
     )
 }
 
+pub fn set_addon_enabled_override(addon_id: AddonId, enabled: Option<bool>) -> Result<(), String> {
+    let registry = installed_addon_manifest_registry();
+    let Some(manifest) = registry.manifest(&addon_id) else {
+        return Err(format!("Unknown addon '{addon_id}'."));
+    };
+    if manifest.essential && enabled == Some(false) {
+        return Err(format!(
+            "Addon '{addon_id}' is essential and cannot be disabled."
+        ));
+    }
+    let mut overrides = addon_state_overrides();
+    if manifest.essential {
+        overrides.set_enabled(addon_id, None);
+    } else {
+        overrides.set_enabled(addon_id, enabled);
+    }
+    config::save_addon_state_overrides(&overrides);
+    Ok(())
+}
+
 fn effective_addon_enabled_with_overrides(
     manifest: &AddonManifest,
     overrides: &AddonStateOverrides,
 ) -> bool {
+    if manifest.essential {
+        return true;
+    }
     overrides
         .enabled_for(&manifest.id)
         .unwrap_or(manifest.enabled_by_default)
@@ -139,20 +221,66 @@ fn installed_enabled_addon_manifest_registry_with_overrides(
     .expect("effective enabled addon catalog must remain internally consistent")
 }
 
-pub(crate) fn first_party_addon_enabled(profile: InstallProfile, addon_id: &AddonId) -> bool {
-    match profile {
-        InstallProfile::MacLauncher if addon_id.as_str() == "shell.connections" => false,
-        _ => first_party_addon_runtime(addon_id).is_some(),
+fn installed_addon_inventory_with_overrides(
+    static_manifests: Vec<AddonManifest>,
+    discovery: AddonManifestDiscovery,
+    overrides: &AddonStateOverrides,
+) -> Vec<InstalledAddonRecord> {
+    let mut by_id = BTreeMap::new();
+
+    for manifest in static_manifests {
+        let explicit_enabled = overrides.enabled_for(&manifest.id);
+        let effective_enabled = effective_addon_enabled_with_overrides(&manifest, overrides);
+        by_id.insert(
+            manifest.id.clone(),
+            InstalledAddonRecord {
+                manifest,
+                manifest_path: None,
+                explicit_enabled,
+                effective_enabled,
+            },
+        );
     }
+
+    for DiscoveredAddonManifest {
+        manifest,
+        manifest_path,
+    } in discovery.manifests
+    {
+        let explicit_enabled = overrides.enabled_for(&manifest.id);
+        let effective_enabled = effective_addon_enabled_with_overrides(&manifest, overrides);
+        by_id.insert(
+            manifest.id.clone(),
+            InstalledAddonRecord {
+                manifest,
+                manifest_path: Some(manifest_path),
+                explicit_enabled,
+                effective_enabled,
+            },
+        );
+    }
+
+    let mut records = by_id.into_values().collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.manifest
+            .display_name
+            .to_ascii_lowercase()
+            .cmp(&right.manifest.display_name.to_ascii_lowercase())
+            .then_with(|| left.manifest.id.cmp(&right.manifest.id))
+    });
+    records
+}
+
+pub(crate) fn first_party_addon_enabled(profile: InstallProfile, addon_id: &AddonId) -> bool {
+    first_party_addon_runtime(addon_id).is_some()
+        && first_party_addon_disabled_reason(profile, addon_id).is_none()
 }
 
 pub(crate) fn first_party_addon_registry_for_profile(profile: InstallProfile) -> AddonRegistry {
-    AddonRegistry::from_manifests(
-        first_party_addon_manifests()
-            .into_iter()
-            .filter(|manifest| first_party_addon_enabled(profile, &manifest.id)),
+    first_party_addon_registry_for_profile_with_registry(
+        profile,
+        &installed_enabled_addon_manifest_registry(),
     )
-    .expect("profile-filtered first-party addon catalog must remain internally consistent")
 }
 
 pub(crate) fn first_party_capability_enabled(
@@ -177,6 +305,53 @@ pub(crate) fn first_party_addon_runtime(
     FIRST_PARTY_ADDON_RUNTIMES
         .iter()
         .find(|runtime| runtime.addon_id == addon_id.as_str())
+}
+
+pub(crate) fn first_party_addon_disabled_reason(
+    profile: InstallProfile,
+    addon_id: &AddonId,
+) -> Option<FirstPartyAddonDisabledReason> {
+    first_party_addon_disabled_reason_with_registry(
+        profile,
+        addon_id,
+        &installed_enabled_addon_manifest_registry(),
+    )
+}
+
+fn first_party_addon_disabled_reason_with_registry(
+    profile: InstallProfile,
+    addon_id: &AddonId,
+    enabled_registry: &AddonRegistry,
+) -> Option<FirstPartyAddonDisabledReason> {
+    if profile_disables_addon(profile, addon_id) {
+        Some(FirstPartyAddonDisabledReason::InstallProfile)
+    } else if first_party_addon_runtime(addon_id).is_some()
+        && enabled_registry.manifest(addon_id).is_none()
+    {
+        Some(FirstPartyAddonDisabledReason::AddonState)
+    } else {
+        None
+    }
+}
+
+fn first_party_addon_registry_for_profile_with_registry(
+    profile: InstallProfile,
+    enabled_registry: &AddonRegistry,
+) -> AddonRegistry {
+    AddonRegistry::from_manifests(
+        enabled_registry
+            .iter()
+            .filter(|manifest| {
+                first_party_addon_runtime(&manifest.id).is_some()
+                    && !profile_disables_addon(profile, &manifest.id)
+            })
+            .cloned(),
+    )
+    .expect("profile-filtered first-party addon catalog must remain internally consistent")
+}
+
+fn profile_disables_addon(profile: InstallProfile, addon_id: &AddonId) -> bool {
+    matches!(profile, InstallProfile::MacLauncher) && addon_id.as_str() == "shell.connections"
 }
 
 fn base_app_manifest(id: &str, display_name: &str, route: &str) -> AddonManifest {
@@ -291,12 +466,19 @@ const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 14] = [
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_addon_enabled_with_overrides, first_party_addon_enabled,
-        first_party_addon_registry, first_party_addon_registry_for_profile,
-        first_party_addon_runtime, first_party_capability_enabled_str,
+        effective_addon_enabled_with_overrides, first_party_addon_disabled_reason_with_registry,
+        first_party_addon_enabled, first_party_addon_registry,
+        first_party_addon_registry_for_profile,
+        first_party_addon_registry_for_profile_with_registry, first_party_addon_runtime,
+        first_party_capability_enabled_str, installed_addon_inventory_sections,
+        installed_addon_inventory_with_overrides,
         installed_enabled_addon_manifest_registry_with_overrides,
     };
-    use crate::platform::{AddonId, AddonStateOverrides, CapabilityId, InstallProfile};
+    use crate::platform::{
+        AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonManifestDiscovery, AddonScope,
+        AddonStateOverrides, CapabilityId, DiscoveredAddonManifest, InstallProfile,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn first_party_registry_exposes_core_capabilities() {
@@ -384,16 +566,16 @@ mod tests {
     #[test]
     fn effective_addon_enabled_uses_override_when_present() {
         let manifest = first_party_addon_registry()
-            .manifest(&AddonId::from("shell.editor"))
+            .manifest(&AddonId::from("tools.nuke-codes"))
             .cloned()
-            .expect("editor manifest");
+            .expect("nuke codes manifest");
         let mut overrides = AddonStateOverrides::default();
 
         assert!(effective_addon_enabled_with_overrides(
             &manifest, &overrides
         ));
 
-        overrides.set_enabled(AddonId::from("shell.editor"), Some(false));
+        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
         assert!(!effective_addon_enabled_with_overrides(
             &manifest, &overrides
         ));
@@ -403,13 +585,162 @@ mod tests {
     fn installed_enabled_registry_filters_disabled_addons() {
         let registry = first_party_addon_registry();
         let mut overrides = AddonStateOverrides::default();
-        overrides.set_enabled(AddonId::from("shell.editor"), Some(false));
+        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
         let registry =
             installed_enabled_addon_manifest_registry_with_overrides(&registry, &overrides);
 
         assert!(registry
             .manifest(&AddonId::from("shell.settings"))
             .is_some());
-        assert!(registry.manifest(&AddonId::from("shell.editor")).is_none());
+        assert!(registry
+            .manifest(&AddonId::from("tools.nuke-codes"))
+            .is_none());
+    }
+
+    #[test]
+    fn installed_inventory_prefers_discovered_manifest_and_applies_override() {
+        let static_manifest =
+            manifest("tools.nuke-codes", "Static Nuke Codes", AddonScope::Bundled);
+        let discovered_manifest = manifest("tools.nuke-codes", "User Nuke Codes", AddonScope::User);
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+
+        let records = installed_addon_inventory_with_overrides(
+            vec![static_manifest],
+            AddonManifestDiscovery {
+                manifests: vec![DiscoveredAddonManifest {
+                    manifest: discovered_manifest,
+                    manifest_path: PathBuf::from("/tmp/addons/nuke-codes/manifest.json"),
+                }],
+                issues: Vec::new(),
+            },
+            &overrides,
+        );
+
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.manifest.display_name, "User Nuke Codes");
+        assert_eq!(record.manifest.scope, AddonScope::User);
+        assert_eq!(
+            record.manifest_path.as_deref(),
+            Some(PathBuf::from("/tmp/addons/nuke-codes/manifest.json").as_path())
+        );
+        assert_eq!(record.explicit_enabled, Some(false));
+        assert!(!record.effective_enabled);
+    }
+
+    #[test]
+    fn installed_inventory_is_sorted_by_display_name_then_id() {
+        let records = installed_addon_inventory_with_overrides(
+            vec![
+                manifest("shell.zeta", "Zeta", AddonScope::Bundled),
+                manifest("shell.alpha-b", "Alpha", AddonScope::Bundled),
+                manifest("shell.alpha-a", "Alpha", AddonScope::Bundled),
+            ],
+            AddonManifestDiscovery::default(),
+            &AddonStateOverrides::default(),
+        );
+
+        let ids = records
+            .iter()
+            .map(|record| record.manifest.id.as_str().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["shell.alpha-a", "shell.alpha-b", "shell.zeta"]);
+    }
+
+    #[test]
+    fn addon_state_disabled_addon_is_removed_from_profile_registry() {
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
+            &first_party_addon_registry(),
+            &overrides,
+        );
+
+        let registry = first_party_addon_registry_for_profile_with_registry(
+            InstallProfile::LinuxDesktop,
+            &enabled_registry,
+        );
+
+        assert!(registry
+            .manifest(&AddonId::from("shell.settings"))
+            .is_some());
+        assert!(registry
+            .manifest(&AddonId::from("tools.nuke-codes"))
+            .is_none());
+    }
+
+    #[test]
+    fn addon_state_disabled_reason_is_reported_separately_from_profile_policy() {
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
+            &first_party_addon_registry(),
+            &overrides,
+        );
+
+        assert_eq!(
+            first_party_addon_disabled_reason_with_registry(
+                InstallProfile::LinuxDesktop,
+                &AddonId::from("tools.nuke-codes"),
+                &enabled_registry,
+            ),
+            Some(super::FirstPartyAddonDisabledReason::AddonState)
+        );
+        assert_eq!(
+            first_party_addon_disabled_reason_with_registry(
+                InstallProfile::MacLauncher,
+                &AddonId::from("shell.connections"),
+                &enabled_registry,
+            ),
+            Some(super::FirstPartyAddonDisabledReason::InstallProfile)
+        );
+    }
+
+    #[test]
+    fn essential_addons_ignore_disabled_override() {
+        let manifest = first_party_addon_registry()
+            .manifest(&AddonId::from("shell.settings"))
+            .cloned()
+            .expect("settings manifest");
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("shell.settings"), Some(false));
+
+        assert!(manifest.essential);
+        assert!(effective_addon_enabled_with_overrides(
+            &manifest, &overrides
+        ));
+    }
+
+    #[test]
+    fn installed_inventory_sections_split_essential_and_optional_addons() {
+        let sections = installed_addon_inventory_sections();
+
+        assert!(sections
+            .essential
+            .iter()
+            .any(|record| record.manifest.id.as_str() == "shell.settings"));
+        assert!(sections
+            .optional
+            .iter()
+            .any(|record| record.manifest.id.as_str() == "tools.nuke-codes"));
+        assert!(sections
+            .optional
+            .iter()
+            .all(|record| !record.manifest.essential));
+    }
+
+    fn manifest(id: &str, display_name: &str, scope: AddonScope) -> AddonManifest {
+        AddonManifest::new(
+            id,
+            display_name,
+            "0.1.0",
+            AddonKind::App,
+            AddonEntrypoint::StaticRoute {
+                route: id.to_string(),
+            },
+        )
+        .with_scope(scope)
     }
 }

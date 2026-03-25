@@ -20,11 +20,21 @@ pub use robcos_native_terminal_app::{
     UserManagementMode, MAIN_MENU_ENTRIES,
 };
 
+fn is_non_selectable_row(item: &str) -> bool {
+    item == "---" || item.starts_with("### ")
+}
+
 fn selectable_row_indices(items: &[String]) -> Vec<usize> {
     items
         .iter()
         .enumerate()
-        .filter_map(|(idx, item)| if item == "---" { None } else { Some(idx) })
+        .filter_map(|(idx, item)| {
+            if is_non_selectable_row(item) {
+                None
+            } else {
+                Some(idx)
+            }
+        })
         .collect()
 }
 
@@ -101,6 +111,11 @@ pub fn draw_terminal_menu_screen(
                     row += 1;
                     continue;
                 }
+                if let Some(header) = item.strip_prefix("### ") {
+                    screen.text(&painter, content_col, row, header, palette.dim);
+                    row += 1;
+                    continue;
+                }
                 let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
                 let text = if selected {
                     format!("  > {item}")
@@ -146,5 +161,19 @@ mod tests {
         ];
         let rows = selectable_row_indices(&items);
         assert_eq!(rows, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn selectable_rows_skip_section_headers() {
+        let items = vec![
+            "### Essential Addons".to_string(),
+            "Settings".to_string(),
+            "---".to_string(),
+            "### Optional Addons".to_string(),
+            "About".to_string(),
+            "Back".to_string(),
+        ];
+        let rows = selectable_row_indices(&items);
+        assert_eq!(rows, vec![1, 4, 5]);
     }
 }

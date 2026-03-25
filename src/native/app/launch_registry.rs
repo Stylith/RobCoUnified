@@ -1,8 +1,10 @@
 use super::super::desktop_app::DesktopWindow;
 use super::super::menu::TerminalScreen;
 use super::super::{
-    first_party_addon_enabled, first_party_addon_registry, first_party_addon_registry_for_profile,
-    first_party_addon_runtime, NativeDesktopRoute, NativeSettingsPanel, NativeTerminalRoute,
+    first_party_addon_disabled_reason, first_party_addon_enabled,
+    first_party_addon_registry_for_profile, first_party_addon_runtime,
+    installed_addon_manifest_registry, NativeDesktopRoute, NativeSettingsPanel,
+    NativeTerminalRoute,
 };
 use crate::config::install_profile;
 use crate::platform::{AddonId, CapabilityId, InstallProfile, LaunchTarget};
@@ -150,13 +152,19 @@ fn unresolved_launch_target_status_for_profile_with_surface(
     profile: InstallProfile,
     surface: &str,
 ) -> String {
-    let registry = first_party_addon_registry();
+    let registry = installed_addon_manifest_registry();
     if let Some(addon_id) = resolve_target_addon_id(target, &registry) {
         if !first_party_addon_enabled(profile, &addon_id) {
-            return format!(
-                "Addon '{addon_id}' is not enabled for install profile {:?}.",
-                profile
-            );
+            return match first_party_addon_disabled_reason(profile, &addon_id) {
+                Some(super::super::FirstPartyAddonDisabledReason::InstallProfile) => format!(
+                    "Addon '{addon_id}' is not enabled for install profile {:?}.",
+                    profile
+                ),
+                Some(super::super::FirstPartyAddonDisabledReason::AddonState) => {
+                    format!("Addon '{addon_id}' is disabled by addon state.")
+                }
+                None => format!("Addon '{addon_id}' is unavailable."),
+            };
         }
     }
 
