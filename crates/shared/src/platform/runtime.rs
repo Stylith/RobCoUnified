@@ -31,12 +31,20 @@ impl StatePathLayout {
         self.path("users")
     }
 
+    pub fn users_db_file(&self) -> PathBuf {
+        self.users_dir().join("users.json")
+    }
+
     pub fn user_dir(&self, username: &str) -> PathBuf {
         self.users_dir().join(username)
     }
 
     pub fn desktop_dir_for_username(&self, username: &str) -> PathBuf {
         self.user_dir(username).join("Desktop")
+    }
+
+    pub fn shared_desktop_dir(&self) -> PathBuf {
+        self.path("Desktop")
     }
 
     pub fn user_file(&self, username: &str, filename: &str) -> PathBuf {
@@ -55,8 +63,44 @@ impl StatePathLayout {
         self.user_file(username, ".default_apps_prompt")
     }
 
+    pub fn user_settings_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "settings.json")
+    }
+
+    pub fn user_apps_catalog_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "apps.json")
+    }
+
+    pub fn user_games_catalog_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "games.json")
+    }
+
+    pub fn user_networks_catalog_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "networks.json")
+    }
+
+    pub fn user_documents_catalog_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "documents.json")
+    }
+
     pub fn global_settings_file(&self) -> PathBuf {
         self.path("settings.json")
+    }
+
+    pub fn shared_apps_catalog_file(&self) -> PathBuf {
+        self.path("apps.json")
+    }
+
+    pub fn shared_games_catalog_file(&self) -> PathBuf {
+        self.path("games.json")
+    }
+
+    pub fn shared_networks_catalog_file(&self) -> PathBuf {
+        self.path("networks.json")
+    }
+
+    pub fn shared_documents_catalog_file(&self) -> PathBuf {
+        self.path("documents.json")
     }
 
     pub fn about_file(&self) -> PathBuf {
@@ -273,6 +317,10 @@ mod tests {
 
         assert_eq!(layout.users_dir(), PathBuf::from("/state-root/users"));
         assert_eq!(
+            layout.users_db_file(),
+            PathBuf::from("/state-root/users/users.json")
+        );
+        assert_eq!(
             layout.user_dir("alice"),
             PathBuf::from("/state-root/users/alice")
         );
@@ -281,8 +329,24 @@ mod tests {
             PathBuf::from("/state-root/users/alice/Desktop")
         );
         assert_eq!(
+            layout.shared_desktop_dir(),
+            PathBuf::from("/state-root/Desktop")
+        );
+        assert_eq!(
             layout.native_shell_snapshot_file("alice"),
             PathBuf::from("/state-root/users/alice/native_shell.json")
+        );
+        assert_eq!(
+            layout.user_settings_file("alice"),
+            PathBuf::from("/state-root/users/alice/settings.json")
+        );
+        assert_eq!(
+            layout.user_apps_catalog_file("alice"),
+            PathBuf::from("/state-root/users/alice/apps.json")
+        );
+        assert_eq!(
+            layout.shared_apps_catalog_file(),
+            PathBuf::from("/state-root/apps.json")
         );
         assert_eq!(
             layout.installed_package_descriptions_file(),

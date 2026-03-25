@@ -14,7 +14,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Phase status:
   - Phase 0 neutral contract layer: done enough
   - Phase 1 runtime adoption and capability routing: complete for the current shell architecture scope
-  - Phase 2 path-authority/state-root migration: done enough for the first compatibility pass
+  - Phase 2 path-authority/state-root migration: complete for the current scope
   - Phase 3 `app.rs` coordinator decomposition: done enough for this stage
   - Phase 4 scoped manifests + addon state + inventory UI: started and now materially real
   - Phase 5 packaged first-party addons / external install-remove lifecycle: not done
@@ -726,7 +726,7 @@ This phase is complete for the current shell architecture scope. Any remaining d
 
 ## Phase 2: Begin Path Migration
 
-Status: done enough for the first compatibility pass
+Status: complete for the current scope
 
 Objective:
 
@@ -776,14 +776,17 @@ Current Phase 2 progress:
 - installer package-description cache and native IPC socket paths now resolve through named shared helpers instead of product-local path joins
 - desktop-surface path checks and bundled standalone binary paths now go through named helpers instead of shell code joining/inspecting compatibility roots directly
 - `RuntimeEnvironment` now exposes named state/runtime path layouts, and the shared config wrappers are starting to collapse onto that layout instead of each path being hand-assembled independently
+- user DB, per-user settings, and per-user app/game/network/document catalog files are now named state-layout paths instead of generic filename plumbing
+- legacy runtime-state detection and compatibility migration now use the named state layout instead of repeating raw state-file names in migration logic
+- no-user desktop and catalog fallbacks now also route through named state-layout paths instead of generic compatibility helper plumbing
 - bundled binary resolution now prefers configured bin roots before sibling/dev fallbacks
 
-Not done yet:
+Remaining future cleanup:
 
-- broader caller migration away from older `config.rs` wrappers
-- broader user/content/package path authority cleanup
+- additional path-domain cleanup can still happen later where it materially helps addon/content architecture work
+- any further migration here should be driven by a concrete new feature or architectural target, not generic path churn
 
-This phase is done enough for now; do not keep tweaking the same compatibility slice without a new concrete target.
+This phase is complete for the current scope. Do not reopen it without a concrete new target.
 
 ## Phase 3: Convert `src/native/app.rs` Into A Coordinator
 

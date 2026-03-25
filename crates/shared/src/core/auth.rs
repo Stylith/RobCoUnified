@@ -1,5 +1,5 @@
 use crate::config::{
-    load_json, mark_default_apps_prompt_pending, save_json, session_state_file, users_dir,
+    load_json, mark_default_apps_prompt_pending, save_json, session_state_file, users_db_file,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,7 +26,7 @@ pub struct UserRecord {
 pub type UsersDb = HashMap<String, UserRecord>;
 
 fn users_db_path() -> PathBuf {
-    users_dir().join("users.json")
+    users_db_file()
 }
 
 fn session_file() -> PathBuf {

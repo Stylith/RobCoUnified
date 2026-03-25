@@ -1,5 +1,6 @@
 use crate::platform::{
     AddonStateOverrides, InstallProfile, PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment,
+    StatePathLayout,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -136,16 +137,17 @@ fn macos_app_support_dir() -> Option<PathBuf> {
 }
 
 fn has_runtime_state(dir: &Path) -> bool {
+    let layout = StatePathLayout::new(dir.to_path_buf());
     [
-        "settings.json",
-        "about.json",
-        ".session",
-        "installed_package_descriptions.json",
+        layout.global_settings_file(),
+        layout.about_file(),
+        layout.session_file(),
+        layout.installed_package_descriptions_file(),
+        layout.users_db_file(),
+        layout.journal_entries_dir(),
     ]
     .iter()
-    .any(|name| dir.join(name).exists())
-        || dir.join("users").join("users.json").exists()
-        || dir.join("journal_entries").exists()
+    .any(|path| path.exists())
 }
 
 fn legacy_runtime_dirs(exe_path: &Path, bundle_dir: &Path) -> Vec<PathBuf> {
@@ -172,19 +174,27 @@ fn merge_runtime_state_from(target_dir: &Path, legacy_dir: &Path) {
     if !has_runtime_state(legacy_dir) {
         return;
     }
-    for name in [
-        "settings.json",
-        "about.json",
-        ".session",
-        "installed_package_descriptions.json",
+    let target_layout = StatePathLayout::new(target_dir.to_path_buf());
+    let legacy_layout = StatePathLayout::new(legacy_dir.to_path_buf());
+    for (from, to) in [
+        (
+            legacy_layout.global_settings_file(),
+            target_layout.global_settings_file(),
+        ),
+        (legacy_layout.about_file(), target_layout.about_file()),
+        (legacy_layout.session_file(), target_layout.session_file()),
+        (
+            legacy_layout.installed_package_descriptions_file(),
+            target_layout.installed_package_descriptions_file(),
+        ),
+        (legacy_layout.users_dir(), target_layout.users_dir()),
+        (
+            legacy_layout.journal_entries_dir(),
+            target_layout.journal_entries_dir(),
+        ),
     ] {
-        merge_path_if_missing(&legacy_dir.join(name), &target_dir.join(name));
+        merge_path_if_missing(&from, &to);
     }
-    merge_path_if_missing(&legacy_dir.join("users"), &target_dir.join("users"));
-    merge_path_if_missing(
-        &legacy_dir.join("journal_entries"),
-        &target_dir.join("journal_entries"),
-    );
 }
 
 fn merge_users_db_if_needed(from: &Path, to: &Path) {
@@ -279,18 +289,6 @@ fn compat_state_path_for_target(relative: &Path, target: PathBuf) -> PathBuf {
     target
 }
 
-fn compat_state_path(relative: impl AsRef<Path>) -> PathBuf {
-    let relative = relative.as_ref();
-    let target = runtime_environment().state_layout().path(relative);
-    compat_state_path_for_target(relative, target)
-}
-
-fn compat_state_dir(relative: impl AsRef<Path>) -> PathBuf {
-    let dir = compat_state_path(relative);
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
 pub fn home_dir_fallback() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
@@ -340,6 +338,13 @@ pub fn users_dir() -> PathBuf {
     dir
 }
 
+pub fn users_db_file() -> PathBuf {
+    compat_state_path_for_target(
+        &Path::new("users").join("users.json"),
+        runtime_environment().state_layout().users_db_file(),
+    )
+}
+
 pub fn user_dir(username: &str) -> PathBuf {
     let d = runtime_environment().state_layout().user_dir(username);
     let _ = std::fs::create_dir_all(&d);
@@ -358,7 +363,12 @@ pub fn desktop_dir() -> PathBuf {
     if let Some(username) = get_current_user() {
         desktop_dir_for_username(&username)
     } else {
-        compat_state_dir("Desktop")
+        let dir = compat_state_path_for_target(
+            Path::new("Desktop"),
+            runtime_environment().state_layout().shared_desktop_dir(),
+        );
+        let _ = std::fs::create_dir_all(&dir);
+        dir
     }
 }
 
@@ -417,20 +427,6 @@ pub fn native_shell_snapshot_file(username: &str) -> PathBuf {
     runtime_environment()
         .state_layout()
         .native_shell_snapshot_file(username)
-}
-
-fn user_state_file(username: &str, filename: &str) -> PathBuf {
-    runtime_environment()
-        .state_layout()
-        .user_file(username, filename)
-}
-
-fn current_user_state_file(filename: &str) -> PathBuf {
-    if let Some(username) = get_current_user() {
-        user_state_file(&username, filename)
-    } else {
-        compat_state_path(filename)
-    }
 }
 
 fn default_apps_prompt_marker(username: &str) -> PathBuf {
@@ -542,44 +538,108 @@ pub fn save_json<T: Serialize>(path: &Path, data: &T) -> Result<()> {
 
 // ── User-aware file helpers ───────────────────────────────────────────────────
 
-fn current_user_catalog_file(filename: &str) -> PathBuf {
-    current_user_state_file(filename)
-}
-
 pub fn user_settings_file(username: &str) -> PathBuf {
-    user_state_file(username, "settings.json")
+    runtime_environment()
+        .state_layout()
+        .user_settings_file(username)
 }
 
 pub fn current_settings_file() -> PathBuf {
-    current_user_state_file("settings.json")
+    if let Some(username) = get_current_user() {
+        runtime_environment()
+            .state_layout()
+            .user_settings_file(&username)
+    } else {
+        global_settings_file()
+    }
+}
+
+fn current_apps_catalog_file() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        runtime_environment()
+            .state_layout()
+            .user_apps_catalog_file(&username)
+    } else {
+        compat_state_path_for_target(
+            Path::new("apps.json"),
+            runtime_environment()
+                .state_layout()
+                .shared_apps_catalog_file(),
+        )
+    }
+}
+
+fn current_games_catalog_file() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        runtime_environment()
+            .state_layout()
+            .user_games_catalog_file(&username)
+    } else {
+        compat_state_path_for_target(
+            Path::new("games.json"),
+            runtime_environment()
+                .state_layout()
+                .shared_games_catalog_file(),
+        )
+    }
+}
+
+fn current_networks_catalog_file() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        runtime_environment()
+            .state_layout()
+            .user_networks_catalog_file(&username)
+    } else {
+        compat_state_path_for_target(
+            Path::new("networks.json"),
+            runtime_environment()
+                .state_layout()
+                .shared_networks_catalog_file(),
+        )
+    }
+}
+
+fn current_documents_catalog_file() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        runtime_environment()
+            .state_layout()
+            .user_documents_catalog_file(&username)
+    } else {
+        compat_state_path_for_target(
+            Path::new("documents.json"),
+            runtime_environment()
+                .state_layout()
+                .shared_documents_catalog_file(),
+        )
+    }
 }
 
 pub fn load_apps() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&current_user_catalog_file("apps.json"))
+    load_json(&current_apps_catalog_file())
 }
 pub fn save_apps(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&current_user_catalog_file("apps.json"), d);
+    let _ = save_json(&current_apps_catalog_file(), d);
 }
 
 pub fn load_games() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&current_user_catalog_file("games.json"))
+    load_json(&current_games_catalog_file())
 }
 pub fn save_games(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&current_user_catalog_file("games.json"), d);
+    let _ = save_json(&current_games_catalog_file(), d);
 }
 
 pub fn load_networks() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&current_user_catalog_file("networks.json"))
+    load_json(&current_networks_catalog_file())
 }
 pub fn save_networks(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&current_user_catalog_file("networks.json"), d);
+    let _ = save_json(&current_networks_catalog_file(), d);
 }
 
 pub fn load_categories() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&current_user_catalog_file("documents.json"))
+    load_json(&current_documents_catalog_file())
 }
 pub fn save_categories(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&current_user_catalog_file("documents.json"), d);
+    let _ = save_json(&current_documents_catalog_file(), d);
 }
 
 pub fn load_about() -> AboutConfig {
