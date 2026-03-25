@@ -35,7 +35,7 @@ pub fn launch_standalone_app(
     args: &[OsString],
     session_username: Option<&str>,
 ) -> Result<(), String> {
-    let binary = sibling_binary_path(app)?;
+    let binary = resolve_binary_path(app)?;
     let mut command = Command::new(binary);
     command.args(args);
     if let Some(username) = session_username.filter(|username| !username.is_empty()) {
@@ -51,34 +51,49 @@ pub fn launch_standalone_app(
         .map_err(|err| format!("Could not open {}: {err}", app.label()))
 }
 
-fn sibling_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|err| format!("Could not resolve current executable: {err}"))?;
-    let Some(dir) = current_exe.parent() else {
-        return Err("Could not resolve application directory.".to_string());
-    };
-    let candidate = dir.join(sibling_binary_file_name(app.binary_stem(), &current_exe));
-    if candidate.is_file() {
-        Ok(candidate)
-    } else {
-        Err(format!(
-            "Could not find the {} app beside `{}`.",
-            app.label(),
-            current_exe.display()
-        ))
-    }
+fn resolve_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
+    bundled_binary_path(app)
+        .or_else(|| sibling_binary_path(app))
+        .ok_or_else(|| {
+            format!(
+                "Could not find the {} app in `{}` or beside the current executable.",
+                app.label(),
+                crate::config::bundled_bin_dir().display()
+            )
+        })
 }
 
-fn sibling_binary_file_name(binary_stem: &str, _current_exe: &Path) -> OsString {
+fn bundled_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
+    let candidate =
+        crate::config::bundled_bin_dir().join(platform_binary_file_name(app.binary_stem()));
+    candidate.is_file().then_some(candidate)
+}
+
+fn sibling_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    sibling_binary_dirs(&current_exe)
+        .into_iter()
+        .map(|dir| dir.join(platform_binary_file_name(app.binary_stem())))
+        .find(|candidate| candidate.is_file())
+}
+
+fn sibling_binary_dirs(current_exe: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = current_exe.parent() {
+        dirs.push(parent.to_path_buf());
+        if parent.file_name().and_then(|name| name.to_str()) == Some("deps") {
+            if let Some(grandparent) = parent.parent() {
+                dirs.push(grandparent.to_path_buf());
+            }
+        }
+    }
+    dirs
+}
+
+fn platform_binary_file_name(binary_stem: &str) -> OsString {
     #[cfg(target_os = "windows")]
     {
-        if _current_exe
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
-        {
-            return OsString::from(format!("{binary_stem}.exe"));
-        }
+        return OsString::from(format!("{binary_stem}.exe"));
     }
 
     OsString::from(binary_stem)
@@ -90,13 +105,7 @@ mod tests {
 
     #[test]
     fn sibling_binary_file_name_matches_current_platform_convention() {
-        let current_exe = if cfg!(target_os = "windows") {
-            PathBuf::from("/tmp/robcos-native.exe")
-        } else {
-            PathBuf::from("/tmp/robcos-native")
-        };
-
-        let name = sibling_binary_file_name("robcos-settings", &current_exe);
+        let name = platform_binary_file_name("robcos-settings");
 
         #[cfg(target_os = "windows")]
         assert_eq!(name, OsString::from("robcos-settings.exe"));

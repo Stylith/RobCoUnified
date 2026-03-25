@@ -381,6 +381,12 @@ Additional shared state-root migration slice:
 - `users_dir`, fallback `desktop_dir`, `global_settings_file`, `about_file`, and non-user-scoped catalog files now resolve under `state_root` while still copying legacy files and directories forward from the older `base_dir()` location when needed
 - this keeps `ROBCOS_BASE_DIR` / `NUCLEON_BASE_DIR` compatibility intact while moving more persistence logic onto the staged path-authority seam
 
+Additional launcher bin-root slice:
+
+- shared config now exposes `bundled_bin_dir()`, with `NUCLEON_BIN_DIR` / `ROBCOS_BIN_DIR` override support and a default of `<core_root>/bin`
+- built-in game launch resolution in `crates/native-services/src/desktop_launcher_service.rs` now prefers that configured bin root before sibling-executable and dev workspace fallbacks
+- native standalone app launch in `src/native/standalone_launcher.rs` now does the same, which reduces executable-relative assumptions without dropping current dev behavior
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

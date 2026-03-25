@@ -54,6 +54,15 @@ pub fn cache_root_dir() -> PathBuf {
     dir
 }
 
+pub const BIN_DIR_ENV: &str = "NUCLEON_BIN_DIR";
+pub const LEGACY_BIN_DIR_ENV: &str = "ROBCOS_BIN_DIR";
+
+pub fn bundled_bin_dir() -> PathBuf {
+    first_non_empty_env_value(&[BIN_DIR_ENV, LEGACY_BIN_DIR_ENV])
+        .map(PathBuf::from)
+        .unwrap_or_else(|| core_root_dir().join("bin"))
+}
+
 pub fn runtime_root_dir() -> PathBuf {
     let dir = platform_paths().runtime_root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
@@ -89,6 +98,15 @@ fn detect_base_dir() -> PathBuf {
     }
 
     PathBuf::from(".")
+}
+
+fn first_non_empty_env_value(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn macos_app_bundle_dir(exe_path: &Path) -> Option<PathBuf> {

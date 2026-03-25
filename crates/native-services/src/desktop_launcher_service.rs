@@ -1,4 +1,6 @@
-use crate::config::{load_apps, load_games, load_networks, save_apps, save_games, save_networks};
+use crate::config::{
+    bundled_bin_dir, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
+};
 use crate::default_apps::parse_custom_command_line;
 use crate::launcher::{command_exists, json_to_cmd};
 use serde_json::{Map, Value};
@@ -78,16 +80,10 @@ pub fn all_game_menu_names() -> Vec<String> {
         .collect()
 }
 
-fn sibling_binary_file_name(binary_stem: &str, _current_exe: &Path) -> OsString {
+fn platform_binary_file_name(binary_stem: &str) -> OsString {
     #[cfg(target_os = "windows")]
     {
-        if _current_exe
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
-        {
-            return OsString::from(format!("{binary_stem}.exe"));
-        }
+        return OsString::from(format!("{binary_stem}.exe"));
     }
 
     OsString::from(binary_stem)
@@ -108,11 +104,16 @@ fn sibling_binary_dirs(current_exe: &Path) -> Vec<PathBuf> {
 
 fn sibling_binary_path(binary_stem: &str) -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok()?;
-    let file_name = sibling_binary_file_name(binary_stem, &current_exe);
+    let file_name = platform_binary_file_name(binary_stem);
     sibling_binary_dirs(&current_exe)
         .into_iter()
         .map(|dir| dir.join(&file_name))
         .find(|candidate| candidate.is_file())
+}
+
+fn bundled_binary_path(binary_stem: &str) -> Option<PathBuf> {
+    let candidate = bundled_bin_dir().join(platform_binary_file_name(binary_stem));
+    candidate.is_file().then_some(candidate)
 }
 
 fn workspace_manifest_path() -> Option<PathBuf> {
@@ -125,6 +126,9 @@ fn workspace_manifest_path() -> Option<PathBuf> {
 
 fn built_in_game_argv(name: &str) -> Option<Vec<String>> {
     let (package, binary) = builtin_robco_fun_game_specs(name)?;
+    if let Some(path) = bundled_binary_path(binary) {
+        return Some(vec![path.to_string_lossy().to_string()]);
+    }
     if let Some(path) = sibling_binary_path(binary) {
         return Some(vec![path.to_string_lossy().to_string()]);
     }
@@ -400,5 +404,15 @@ mod tests {
 
         assert_eq!(launch.title, BUILTIN_ZETA_INVADERS_GAME);
         assert!(!launch.argv.is_empty());
+    }
+
+    #[test]
+    fn platform_binary_file_name_matches_current_platform_convention() {
+        let name = platform_binary_file_name("robcos-settings");
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(name, OsString::from("robcos-settings.exe"));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(name, OsString::from("robcos-settings"));
     }
 }
