@@ -1,9 +1,8 @@
 use super::super::desktop_app::{
     build_active_desktop_menu_section, build_app_control_menu, build_shared_desktop_menu_section,
     build_window_menu_entries, build_window_menu_section, build_window_tiling_menu_section,
-    desktop_app_menu_name, hosted_app_for_window, DesktopHostedApp, DesktopLaunchPayload,
-    DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection,
-    DesktopShellAction, DesktopWindow,
+    desktop_app_menu_name, hosted_app_for_window, DesktopHostedApp, DesktopMenuAction,
+    DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection, DesktopWindow,
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
 use super::super::retro_ui::{current_palette, RetroPalette};
@@ -54,10 +53,7 @@ impl RobcoNativeApp {
                 self.run_editor_text_command(ctx, self.active_editor_text_edit_id(), *command);
             }
             DesktopMenuAction::OpenRecentEditorFile(path) => {
-                self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
-                    target: super::launch_registry::editor_launch_target(),
-                    payload: DesktopLaunchPayload::OpenPath(path.clone()),
-                });
+                self.launch_editor_path_via_registry(path.clone());
             }
             DesktopMenuAction::FileManagerCommand(command) => {
                 self.run_file_manager_command(*command);

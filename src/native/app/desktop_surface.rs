@@ -393,7 +393,7 @@ impl RobcoNativeApp {
                 self.create_desktop_folder();
             }
             ContextMenuAction::ChangeAppearance => {
-                self.open_desktop_settings_panel(NativeSettingsPanel::Appearance);
+                self.launch_settings_panel_via_registry(NativeSettingsPanel::Appearance);
             }
             ContextMenuAction::OpenSettings => {
                 self.launch_settings_via_registry();
@@ -433,7 +433,7 @@ impl RobcoNativeApp {
                 let custom_cmd = desktop_shortcut_launch_command(&self.settings.draft, &name);
                 if let Some(cmd) = custom_cmd {
                     let args: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
-                    self.open_desktop_pty(&name, &args);
+                    self.launch_shell_command_in_desktop_surface(&name, &args);
                 } else {
                     self.run_start_leaf_action(NativeStartLeafAction::LaunchConfiguredApp(name));
                 }

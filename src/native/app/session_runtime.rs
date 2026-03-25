@@ -49,7 +49,7 @@ impl RobcoNativeApp {
         self.desktop_mode_open = launch_default_desktop;
         self.apply_terminal_navigation_state(terminal_defaults);
         self.terminal_nuke_codes = NukeCodesView::default();
-        if let Some(mut pty) = self.terminal_pty.take() {
+        if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
         Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
@@ -124,5 +124,6 @@ impl RobcoNativeApp {
     fn reset_shell_runtime_for_logout(&mut self) {
         self.reset_shell_runtime_for_session(false);
         self.terminal_pty = None;
+        self.terminal_pty_surface = None;
     }
 }

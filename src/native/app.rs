@@ -38,6 +38,7 @@ use super::file_manager_desktop::{self, FileManagerDesktopFooterAction};
 use super::installer_screen::{DesktopInstallerState, TerminalInstallerState};
 use super::menu::{
     terminal_runtime_defaults, TerminalLoginState, TerminalNavigationState, TerminalScreen,
+    TerminalShellSurface,
 };
 use super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 #[cfg(test)]
@@ -559,6 +560,7 @@ pub struct RobcoNativeApp {
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
     terminal_pty: Option<NativePtyState>,
+    terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
@@ -641,6 +643,7 @@ pub(super) struct ParkedSessionState {
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
     terminal_pty: Option<NativePtyState>,
+    terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
@@ -744,6 +747,7 @@ impl Default for RobcoNativeApp {
             terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_nuke_codes: NukeCodesView::default(),
             terminal_pty: None,
+            terminal_pty_surface: None,
             terminal_installer: TerminalInstallerState::default(),
             terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
@@ -960,7 +964,7 @@ mod tests {
     use crate::config::{DesktopShortcut, FileManagerSortMode, FileManagerViewMode};
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
     use crate::native::desktop_app::DesktopLaunchPayload;
-    use crate::native::file_manager_app::FileManagerClipboardMode;
+    use crate::native::file_manager_app::{FileManagerClipboardMode, OpenWithLaunchRequest};
     use crate::native::installer_screen::DesktopInstallerView;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -2168,6 +2172,7 @@ mod tests {
             .expect("secondary pty window");
 
         let mut swapped_state = None;
+        let mut swapped_surface = Some(TerminalShellSurface::Desktop);
         {
             let slot = app
                 .desktop_pty_slot_mut(secondary_id)
@@ -2175,8 +2180,10 @@ mod tests {
             std::mem::swap(slot, &mut swapped_state);
         }
         std::mem::swap(&mut app.terminal_pty, &mut swapped_state);
+        std::mem::swap(&mut app.terminal_pty_surface, &mut swapped_surface);
         app.drawing_window_id = Some(secondary_id);
         app.update_desktop_window_state(DesktopWindow::PtyApp, false);
+        std::mem::swap(&mut app.terminal_pty_surface, &mut swapped_surface);
         std::mem::swap(&mut app.terminal_pty, &mut swapped_state);
         {
             let slot = app
@@ -2187,6 +2194,7 @@ mod tests {
         app.drawing_window_id = None;
 
         assert!(app.terminal_pty.is_some());
+        assert!(app.primary_desktop_pty_open());
         assert!(app.desktop_pty_state(secondary_id).is_none());
 
         app.terminate_all_native_pty_children();
@@ -2230,6 +2238,20 @@ mod tests {
 
         assert!(app.settings.open);
         assert_eq!(app.settings.panel, NativeSettingsPanel::Appearance);
+    }
+
+    #[test]
+    fn settings_launch_target_with_panel_payload_opens_requested_panel() {
+        let mut app = RobcoNativeApp::default();
+
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+            target: launch_registry::settings_launch_target(),
+            payload: DesktopLaunchPayload::OpenSettingsPanel(NativeSettingsPanel::Connections),
+        });
+
+        assert!(app.settings.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Settings));
+        assert_eq!(app.settings.panel, NativeSettingsPanel::Connections);
     }
 
     #[test]
@@ -2545,6 +2567,111 @@ mod tests {
             .secondary_windows
             .iter()
             .all(|window| window.id.kind != DesktopWindow::Editor));
+    }
+
+    #[test]
+    fn terminal_open_with_request_uses_embedded_pty_surface() {
+        let _guard = session_test_guard();
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.navigate_to_screen(TerminalScreen::DocumentBrowser);
+
+        let status = app.launch_open_with_request(OpenWithLaunchRequest {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 30".to_string(),
+            ],
+            title: "Open With".to_string(),
+            status_message: "Opened via terminal.".to_string(),
+        });
+
+        assert_eq!(status, "Opened via terminal.");
+        assert!(app.terminal_pty.is_some());
+        assert!(app.primary_embedded_pty_open());
+        assert!(!app.primary_desktop_pty_open());
+        assert_eq!(app.terminal_nav.screen, TerminalScreen::PtyApp);
+        assert!(!app.desktop_mode_open);
+        assert!(!app.desktop_component_pty_is_open());
+        assert!(
+            app.desktop_pty_state(WindowInstanceId::primary(DesktopWindow::PtyApp))
+                .is_none()
+        );
+
+        app.terminate_all_native_pty_children();
+    }
+
+    #[test]
+    fn active_surface_command_launch_uses_embedded_pty_when_desktop_is_closed() {
+        let _guard = session_test_guard();
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 30".to_string(),
+        ];
+        app.launch_shell_command_on_active_surface(
+            "Surface Launch",
+            &argv,
+            TerminalScreen::DocumentBrowser,
+        );
+
+        assert!(app.primary_embedded_pty_open());
+        assert!(!app.primary_desktop_pty_open());
+        assert_eq!(app.terminal_nav.screen, TerminalScreen::PtyApp);
+
+        app.terminate_all_native_pty_children();
+    }
+
+    #[test]
+    fn active_surface_command_launch_uses_desktop_pty_when_desktop_is_open() {
+        let _guard = session_test_guard();
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 30".to_string(),
+        ];
+        app.launch_shell_command_on_active_surface(
+            "Surface Launch",
+            &argv,
+            TerminalScreen::DocumentBrowser,
+        );
+
+        assert!(app.primary_desktop_pty_open());
+        assert!(!app.primary_embedded_pty_open());
+        assert!(app.desktop_window_is_open(DesktopWindow::PtyApp));
+
+        app.terminate_all_native_pty_children();
+    }
+
+    #[test]
+    fn desktop_open_with_request_uses_desktop_pty_surface() {
+        let _guard = session_test_guard();
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = true;
+
+        let status = app.launch_open_with_request(OpenWithLaunchRequest {
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 30".to_string(),
+            ],
+            title: "Open With".to_string(),
+            status_message: "Opened via desktop.".to_string(),
+        });
+
+        assert_eq!(status, "Opened via desktop.");
+        assert!(app.terminal_pty.is_some());
+        assert!(app.primary_desktop_pty_open());
+        assert!(!app.primary_embedded_pty_open());
+        assert!(app.desktop_window_is_open(DesktopWindow::PtyApp));
+
+        app.terminate_all_native_pty_children();
     }
 
     #[test]

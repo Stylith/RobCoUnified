@@ -122,6 +122,9 @@ impl RobcoNativeApp {
             return None;
         }
         if id.instance == 0 {
+            if !self.primary_desktop_pty_open() {
+                return None;
+            }
             return Some(&mut self.terminal_pty);
         }
         self.secondary_windows
@@ -138,6 +141,9 @@ impl RobcoNativeApp {
             return None;
         }
         if id.instance == 0 {
+            if !self.primary_desktop_pty_open() {
+                return None;
+            }
             return self.terminal_pty.as_ref();
         }
         self.secondary_windows
@@ -848,7 +854,7 @@ impl RobcoNativeApp {
                     DesktopWindow::FileManager => self.file_manager.open = false,
                     DesktopWindow::Editor => self.editor.open = false,
                     DesktopWindow::PtyApp => {
-                        if let Some(mut pty) = self.terminal_pty.take() {
+                        if let Some(mut pty) = self.take_primary_pty() {
                             pty.session.terminate();
                         }
                     }
@@ -1016,8 +1022,11 @@ impl RobcoNativeApp {
                 std::mem::swap(&mut self.editor, editor);
             }
             SecondaryWindowApp::Pty(state) => {
+                let mut swapped_surface = Some(super::super::menu::TerminalShellSurface::Desktop);
                 std::mem::swap(&mut self.terminal_pty, state);
+                std::mem::swap(&mut self.terminal_pty_surface, &mut swapped_surface);
                 self.draw_desktop_pty_window(ctx);
+                std::mem::swap(&mut self.terminal_pty_surface, &mut swapped_surface);
                 std::mem::swap(&mut self.terminal_pty, state);
             }
         }

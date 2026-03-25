@@ -20,6 +20,36 @@ use robcos_native_programs_app::{resolve_desktop_games_request, DesktopProgramRe
 use std::path::{Path, PathBuf};
 
 impl RobcoNativeApp {
+    pub(super) fn launch_shell_command_in_desktop_surface(
+        &mut self,
+        title: &str,
+        argv: &[String],
+    ) {
+        self.open_desktop_pty(title, argv);
+    }
+
+    pub(super) fn launch_shell_command_in_embedded_surface(
+        &mut self,
+        title: &str,
+        argv: &[String],
+        return_screen: TerminalScreen,
+    ) {
+        self.open_embedded_pty(title, argv, return_screen);
+    }
+
+    pub(super) fn launch_shell_command_on_active_surface(
+        &mut self,
+        title: &str,
+        argv: &[String],
+        return_screen: TerminalScreen,
+    ) {
+        if self.desktop_mode_open {
+            self.launch_shell_command_in_desktop_surface(title, argv);
+        } else {
+            self.launch_shell_command_in_embedded_surface(title, argv, return_screen);
+        }
+    }
+
     /// Open a desktop window if not already open, otherwise spawn a secondary
     /// embedded instance inside the shell.
     pub(super) fn open_or_spawn_desktop_window(&mut self, window: DesktopWindow) {
@@ -71,6 +101,50 @@ impl RobcoNativeApp {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
         ));
+    }
+
+    pub(super) fn launch_settings_panel_via_registry(&mut self, panel: NativeSettingsPanel) {
+        self.execute_desktop_launch_target_with_payload(
+            launch_registry::settings_launch_target(),
+            DesktopLaunchPayload::OpenSettingsPanel(panel),
+        );
+    }
+
+    pub(super) fn launch_file_manager_path_via_registry(&mut self, path: PathBuf) {
+        self.execute_desktop_launch_target_with_payload(
+            launch_registry::file_manager_launch_target(),
+            DesktopLaunchPayload::OpenPath(path),
+        );
+    }
+
+    pub(super) fn reveal_path_in_file_manager_via_registry(&mut self, path: PathBuf) {
+        self.execute_desktop_launch_target_with_payload(
+            launch_registry::file_manager_launch_target(),
+            DesktopLaunchPayload::RevealPath(path),
+        );
+    }
+
+    pub(super) fn launch_editor_path_via_registry(&mut self, path: PathBuf) {
+        self.execute_desktop_launch_target_with_payload(
+            launch_registry::editor_launch_target(),
+            DesktopLaunchPayload::OpenPath(path),
+        );
+    }
+
+    pub(super) fn launch_editor_path_on_active_surface(
+        &mut self,
+        path: PathBuf,
+        return_screen: TerminalScreen,
+    ) {
+        if self.desktop_mode_open {
+            self.launch_editor_path_via_registry(path);
+        } else {
+            self.execute_terminal_launch_target_with_path(
+                launch_registry::editor_launch_target(),
+                path,
+                return_screen,
+            );
+        }
     }
 
     pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
@@ -143,6 +217,10 @@ impl RobcoNativeApp {
                 DesktopLaunchPayload::OpenTerminalShell,
             ) => self.open_desktop_terminal_shell(),
             (
+                NativeDesktopLaunch::OpenSettingsPanel(_),
+                DesktopLaunchPayload::OpenSettingsPanel(panel),
+            ) => self.open_desktop_settings_panel(panel),
+            (
                 NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager),
                 DesktopLaunchPayload::OpenPath(path),
             ) => self.open_file_manager_at(path),
@@ -163,10 +241,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn launch_desktop_terminal_shell_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
-            target: launch_registry::terminal_launch_target(),
-            payload: DesktopLaunchPayload::OpenTerminalShell,
-        });
+        self.execute_desktop_launch_target_with_payload(
+            launch_registry::terminal_launch_target(),
+            DesktopLaunchPayload::OpenTerminalShell,
+        );
     }
 
     pub(super) fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
@@ -185,10 +263,7 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::OpenFileManagerAt(path) => {
-                self.execute_desktop_launch_target_with_payload(
-                    launch_registry::file_manager_launch_target(),
-                    DesktopLaunchPayload::OpenPath(path),
-                );
+                self.launch_file_manager_path_via_registry(path);
             }
             DesktopShellAction::LaunchNetworkProgram(name) => {
                 self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
@@ -282,7 +357,7 @@ impl RobcoNativeApp {
 
     pub(super) fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
         match resolve_catalog_launch(name, catalog) {
-            Ok(launch) => self.open_desktop_pty(&launch.title, &launch.argv),
+            Ok(launch) => self.launch_shell_command_in_desktop_surface(&launch.title, &launch.argv),
             Err(err) => self.shell_status = err,
         }
     }
@@ -294,7 +369,11 @@ impl RobcoNativeApp {
         return_screen: TerminalScreen,
     ) {
         match resolve_catalog_launch(name, catalog) {
-            Ok(launch) => self.open_embedded_pty(&launch.title, &launch.argv, return_screen),
+            Ok(launch) => self.launch_shell_command_in_embedded_surface(
+                &launch.title,
+                &launch.argv,
+                return_screen,
+            ),
             Err(err) => self.shell_status = err,
         }
     }

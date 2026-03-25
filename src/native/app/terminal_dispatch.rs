@@ -259,9 +259,11 @@ impl RobcoNativeApp {
             has_default_app_slot: self.terminal_nav.default_app_slot.is_some(),
             connections_at_root: self.terminal_connections.is_at_root(),
             installer_at_root: self.terminal_installer.is_at_root(),
-            has_embedded_pty: self.terminal_pty.is_some(),
+            has_embedded_pty: self.primary_embedded_pty_open(),
             pty_return_screen: self
-                .terminal_pty
+                .primary_embedded_pty_open()
+                .then_some(self.terminal_pty.as_ref())
+                .flatten()
                 .as_ref()
                 .map(|pty| pty.return_screen)
                 .unwrap_or(TerminalScreen::MainMenu),
@@ -303,7 +305,7 @@ impl RobcoNativeApp {
                 }
             }
             TerminalBackAction::ClosePtyAndReturn { return_screen } => {
-                if let Some(mut pty) = self.terminal_pty.take() {
+                if let Some(mut pty) = self.take_primary_pty() {
                     pty.session.terminate();
                     self.navigate_to_screen(return_screen);
                     self.shell_status = format!("Closed {}.", pty.title);

@@ -69,6 +69,7 @@ impl RobcoNativeApp {
             terminal_settings_panel: self.terminal_settings_panel,
             terminal_nuke_codes: self.terminal_nuke_codes.clone(),
             terminal_pty: self.terminal_pty.take(),
+            terminal_pty_surface: self.terminal_pty_surface.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
             terminal_edit_menus: std::mem::take(&mut self.terminal_edit_menus),
             terminal_connections: std::mem::take(&mut self.terminal_connections),
@@ -136,6 +137,7 @@ impl RobcoNativeApp {
         self.terminal_settings_panel = parked.terminal_settings_panel;
         self.terminal_nuke_codes = parked.terminal_nuke_codes;
         self.terminal_pty = parked.terminal_pty;
+        self.terminal_pty_surface = parked.terminal_pty_surface;
         self.terminal_installer = parked.terminal_installer;
         self.terminal_edit_menus = parked.terminal_edit_menus;
         self.terminal_connections = parked.terminal_connections;
@@ -196,7 +198,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn terminate_all_native_pty_children(&mut self) {
-        if let Some(mut pty) = self.terminal_pty.take() {
+        if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
         Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
@@ -204,6 +206,7 @@ impl RobcoNativeApp {
             if let Some(mut pty) = parked.terminal_pty.take() {
                 pty.session.terminate();
             }
+            parked.terminal_pty_surface = None;
             Self::terminate_secondary_window_ptys(&mut parked.secondary_windows);
         }
     }
@@ -223,7 +226,7 @@ impl RobcoNativeApp {
             }
         };
 
-        if let Some(mut pty) = self.terminal_pty.take() {
+        if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
         Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
@@ -231,6 +234,7 @@ impl RobcoNativeApp {
             if let Some(mut pty) = parked.terminal_pty.take() {
                 pty.session.terminate();
             }
+            parked.terminal_pty_surface = None;
             Self::terminate_secondary_window_ptys(&mut parked.secondary_windows);
         }
 

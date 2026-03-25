@@ -273,7 +273,7 @@ impl RobcoNativeApp {
         self.sync_native_display_effects();
         self.sync_native_cursor_mode();
         let pty_last =
-            self.active_window_kind() == Some(DesktopWindow::PtyApp) && self.terminal_pty.is_some();
+            self.active_window_kind() == Some(DesktopWindow::PtyApp) && self.primary_desktop_pty_open();
         if pty_last {
             self.draw_installer(ctx);
             self.draw_desktop_pty_window(ctx);
@@ -281,7 +281,7 @@ impl RobcoNativeApp {
             self.draw_desktop_pty_window(ctx);
             self.draw_installer(ctx);
         }
-        if !self.desktop_installer.open && self.terminal_pty.is_none() {
+        if !self.desktop_installer.open && !self.primary_desktop_pty_open() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(500));

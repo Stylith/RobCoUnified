@@ -352,7 +352,7 @@ impl RobcoNativeApp {
             } = event
             {
                 self.desktop_installer.status = status.clone();
-                self.open_desktop_pty("Program Installer", &argv);
+                self.launch_shell_command_in_desktop_surface("Program Installer", &argv);
                 if let Some(pty) = self.active_desktop_pty_state_mut() {
                     pty.completion_message = completion_message;
                 }

@@ -1,5 +1,4 @@
 use super::super::background::BackgroundResult;
-use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction};
 use super::super::desktop_settings_service::{
     load_settings_snapshot, persist_settings_draft, reload_settings_snapshot,
 };
@@ -120,27 +119,15 @@ impl RobcoNativeApp {
                     self.replace_settings_draft(settings);
                 }
                 super::super::ipc::IpcMessage::OpenInEditor { path } => {
-                    self.execute_desktop_shell_action(
-                        DesktopShellAction::LaunchByTargetWithPayload {
-                            target: super::launch_registry::editor_launch_target(),
-                            payload: DesktopLaunchPayload::OpenPath(std::path::PathBuf::from(path)),
-                        },
-                    );
+                    self.launch_editor_path_via_registry(std::path::PathBuf::from(path));
                 }
                 super::super::ipc::IpcMessage::RevealInFileManager { path } => {
-                    self.execute_desktop_shell_action(
-                        DesktopShellAction::LaunchByTargetWithPayload {
-                            target: super::launch_registry::file_manager_launch_target(),
-                            payload: DesktopLaunchPayload::RevealPath(std::path::PathBuf::from(
-                                path,
-                            )),
-                        },
-                    );
+                    self.reveal_path_in_file_manager_via_registry(std::path::PathBuf::from(path));
                 }
                 super::super::ipc::IpcMessage::OpenSettings { panel } => {
                     let panel = panel.and_then(|p| standalone_settings_panel_from_arg(&p));
                     if let Some(panel) = panel {
-                        self.open_desktop_settings_panel(panel);
+                        self.launch_settings_panel_via_registry(panel);
                     } else {
                         self.launch_settings_via_registry();
                     }

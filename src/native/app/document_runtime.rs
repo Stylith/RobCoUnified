@@ -1,5 +1,5 @@
 use super::super::data::{home_dir_fallback, save_text_file, word_processor_dir};
-use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction, DesktopWindow};
+use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_file_service::{load_text_document, open_directory_location};
 use super::super::desktop_settings_service::{
     apply_file_manager_settings_update as apply_desktop_file_manager_settings_update,
@@ -42,7 +42,11 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn launch_open_with_request(&mut self, launch: OpenWithLaunchRequest) -> String {
-        self.open_desktop_pty(&launch.title, &launch.argv);
+        self.launch_shell_command_on_active_surface(
+            &launch.title,
+            &launch.argv,
+            self.terminal_nav.screen,
+        );
         launch.status_message
     }
 
@@ -371,15 +375,11 @@ impl RobcoNativeApp {
                     robcos_native_file_manager_app::open_with_command_title(&argv[0]),
                     display,
                 );
-                if self.desktop_mode_open {
-                    self.open_desktop_pty(&title, &argv);
-                } else {
-                    self.open_embedded_pty(
-                        &title,
-                        &argv,
-                        super::super::menu::TerminalScreen::DocumentBrowser,
-                    );
-                }
+                self.launch_shell_command_on_active_surface(
+                    &title,
+                    &argv,
+                    super::super::menu::TerminalScreen::DocumentBrowser,
+                );
                 self.shell_status = format!("Opened {display}");
             }
             Some(ResolvedDocumentOpen::BuiltinAddon(addon_id))
@@ -394,18 +394,7 @@ impl RobcoNativeApp {
     }
 
     fn open_path_with_active_shell_editor(&mut self, path: PathBuf) {
-        if self.desktop_mode_open {
-            self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
-                target: super::launch_registry::editor_launch_target(),
-                payload: DesktopLaunchPayload::OpenPath(path),
-            });
-        } else {
-            self.execute_terminal_launch_target_with_path(
-                super::launch_registry::editor_launch_target(),
-                path,
-                TerminalScreen::DocumentBrowser,
-            );
-        }
+        self.launch_editor_path_on_active_surface(path, TerminalScreen::DocumentBrowser);
     }
 
     pub(super) fn file_manager_activate_or_pick(&mut self) {

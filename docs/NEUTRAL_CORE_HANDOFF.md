@@ -13,7 +13,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Current strategy: incremental migration, not rewrite
 - Phase status:
   - Phase 0 neutral contract layer: done enough
-  - Phase 1 runtime adoption and capability routing: far along
+  - Phase 1 runtime adoption and capability routing: complete for the current shell architecture scope
   - Phase 2 path-authority/state-root migration: done enough for the first compatibility pass
   - Phase 3 `app.rs` coordinator decomposition: done enough for this stage
   - Phase 4 scoped manifests + addon state + inventory UI: started and now materially real
@@ -668,7 +668,7 @@ This phase is complete.
 
 ## Phase 1: Add Runtime Adapters Without Breaking Existing Flows
 
-Status: done enough for the current stage
+Status: complete for the current shell architecture scope
 
 Objective:
 
@@ -705,21 +705,24 @@ Current Phase 1 progress:
 - desktop payload-carrying shell actions now have a typed launch-payload seam for editor/file-manager path opens and desktop terminal-shell entry, instead of routing those cases only through ad hoc top-level shell action branches
 - desktop surface file/folder activation now uses that same typed launch-payload seam for file-manager directory opens and built-in editor fallback opens
 - path-open policy is now explicit: desktop-originated path opens stay desktop/windowed, terminal-originated path opens stay terminal-native unless the user explicitly launches a desktop shell/app
+- open-with launches now follow the same surface policy: desktop-originated launches use desktop PTY hosting, terminal-originated launches use embedded PTY hosting
+- primary PTY ownership is now explicit: embedded terminal PTYs and desktop PTY windows share launch/runtime plumbing but no longer share "is open" state implicitly
+- arbitrary argv/PTy launches now resolve through shared shell-command launch helpers, so installer/custom-command/document-open callers do not each reimplement desktop-vs-terminal PTY policy
+- settings panel targeting now has a typed desktop launch payload, so opening a specific settings pane no longer bypasses the shell launch-action path
+- built-in editor/file-manager path openings now also have shared desktop helpers, and editor path opens have a shared active-surface helper, so path-carrying callers no longer build registry payload actions ad hoc
 - terminal `F1` command UI should be treated as a window-local menu strip under the active window header, not as a global top-bar replacement; terminal editor/browser input should be inert while that local strip is open
 - settings subtools now have addon identities
 - unresolved status now distinguishes “not wired”, “disabled by install profile”, and “disabled by addon state”
-- remaining direct paths are mostly payload-carrying flows or shell-owned host behavior:
-  - settings panel-specific routing
-  - broader cross-mode path/payload behavior still uses runtime-owned helpers after resolution
-  - direct desktop/terminal host opening for currently compiled first-party runtimes beyond the new terminal-shell launch seam
+- remaining direct paths are now mostly intentional picker/standalone host behavior rather than shell launch-policy duplication
 
 Exit criteria:
 
 - capability/addon routing is the default path for addon-backed surfaces
 - no visible behavior regression
 - desktop and terminal stay aligned for addon-backed flows
+- remaining non-routed direct opens are limited to intentionally stateful picker/standalone host flows
 
-This phase is done enough for now.
+This phase is complete for the current shell architecture scope. Any remaining direct opens here are intentional picker/standalone host behavior, not outstanding launch-routing debt.
 
 ## Phase 2: Begin Path Migration
 

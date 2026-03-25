@@ -15,13 +15,33 @@ use super::super::menu::{
     TerminalUserManagementPromptPlan, TerminalUserPasswordFlow, UserManagementMode,
 };
 use super::super::prompt::{FlashAction, TerminalFlash, TerminalPromptAction};
-use super::super::pty_screen::spawn_embedded_pty_with_options;
+use super::super::pty_screen::{spawn_embedded_pty_with_options, NativePtyState};
 use super::RobcoNativeApp;
 use crate::core::auth::{AuthMethod, UserRecord};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 impl RobcoNativeApp {
+    pub(super) fn primary_embedded_pty_open(&self) -> bool {
+        self.terminal_pty.is_some()
+            && self.terminal_pty_surface == Some(TerminalShellSurface::Embedded)
+    }
+
+    pub(super) fn primary_desktop_pty_open(&self) -> bool {
+        self.terminal_pty.is_some()
+            && self.terminal_pty_surface == Some(TerminalShellSurface::Desktop)
+    }
+
+    pub(super) fn take_primary_pty(&mut self) -> Option<NativePtyState> {
+        self.terminal_pty_surface = None;
+        self.terminal_pty.take()
+    }
+
+    fn set_primary_pty(&mut self, state: NativePtyState, surface: TerminalShellSurface) {
+        self.terminal_pty = Some(state);
+        self.terminal_pty_surface = Some(surface);
+    }
+
     pub(super) fn navigate_to_screen(&mut self, screen: TerminalScreen) {
         let previous = self.terminal_nav.screen;
         if previous != screen {
@@ -186,11 +206,11 @@ impl RobcoNativeApp {
         desktop_window: bool,
     ) {
         let spawn_secondary_desktop_pty =
-            desktop_window && self.desktop_window_is_open(DesktopWindow::PtyApp);
+            desktop_window && self.primary_desktop_pty_open();
         if !spawn_secondary_desktop_pty
             && (plan.replace_existing_pty || self.terminal_pty.is_some())
         {
-            if let Some(mut previous) = self.terminal_pty.take() {
+            if let Some(mut previous) = self.take_primary_pty() {
                 previous.session.terminate();
             }
         }
@@ -235,14 +255,14 @@ impl RobcoNativeApp {
                             super::SecondaryWindowApp::Pty(Some(state)),
                         )
                     } else {
-                        self.terminal_pty = Some(state);
+                        self.set_primary_pty(state, TerminalShellSurface::Desktop);
                         self.open_desktop_window(DesktopWindow::PtyApp);
                         WindowInstanceId::primary(DesktopWindow::PtyApp)
                     };
                     let window = self.desktop_window_state_mut(window_id);
                     window.maximized = profile.open_fullscreen;
                 } else {
-                    self.terminal_pty = Some(state);
+                    self.set_primary_pty(state, TerminalShellSurface::Embedded);
                     self.navigate_to_screen(TerminalScreen::PtyApp);
                 }
                 self.shell_status = plan.success_status;

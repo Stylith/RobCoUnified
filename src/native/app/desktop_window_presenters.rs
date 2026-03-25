@@ -1542,6 +1542,10 @@ impl RobcoNativeApp {
         if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
             return;
         }
+        if !self.primary_desktop_pty_open() {
+            self.update_desktop_window_state(DesktopWindow::PtyApp, false);
+            return;
+        }
         let wid = self.current_window_id(DesktopWindow::PtyApp);
         let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
         let default_pos = Self::desktop_default_window_pos(ctx, default_size);

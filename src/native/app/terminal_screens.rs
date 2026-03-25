@@ -1041,6 +1041,11 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_pty(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        if !self.primary_embedded_pty_open() {
+            self.navigate_to_screen(TerminalScreen::MainMenu);
+            self.shell_status = "No embedded PTY session.".to_string();
+            return;
+        };
         let Some(state) = self.terminal_pty.as_mut() else {
             self.navigate_to_screen(TerminalScreen::MainMenu);
             self.shell_status = "No embedded PTY session.".to_string();
@@ -1065,7 +1070,7 @@ impl RobcoNativeApp {
             PtyScreenEvent::None => {}
             PtyScreenEvent::CloseRequested => self.handle_terminal_back(),
             PtyScreenEvent::ProcessExited => {
-                if let Some(pty) = self.terminal_pty.take() {
+                if let Some(pty) = self.take_primary_pty() {
                     let plan = resolve_embedded_pty_exit(
                         &pty.title,
                         pty.return_screen,

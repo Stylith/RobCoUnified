@@ -2,13 +2,13 @@ use super::desktop_app::DesktopWindow;
 use super::menu::TerminalScreen;
 use super::NativeSettingsPanel;
 use crate::config;
+#[cfg(test)]
+use crate::platform::CapabilityId;
 use crate::platform::{
     build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint, AddonId, AddonKind,
     AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonScope, AddonStateOverrides,
     DiscoveredAddonManifest, FileAssociation, InstallProfile,
 };
-#[cfg(test)]
-use crate::platform::CapabilityId;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

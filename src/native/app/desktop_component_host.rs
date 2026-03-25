@@ -148,12 +148,12 @@ impl RobcoNativeApp {
     }
 
     pub(crate) fn desktop_component_pty_is_open(&self) -> bool {
-        self.terminal_pty.is_some()
+        self.primary_desktop_pty_open()
     }
 
     pub(crate) fn desktop_component_pty_set_open(&mut self, open: bool) {
-        if !open {
-            if let Some(mut pty) = self.terminal_pty.take() {
+        if !open && self.primary_desktop_pty_open() {
+            if let Some(mut pty) = self.take_primary_pty() {
                 pty.session.terminate();
             }
         }
