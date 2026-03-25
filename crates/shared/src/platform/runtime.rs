@@ -10,6 +10,112 @@ pub const LEGACY_BASE_DIR_ENV: &str = "ROBCOS_BASE_DIR";
 pub const DEFAULT_PRODUCT_DIR: &str = "robcos";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatePathLayout {
+    root: PathBuf,
+}
+
+impl StatePathLayout {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn path(&self, relative: impl AsRef<Path>) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    pub fn users_dir(&self) -> PathBuf {
+        self.path("users")
+    }
+
+    pub fn user_dir(&self, username: &str) -> PathBuf {
+        self.users_dir().join(username)
+    }
+
+    pub fn desktop_dir_for_username(&self, username: &str) -> PathBuf {
+        self.user_dir(username).join("Desktop")
+    }
+
+    pub fn user_file(&self, username: &str, filename: &str) -> PathBuf {
+        self.user_dir(username).join(filename)
+    }
+
+    pub fn file_manager_trash_dir_for_username(&self, username: &str) -> PathBuf {
+        self.user_dir(username).join(".fm_trash")
+    }
+
+    pub fn native_shell_snapshot_file(&self, username: &str) -> PathBuf {
+        self.user_file(username, "native_shell.json")
+    }
+
+    pub fn default_apps_prompt_marker(&self, username: &str) -> PathBuf {
+        self.user_file(username, ".default_apps_prompt")
+    }
+
+    pub fn global_settings_file(&self) -> PathBuf {
+        self.path("settings.json")
+    }
+
+    pub fn about_file(&self) -> PathBuf {
+        self.path("about.json")
+    }
+
+    pub fn session_file(&self) -> PathBuf {
+        self.path(".session")
+    }
+
+    pub fn installed_package_descriptions_file(&self) -> PathBuf {
+        self.path("installed_package_descriptions.json")
+    }
+
+    pub fn addon_state_overrides_file(&self) -> PathBuf {
+        self.path("addon_state.json")
+    }
+
+    pub fn journal_entries_dir(&self) -> PathBuf {
+        self.path("journal_entries")
+    }
+
+    pub fn diagnostics_log_file(&self) -> PathBuf {
+        self.path("diagnostics.log")
+    }
+
+    pub fn shared_file_manager_trash_dir(&self) -> PathBuf {
+        self.path(".fm_trash")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimePathLayout {
+    root: PathBuf,
+}
+
+impl RuntimePathLayout {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn path(&self, relative: impl AsRef<Path>) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    pub fn ipc_socket_file(&self) -> PathBuf {
+        self.path("shell.sock")
+    }
+
+    pub fn pty_key_debug_log_file(&self) -> PathBuf {
+        self.path("robcos_keys.log")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEnvironment {
     product_dir: String,
     install_profile: InstallProfile,
@@ -52,6 +158,14 @@ impl RuntimeEnvironment {
 
     pub fn state_root(&self) -> &Path {
         &self.state_root
+    }
+
+    pub fn state_layout(&self) -> StatePathLayout {
+        StatePathLayout::new(self.state_root.clone())
+    }
+
+    pub fn runtime_layout(&self) -> RuntimePathLayout {
+        RuntimePathLayout::new(self.paths.runtime_root().to_path_buf())
     }
 
     pub fn state_path(&self, relative: impl AsRef<Path>) -> PathBuf {
@@ -102,7 +216,10 @@ fn first_non_empty_env(names: &[&str]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{InstallProfile, PlatformPathEnvironment, PlatformPaths, RuntimeEnvironment};
+    use super::{
+        InstallProfile, PlatformPathEnvironment, PlatformPaths, RuntimeEnvironment,
+        RuntimePathLayout, StatePathLayout,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -147,6 +264,43 @@ mod tests {
         assert_eq!(
             runtime.paths().user_root(),
             PathBuf::from("/home/alice/.local/share/nucleon/user")
+        );
+    }
+
+    #[test]
+    fn state_path_layout_builds_named_state_paths() {
+        let layout = StatePathLayout::new(PathBuf::from("/state-root"));
+
+        assert_eq!(layout.users_dir(), PathBuf::from("/state-root/users"));
+        assert_eq!(
+            layout.user_dir("alice"),
+            PathBuf::from("/state-root/users/alice")
+        );
+        assert_eq!(
+            layout.desktop_dir_for_username("alice"),
+            PathBuf::from("/state-root/users/alice/Desktop")
+        );
+        assert_eq!(
+            layout.native_shell_snapshot_file("alice"),
+            PathBuf::from("/state-root/users/alice/native_shell.json")
+        );
+        assert_eq!(
+            layout.installed_package_descriptions_file(),
+            PathBuf::from("/state-root/installed_package_descriptions.json")
+        );
+    }
+
+    #[test]
+    fn runtime_path_layout_builds_named_runtime_paths() {
+        let layout = RuntimePathLayout::new(PathBuf::from("/runtime-root"));
+
+        assert_eq!(
+            layout.ipc_socket_file(),
+            PathBuf::from("/runtime-root/shell.sock")
+        );
+        assert_eq!(
+            layout.pty_key_debug_log_file(),
+            PathBuf::from("/runtime-root/robcos_keys.log")
         );
     }
 }

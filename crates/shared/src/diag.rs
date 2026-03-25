@@ -1,3 +1,4 @@
+use crate::config::diagnostics_log_file;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -5,10 +6,7 @@ fn diagnostics_path() -> PathBuf {
     if let Ok(path) = std::env::var("ROBCOS_DIAG_PATH") {
         return PathBuf::from(path);
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/share/robcos/diagnostics.log");
-    }
-    std::env::temp_dir().join("robcos_diagnostics.log")
+    diagnostics_log_file()
 }
 
 fn ensure_parent(path: &PathBuf) {

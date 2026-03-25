@@ -6,8 +6,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use robcos_shared::config::{
-    installed_package_descriptions_file, load_apps, load_games, load_networks, save_apps,
-    save_games, save_networks,
+    load_apps, load_games, load_installed_package_descriptions, load_networks, save_apps,
+    save_games, save_installed_package_descriptions, save_networks,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1129,21 +1129,12 @@ impl DesktopInstallerState {
     }
 }
 
-fn installed_description_cache_path() -> PathBuf {
-    installed_package_descriptions_file()
-}
-
 fn load_installed_description_cache() -> HashMap<String, HashMap<String, String>> {
-    std::fs::read_to_string(installed_description_cache_path())
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+    load_installed_package_descriptions()
 }
 
 fn save_installed_description_cache(cache: &HashMap<String, HashMap<String, String>>) {
-    if let Ok(raw) = serde_json::to_string_pretty(cache) {
-        let _ = std::fs::write(installed_description_cache_path(), raw);
-    }
+    save_installed_package_descriptions(cache);
 }
 
 pub fn build_desktop_installer_event(

@@ -1,4 +1,5 @@
 use super::super::background::BackgroundResult;
+use super::super::data::desktop_surface_dir;
 use super::super::desktop_settings_service::{
     load_settings_snapshot, persist_settings_draft, reload_settings_snapshot,
 };
@@ -26,7 +27,7 @@ impl RobcoNativeApp {
     pub(super) fn invalidate_desktop_surface_cache(&mut self) {
         self.desktop_surface_entries_cache = None;
         self.invalidate_desktop_icon_layout_cache();
-        if self.file_manager.cwd == crate::config::desktop_dir() {
+        if self.file_manager.cwd == desktop_surface_dir() {
             self.file_manager.refresh_contents();
         }
     }

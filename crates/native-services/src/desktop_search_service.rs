@@ -1,21 +1,11 @@
 use super::desktop_documents_service::document_category_entries;
 use super::desktop_launcher_service::{all_game_menu_names, catalog_names, ProgramCatalog};
+use crate::config::{documents_root_dir, home_dir_fallback, word_processor_documents_dir};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-fn home_dir_fallback() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-}
-
-fn documents_dir() -> PathBuf {
-    dirs::document_dir().unwrap_or_else(home_dir_fallback)
-}
-
 fn word_processor_dir(username: &str) -> PathBuf {
-    let dir = documents_dir().join("ROBCO Word Processor").join(username);
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    word_processor_documents_dir(username)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,7 +264,7 @@ fn gather_spotlight_results_with_names(
     }
 
     if tab == 0 || tab == 3 {
-        let dirs_to_search = [home_dir_fallback(), documents_dir()];
+        let dirs_to_search = [home_dir_fallback(), documents_root_dir()];
         let mut seen = HashSet::new();
         for dir in &dirs_to_search {
             if !dir.is_dir() {

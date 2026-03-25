@@ -1,3 +1,4 @@
+use super::data::home_dir_fallback;
 use super::menu::TerminalScreen;
 use super::retro_ui::{
     current_palette, RetroPalette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
@@ -1720,10 +1721,9 @@ fn try_load_retro_font_bytes() -> Option<Vec<u8>> {
         std::path::PathBuf::from("Sysfixed.ttf"),
         std::path::PathBuf::from("sysfixed.ttf"),
     ];
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
-        candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
-    }
+    let home = home_dir_fallback();
+    candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
+    candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
     candidates.push(std::path::PathBuf::from("/Library/Fonts/Sysfixed.ttf"));
     candidates.push(std::path::PathBuf::from("/Library/Fonts/sysfixed.ttf"));
     candidates.push(std::path::PathBuf::from("/System/Library/Fonts/Monaco.ttf"));

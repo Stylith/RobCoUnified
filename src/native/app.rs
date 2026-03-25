@@ -421,10 +421,9 @@ fn try_load_font_bytes() -> Option<Vec<u8>> {
         PathBuf::from("Sysfixed.ttf"),
         PathBuf::from("sysfixed.ttf"),
     ];
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
-        candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
-    }
+    let home = home_dir_fallback();
+    candidates.push(home.join("Library/Fonts/Sysfixed.ttf"));
+    candidates.push(home.join("Library/Fonts/sysfixed.ttf"));
     candidates.push(PathBuf::from("/Library/Fonts/Sysfixed.ttf"));
     candidates.push(PathBuf::from("/Library/Fonts/sysfixed.ttf"));
     candidates.push(PathBuf::from("/System/Library/Fonts/Monaco.ttf"));
@@ -2593,10 +2592,9 @@ mod tests {
         assert_eq!(app.terminal_nav.screen, TerminalScreen::PtyApp);
         assert!(!app.desktop_mode_open);
         assert!(!app.desktop_component_pty_is_open());
-        assert!(
-            app.desktop_pty_state(WindowInstanceId::primary(DesktopWindow::PtyApp))
-                .is_none()
-        );
+        assert!(app
+            .desktop_pty_state(WindowInstanceId::primary(DesktopWindow::PtyApp))
+            .is_none());
 
         app.terminate_all_native_pty_children();
     }

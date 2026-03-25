@@ -5,7 +5,7 @@
 //! Standalone apps connect, send a single [`IpcMessage`], and disconnect.
 //! The shell polls received messages each frame via an mpsc channel.
 
-use crate::config::runtime_root_dir;
+use crate::config::ipc_socket_file;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -55,7 +55,7 @@ impl Drop for IpcReceiver {
 
 /// Returns the socket path under the runtime root.
 pub fn socket_path() -> PathBuf {
-    runtime_root_dir().join("shell.sock")
+    ipc_socket_file()
 }
 
 /// Start the IPC listener on a background thread. Returns a receiver

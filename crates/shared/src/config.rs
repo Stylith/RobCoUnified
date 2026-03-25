@@ -25,7 +25,7 @@ pub fn platform_paths() -> ResolvedPlatformPaths {
 }
 
 pub fn state_root_dir() -> PathBuf {
-    let dir = runtime_environment().state_root().to_path_buf();
+    let dir = runtime_environment().state_layout().root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -65,8 +65,12 @@ pub fn bundled_bin_dir() -> PathBuf {
         .unwrap_or_else(|| core_root_dir().join("bin"))
 }
 
+pub fn bundled_binary_path(binary_name: impl AsRef<Path>) -> PathBuf {
+    bundled_bin_dir().join(binary_name)
+}
+
 pub fn runtime_root_dir() -> PathBuf {
-    let dir = platform_paths().runtime_root().to_path_buf();
+    let dir = runtime_environment().runtime_layout().root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -253,6 +257,7 @@ fn merge_path_if_missing(from: &Path, to: &Path) {
     }
 }
 
+#[cfg(test)]
 fn compat_state_path_with_roots(
     relative: &Path,
     target_root: &Path,
@@ -266,9 +271,18 @@ fn compat_state_path_with_roots(
     target
 }
 
+fn compat_state_path_for_target(relative: &Path, target: PathBuf) -> PathBuf {
+    let legacy = base_dir().join(relative);
+    if target != legacy {
+        merge_path_if_missing(&legacy, &target);
+    }
+    target
+}
+
 fn compat_state_path(relative: impl AsRef<Path>) -> PathBuf {
     let relative = relative.as_ref();
-    compat_state_path_with_roots(relative, &state_root_dir(), &base_dir())
+    let target = runtime_environment().state_layout().path(relative);
+    compat_state_path_for_target(relative, target)
 }
 
 fn compat_state_dir(relative: impl AsRef<Path>) -> PathBuf {
@@ -277,18 +291,65 @@ fn compat_state_dir(relative: impl AsRef<Path>) -> PathBuf {
     dir
 }
 
+pub fn home_dir_fallback() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+pub fn documents_root_dir() -> PathBuf {
+    dirs::document_dir().unwrap_or_else(home_dir_fallback)
+}
+
+fn legacy_diagnostics_path() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("robcos")
+            .join("diagnostics.log");
+    }
+    std::env::temp_dir().join("robcos_diagnostics.log")
+}
+
+fn word_processor_documents_dir_with_roots(
+    username: &str,
+    target_root: &Path,
+    legacy_documents_root: &Path,
+) -> PathBuf {
+    let dir = target_root
+        .join("users")
+        .join(username)
+        .join("documents")
+        .join("word-processor");
+    let legacy_dir = legacy_documents_root
+        .join("ROBCO Word Processor")
+        .join(username);
+    if dir != legacy_dir {
+        merge_path_if_missing(&legacy_dir, &dir);
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn users_dir() -> PathBuf {
-    compat_state_dir("users")
+    let dir = compat_state_path_for_target(
+        Path::new("users"),
+        runtime_environment().state_layout().users_dir(),
+    );
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 pub fn user_dir(username: &str) -> PathBuf {
-    let d = users_dir().join(username);
+    let d = runtime_environment().state_layout().user_dir(username);
     let _ = std::fs::create_dir_all(&d);
     d
 }
 
 pub fn desktop_dir_for_username(username: &str) -> PathBuf {
-    let d = user_dir(username).join("Desktop");
+    let d = runtime_environment()
+        .state_layout()
+        .desktop_dir_for_username(username);
     let _ = std::fs::create_dir_all(&d);
     d
 }
@@ -301,8 +362,67 @@ pub fn desktop_dir() -> PathBuf {
     }
 }
 
+pub fn word_processor_documents_dir(username: &str) -> PathBuf {
+    word_processor_documents_dir_with_roots(username, &state_root_dir(), &documents_root_dir())
+}
+
+pub fn journal_entries_dir() -> PathBuf {
+    let dir = compat_state_path_for_target(
+        Path::new("journal_entries"),
+        runtime_environment().state_layout().journal_entries_dir(),
+    );
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn diagnostics_log_file() -> PathBuf {
+    let target = runtime_environment().state_layout().diagnostics_log_file();
+    let legacy = legacy_diagnostics_path();
+    if target != legacy {
+        merge_path_if_missing(&legacy, &target);
+    }
+    target
+}
+
+pub fn pty_key_debug_log_file() -> PathBuf {
+    runtime_environment()
+        .runtime_layout()
+        .pty_key_debug_log_file()
+}
+
+pub fn ipc_socket_file() -> PathBuf {
+    runtime_environment().runtime_layout().ipc_socket_file()
+}
+
+pub fn file_manager_trash_dir() -> PathBuf {
+    if let Some(username) = get_current_user() {
+        let dir = runtime_environment()
+            .state_layout()
+            .file_manager_trash_dir_for_username(&username);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    } else {
+        let dir = compat_state_path_for_target(
+            Path::new(".fm_trash"),
+            runtime_environment()
+                .state_layout()
+                .shared_file_manager_trash_dir(),
+        );
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+}
+
+pub fn native_shell_snapshot_file(username: &str) -> PathBuf {
+    runtime_environment()
+        .state_layout()
+        .native_shell_snapshot_file(username)
+}
+
 fn user_state_file(username: &str, filename: &str) -> PathBuf {
-    user_dir(username).join(filename)
+    runtime_environment()
+        .state_layout()
+        .user_file(username, filename)
 }
 
 fn current_user_state_file(filename: &str) -> PathBuf {
@@ -314,7 +434,9 @@ fn current_user_state_file(filename: &str) -> PathBuf {
 }
 
 fn default_apps_prompt_marker(username: &str) -> PathBuf {
-    user_state_file(username, ".default_apps_prompt")
+    runtime_environment()
+        .state_layout()
+        .default_apps_prompt_marker(username)
 }
 
 pub fn mark_default_apps_prompt_pending(username: &str) {
@@ -331,19 +453,47 @@ pub fn take_default_apps_prompt_pending(username: &str) -> bool {
 }
 
 pub fn global_settings_file() -> PathBuf {
-    compat_state_path("settings.json")
+    compat_state_path_for_target(
+        Path::new("settings.json"),
+        runtime_environment().state_layout().global_settings_file(),
+    )
 }
 pub fn about_file() -> PathBuf {
-    compat_state_path("about.json")
+    compat_state_path_for_target(
+        Path::new("about.json"),
+        runtime_environment().state_layout().about_file(),
+    )
 }
 pub fn session_state_file() -> PathBuf {
-    compat_state_path(".session")
+    compat_state_path_for_target(
+        Path::new(".session"),
+        runtime_environment().state_layout().session_file(),
+    )
 }
 pub fn installed_package_descriptions_file() -> PathBuf {
-    compat_state_path("installed_package_descriptions.json")
+    compat_state_path_for_target(
+        Path::new("installed_package_descriptions.json"),
+        runtime_environment()
+            .state_layout()
+            .installed_package_descriptions_file(),
+    )
 }
+
+pub fn load_installed_package_descriptions<T: for<'de> Deserialize<'de> + Default>() -> T {
+    load_json(&installed_package_descriptions_file())
+}
+
+pub fn save_installed_package_descriptions<T: Serialize>(descriptions: &T) {
+    let _ = save_json(&installed_package_descriptions_file(), descriptions);
+}
+
 pub fn addon_state_overrides_file() -> PathBuf {
-    compat_state_path("addon_state.json")
+    compat_state_path_for_target(
+        Path::new("addon_state.json"),
+        runtime_environment()
+            .state_layout()
+            .addon_state_overrides_file(),
+    )
 }
 
 pub fn load_addon_state_overrides() -> AddonStateOverrides {
@@ -383,6 +533,10 @@ pub fn load_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
 
 pub fn save_json<T: Serialize>(path: &Path, data: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(data)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dirs for {}", path.display()))?;
+    }
     std::fs::write(path, json).with_context(|| format!("writing {}", path.display()))
 }
 
@@ -1685,9 +1839,89 @@ mod tests {
     }
 
     #[test]
+    fn word_processor_documents_dir_lives_under_user_dir() {
+        let dir = word_processor_documents_dir("adi");
+        assert!(dir.ends_with(
+            Path::new("users")
+                .join("adi")
+                .join("documents")
+                .join("word-processor")
+        ));
+    }
+
+    #[test]
+    fn word_processor_documents_dir_with_roots_migrates_legacy_documents_forward() {
+        let temp = TempDirGuard::new("word_processor_documents");
+        let target_root = temp.path.join("target");
+        let legacy_documents_root = temp.path.join("legacy-documents");
+        let legacy_dir = legacy_documents_root
+            .join("ROBCO Word Processor")
+            .join("adi");
+        std::fs::create_dir_all(&legacy_dir).expect("create legacy documents dir");
+        std::fs::write(legacy_dir.join("notes.txt"), "hello").expect("write legacy doc");
+
+        let dir =
+            word_processor_documents_dir_with_roots("adi", &target_root, &legacy_documents_root);
+
+        assert_eq!(
+            dir,
+            target_root
+                .join("users")
+                .join("adi")
+                .join("documents")
+                .join("word-processor")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("notes.txt")).expect("read migrated doc"),
+            "hello"
+        );
+    }
+
+    #[test]
     fn user_settings_file_lives_under_user_dir() {
         let settings = user_settings_file("adi");
         assert!(settings.ends_with(Path::new("users").join("adi").join("settings.json")));
+    }
+
+    #[test]
+    fn native_shell_snapshot_file_lives_under_user_dir() {
+        let snapshot = native_shell_snapshot_file("adi");
+        assert!(snapshot.ends_with(Path::new("users").join("adi").join("native_shell.json")));
+    }
+
+    #[test]
+    fn file_manager_trash_dir_uses_user_root_when_current_user_is_set() {
+        let previous = get_current_user();
+        set_current_user(Some("adi"));
+
+        let trash = file_manager_trash_dir();
+
+        set_current_user(previous.as_deref());
+        assert!(trash.ends_with(Path::new("users").join("adi").join(".fm_trash")));
+    }
+
+    #[test]
+    fn diagnostics_log_file_lives_under_state_root() {
+        let diagnostics = diagnostics_log_file();
+        assert_eq!(diagnostics, state_root_dir().join("diagnostics.log"));
+    }
+
+    #[test]
+    fn pty_key_debug_log_file_lives_under_runtime_root() {
+        let key_log = pty_key_debug_log_file();
+        assert_eq!(key_log, runtime_root_dir().join("robcos_keys.log"));
+    }
+
+    #[test]
+    fn bundled_binary_path_lives_under_bundled_bin_dir() {
+        let binary = bundled_binary_path("robcos-editor");
+        assert_eq!(binary, bundled_bin_dir().join("robcos-editor"));
+    }
+
+    #[test]
+    fn ipc_socket_file_lives_under_runtime_root() {
+        let socket = ipc_socket_file();
+        assert_eq!(socket, runtime_root_dir().join("shell.sock"));
     }
 
     #[test]

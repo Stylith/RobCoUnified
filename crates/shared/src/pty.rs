@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::config::pty_key_debug_log_file;
 use crate::status::render_status_bar;
 use crate::ui::Term;
 
@@ -75,7 +76,7 @@ pub fn clear_all_suspended() {
 fn key_debug_path() -> std::path::PathBuf {
     std::env::var_os("ROBCOS_KEY_DEBUG_PATH")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/robcos_keys.log"))
+        .unwrap_or_else(pty_key_debug_log_file)
 }
 
 fn open_key_debug_file() -> Option<std::fs::File> {

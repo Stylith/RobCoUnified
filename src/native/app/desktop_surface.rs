@@ -1,3 +1,4 @@
+use super::super::data::desktop_surface_dir;
 use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_search_service::NativeStartLeafAction;
 use super::super::desktop_shortcuts_service::{
@@ -20,7 +21,7 @@ use super::{
     AssetCache, ContextMenuAction, DesktopIconLayoutCache, DesktopIconSelection,
     DesktopSurfaceEntriesCache, ShortcutPropertiesState, StartMenuRenameState,
 };
-use crate::config::{desktop_dir, DesktopIconSortMode, DesktopIconStyle, WallpaperSizeMode};
+use crate::config::{DesktopIconSortMode, DesktopIconStyle, WallpaperSizeMode};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, RichText, TextureHandle};
 use robcos_native_settings_app::NativeSettingsPanel;
 use std::collections::HashMap;
@@ -33,7 +34,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn desktop_surface_entries(&mut self) -> Arc<Vec<DesktopSurfaceEntry>> {
-        let dir = desktop_dir();
+        let dir = desktop_surface_dir();
         let modified = std::fs::metadata(&dir)
             .and_then(|meta| meta.modified())
             .ok();
@@ -299,7 +300,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn import_paths_to_desktop(&mut self, paths: Vec<PathBuf>) {
-        let desktop_dir = desktop_dir();
+        let desktop_dir = desktop_surface_dir();
         self.shell_status = match self
             .file_manager_runtime
             .copy_paths_into_dir(paths, &desktop_dir)
@@ -1485,7 +1486,7 @@ impl RobcoNativeApp {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let response = ui.allocate_rect(rect, egui::Sense::click());
-                let desktop_dir = desktop_dir();
+                let desktop_dir = desktop_surface_dir();
                 let file_manager_drop_hover = response
                     .dnd_hover_payload::<NativeFileManagerDragPayload>()
                     .is_some_and(|payload| {

@@ -205,8 +205,7 @@ impl RobcoNativeApp {
         plan: TerminalPtyLaunchPlan,
         desktop_window: bool,
     ) {
-        let spawn_secondary_desktop_pty =
-            desktop_window && self.primary_desktop_pty_open();
+        let spawn_secondary_desktop_pty = desktop_window && self.primary_desktop_pty_open();
         if !spawn_secondary_desktop_pty
             && (plan.replace_existing_pty || self.terminal_pty.is_some())
         {

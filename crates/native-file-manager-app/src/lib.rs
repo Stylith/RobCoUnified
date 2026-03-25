@@ -3,7 +3,8 @@ use robcos_native_services::shared_file_manager_settings::{
     open_with_default_for_extension, open_with_history_for_extension,
 };
 use robcos_shared::config::{
-    base_dir, get_settings, DesktopFileManagerSettings, FileManagerSortMode, FileManagerViewMode,
+    file_manager_trash_dir, get_settings, DesktopFileManagerSettings, FileManagerSortMode,
+    FileManagerViewMode,
 };
 use robcos_shared::default_apps::parse_custom_command_line;
 use robcos_shared::launcher::command_exists;
@@ -1338,9 +1339,7 @@ impl FileManagerEditRuntime {
         if entries.is_empty() {
             return Err(anyhow!("Select a file or folder first."));
         }
-        let trash_dir = base_dir().join(".fm_trash");
-        std::fs::create_dir_all(&trash_dir)
-            .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
+        let trash_dir = file_manager_trash_dir();
         let mut moved = 0usize;
         for entry in entries {
             let name = path_display_name(&entry.path);
@@ -1365,9 +1364,7 @@ impl FileManagerEditRuntime {
         if entries.is_empty() {
             return Err(anyhow!("Select a file or folder first."));
         }
-        let trash_dir = base_dir().join(".fm_trash");
-        std::fs::create_dir_all(&trash_dir)
-            .map_err(|e| anyhow!("Failed creating trash dir {}: {e}", trash_dir.display()))?;
+        let trash_dir = file_manager_trash_dir();
         let mut moved = 0usize;
         for entry in entries {
             let name = path_display_name(&entry.path);

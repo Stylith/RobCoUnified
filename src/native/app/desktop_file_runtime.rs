@@ -1,3 +1,4 @@
+use super::super::data::{desktop_surface_dir, path_targets_desktop_surface};
 use super::super::desktop_surface_service::DesktopSurfaceEntry;
 use super::super::file_manager::{FileEntryRow, FileManagerCommand};
 use super::super::file_manager_app::{
@@ -32,8 +33,7 @@ impl RobcoNativeApp {
             Ok(message) => message,
             Err(err) => format!("File action failed: {err}"),
         };
-        let desktop_dir = crate::config::desktop_dir();
-        if target_dir == desktop_dir || target_dir.starts_with(&desktop_dir) {
+        if path_targets_desktop_surface(&target_dir) {
             self.invalidate_desktop_surface_cache();
         }
     }
@@ -47,7 +47,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn create_desktop_folder(&mut self) {
-        let desktop_dir = crate::config::desktop_dir();
+        let desktop_dir = desktop_surface_dir();
         self.shell_status = match self
             .file_manager_runtime
             .create_folder_in_dir(&desktop_dir, "New Folder")
@@ -66,7 +66,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn paste_to_desktop(&mut self) {
-        let desktop_dir = crate::config::desktop_dir();
+        let desktop_dir = desktop_surface_dir();
         self.shell_status = match self
             .file_manager_runtime
             .paste_clipboard_into_dir(&desktop_dir)

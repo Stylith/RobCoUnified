@@ -1,5 +1,6 @@
 use crate::config::{
-    bundled_bin_dir, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
+    bundled_binary_path as shared_bundled_binary_path, load_apps, load_games, load_networks,
+    save_apps, save_games, save_networks,
 };
 use crate::default_apps::parse_custom_command_line;
 use crate::launcher::{command_exists, json_to_cmd};
@@ -112,7 +113,7 @@ fn sibling_binary_path(binary_stem: &str) -> Option<PathBuf> {
 }
 
 fn bundled_binary_path(binary_stem: &str) -> Option<PathBuf> {
-    let candidate = bundled_bin_dir().join(platform_binary_file_name(binary_stem));
+    let candidate = shared_bundled_binary_path(platform_binary_file_name(binary_stem));
     candidate.is_file().then_some(candidate)
 }
 

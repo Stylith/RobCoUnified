@@ -767,6 +767,15 @@ Current Phase 2 progress:
   - installed package descriptions
   - users
   - journal entries
+- hardcoded word-processor document storage now has a shared compatibility-aware helper rooted under per-user state paths, with lazy migration from the legacy OS Documents location
+- native shell and native-services callers no longer duplicate the `ROBCO Word Processor/<user>` path layout by hand
+- native shell snapshot storage now has a shared authoritative helper instead of per-caller `user_dir(...).join("native_shell.json")` logic
+- file-manager trash storage now has a shared authoritative helper instead of callers building `.fm_trash` paths ad hoc
+- diagnostics and PTY key-debug logs now resolve through shared path helpers instead of hardcoded `~/.local/share/...` and `/tmp/...` fallbacks in product code
+- home/documents fallback resolution used by native shell and native-services now comes from shared config instead of duplicated local helpers
+- installer package-description cache and native IPC socket paths now resolve through named shared helpers instead of product-local path joins
+- desktop-surface path checks and bundled standalone binary paths now go through named helpers instead of shell code joining/inspecting compatibility roots directly
+- `RuntimeEnvironment` now exposes named state/runtime path layouts, and the shared config wrappers are starting to collapse onto that layout instead of each path being hand-assembled independently
 - bundled binary resolution now prefers configured bin roots before sibling/dev fallbacks
 
 Not done yet:

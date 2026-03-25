@@ -67,7 +67,7 @@ fn resolve_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
 
 fn bundled_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
     let candidate =
-        crate::config::bundled_bin_dir().join(platform_binary_file_name(app.binary_stem()));
+        crate::config::bundled_binary_path(platform_binary_file_name(app.binary_stem()));
     candidate.is_file().then_some(candidate)
 }
 

@@ -1,9 +1,12 @@
 use super::desktop_user_service::{sorted_usernames, user_exists};
 use super::shared_types::FlashAction;
-use crate::config::{load_json, save_json, set_current_user, user_dir, OpenMode};
+use crate::config::{
+    load_json, native_shell_snapshot_file, save_json, set_current_user,
+    word_processor_documents_dir, OpenMode,
+};
 use crate::core::auth::{
     ensure_default_admin, hash_password, load_users, read_session, write_session, AuthMethod,
-    UserRecord,
+    UserRecord, UsersDb,
 };
 use crate::session;
 use serde::{Deserialize, Serialize};
@@ -38,28 +41,17 @@ fn bind_login_session(username: &str) {
     write_session(username);
 }
 
-fn home_dir_fallback() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-}
-
-fn documents_dir() -> PathBuf {
-    dirs::document_dir().unwrap_or_else(home_dir_fallback)
-}
-
 fn word_processor_dir(username: &str) -> PathBuf {
-    let dir = documents_dir().join("ROBCO Word Processor").join(username);
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    word_processor_documents_dir(username)
 }
 
 fn write_shell_snapshot<T: Serialize>(username: &str, value: &T) {
-    let path = user_dir(username).join("native_shell.json");
+    let path = native_shell_snapshot_file(username);
     let _ = save_json(&path, value);
 }
 
 fn read_shell_snapshot<T: for<'de> Deserialize<'de> + Default>(username: &str) -> T {
-    let path = user_dir(username).join("native_shell.json");
+    let path = native_shell_snapshot_file(username);
     load_json(&path)
 }
 
@@ -177,11 +169,18 @@ pub fn bind_login_identity(username: &str) {
     bind_login_session(username);
 }
 
-pub fn login_selection_auth_method(username: &str) -> Result<AuthMethod, String> {
-    load_users()
+fn login_selection_auth_method_from_users(
+    users: &UsersDb,
+    username: &str,
+) -> Result<AuthMethod, String> {
+    users
         .get(username)
         .map(|record| record.auth_method.clone())
         .ok_or_else(|| "Unknown user.".to_string())
+}
+
+pub fn login_selection_auth_method(username: &str) -> Result<AuthMethod, String> {
+    login_selection_auth_method_from_users(&load_users(), username)
 }
 
 pub fn user_record(username: &str) -> Option<UserRecord> {
@@ -290,7 +289,9 @@ pub fn apply_session_switch(
     }
 }
 
-pub fn close_active_session() -> Result<Option<NativeClosedSessionOutcome>, String> {
+fn close_active_session_with_users(
+    users: &UsersDb,
+) -> Result<Option<NativeClosedSessionOutcome>, String> {
     let count = session::session_count();
     if count == 0 {
         return Ok(None);
@@ -303,8 +304,20 @@ pub fn close_active_session() -> Result<Option<NativeClosedSessionOutcome>, Stri
     };
     Ok(Some(NativeClosedSessionOutcome {
         removed_idx,
-        active_identity: active_session_identity()?,
+        active_identity: active_session_identity_from_users(users)?,
     }))
+}
+
+pub fn close_active_session() -> Result<Option<NativeClosedSessionOutcome>, String> {
+    let users = load_users();
+    let outcome = close_active_session_with_users(&users)?;
+    if let Some(identity) = outcome
+        .as_ref()
+        .and_then(|outcome| outcome.active_identity.as_ref())
+    {
+        bind_login_session(&identity.username);
+    }
+    Ok(outcome)
 }
 
 pub fn clear_all_sessions() {
@@ -342,29 +355,48 @@ pub fn logout_flash_plan(already_logging_out: bool) -> Option<NativeSessionFlash
     })
 }
 
-pub fn session_identity_for_username(username: &str) -> Result<NativeSessionIdentity, String> {
-    let users = load_users();
+fn resolve_session_identity_from_users(
+    users: &UsersDb,
+    username: &str,
+) -> Result<NativeSessionIdentity, String> {
     let Some(user) = users.get(username) else {
         return Err(format!("Unknown user '{username}'."));
     };
-    bind_login_session(username);
     Ok(NativeSessionIdentity {
         username: username.to_string(),
         is_admin: user.is_admin,
     })
 }
 
-pub fn active_session_identity() -> Result<Option<NativeSessionIdentity>, String> {
+fn active_session_identity_from_users(
+    users: &UsersDb,
+) -> Result<Option<NativeSessionIdentity>, String> {
     let Some(username) = session::active_username() else {
         return Ok(None);
     };
-    session_identity_for_username(&username).map(Some)
+    resolve_session_identity_from_users(users, &username).map(Some)
+}
+
+pub fn session_identity_for_username(username: &str) -> Result<NativeSessionIdentity, String> {
+    let users = load_users();
+    let identity = resolve_session_identity_from_users(&users, username)?;
+    bind_login_session(username);
+    Ok(identity)
+}
+
+pub fn active_session_identity() -> Result<Option<NativeSessionIdentity>, String> {
+    let users = load_users();
+    let identity = active_session_identity_from_users(&users)?;
+    if let Some(identity) = &identity {
+        bind_login_session(&identity.username);
+    }
+    Ok(identity)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::auth::{save_users, UserRecord};
+    use crate::core::auth::UserRecord;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -375,28 +407,9 @@ mod tests {
             .expect("desktop session service test lock")
     }
 
-    struct UsersRestore {
-        backup: HashMap<String, UserRecord>,
-    }
-
-    impl UsersRestore {
-        fn capture() -> Self {
-            Self {
-                backup: load_users(),
-            }
-        }
-    }
-
-    impl Drop for UsersRestore {
-        fn drop(&mut self) {
-            save_users(&self.backup);
-        }
-    }
-
     #[test]
     fn login_selection_auth_method_reads_saved_method() {
         let _guard = session_test_guard();
-        let _restore = UsersRestore::capture();
         let mut users = HashMap::new();
         users.insert(
             "alice".to_string(),
@@ -406,9 +419,9 @@ mod tests {
                 auth_method: AuthMethod::HackingMinigame,
             },
         );
-        save_users(&users);
 
-        let auth_method = login_selection_auth_method("alice").expect("auth method");
+        let auth_method =
+            login_selection_auth_method_from_users(&users, "alice").expect("auth method");
         assert_eq!(auth_method, AuthMethod::HackingMinigame);
     }
 
@@ -445,7 +458,6 @@ mod tests {
     #[test]
     fn close_active_session_returns_previous_identity() {
         let _guard = session_test_guard();
-        let _restore = UsersRestore::capture();
         let mut users = HashMap::new();
         users.insert(
             "alice".to_string(),
@@ -463,14 +475,13 @@ mod tests {
                 auth_method: AuthMethod::NoPassword,
             },
         );
-        save_users(&users);
 
         session::clear_sessions();
         session::push_session("alice");
         session::push_session("bob");
         session::set_active(1);
 
-        let outcome = close_active_session()
+        let outcome = close_active_session_with_users(&users)
             .expect("close session result")
             .expect("closed session");
         assert_eq!(outcome.removed_idx, 1);

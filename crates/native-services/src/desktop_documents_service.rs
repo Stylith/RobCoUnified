@@ -1,4 +1,4 @@
-use crate::config::{load_categories, save_categories};
+use crate::config::{home_dir_fallback, load_categories, save_categories};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -10,9 +10,7 @@ fn sorted_keys(data: &serde_json::Map<String, Value>) -> Vec<String> {
 
 fn expand_tilde(raw: &str) -> PathBuf {
     if let Some(rest) = raw.strip_prefix('~') {
-        if let Some(home) = dirs::home_dir() {
-            return PathBuf::from(format!("{}{}", home.display(), rest));
-        }
+        return PathBuf::from(format!("{}{}", home_dir_fallback().display(), rest));
     }
     PathBuf::from(raw)
 }
@@ -90,54 +88,22 @@ pub fn delete_document_category(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{load_categories, save_categories};
     use serde_json::{Map, Value};
-    use std::sync::{Mutex, OnceLock};
-
-    fn documents_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("desktop documents service test lock")
-    }
-
-    struct CategoriesRestore {
-        backup: Map<String, Value>,
-    }
-
-    impl CategoriesRestore {
-        fn capture() -> Self {
-            Self {
-                backup: load_categories(),
-            }
-        }
-    }
-
-    impl Drop for CategoriesRestore {
-        fn drop(&mut self) {
-            save_categories(&self.backup);
-        }
-    }
 
     #[test]
     fn document_category_names_are_sorted_case_insensitively() {
-        let _guard = documents_test_guard();
-        let _restore = CategoriesRestore::capture();
         let mut categories = Map::new();
         categories.insert("zeta".to_string(), Value::String("/tmp/zeta".to_string()));
         categories.insert("Alpha".to_string(), Value::String("/tmp/alpha".to_string()));
-        save_categories(&categories);
 
         assert_eq!(
-            document_category_names(),
+            sorted_keys(&categories),
             vec!["Alpha".to_string(), "zeta".to_string()]
         );
     }
 
     #[test]
     fn rename_document_category_rejects_duplicates() {
-        let _guard = documents_test_guard();
-        let _restore = CategoriesRestore::capture();
         let mut categories = Map::new();
         categories.insert("Docs".to_string(), Value::String("/tmp/docs".to_string()));
         categories.insert("Logs".to_string(), Value::String("/tmp/logs".to_string()));

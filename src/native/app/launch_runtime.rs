@@ -20,11 +20,7 @@ use robcos_native_programs_app::{resolve_desktop_games_request, DesktopProgramRe
 use std::path::{Path, PathBuf};
 
 impl RobcoNativeApp {
-    pub(super) fn launch_shell_command_in_desktop_surface(
-        &mut self,
-        title: &str,
-        argv: &[String],
-    ) {
+    pub(super) fn launch_shell_command_in_desktop_surface(&mut self, title: &str, argv: &[String]) {
         self.open_desktop_pty(title, argv);
     }
 
