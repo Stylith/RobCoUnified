@@ -98,6 +98,7 @@ pub enum InstallerView {
     PackageManagerSelect,
     RuntimeTools,
     AddonInventory,
+    AddonActions { addon_id: String },
     RuntimeToolActions { tool: RuntimeTool },
     SearchResults,
     Installed,
@@ -1458,6 +1459,10 @@ impl TerminalInstallerState {
                 self.view = InstallerView::Root;
                 false
             }
+            InstallerView::AddonActions { .. } => {
+                self.view = InstallerView::AddonInventory;
+                false
+            }
             InstallerView::RuntimeToolActions { .. } => {
                 self.view = InstallerView::RuntimeTools;
                 false
@@ -1735,6 +1740,19 @@ mod tests {
 
         assert!(!state.back());
         assert!(matches!(state.view, InstallerView::Root));
+    }
+
+    #[test]
+    fn terminal_back_from_addon_actions_returns_to_inventory() {
+        let mut state = TerminalInstallerState {
+            view: InstallerView::AddonActions {
+                addon_id: "tools.nuke-codes".to_string(),
+            },
+            ..TerminalInstallerState::default()
+        };
+
+        assert!(!state.back());
+        assert!(matches!(state.view, InstallerView::AddonInventory));
     }
 
     #[test]

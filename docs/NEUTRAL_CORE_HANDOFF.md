@@ -498,6 +498,36 @@ Additional addon-policy adoption slice:
   - disabled by addon state
 - runtime routing still stays on the static first-party runtime table; this slice only changed policy/availability resolution, not how actual runtime routes are implemented
 
+Additional user-addon removal slice:
+
+- addon lifecycle now includes one narrow removal path: discovered user-scoped addon manifests can be removed through native addon-management helpers
+- removal is intentionally bounded:
+  - user-scoped discovered manifests only
+  - bundled addons are not removable
+  - system-scoped addons are not removable in this slice
+  - runtime loading remains static
+- removing a user-scoped addon now:
+  - deletes its discovered manifest file
+  - removes now-empty parent addon directories under the user addons root
+  - clears any persisted enable/disable override for that addon id
+- terminal Program Installer now opens an addon action screen from the Installed Addons inventory instead of toggling state directly from the list row
+- desktop Program Installer now exposes inline addon actions:
+  - enable/disable for optional addons
+  - remove for removable user-scoped discovered addons
+  - required marker for essential addons
+- this keeps desktop and terminal aligned on the same lifecycle seam without jumping to packaging or dynamic loading yet
+
+Additional user-path helper cleanup slice:
+
+- shared config now centralizes user-scoped settings/catalog paths behind explicit helpers instead of scattering raw `user_dir(...).join(...)` calls
+- new/cleaned helper usage now covers:
+  - current user catalog files (`apps.json`, `games.json`, `networks.json`, `documents.json`)
+  - current settings file lookup
+  - per-user settings file lookup
+  - default-apps prompt marker path
+- native runtime settings-sync code now uses the shared `current_settings_file()` helper instead of rebuilding the per-user settings path locally
+- this slice intentionally does not change the directory layout yet; it reduces raw path joins first so later path-authority migration has fewer call sites to update
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

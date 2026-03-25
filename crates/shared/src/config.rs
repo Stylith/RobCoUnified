@@ -301,8 +301,20 @@ pub fn desktop_dir() -> PathBuf {
     }
 }
 
+fn user_state_file(username: &str, filename: &str) -> PathBuf {
+    user_dir(username).join(filename)
+}
+
+fn current_user_state_file(filename: &str) -> PathBuf {
+    if let Some(username) = get_current_user() {
+        user_state_file(&username, filename)
+    } else {
+        compat_state_path(filename)
+    }
+}
+
 fn default_apps_prompt_marker(username: &str) -> PathBuf {
-    user_dir(username).join(".default_apps_prompt")
+    user_state_file(username, ".default_apps_prompt")
 }
 
 pub fn mark_default_apps_prompt_pending(username: &str) {
@@ -376,40 +388,44 @@ pub fn save_json<T: Serialize>(path: &Path, data: &T) -> Result<()> {
 
 // ── User-aware file helpers ───────────────────────────────────────────────────
 
-fn user_file(filename: &str) -> PathBuf {
-    if let Some(u) = get_current_user() {
-        user_dir(&u).join(filename)
-    } else {
-        compat_state_path(filename)
-    }
+fn current_user_catalog_file(filename: &str) -> PathBuf {
+    current_user_state_file(filename)
+}
+
+pub fn user_settings_file(username: &str) -> PathBuf {
+    user_state_file(username, "settings.json")
+}
+
+pub fn current_settings_file() -> PathBuf {
+    current_user_state_file("settings.json")
 }
 
 pub fn load_apps() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&user_file("apps.json"))
+    load_json(&current_user_catalog_file("apps.json"))
 }
 pub fn save_apps(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&user_file("apps.json"), d);
+    let _ = save_json(&current_user_catalog_file("apps.json"), d);
 }
 
 pub fn load_games() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&user_file("games.json"))
+    load_json(&current_user_catalog_file("games.json"))
 }
 pub fn save_games(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&user_file("games.json"), d);
+    let _ = save_json(&current_user_catalog_file("games.json"), d);
 }
 
 pub fn load_networks() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&user_file("networks.json"))
+    load_json(&current_user_catalog_file("networks.json"))
 }
 pub fn save_networks(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&user_file("networks.json"), d);
+    let _ = save_json(&current_user_catalog_file("networks.json"), d);
 }
 
 pub fn load_categories() -> serde_json::Map<String, serde_json::Value> {
-    load_json(&user_file("documents.json"))
+    load_json(&current_user_catalog_file("documents.json"))
 }
 pub fn save_categories(d: &serde_json::Map<String, serde_json::Value>) {
-    let _ = save_json(&user_file("documents.json"), d);
+    let _ = save_json(&current_user_catalog_file("documents.json"), d);
 }
 
 pub fn load_about() -> AboutConfig {
@@ -418,7 +434,7 @@ pub fn load_about() -> AboutConfig {
 
 pub fn load_settings() -> Settings {
     if let Some(u) = get_current_user() {
-        let f = user_dir(&u).join("settings.json");
+        let f = user_settings_file(&u);
         if f.exists() {
             let mut s: Settings = load_json(&f);
             apply_legacy_settings_migrations(&mut s);
@@ -431,7 +447,7 @@ pub fn load_settings() -> Settings {
 }
 pub fn save_settings(d: &Settings) {
     if let Some(u) = get_current_user() {
-        let _ = save_json(&user_dir(&u).join("settings.json"), d);
+        let _ = save_json(&user_settings_file(&u), d);
     } else {
         let _ = save_json(&global_settings_file(), d);
     }
@@ -1666,6 +1682,18 @@ mod tests {
     fn desktop_dir_for_username_lives_under_user_dir() {
         let desktop = desktop_dir_for_username("adi");
         assert!(desktop.ends_with(Path::new("users").join("adi").join("Desktop")));
+    }
+
+    #[test]
+    fn user_settings_file_lives_under_user_dir() {
+        let settings = user_settings_file("adi");
+        assert!(settings.ends_with(Path::new("users").join("adi").join("settings.json")));
+    }
+
+    #[test]
+    fn current_settings_file_falls_back_to_global_when_no_user() {
+        set_current_user(None);
+        assert_eq!(current_settings_file(), global_settings_file());
     }
 
     #[test]

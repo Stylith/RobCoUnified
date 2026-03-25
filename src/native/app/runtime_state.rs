@@ -9,8 +9,7 @@ use super::super::desktop_user_service::{sorted_user_records, sorted_usernames};
 use super::super::settings_standalone::standalone_settings_panel_from_arg;
 use super::RobcoNativeApp;
 use crate::config::{
-    get_current_user, global_settings_file, user_dir, ConnectionKind, NativeStartupWindowMode,
-    SavedConnection, Settings,
+    current_settings_file, ConnectionKind, NativeStartupWindowMode, SavedConnection, Settings,
 };
 use crate::core::auth::UserRecord;
 use eframe::egui::{self, Context};
@@ -67,11 +66,7 @@ impl RobcoNativeApp {
     }
 
     fn current_settings_file_path() -> PathBuf {
-        if let Some(username) = get_current_user() {
-            user_dir(&username).join("settings.json")
-        } else {
-            global_settings_file()
-        }
+        current_settings_file()
     }
 
     pub(super) fn current_settings_file_mtime() -> Option<SystemTime> {

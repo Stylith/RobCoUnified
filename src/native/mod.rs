@@ -49,7 +49,7 @@ pub use addons::{
     addon_state_overrides, discovered_addon_manifest_catalog, effective_addon_enabled,
     first_party_addon_manifests, first_party_addon_registry, installed_addon_inventory,
     installed_addon_inventory_sections, installed_addon_manifest_registry,
-    installed_enabled_addon_manifest_registry, set_addon_enabled_override,
+    installed_enabled_addon_manifest_registry, remove_installed_addon, set_addon_enabled_override,
     InstalledAddonInventorySections, InstalledAddonRecord,
 };
 pub(crate) use addons::{

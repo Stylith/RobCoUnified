@@ -1,8 +1,8 @@
 use super::menu::draw_terminal_menu_screen;
 use crate::config::get_current_user;
 use crate::native::{
-    installed_addon_inventory_sections, set_addon_enabled_override,
-    InstalledAddonInventorySections, InstalledAddonRecord,
+    installed_addon_inventory, installed_addon_inventory_sections, remove_installed_addon,
+    set_addon_enabled_override, InstalledAddonInventorySections, InstalledAddonRecord,
 };
 pub use robcos_native_installer_app::{
     add_package_to_menu, apply_filter, apply_search_query, available_runtime_tools,
@@ -124,6 +124,22 @@ pub fn draw_installer_screen(
         InstallerView::AddonInventory => draw_addon_inventory(
             ctx,
             state,
+            shell_status,
+            cols,
+            rows,
+            header_start_row,
+            separator_top_row,
+            title_row,
+            separator_bottom_row,
+            subtitle_row,
+            menu_start_row,
+            status_row,
+            content_col,
+        ),
+        InstallerView::AddonActions { addon_id } => draw_addon_actions(
+            ctx,
+            state,
+            &addon_id,
             shell_status,
             cols,
             rows,
@@ -486,20 +502,19 @@ fn draw_addon_inventory(
 
     match activated {
         Some(idx) => match row_actions.get(idx) {
-            Some(AddonRow::Essential(_)) => {
-                InstallerEvent::Status("Essential addons are always enabled.".to_string())
+            Some(AddonRow::Essential(idx)) => {
+                state.action_idx = 0;
+                state.view = InstallerView::AddonActions {
+                    addon_id: sections.essential[*idx].manifest.id.to_string(),
+                };
+                InstallerEvent::None
             }
             Some(AddonRow::Optional(idx)) => {
-                let record = &sections.optional[*idx];
-                let next_enabled = !record.effective_enabled;
-                match set_addon_enabled_override(record.manifest.id.clone(), Some(next_enabled)) {
-                    Ok(()) => InstallerEvent::Status(format!(
-                        "{} {}.",
-                        record.manifest.display_name,
-                        if next_enabled { "enabled" } else { "disabled" }
-                    )),
-                    Err(err) => InstallerEvent::Status(err),
-                }
+                state.action_idx = 0;
+                state.view = InstallerView::AddonActions {
+                    addon_id: sections.optional[*idx].manifest.id.to_string(),
+                };
+                InstallerEvent::None
             }
             Some(AddonRow::Prev) => {
                 state.addons_page = state.addons_page.saturating_sub(1);
@@ -513,6 +528,111 @@ fn draw_addon_inventory(
             }
             Some(AddonRow::Back) => {
                 state.view = InstallerView::Root;
+                InstallerEvent::None
+            }
+            _ => InstallerEvent::None,
+        },
+        None => InstallerEvent::None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_addon_actions(
+    ctx: &eframe::egui::Context,
+    state: &mut TerminalInstallerState,
+    addon_id: &str,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    content_col: usize,
+) -> InstallerEvent {
+    #[derive(Clone, Copy)]
+    enum AddonAction {
+        Toggle,
+        Remove,
+        Back,
+        Ignore,
+    }
+
+    let Some(record) = installed_addon_inventory()
+        .into_iter()
+        .find(|record| record.manifest.id.as_str() == addon_id)
+    else {
+        state.view = InstallerView::AddonInventory;
+        return InstallerEvent::Status("Addon is no longer installed.".to_string());
+    };
+
+    let mut items = Vec::new();
+    let mut actions = Vec::new();
+    if !record.manifest.essential {
+        items.push(if record.effective_enabled {
+            "Disable".to_string()
+        } else {
+            "Enable".to_string()
+        });
+        actions.push(AddonAction::Toggle);
+    }
+    if addon_can_be_removed(&record) {
+        items.push("Remove".to_string());
+        actions.push(AddonAction::Remove);
+    }
+    items.push("---".to_string());
+    actions.push(AddonAction::Ignore);
+    items.push("Back".to_string());
+    actions.push(AddonAction::Back);
+
+    let subtitle = addon_inventory_subtitle(&record);
+    let activated = draw_terminal_menu_screen(
+        ctx,
+        &record.manifest.display_name,
+        Some(&subtitle),
+        &items,
+        &mut state.action_idx,
+        cols,
+        rows,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        content_col,
+        shell_status,
+    );
+
+    match activated {
+        Some(idx) => match actions.get(idx) {
+            Some(AddonAction::Toggle) => {
+                let next_enabled = !record.effective_enabled;
+                let override_value = addon_override_value(&record, next_enabled);
+                match set_addon_enabled_override(record.manifest.id.clone(), override_value) {
+                    Ok(()) => InstallerEvent::Status(format!(
+                        "{} {}.",
+                        record.manifest.display_name,
+                        if next_enabled { "enabled" } else { "disabled" }
+                    )),
+                    Err(err) => InstallerEvent::Status(err),
+                }
+            }
+            Some(AddonAction::Remove) => match remove_installed_addon(record.manifest.id.clone()) {
+                Ok(message) => {
+                    state.view = InstallerView::AddonInventory;
+                    state.action_idx = 0;
+                    InstallerEvent::Status(message)
+                }
+                Err(err) => InstallerEvent::Status(err),
+            },
+            Some(AddonAction::Back) => {
+                state.view = InstallerView::AddonInventory;
+                state.action_idx = 0;
                 InstallerEvent::None
             }
             _ => InstallerEvent::None,
@@ -603,6 +723,18 @@ fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
         crate::platform::AddonScope::System => "system",
         crate::platform::AddonScope::User => "user",
     }
+}
+
+fn addon_override_value(record: &InstalledAddonRecord, enabled: bool) -> Option<bool> {
+    if enabled == record.manifest.enabled_by_default {
+        None
+    } else {
+        Some(enabled)
+    }
+}
+
+fn addon_can_be_removed(record: &InstalledAddonRecord) -> bool {
+    record.manifest.scope == crate::platform::AddonScope::User && record.manifest_path.is_some()
 }
 
 #[allow(clippy::too_many_arguments)]

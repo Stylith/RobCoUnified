@@ -8,12 +8,19 @@ use super::super::installer_screen::{
 };
 use super::super::retro_ui::{current_palette, RetroPalette};
 use super::super::{
-    installed_addon_inventory_sections, set_addon_enabled_override, InstalledAddonRecord,
+    installed_addon_inventory_sections, remove_installed_addon, set_addon_enabled_override,
+    InstalledAddonRecord,
 };
 use super::DesktopHeaderAction;
 use eframe::egui::{self, Color32, Context, Id, Key, RichText, TextureHandle};
 
 use super::RobcoNativeApp;
+
+enum AddonRowAction {
+    None,
+    Toggle,
+    Remove,
+}
 
 impl RobcoNativeApp {
     // ─── Desktop Program Installer ─────────────────────────────────────────────
@@ -1056,9 +1063,17 @@ impl RobcoNativeApp {
                         );
                         ui.add_space(6.0);
                         for record in &sections.essential {
-                            Self::draw_installer_addon_row(
-                                ui, palette, row_width, row_height, record,
-                            );
+                            if matches!(
+                                Self::draw_installer_addon_row(
+                                    ui, palette, row_width, row_height, record,
+                                ),
+                                AddonRowAction::Remove
+                            ) {
+                                match remove_installed_addon(record.manifest.id.clone()) {
+                                    Ok(message) => state.status = message,
+                                    Err(err) => state.status = err,
+                                }
+                            }
                         }
                     }
 
@@ -1071,35 +1086,47 @@ impl RobcoNativeApp {
                         ui.label(RichText::new("Optional Addons").color(palette.dim).strong());
                         ui.add_space(6.0);
                         for record in &sections.optional {
-                            let toggled = Self::draw_installer_addon_row(
+                            match Self::draw_installer_addon_row(
                                 ui, palette, row_width, row_height, record,
-                            );
-                            if toggled {
-                                let next_enabled = !record.effective_enabled;
-                                let override_value =
-                                    if next_enabled == record.manifest.enabled_by_default {
-                                        None
-                                    } else {
-                                        Some(next_enabled)
-                                    };
-                                match set_addon_enabled_override(
-                                    record.manifest.id.clone(),
-                                    override_value,
-                                ) {
-                                    Ok(()) => {
-                                        state.status = format!(
-                                            "{} {}.",
-                                            record.manifest.display_name,
-                                            if next_enabled { "enabled" } else { "disabled" }
-                                        );
+                            ) {
+                                AddonRowAction::Toggle => {
+                                    let next_enabled = !record.effective_enabled;
+                                    let override_value =
+                                        Self::addon_override_value(record, next_enabled);
+                                    match set_addon_enabled_override(
+                                        record.manifest.id.clone(),
+                                        override_value,
+                                    ) {
+                                        Ok(()) => {
+                                            state.status = format!(
+                                                "{} {}.",
+                                                record.manifest.display_name,
+                                                if next_enabled { "enabled" } else { "disabled" }
+                                            );
+                                        }
+                                        Err(err) => state.status = err,
                                     }
-                                    Err(err) => state.status = err,
                                 }
+                                AddonRowAction::Remove => {
+                                    match remove_installed_addon(record.manifest.id.clone()) {
+                                        Ok(message) => state.status = message,
+                                        Err(err) => state.status = err,
+                                    }
+                                }
+                                AddonRowAction::None => {}
                             }
                         }
                     }
                 });
         });
+    }
+
+    fn addon_override_value(record: &InstalledAddonRecord, enabled: bool) -> Option<bool> {
+        if enabled == record.manifest.enabled_by_default {
+            None
+        } else {
+            Some(enabled)
+        }
     }
 
     fn draw_installer_addon_row(
@@ -1108,9 +1135,9 @@ impl RobcoNativeApp {
         row_width: f32,
         row_height: f32,
         record: &InstalledAddonRecord,
-    ) -> bool {
+    ) -> AddonRowAction {
         let (_, row_rect) = ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
-        let mut toggled = false;
+        let mut action = AddonRowAction::None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
             let frame = egui::Frame::none()
                 .stroke(egui::Stroke::new(1.0, palette.fg))
@@ -1121,7 +1148,13 @@ impl RobcoNativeApp {
                 ui.set_max_width(content_width);
                 ui.set_min_height(row_height - 8.0);
                 let action_width = if record.manifest.essential {
-                    120.0
+                    if Self::addon_can_be_removed(record) {
+                        220.0
+                    } else {
+                        120.0
+                    }
+                } else if Self::addon_can_be_removed(record) {
+                    220.0
                 } else {
                     112.0
                 };
@@ -1137,6 +1170,13 @@ impl RobcoNativeApp {
                         .truncate(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if Self::addon_can_be_removed(record)
+                            && ui
+                                .button(RichText::new("Remove").color(palette.fg))
+                                .clicked()
+                        {
+                            action = AddonRowAction::Remove;
+                        }
                         if record.manifest.essential {
                             ui.label(RichText::new("[ required ]").color(palette.fg));
                         } else if ui
@@ -1145,7 +1185,7 @@ impl RobcoNativeApp {
                             )
                             .clicked()
                         {
-                            toggled = true;
+                            action = AddonRowAction::Toggle;
                         }
                     });
                 });
@@ -1165,7 +1205,11 @@ impl RobcoNativeApp {
                 );
             });
         });
-        toggled
+        action
+    }
+
+    fn addon_can_be_removed(record: &InstalledAddonRecord) -> bool {
+        record.manifest.scope == crate::platform::AddonScope::User && record.manifest_path.is_some()
     }
 
     fn addon_enabled_chip(record: &InstalledAddonRecord) -> &'static str {

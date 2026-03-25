@@ -4,11 +4,11 @@ use super::NativeSettingsPanel;
 use crate::config;
 use crate::platform::{
     build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint, AddonId, AddonKind,
-    AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonStateOverrides, CapabilityId,
-    DiscoveredAddonManifest, FileAssociation, InstallProfile,
+    AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonScope, AddonStateOverrides,
+    CapabilityId, DiscoveredAddonManifest, FileAssociation, InstallProfile,
 };
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeDesktopRoute {
@@ -196,6 +196,19 @@ pub fn set_addon_enabled_override(addon_id: AddonId, enabled: Option<bool>) -> R
     Ok(())
 }
 
+pub fn remove_installed_addon(addon_id: AddonId) -> Result<String, String> {
+    let record = installed_addon_inventory()
+        .into_iter()
+        .find(|record| record.manifest.id == addon_id)
+        .ok_or_else(|| format!("Unknown addon '{addon_id}'."))?;
+
+    let mut overrides = addon_state_overrides();
+    remove_installed_addon_record(&record, &config::user_addons_root_dir(), &mut overrides)?;
+    overrides.set_enabled(addon_id, None);
+    config::save_addon_state_overrides(&overrides);
+    Ok(format!("Removed {}.", record.manifest.display_name))
+}
+
 fn effective_addon_enabled_with_overrides(
     manifest: &AddonManifest,
     overrides: &AddonStateOverrides,
@@ -269,6 +282,60 @@ fn installed_addon_inventory_with_overrides(
             .then_with(|| left.manifest.id.cmp(&right.manifest.id))
     });
     records
+}
+
+fn remove_installed_addon_record(
+    record: &InstalledAddonRecord,
+    user_addons_root: &Path,
+    overrides: &mut AddonStateOverrides,
+) -> Result<(), String> {
+    let manifest_path = record
+        .manifest_path
+        .as_ref()
+        .ok_or_else(|| format!("Addon '{}' cannot be removed.", record.manifest.id))?;
+    if record.manifest.scope != AddonScope::User {
+        return Err(format!(
+            "Addon '{}' is not a user-scoped addon and cannot be removed.",
+            record.manifest.id
+        ));
+    }
+
+    let canonical_root = std::fs::canonicalize(user_addons_root)
+        .map_err(|error| format!("Failed to resolve user addons root: {error}"))?;
+    let canonical_manifest = std::fs::canonicalize(manifest_path)
+        .map_err(|error| format!("Failed to resolve addon manifest path: {error}"))?;
+
+    if !canonical_manifest.starts_with(&canonical_root) {
+        return Err(format!(
+            "Addon '{}' is outside the user addons root and cannot be removed.",
+            record.manifest.id
+        ));
+    }
+
+    std::fs::remove_file(&canonical_manifest)
+        .map_err(|error| format!("Failed to remove addon manifest: {error}"))?;
+    remove_empty_parent_dirs(canonical_manifest.parent(), &canonical_root);
+    overrides.set_enabled(record.manifest.id.clone(), None);
+    Ok(())
+}
+
+fn remove_empty_parent_dirs(mut dir: Option<&Path>, stop_at: &Path) {
+    while let Some(current) = dir {
+        if current == stop_at {
+            break;
+        }
+        let is_empty = std::fs::read_dir(current)
+            .ok()
+            .and_then(|mut entries| entries.next().transpose().ok())
+            .is_some_and(|entry| entry.is_none());
+        if !is_empty {
+            break;
+        }
+        if std::fs::remove_dir(current).is_err() {
+            break;
+        }
+        dir = current.parent();
+    }
 }
 
 pub(crate) fn first_party_addon_enabled(profile: InstallProfile, addon_id: &AddonId) -> bool {
@@ -478,7 +545,9 @@ mod tests {
         AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonManifestDiscovery, AddonScope,
         AddonStateOverrides, CapabilityId, DiscoveredAddonManifest, InstallProfile,
     };
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn first_party_registry_exposes_core_capabilities() {
@@ -731,6 +800,57 @@ mod tests {
             .all(|record| !record.manifest.essential));
     }
 
+    #[test]
+    fn user_scoped_manifest_removal_deletes_manifest_and_clears_override() {
+        let root = temp_dir("user_scoped_manifest_removal_deletes_manifest_and_clears_override");
+        let addon_dir = root.join("sample-addon");
+        fs::create_dir_all(&addon_dir).unwrap();
+        let manifest_path = addon_dir.join("manifest.json");
+        fs::write(&manifest_path, "{}").unwrap();
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("addons.sample"), Some(false));
+        let record = super::InstalledAddonRecord {
+            manifest: manifest("addons.sample", "Sample Addon", AddonScope::User),
+            manifest_path: Some(manifest_path.clone()),
+            explicit_enabled: Some(false),
+            effective_enabled: false,
+        };
+
+        super::remove_installed_addon_record(&record, &root, &mut overrides).unwrap();
+
+        assert!(!manifest_path.exists());
+        assert!(!addon_dir.exists());
+        assert_eq!(overrides.enabled_for(&AddonId::from("addons.sample")), None);
+    }
+
+    #[test]
+    fn non_user_or_static_addons_are_not_removable() {
+        let root = temp_dir("non_user_or_static_addons_are_not_removable");
+        let mut overrides = AddonStateOverrides::default();
+
+        let bundled_record = super::InstalledAddonRecord {
+            manifest: manifest("shell.settings", "Settings", AddonScope::Bundled).essential(),
+            manifest_path: None,
+            explicit_enabled: None,
+            effective_enabled: true,
+        };
+        assert!(
+            super::remove_installed_addon_record(&bundled_record, &root, &mut overrides).is_err()
+        );
+
+        let system_path = root.join("system-addon.json");
+        fs::write(&system_path, "{}").unwrap();
+        let system_record = super::InstalledAddonRecord {
+            manifest: manifest("addons.system", "System Addon", AddonScope::System),
+            manifest_path: Some(system_path),
+            explicit_enabled: None,
+            effective_enabled: true,
+        };
+        assert!(
+            super::remove_installed_addon_record(&system_record, &root, &mut overrides).is_err()
+        );
+    }
+
     fn manifest(id: &str, display_name: &str, scope: AddonScope) -> AddonManifest {
         AddonManifest::new(
             id,
@@ -742,5 +862,15 @@ mod tests {
             },
         )
         .with_scope(scope)
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos-addon-tests-{label}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }
