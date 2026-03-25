@@ -6,7 +6,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use robcos_shared::config::{
-    base_dir, load_apps, load_games, load_networks, save_apps, save_games, save_networks,
+    installed_package_descriptions_file, load_apps, load_games, load_networks, save_apps,
+    save_games, save_networks,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1119,7 +1120,7 @@ impl DesktopInstallerState {
 }
 
 fn installed_description_cache_path() -> PathBuf {
-    base_dir().join("installed_package_descriptions.json")
+    installed_package_descriptions_file()
 }
 
 fn load_installed_description_cache() -> HashMap<String, HashMap<String, String>> {

@@ -164,6 +164,16 @@ impl AddonManifest {
         self
     }
 
+    pub fn with_scope(mut self, scope: AddonScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub fn with_trust(mut self, trust: AddonTrust) -> Self {
+        self.trust = trust;
+        self
+    }
+
     pub fn with_permission(mut self, permission: impl Into<PermissionId>) -> Self {
         self.permissions.insert(permission.into());
         self

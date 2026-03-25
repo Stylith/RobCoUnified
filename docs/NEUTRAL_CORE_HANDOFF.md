@@ -387,6 +387,46 @@ Additional launcher bin-root slice:
 - built-in game launch resolution in `crates/native-services/src/desktop_launcher_service.rs` now prefers that configured bin root before sibling-executable and dev workspace fallbacks
 - native standalone app launch in `src/native/standalone_launcher.rs` now does the same, which reduces executable-relative assumptions without dropping current dev behavior
 
+Additional session-state path slice:
+
+- shared config now exposes compatibility-aware helpers for `.session` and `installed_package_descriptions.json`
+- `crates/shared/src/core/auth.rs` now resolves the login session marker through `session_state_file()` instead of joining directly onto `base_dir()`
+- this keeps the session marker on the same staged state-root migration path as settings, users, catalogs, and logs
+
+Additional installer-cache path slice:
+
+- `crates/native-installer-app/src/lib.rs` now resolves `installed_package_descriptions.json` through the shared compatibility helper instead of joining directly onto `base_dir()`
+- this completes the current migration pass for the named legacy runtime files that were explicitly called out in the compatibility merge logic: settings, about, `.session`, installed package descriptions, users, and journal entries
+
+Additional scoped-manifest groundwork slice:
+
+- `crates/shared/src/platform/catalog.rs` was added as the first read-only addon manifest discovery layer for externalized metadata
+- shared platform can now discover manifest JSON files from three staged roots:
+  - bundled: `<core_root>/bundled-addons`
+  - system: `system_addons_root`
+  - user: `user_addons_root`
+- the loader currently accepts direct `*.json` files in those roots and per-addon directories containing `addon.json` or `manifest.json`
+- discovered manifests are forced onto the scope implied by their root, so scope comes from install location rather than trusting file contents
+- shared platform now exposes a layered-registry builder that applies later-layer precedence, which is the needed seam for `bundled -> system -> user` manifest overrides during the static-to-external migration
+- `src/native/addons.rs` now exposes `discovered_addon_manifest_catalog()` and `installed_addon_manifest_registry()` as metadata seams for later addon-manager work, while existing launch/runtime code still stays on the static first-party runtime registry for safety
+- this intentionally does not introduce dynamic loading or change launch behavior yet; it only establishes scoped manifest discovery and layering so later stages can externalize first-party manifests without a rewrite
+
+Additional addon install-state slice:
+
+- `crates/shared/src/platform/state.rs` was added as the first shared addon enablement-state model
+- shared config now persists addon state overrides in `addon_state.json` under the staged compatibility state root
+- the current state model is intentionally narrow: it stores explicit per-addon enabled/disabled overrides keyed by addon id, and leaves package removal/uninstall workflow for a later stage
+- `src/native/addons.rs` now exposes:
+  - `addon_state_overrides()`
+  - `effective_addon_enabled(...)`
+  - `installed_enabled_addon_manifest_registry()`
+- that gives native code a shared “effective enabled addon catalog” seam layered over:
+  - static first-party manifests
+  - discovered bundled/system/user manifests
+  - persisted enable/disable overrides
+- existing launch/runtime resolution still intentionally stays on the static first-party runtime registry and profile policy, so this slice does not yet change launcher behavior
+- this is the intended bridge into later addon-manager/installer work: install scope and manifest discovery now exist, and enablement state now has one shared persistence file instead of scattered future flags
+
 ## Why This Was The Correct First Step
 
 The current codebase already has partial module extraction under `src/native/app/`, so the highest-leverage missing piece was not another `app.rs` split in isolation.

@@ -1,4 +1,6 @@
-use crate::config::{base_dir, load_json, mark_default_apps_prompt_pending, save_json, users_dir};
+use crate::config::{
+    load_json, mark_default_apps_prompt_pending, save_json, session_state_file, users_dir,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -28,7 +30,7 @@ fn users_db_path() -> PathBuf {
 }
 
 fn session_file() -> PathBuf {
-    base_dir().join(".session")
+    session_state_file()
 }
 
 pub fn load_users() -> UsersDb {

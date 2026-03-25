@@ -1,4 +1,6 @@
-use crate::platform::{InstallProfile, PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment};
+use crate::platform::{
+    AddonStateOverrides, InstallProfile, PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -321,6 +323,28 @@ pub fn global_settings_file() -> PathBuf {
 }
 pub fn about_file() -> PathBuf {
     compat_state_path("about.json")
+}
+pub fn session_state_file() -> PathBuf {
+    compat_state_path(".session")
+}
+pub fn installed_package_descriptions_file() -> PathBuf {
+    compat_state_path("installed_package_descriptions.json")
+}
+pub fn addon_state_overrides_file() -> PathBuf {
+    compat_state_path("addon_state.json")
+}
+
+pub fn load_addon_state_overrides() -> AddonStateOverrides {
+    load_json(&addon_state_overrides_file())
+}
+
+pub fn save_addon_state_overrides(overrides: &AddonStateOverrides) {
+    let path = addon_state_overrides_file();
+    if overrides.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let _ = save_json(&path, overrides);
+    }
 }
 
 pub const ALLOWED_EXTENSIONS: &[&str] = &[".pdf", ".epub", ".txt", ".mobi", ".azw3"];

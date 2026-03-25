@@ -1,8 +1,10 @@
 use super::desktop_app::DesktopWindow;
 use super::menu::TerminalScreen;
 use super::NativeSettingsPanel;
+use crate::config;
 use crate::platform::{
-    AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonRegistry, CapabilityId,
+    build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint, AddonId, AddonKind,
+    AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonStateOverrides, CapabilityId,
     FileAssociation, InstallProfile,
 };
 
@@ -88,6 +90,53 @@ pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
 pub fn first_party_addon_registry() -> AddonRegistry {
     AddonRegistry::from_manifests(first_party_addon_manifests())
         .expect("first-party addon catalog must remain internally consistent")
+}
+
+pub fn discovered_addon_manifest_catalog() -> AddonManifestDiscovery {
+    discover_addon_manifests(&config::platform_paths())
+}
+
+pub fn installed_addon_manifest_registry() -> AddonRegistry {
+    let discovery = discovered_addon_manifest_catalog();
+    build_layered_addon_registry([first_party_addon_manifests(), discovery.into_manifests()])
+        .expect("layered addon manifest catalog must remain internally consistent")
+}
+
+pub fn addon_state_overrides() -> AddonStateOverrides {
+    config::load_addon_state_overrides()
+}
+
+pub fn effective_addon_enabled(manifest: &AddonManifest) -> bool {
+    effective_addon_enabled_with_overrides(manifest, &addon_state_overrides())
+}
+
+pub fn installed_enabled_addon_manifest_registry() -> AddonRegistry {
+    installed_enabled_addon_manifest_registry_with_overrides(
+        &installed_addon_manifest_registry(),
+        &addon_state_overrides(),
+    )
+}
+
+fn effective_addon_enabled_with_overrides(
+    manifest: &AddonManifest,
+    overrides: &AddonStateOverrides,
+) -> bool {
+    overrides
+        .enabled_for(&manifest.id)
+        .unwrap_or(manifest.enabled_by_default)
+}
+
+fn installed_enabled_addon_manifest_registry_with_overrides(
+    registry: &AddonRegistry,
+    overrides: &AddonStateOverrides,
+) -> AddonRegistry {
+    AddonRegistry::from_manifests(
+        registry
+            .iter()
+            .filter(|manifest| effective_addon_enabled_with_overrides(manifest, overrides))
+            .cloned(),
+    )
+    .expect("effective enabled addon catalog must remain internally consistent")
 }
 
 pub(crate) fn first_party_addon_enabled(profile: InstallProfile, addon_id: &AddonId) -> bool {
@@ -242,11 +291,12 @@ const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 14] = [
 #[cfg(test)]
 mod tests {
     use super::{
-        first_party_addon_enabled, first_party_addon_registry,
-        first_party_addon_registry_for_profile, first_party_addon_runtime,
-        first_party_capability_enabled_str,
+        effective_addon_enabled_with_overrides, first_party_addon_enabled,
+        first_party_addon_registry, first_party_addon_registry_for_profile,
+        first_party_addon_runtime, first_party_capability_enabled_str,
+        installed_enabled_addon_manifest_registry_with_overrides,
     };
-    use crate::platform::{AddonId, CapabilityId, InstallProfile};
+    use crate::platform::{AddonId, AddonStateOverrides, CapabilityId, InstallProfile};
 
     #[test]
     fn first_party_registry_exposes_core_capabilities() {
@@ -329,5 +379,37 @@ mod tests {
             InstallProfile::LinuxDesktop,
             "connections-ui"
         ));
+    }
+
+    #[test]
+    fn effective_addon_enabled_uses_override_when_present() {
+        let manifest = first_party_addon_registry()
+            .manifest(&AddonId::from("shell.editor"))
+            .cloned()
+            .expect("editor manifest");
+        let mut overrides = AddonStateOverrides::default();
+
+        assert!(effective_addon_enabled_with_overrides(
+            &manifest, &overrides
+        ));
+
+        overrides.set_enabled(AddonId::from("shell.editor"), Some(false));
+        assert!(!effective_addon_enabled_with_overrides(
+            &manifest, &overrides
+        ));
+    }
+
+    #[test]
+    fn installed_enabled_registry_filters_disabled_addons() {
+        let registry = first_party_addon_registry();
+        let mut overrides = AddonStateOverrides::default();
+        overrides.set_enabled(AddonId::from("shell.editor"), Some(false));
+        let registry =
+            installed_enabled_addon_manifest_registry_with_overrides(&registry, &overrides);
+
+        assert!(registry
+            .manifest(&AddonId::from("shell.settings"))
+            .is_some());
+        assert!(registry.manifest(&AddonId::from("shell.editor")).is_none());
     }
 }
