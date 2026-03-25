@@ -12,9 +12,14 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 - Refactor goal: move from a product-branded, built-in-app shell toward a neutral core platform with first-party and later third-party addons
 - Current strategy: incremental migration, not rewrite
 - Phase status:
-  - Phase 0 contract layer: complete
-  - Phase 1 runtime adoption: started
-  - Current adopted slice: generic desktop-side Settings, File Manager, Editor, and Nuke Codes launch now route through capability-based launch targets instead of directly opening shell windows
+  - Phase 0 neutral contract layer: done enough
+  - Phase 1 runtime adoption and capability routing: far along
+  - Phase 2 path-authority/state-root migration: done enough for the first compatibility pass
+  - Phase 3 `app.rs` coordinator decomposition: done enough for this stage
+  - Phase 4 scoped manifests + addon state + inventory UI: started and now materially real
+  - Phase 5 packaged first-party addons / external install-remove lifecycle: not done
+  - Phase 6 branding/theme/content extraction: not done
+  - Phase 7 third-party addon model: intentionally not started
 
 Important constraint summary:
 
@@ -25,10 +30,42 @@ Important constraint summary:
 - Core must depend on capabilities, not app names.
 - Shell must not depend on app internals.
 - Avoid dynamic plugin loading for now.
+- Keep desktop mode and terminal menu mode aligned; do not let one drift too far ahead of the other.
 
-## What Was Implemented In This Step
+Current practical status summary:
 
-The first safe step was completed: define the neutral contract layer before changing runtime behavior.
+- shared neutral contracts exist for install profiles, logical paths, manifests, registry, shell launch/action types, scoped manifest discovery, and addon enabled-state
+- desktop and terminal addon-backed entry points mostly launch through capability/addon resolution instead of direct hardcoded UI actions
+- `src/native/app.rs` is no longer the old god-file shape; most cohesive runtime blocks are extracted
+- compatibility path migration is in place for the named legacy runtime files and bundled binary roots
+- installer/addon-manager groundwork is now real:
+  - discovered scoped manifests
+  - layered addon inventory
+  - persisted enable/disable state
+  - desktop + terminal installed-addon inventory views
+  - essential vs optional addon separation
+- current essential-addon policy:
+  - all current first-party addons are essential except `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
+
+Important honesty note:
+
+- the codebase is much cleaner and more modular than before, but it is not fully untangled yet
+- contract/policy separation is far ahead of runtime/package separation
+- there are still hardwired first-party runtime mappings and shell-owned window/screen enums that know about current first-party addons
+- product branding and theme assumptions are still present in many UI/runtime surfaces
+
+## What Has Been Implemented So Far
+
+The safe-first sequence has been followed. The project now has:
+
+1. neutral shared contracts
+2. capability-based runtime adoption across desktop and terminal addon-backed flows
+3. major native runtime decomposition
+4. first compatibility pass for path authority
+5. scoped manifest discovery and addon state groundwork
+6. a real installed-addon inventory surface in the Program Installer
+
+The sections below retain the detailed slice-by-slice history.
 
 New shared platform contracts were added in `crates/shared/src/platform/`:
 
@@ -60,14 +97,9 @@ New shared platform contracts were added in `crates/shared/src/platform/`:
   - `ShellAction`
   - `ShellEvent`
 
-The shared module is exported through:
+The shared module is exported through `crates/shared/src/lib.rs` and `src/lib.rs`.
 
-- `crates/shared/src/lib.rs`
-- `src/lib.rs`
-
-A product-layer static first-party addon catalog was added in:
-
-- `src/native/addons.rs`
+The product-layer first-party addon catalog and runtime table live in `src/native/addons.rs`.
 
 That file currently defines code-backed manifests for:
 
@@ -86,33 +118,35 @@ That file currently defines code-backed manifests for:
 - Zeta Invaders
 - nuke codes
 
-Those manifests were introduced before runtime adoption. The first runtime adoption slice now exists, but only for Settings Start/Spotlight launch paths.
+Current essential/optional split:
 
-Follow-up adoption work has now started in the native shell:
+- essential:
+  - settings
+  - file manager
+  - editor
+  - document browser
+  - terminal
+  - installer
+  - programs
+  - default apps
+  - connections
+  - edit menus
+  - about
+- optional:
+  - Red Menace
+  - Zeta Invaders
+  - nuke codes
+
+Runtime adoption is no longer limited to Settings. The shell now uses capability/addon routing for a broad first-party set.
+
+Adopted runtime flows in the native shell include:
 
 - `src/native/app/launch_registry.rs` was added as the first runtime launch adapter
 - `DesktopShellAction` now supports a shared `LaunchTarget`
-- the desktop Start menu Settings action now launches through `LaunchTarget::Capability("settings-ui")`
-- the desktop Spotlight Settings action now launches through the same capability path
-- the desktop menu bar Settings action now launches through the same capability path
-- the desktop context menu Settings action now launches through the same capability path
-- the desktop IPC `OpenSettings { panel: None }` path now launches through the same capability path
-- the desktop Start menu File Manager action now launches through `LaunchTarget::Capability("file-browser")`
-- the desktop Spotlight File Manager action now launches through the same capability path
-- the desktop menu bar File Manager action now launches through the same capability path
-- the desktop program-request `OpenFileManager` path now launches through the same capability path
-- the desktop Start/Spotlight Editor action now launches through `LaunchTarget::Capability("text-editor")`
-- the desktop program-request `OpenTextEditor` path now launches through the same capability path
-- the retained shell-level `OpenTextEditor` action now delegates to the same capability path
-- the desktop Start/Spotlight Nuke Codes action now launches through `LaunchTarget::Capability("code-reference")`
-- the desktop program-request `OpenNukeCodes` path now launches through the same capability path
-- the retained shell-level `OpenNukeCodes` action now delegates to the same capability path
-- the runtime still ends up opening the same existing Settings window, so visible behavior is unchanged
-- the runtime still ends up opening the same existing File Manager window, so visible behavior is unchanged
-- the runtime still ends up opening the same existing Editor window, so visible behavior is unchanged
-- the runtime still ends up opening the same existing Nuke Codes window, including its background prefetch path, so visible behavior is unchanged
-- panel-specific settings entry points still open panels directly for now
-- path-specific editor opens still route directly because they carry file payload
+- desktop Start/Spotlight/menu/context/IPC launch paths for Settings, File Manager, Editor, Terminal, Applications, Installer, Connections, Default Apps, Edit Menus, About, and Nuke Codes now route through capability/addon resolution where appropriate
+- terminal menu mode now uses the same registry seam for addon-backed destinations instead of a separate local lookup table
+- settings subtools now have addon-backed identities even where they still render inside the Settings host
+- visible behavior has been intentionally preserved; most of the change is in launch contract and ownership boundaries
 
 ## Files Added Or Changed
 
@@ -482,17 +516,29 @@ Without those contracts, later refactors would keep hardcoding product names, ap
 
 These are the important real-code observations from the current repo state:
 
-1. `src/native/app.rs` is still the main orchestration pressure point, but it already delegates some logic into `src/native/app/*.rs`.
-2. Path handling is still ad hoc and product-specific.
-   - `crates/shared/src/config.rs` still owns `base_dir()`, `user_dir()`, `desktop_dir()`, `global_settings_file()`, etc.
-   - `src/native/data.rs` still uses direct `dirs::*` and repo/process-relative behavior.
-3. Built-in launch behavior is still special-cased by name.
-   - `crates/native-services/src/desktop_launcher_service.rs` currently hardcodes built-in games and uses sibling-binary / cargo-manifest fallback logic.
-4. Some code still depends on repo-relative or compile-time manifest assumptions.
-   - Example: `env!("CARGO_MANIFEST_DIR")` usage in desktop/icon logic and launcher logic.
-5. Current branding still leaks into core paths and model assumptions.
+1. `src/native/app.rs` is no longer the old god file, but it is still the root coordinator and still owns core state, constructor/default wiring, and the test module.
+   - major runtime blocks now live in extracted modules under `src/native/app/`
+   - this stage of decomposition is done enough; further extraction should now be selective, not churn for its own sake
+2. Path handling is materially better, but still mixed.
+   - shared config now has explicit logical-root and compatibility state-root helpers
+   - several important runtime files already moved behind those helpers
+   - but many callers still go through older `config.rs` wrappers rather than native code using `PlatformPaths` directly
+3. First-party launch/policy behavior is much cleaner, but not fully detached.
+   - capability/addon resolution is real
+   - install-profile and addon enabled-state both affect availability
+   - but the native shell still contains a static first-party runtime table that maps addon ids to `DesktopWindow`, `TerminalScreen`, and settings-panel routes
+4. Desktop and terminal are better aligned than before, but some older terminal-specific navigation/state still exists for non-addon sections.
+5. External manifest discovery exists, but runtime loading is still intentionally static.
+   - scoped manifest discovery is metadata-only right now
+   - first-party runtime behavior still comes from compiled code
+6. Current branding and current theme assumptions still leak through product/runtime layers.
+   - RobCo strings and Fallout-like naming are still present in many UI surfaces
+   - current appearance system is still closer to a single built-in visual language than a neutral theme engine
+7. Some direct app-specific references still exist and are expected at this stage.
+   - especially editor/file-manager/document flows
+   - settings subpanels still host multiple first-party tools inside shell-owned runtime
 
-This means the next phases should be migration layers, not a sudden redesign.
+This means the next phases should continue as migration layers, not a rewrite.
 
 ## Target Architecture Summary
 
@@ -578,7 +624,7 @@ This phase is complete.
 
 ## Phase 1: Add Runtime Adapters Without Breaking Existing Flows
 
-Status: in progress
+Status: done enough for the current stage
 
 Objective:
 
@@ -608,39 +654,27 @@ Suggested initial output of this phase:
 
 Current Phase 1 progress:
 
-- done: added a desktop launch adapter
-- done: backed it with `first_party_addon_registry()`
-- done: routed Settings Start menu launch through capability lookup
-- done: routed Settings Spotlight launch through capability lookup
-- done: routed desktop menu bar Settings through capability lookup
-- done: routed desktop context menu Settings through capability lookup
-- done: routed generic desktop IPC Settings open through capability lookup
-- done: routed File Manager Start menu launch through capability lookup
-- done: routed File Manager Spotlight launch through capability lookup
-- done: routed desktop menu bar File Manager through capability lookup
-- done: routed desktop program-request File Manager through capability lookup
-- done: routed Editor Start launch through capability lookup
-- done: routed Editor Spotlight launch through capability lookup
-- done: routed desktop program-request Editor through capability lookup
-- done: routed shell-level OpenTextEditor through capability lookup
-- done: routed Nuke Codes Start launch through capability lookup
-- done: routed Nuke Codes Spotlight launch through capability lookup
-- done: routed desktop program-request Nuke Codes through capability lookup
-- done: routed shell-level OpenNukeCodes through capability lookup
-- done: added focused resolver and app integration tests
-- not done: panel-specific Settings opens still use direct panel routing
-- not done: path-specific File Manager opens still use direct file-manager actions
-- not done: path-specific Editor opens still use direct editor actions
-- not done: no payload-carrying fourth app has been migrated yet
+- desktop and terminal addon-backed entry points now mostly route through shared capability/addon resolution
+- first-party runtime resolution is centralized in `src/native/addons.rs` + `src/native/app/launch_registry.rs`
+- profile-aware availability and addon enabled-state both feed launcher policy
+- settings subtools now have addon identities
+- unresolved status now distinguishes “not wired”, “disabled by install profile”, and “disabled by addon state”
+- remaining direct paths are mostly payload-carrying flows or shell-owned host behavior:
+  - settings panel-specific routing
+  - path/payload-specific editor and file-manager behavior
+  - direct desktop/terminal host opening for currently compiled first-party runtimes
 
 Exit criteria:
 
-- at least one app is fully routed through registry-backed launch paths for all major entry points
+- capability/addon routing is the default path for addon-backed surfaces
 - no visible behavior regression
+- desktop and terminal stay aligned for addon-backed flows
+
+This phase is done enough for now.
 
 ## Phase 2: Begin Path Migration
 
-Status: after Phase 1 starts landing cleanly
+Status: done enough for the first compatibility pass
 
 Objective:
 
@@ -670,9 +704,29 @@ Exit criteria:
 - The logical path model is authoritative.
 - Existing path helpers become wrappers or compatibility shims.
 
+Current Phase 2 progress:
+
+- logical roots and install-profile path mapping exist
+- compatibility-aware state-root helpers exist in shared config
+- named legacy runtime files moved onto the compatibility state-root seam:
+  - settings
+  - about
+  - `.session`
+  - installed package descriptions
+  - users
+  - journal entries
+- bundled binary resolution now prefers configured bin roots before sibling/dev fallbacks
+
+Not done yet:
+
+- broader caller migration away from older `config.rs` wrappers
+- broader user/content/package path authority cleanup
+
+This phase is done enough for now; do not keep tweaking the same compatibility slice without a new concrete target.
+
 ## Phase 3: Convert `src/native/app.rs` Into A Coordinator
 
-Status: after the registry/path substrate is actually in use
+Status: done enough for this stage
 
 Objective:
 
@@ -709,9 +763,38 @@ Exit criteria:
 - `app.rs` mostly composes modules and coordinates state.
 - business rules live outside the god file.
 
+Current Phase 3 progress:
+
+- major runtime blocks have been extracted:
+  - `addon_policy.rs`
+  - `launch_runtime.rs`
+  - `session_runtime.rs`
+  - `desktop_runtime.rs`
+  - `terminal_runtime.rs`
+  - `prompt_runtime.rs`
+  - `document_runtime.rs`
+  - `document_browser_runtime.rs`
+  - `edit_menu_runtime.rs`
+  - `editor_runtime.rs`
+  - `runtime_state.rs`
+  - `frame_runtime.rs`
+  - `desktop_component_host.rs`
+  - `desktop_window_mgmt.rs`
+  - `desktop_file_runtime.rs`
+  - `asset_helpers.rs`
+  - `ui_helpers.rs`
+- `app.rs` production code is now a coordinator-sized core rather than the old all-in-one file
+
+Not done yet:
+
+- the named state structs from the final destination are not fully formalized
+- some shell-owned host behavior still remains in the coordinator and related modules
+
+This phase is done enough for now.
+
 ## Phase 4: Convert Built-Ins To First-Party Addons
 
-Status: staged, one app at a time
+Status: structurally well underway, but not complete
 
 Objective:
 
@@ -744,9 +827,23 @@ Exit criteria:
 - Built-ins launch through addon ids/capabilities.
 - Core knows capabilities, not app names.
 
+Current Phase 4 progress:
+
+- built-ins now have stable addon ids and manifests
+- launcher/policy behavior is largely capability/addon based
+- install-profile rules and addon-state rules now affect effective availability
+- installer UI now exposes installed addons and optional enable/disable state
+
+Not done yet:
+
+- first-party runtimes are still statically compiled and code-registered
+- shell still owns the runtime mapping from addon ids to windows/screens/panels
+- settings subtools are still shell-hosted panels rather than truly separate packaged runtimes
+- some app-specific flows still contain direct first-party assumptions
+
 ## Phase 5: External Manifests And Scopes
 
-Status: after static registry is proven
+Status: groundwork done, behavior stage not done
 
 Objective:
 
@@ -768,6 +865,21 @@ Exit criteria:
 
 - runtime can enumerate addons from scoped manifests
 - install/enable/disable/remove are possible without changing core contracts
+
+Current Phase 5 progress:
+
+- scoped manifest discovery exists for bundled/system/user roots
+- layered manifest precedence exists
+- persisted enable/disable overrides exist
+- unified installed-addon inventory exists
+- installer/addon-manager UI now consumes that inventory
+
+Not done yet:
+
+- install/remove workflow for discovered addons
+- richer addon-manager actions beyond enable/disable
+- runtime usage of discovered non-static addons
+- packaged first-party addons
 
 ## Phase 6: Third-Party Addons
 
@@ -881,15 +993,20 @@ All three platforms should share one runtime model, with different install-profi
 
 The next Codex task should be:
 
-1. choose the next low-risk first-party app with a true desktop surface
-2. likely candidates:
-   - Nuke Codes
-   - Installer
-   - Connections
-3. migrate only generic launch entry points first
-4. keep visible behavior unchanged
+1. stay on the addon-management / manifest-externalization track rather than reopening old runtime decomposition work
+2. add the next narrow lifecycle behavior for discovered addons:
+   - likely first target: install/remove handling for user-scoped manifest entries
+   - keep runtime behavior static for first-party addons
+3. preserve the current essential/optional rule:
+   - essential: every current first-party addon except `Red Menace`, `Zeta Invaders`, and `Nuke Codes`
+   - optional: only those three for now
+4. keep desktop and terminal installer/addon-manager behavior aligned
+5. do not jump to dynamic loading, generalized third-party runtime plugins, or a whole-repo folder cleanup
 
-Do not jump to third-party manifests or dynamic loading yet.
+Alternative next task if addon install/remove is blocked:
+
+1. continue path-authority cleanup for remaining user/content/package layout helpers
+2. keep it compatibility-safe and bounded to one slice
 
 ## Suggested Continuation Steps For The Next Session
 
@@ -898,15 +1015,22 @@ When resuming:
 1. checkout branch `WIP`
 2. re-run:
    - `cargo test -p robcos-shared platform`
-   - `cargo test -p robcos first_party_registry_exposes_core_capabilities --lib`
-3. inspect current hardcoded settings launch sites in:
-   - `src/native/app.rs`
-   - `src/native/desktop_app.rs`
-   - any menu/start/spotlight launch helpers
-4. inspect `src/native/app/launch_registry.rs`
-5. keep Settings as the reference pattern
-6. migrate the next lowest-risk app after Editor
-7. verify no visible behavior change
+   - `cargo test -p robcos-native-installer-app --lib`
+   - `cargo test -p robcos installed_inventory_sections_split_essential_and_optional_addons --lib`
+   - `cargo test -p robcos addon_state_disabled_reason_is_reported_separately_from_profile_policy --lib`
+3. inspect:
+   - `src/native/addons.rs`
+   - `src/native/app/launch_registry.rs`
+   - `src/native/installer_screen.rs`
+   - `src/native/app/desktop_installer_ui.rs`
+   - `crates/shared/src/platform/catalog.rs`
+   - `crates/shared/src/platform/state.rs`
+4. confirm the current essential-addon rule before changing any addon-manager behavior
+5. choose one next bounded slice:
+   - user-scoped addon install/remove behavior
+   - or remaining path-authority cleanup
+6. keep runtime loading static
+7. verify desktop and terminal stay aligned
 
 ## Suggested Prompt For The Next Codex Session
 
@@ -921,18 +1045,22 @@ Read these files first:
 - docs/NATIVE_ROADMAP.md
 
 Important context:
-- The first contract step is already implemented in crates/shared/src/platform/ and src/native/addons.rs.
-- The first runtime adoption slice is also implemented in src/native/app/launch_registry.rs and wires Settings Start/Spotlight launches through capability lookup.
-- Do not redesign those contracts unless there is a concrete bug.
-- The next task is to use the completed Settings/File Manager/Editor/Nuke Codes pattern as the template for the next app slice.
-- Preserve current behavior and avoid broad rewrites.
+- Neutral contracts, major runtime adoption, first compatibility path migration, and the main `app.rs` decomposition are already done enough.
+- Scoped manifest discovery, addon enabled-state, and installer inventory UI are already implemented.
+- Essential addon policy is currently:
+  - essential: every current first-party addon except `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
+  - optional: only those three
+- Desktop and terminal installer/addon-manager behavior should stay aligned.
+- Do not redesign the contract layer unless there is a concrete bug.
 - Do not introduce dynamic plugin loading.
-- Prefer migration layers over replacing large parts of src/native/app.rs in one pass.
+- Prefer bounded migration slices over broad rewrites.
 
 Goal for this session:
-- migrate the next app using the same adapter pattern already used for Settings, File Manager, Editor, and Nuke Codes
-- keep shell behavior unchanged
-- add focused tests
+- continue from the current addon-management/path-authority stage
+- either add a narrow install/remove behavior for discovered user/system manifests, or take the next bounded compatibility path migration slice
+- keep first-party runtime behavior static
+- keep visible behavior unchanged except for the targeted management surface
+- add focused tests and update docs/NEUTRAL_CORE_HANDOFF.md
 ```
 
 ## Reference Files To Inspect Next
@@ -969,3 +1097,14 @@ The important principle is sequence:
 7. packaging and third-party support
 
 Do not skip ahead. The architecture will be cleaner if the migration order stays disciplined.
+
+Also keep these additional realities in mind:
+
+- the codebase is not yet 100% separated; static first-party runtime routing still exists
+- there are still shell-owned window/screen/panel enums that know about current first-party addons
+- theme and branding extraction are still ahead of us
+- future theme work should separate:
+  - render mode (`monochrome` vs `color`)
+  - color themes
+  - shell themes
+  - desktop vs terminal appearance with global fallback
