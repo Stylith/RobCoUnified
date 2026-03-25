@@ -1,14 +1,13 @@
 use super::super::data::{home_dir_fallback, save_text_file, word_processor_dir};
-use super::super::desktop_app::DesktopWindow;
+use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction, DesktopWindow};
 use super::super::desktop_file_service::{load_text_document, open_directory_location};
 use super::super::desktop_settings_service::{
     apply_file_manager_settings_update as apply_desktop_file_manager_settings_update,
     load_settings_snapshot,
 };
 use super::super::desktop_shortcuts_service::set_shortcut_icon as set_desktop_shortcut_icon;
-use super::super::desktop_status_service::clear_shell_status;
 use super::super::desktop_surface_service::set_wallpaper_path as set_desktop_wallpaper_path;
-use super::super::editor_app::{EditorCommand, EditorTextAlign, EditorWindow};
+use super::super::editor_app::{EditorCommand, EditorWindow};
 use super::super::file_manager::{FileEntryRow, FileManagerCommand};
 use super::super::file_manager_app::{
     self, FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode,
@@ -18,8 +17,8 @@ use super::super::file_manager_app::{
 use super::super::file_manager_desktop::{
     self, FileManagerDesktopFooterAction, FileManagerDesktopFooterRequest,
 };
+use super::super::menu::TerminalScreen;
 use super::super::prompt::TerminalPromptAction;
-use super::super::terminal_command_palette::CommandPaletteAction;
 use super::super::terminal_open_with_picker::OpenWithPickerState;
 use super::RobcoNativeApp;
 use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
@@ -85,64 +84,6 @@ impl RobcoNativeApp {
         match open_directory_location(path) {
             Ok(location) => self.apply_file_manager_location(location),
             Err(status) => self.shell_status = status,
-        }
-    }
-
-    pub(super) fn apply_fm_palette_action(&mut self, action: CommandPaletteAction) {
-        match action {
-            CommandPaletteAction::FmOpenSelected => {
-                self.run_file_manager_command(FileManagerCommand::OpenSelected);
-            }
-            CommandPaletteAction::FmNewFolder => {
-                self.run_file_manager_command(FileManagerCommand::NewFolder);
-            }
-            CommandPaletteAction::FmHome => {
-                self.run_file_manager_command(FileManagerCommand::OpenHome);
-            }
-            CommandPaletteAction::FmCopy => {
-                self.run_file_manager_command(FileManagerCommand::Copy);
-            }
-            CommandPaletteAction::FmCut => {
-                self.run_file_manager_command(FileManagerCommand::Cut);
-            }
-            CommandPaletteAction::FmPaste => {
-                self.run_file_manager_command(FileManagerCommand::Paste);
-            }
-            CommandPaletteAction::FmDuplicate => {
-                self.run_file_manager_command(FileManagerCommand::Duplicate);
-            }
-            CommandPaletteAction::FmRename => {
-                self.run_file_manager_command(FileManagerCommand::Rename);
-            }
-            CommandPaletteAction::FmMoveTo => {
-                self.run_file_manager_command(FileManagerCommand::Move);
-            }
-            CommandPaletteAction::FmDelete => {
-                self.run_file_manager_command(FileManagerCommand::Delete);
-            }
-            CommandPaletteAction::FmUndo => {
-                self.run_file_manager_command(FileManagerCommand::Undo);
-            }
-            CommandPaletteAction::FmRedo => {
-                self.run_file_manager_command(FileManagerCommand::Redo);
-            }
-            CommandPaletteAction::FmClearSearch => {
-                self.run_file_manager_command(FileManagerCommand::ClearSearch);
-            }
-            CommandPaletteAction::FmNewDocument => {
-                self.run_editor_command(EditorCommand::NewDocument);
-            }
-            CommandPaletteAction::FmToggleHiddenFiles => {
-                self.run_file_manager_command(FileManagerCommand::ToggleHiddenFiles);
-            }
-            CommandPaletteAction::FmOpenWith => {
-                self.open_terminal_open_with_picker();
-            }
-            CommandPaletteAction::FmClose => {
-                self.navigate_to_screen(self.terminal_nav.browser_return_screen);
-                self.apply_status_update(clear_shell_status());
-            }
-            _ => {}
         }
     }
 
@@ -444,11 +385,26 @@ impl RobcoNativeApp {
             Some(ResolvedDocumentOpen::BuiltinAddon(addon_id))
                 if addon_id.as_str() == "shell.editor" =>
             {
-                self.open_path_in_editor(path);
+                self.open_path_with_active_shell_editor(path);
             }
             Some(ResolvedDocumentOpen::BuiltinAddon(_)) | None => {
-                self.open_path_in_editor(path);
+                self.open_path_with_active_shell_editor(path);
             }
+        }
+    }
+
+    fn open_path_with_active_shell_editor(&mut self, path: PathBuf) {
+        if self.desktop_mode_open {
+            self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+                target: super::launch_registry::editor_launch_target(),
+                payload: DesktopLaunchPayload::OpenPath(path),
+            });
+        } else {
+            self.execute_terminal_launch_target_with_path(
+                super::launch_registry::editor_launch_target(),
+                path,
+                TerminalScreen::DocumentBrowser,
+            );
         }
     }
 
@@ -533,56 +489,6 @@ impl RobcoNativeApp {
             EditorCommand::ToggleLineNumbers => {
                 self.editor.ui.toggle_line_numbers();
             }
-        }
-    }
-
-    pub(super) fn apply_editor_palette_action(&mut self, action: CommandPaletteAction) {
-        match action {
-            CommandPaletteAction::EditorSave => self.run_editor_command(EditorCommand::Save),
-            CommandPaletteAction::EditorSaveAs => self.run_editor_command(EditorCommand::SaveAs),
-            CommandPaletteAction::EditorNewDocument => {
-                self.run_editor_command(EditorCommand::NewDocument)
-            }
-            CommandPaletteAction::EditorFind => self.run_editor_command(EditorCommand::OpenFind),
-            CommandPaletteAction::EditorFindReplace => {
-                self.run_editor_command(EditorCommand::OpenFindReplace)
-            }
-            CommandPaletteAction::EditorUndo
-            | CommandPaletteAction::EditorRedo
-            | CommandPaletteAction::EditorCut
-            | CommandPaletteAction::EditorCopy
-            | CommandPaletteAction::EditorPaste
-            | CommandPaletteAction::EditorSelectAll => {
-                self.terminal_command_palette.pending_action = Some(action);
-            }
-            CommandPaletteAction::EditorToggleWordWrap => {
-                self.run_editor_command(EditorCommand::ToggleWordWrap)
-            }
-            CommandPaletteAction::EditorFontLarger => {
-                self.run_editor_command(EditorCommand::IncreaseFontSize)
-            }
-            CommandPaletteAction::EditorFontSmaller => {
-                self.run_editor_command(EditorCommand::DecreaseFontSize)
-            }
-            CommandPaletteAction::EditorFontReset => {
-                self.run_editor_command(EditorCommand::ResetFontSize)
-            }
-            CommandPaletteAction::EditorAlignLeft => {
-                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Left))
-            }
-            CommandPaletteAction::EditorAlignCenter => {
-                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Center))
-            }
-            CommandPaletteAction::EditorAlignRight => {
-                self.run_editor_command(EditorCommand::SetTextAlign(EditorTextAlign::Right))
-            }
-            CommandPaletteAction::EditorToggleLineNumbers => {
-                self.run_editor_command(EditorCommand::ToggleLineNumbers)
-            }
-            CommandPaletteAction::EditorClose => {
-                self.update_desktop_window_state(DesktopWindow::Editor, false);
-            }
-            _ => {}
         }
     }
 

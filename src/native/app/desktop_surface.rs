@@ -1172,7 +1172,7 @@ impl RobcoNativeApp {
         }
 
         if open_terminal {
-            self.open_desktop_terminal_shell();
+            self.launch_desktop_terminal_shell_via_registry();
         } else if let Some(path) = open_desktop_path {
             self.open_desktop_surface_path(path);
         } else if let Some(window) = open_window {

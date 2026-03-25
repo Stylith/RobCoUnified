@@ -9,7 +9,7 @@ pub use robcos_native_document_browser_app::{
 
 pub enum DocumentBrowserEvent {
     None,
-    Activate(usize),
+    Activate,
     GoBack,
     Quit,
     OpenCommandPalette,
@@ -41,44 +41,51 @@ pub fn draw_terminal_document_browser(
     status_row: usize,
     status_row_alt: usize,
     content_col: usize,
+    input_enabled: bool,
 ) -> DocumentBrowserEvent {
     let rows_data = browser_rows(file_manager);
     *selected_idx = (*selected_idx).min(rows_data.len().saturating_sub(1));
-    if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-        *selected_idx = selected_idx.saturating_sub(1);
-    }
-    if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-        *selected_idx = (*selected_idx + 1).min(rows_data.len().saturating_sub(1));
+    if input_enabled {
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            *selected_idx = selected_idx.saturating_sub(1);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            *selected_idx = (*selected_idx + 1).min(rows_data.len().saturating_sub(1));
+        }
     }
 
     let mut event = DocumentBrowserEvent::None;
-    if ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) {
-        event = DocumentBrowserEvent::Activate(*selected_idx);
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+    if input_enabled
+        && ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
+    {
+        event = DocumentBrowserEvent::Activate;
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
         event = DocumentBrowserEvent::GoBack;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::Q)) {
         event = DocumentBrowserEvent::Quit;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::F1)) {
         event = DocumentBrowserEvent::OpenCommandPalette;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::C) && i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::C) && i.modifiers.command) {
         event = DocumentBrowserEvent::Copy;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::X) && i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::X) && i.modifiers.command) {
         event = DocumentBrowserEvent::Cut;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::V) && i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::V) && i.modifiers.command) {
         event = DocumentBrowserEvent::Paste;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+    } else if input_enabled
+        && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
         event = DocumentBrowserEvent::Delete;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::F2)) {
         event = DocumentBrowserEvent::Rename;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command) {
         event = DocumentBrowserEvent::Undo;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Y) && i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::Y) && i.modifiers.command) {
         event = DocumentBrowserEvent::Redo;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift)
+    } else if input_enabled
+        && ctx.input(|i| i.key_pressed(egui::Key::N) && i.modifiers.command && i.modifiers.shift)
     {
         event = DocumentBrowserEvent::NewFolder;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::O) && !i.modifiers.command) {
+    } else if input_enabled && ctx.input(|i| i.key_pressed(egui::Key::O) && !i.modifiers.command) {
         event = DocumentBrowserEvent::OpenWith;
     }
 
@@ -135,16 +142,16 @@ pub fn draw_terminal_document_browser(
                     &text,
                     selected,
                 );
-                if response.clicked() {
+                if input_enabled && response.clicked() {
                     *selected_idx = data_idx;
-                    event = DocumentBrowserEvent::Activate(data_idx);
+                    event = DocumentBrowserEvent::Activate;
                 }
             }
             screen.text(
                 &painter,
                 content_col,
                 status_row,
-                "Enter open | O open-with | Tab back | Q quit | Up/Down | F1 cmds",
+                "Enter open | O open-with | Tab back | Q quit | Up/Down | F1 menu",
                 palette.dim,
             );
             if !shell_status.is_empty() {

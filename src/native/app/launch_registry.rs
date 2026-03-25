@@ -95,6 +95,10 @@ pub(super) fn resolve_desktop_launch_target(target: &LaunchTarget) -> Option<Nat
     resolve_desktop_launch_target_for_profile(target, install_profile())
 }
 
+pub(super) fn desktop_launch_target_available(target: &LaunchTarget) -> bool {
+    desktop_launch_target_available_for_profile(target, install_profile())
+}
+
 pub(super) fn resolve_terminal_launch_target(
     target: &LaunchTarget,
 ) -> Option<NativeTerminalLaunch> {
@@ -113,6 +117,13 @@ pub(super) fn resolve_desktop_launch_target_for_profile(
         .map(resolve_runtime_route)
 }
 
+pub(super) fn desktop_launch_target_available_for_profile(
+    target: &LaunchTarget,
+    profile: InstallProfile,
+) -> bool {
+    resolve_desktop_launch_target_for_profile(target, profile).is_some()
+}
+
 pub(super) fn resolve_terminal_launch_target_for_profile(
     target: &LaunchTarget,
     profile: InstallProfile,
@@ -123,6 +134,13 @@ pub(super) fn resolve_terminal_launch_target_for_profile(
     first_party_addon_runtime(&addon_id)
         .and_then(|runtime| runtime.terminal_route)
         .map(resolve_terminal_runtime_route)
+}
+
+pub(super) fn terminal_launch_target_available_for_profile(
+    target: &LaunchTarget,
+    profile: InstallProfile,
+) -> bool {
+    resolve_terminal_launch_target_for_profile(target, profile).is_some()
 }
 
 pub(super) fn unresolved_launch_target_status(target: &LaunchTarget) -> String {
@@ -220,12 +238,12 @@ fn resolve_terminal_runtime_route(route: NativeTerminalRoute) -> NativeTerminalL
 mod tests {
     use super::{
         about_launch_target, connections_launch_target, default_apps_launch_target,
-        edit_menus_launch_target, editor_launch_target, file_manager_launch_target,
-        installer_launch_target, nuke_codes_launch_target, programs_launch_target,
-        resolve_desktop_launch_target, resolve_desktop_launch_target_for_profile,
-        resolve_terminal_launch_target, resolve_terminal_launch_target_for_profile,
-        settings_launch_target, terminal_launch_target,
-        unresolved_launch_target_status_for_profile,
+        desktop_launch_target_available_for_profile, edit_menus_launch_target,
+        editor_launch_target, file_manager_launch_target, installer_launch_target,
+        nuke_codes_launch_target, programs_launch_target, resolve_desktop_launch_target,
+        resolve_desktop_launch_target_for_profile, resolve_terminal_launch_target,
+        resolve_terminal_launch_target_for_profile, settings_launch_target, terminal_launch_target,
+        terminal_launch_target_available_for_profile, unresolved_launch_target_status_for_profile,
         unresolved_terminal_launch_target_status_for_profile, NativeDesktopLaunch,
         NativeTerminalLaunch,
     };
@@ -426,6 +444,30 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn desktop_launch_availability_matches_resolver_for_connections() {
+        assert!(!desktop_launch_target_available_for_profile(
+            &connections_launch_target(),
+            InstallProfile::MacLauncher,
+        ));
+        assert!(desktop_launch_target_available_for_profile(
+            &connections_launch_target(),
+            InstallProfile::LinuxDesktop,
+        ));
+    }
+
+    #[test]
+    fn terminal_launch_availability_matches_resolver_for_connections() {
+        assert!(!terminal_launch_target_available_for_profile(
+            &connections_launch_target(),
+            InstallProfile::MacLauncher,
+        ));
+        assert!(terminal_launch_target_available_for_profile(
+            &connections_launch_target(),
+            InstallProfile::LinuxDesktop,
+        ));
     }
 
     #[test]

@@ -8,11 +8,10 @@ use super::super::desktop_search_service::{
 };
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
-use super::super::first_party_capability_enabled_str;
 use super::super::prompt::FlashAction;
 use super::super::retro_ui::current_palette;
 use crate::config::install_profile;
-use crate::platform::InstallProfile;
+use crate::platform::{InstallProfile, LaunchTarget};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
 
 use super::RobcoNativeApp;
@@ -117,13 +116,13 @@ pub(super) fn start_root_action_for_idx(idx: usize) -> Option<StartRootAction> {
     }
 }
 
-fn start_system_action_capability(action: StartSystemAction) -> &'static str {
+fn start_system_action_visibility_target(action: StartSystemAction) -> LaunchTarget {
     match action {
-        StartSystemAction::ProgramInstaller => "installer-ui",
-        StartSystemAction::Terminal => "terminal-tool",
-        StartSystemAction::FileManager => "file-browser",
-        StartSystemAction::Settings => "settings-ui",
-        StartSystemAction::Connections => "connections-ui",
+        StartSystemAction::ProgramInstaller => super::launch_registry::installer_launch_target(),
+        StartSystemAction::Terminal => super::launch_registry::terminal_launch_target(),
+        StartSystemAction::FileManager => super::launch_registry::file_manager_launch_target(),
+        StartSystemAction::Settings => super::launch_registry::settings_launch_target(),
+        StartSystemAction::Connections => super::launch_registry::connections_launch_target(),
     }
 }
 
@@ -134,7 +133,10 @@ pub(super) fn start_system_items_for_profile(
         .iter()
         .copied()
         .filter(|(_, action)| {
-            first_party_capability_enabled_str(profile, start_system_action_capability(*action))
+            super::launch_registry::desktop_launch_target_available_for_profile(
+                &start_system_action_visibility_target(*action),
+                profile,
+            )
         })
         .collect()
 }
@@ -346,9 +348,15 @@ impl RobcoNativeApp {
         match leaf {
             StartLeaf::Applications => start_application_entries(
                 self.settings.draft.builtin_menu_visibility.nuke_codes
-                    && first_party_capability_enabled_str(profile, "code-reference"),
+                    && super::launch_registry::desktop_launch_target_available_for_profile(
+                        &super::launch_registry::nuke_codes_launch_target(),
+                        profile,
+                    ),
                 self.settings.draft.builtin_menu_visibility.text_editor
-                    && first_party_capability_enabled_str(profile, "text-editor"),
+                    && super::launch_registry::desktop_launch_target_available_for_profile(
+                        &super::launch_registry::editor_launch_target(),
+                        profile,
+                    ),
                 EDITOR_APP_TITLE,
                 super::BUILTIN_NUKE_CODES_APP,
             ),
@@ -413,7 +421,10 @@ impl RobcoNativeApp {
             StartSystemAction::ProgramInstaller => {
                 DesktopShellAction::LaunchByTarget(super::launch_registry::installer_launch_target())
             }
-            StartSystemAction::Terminal => DesktopShellAction::OpenDesktopTerminalShell,
+            StartSystemAction::Terminal => DesktopShellAction::LaunchByTargetWithPayload {
+                target: super::launch_registry::terminal_launch_target(),
+                payload: super::super::desktop_app::DesktopLaunchPayload::OpenTerminalShell,
+            },
             StartSystemAction::FileManager => DesktopShellAction::LaunchByTarget(
                 super::launch_registry::file_manager_launch_target(),
             ),

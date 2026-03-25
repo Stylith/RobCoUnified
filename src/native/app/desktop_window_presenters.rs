@@ -1,4 +1,5 @@
 use super::super::background::BackgroundResult;
+use super::super::command_layer::CommandLayerTarget;
 use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::super::desktop_settings_service::persist_settings_draft;
 use super::super::desktop_status_service::{clear_settings_status, saved_settings_status};
@@ -6,17 +7,12 @@ use super::super::desktop_surface_service::{
     desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
 };
-use super::super::editor_app::{
-    EditorCommand, EditorTextAlign, EditorTextCommand, EDITOR_APP_TITLE,
-};
+use super::super::editor_app::{EditorCommand, EditorTextAlign, EDITOR_APP_TITLE};
 use super::super::file_manager_desktop;
 use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
-use super::super::terminal_command_palette::{
-    draw_command_palette, CommandPaletteAction, CommandPaletteState, CommandPaletteTarget,
-};
 use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
@@ -193,19 +189,27 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_editor(&mut self, ctx: &Context) {
+        let terminal_command_layer_open =
+            !self.desktop_mode_open && self.command_layer_open_for(CommandLayerTarget::Editor);
         if !self.editor.open {
             return;
         }
         if self.desktop_mode_open && self.desktop_window_is_minimized(DesktopWindow::Editor) {
             return;
         }
-        if ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command) {
+        if !terminal_command_layer_open
+            && ctx.input(|i| i.key_pressed(Key::S) && i.modifiers.command)
+        {
             self.run_editor_command(EditorCommand::Save);
         }
-        if ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command) {
+        if !terminal_command_layer_open
+            && ctx.input(|i| i.key_pressed(Key::F) && i.modifiers.command)
+        {
             self.run_editor_command(EditorCommand::OpenFind);
         }
-        if ctx.input(|i| i.key_pressed(Key::H) && i.modifiers.command) {
+        if !terminal_command_layer_open
+            && ctx.input(|i| i.key_pressed(Key::H) && i.modifiers.command)
+        {
             self.run_editor_command(EditorCommand::OpenFindReplace);
         }
         if self.desktop_mode_open
@@ -224,33 +228,16 @@ impl RobcoNativeApp {
             .to_string();
 
         if !self.desktop_mode_open {
-            let palette_is_open = self.terminal_command_palette.open
-                && self.terminal_command_palette.target == CommandPaletteTarget::Editor;
-
-            // If command palette is open, let it process and consume keys first
-            let mut palette_action = None;
-            if palette_is_open {
-                let layout = self.terminal_layout();
-                palette_action = draw_command_palette(
+            if terminal_command_layer_open {
+                self.draw_command_layer_at(
                     ctx,
-                    &mut self.terminal_command_palette,
-                    layout.cols,
-                    layout.rows,
+                    CommandLayerTarget::Editor,
+                    self.terminal_command_layer_bar_pos(ctx),
+                    ctx.screen_rect(),
                 );
-                // Consume remaining keys so editor and underlying screens don't act on them
-                ctx.input_mut(|i| {
-                    let m = egui::Modifiers::NONE;
-                    i.consume_key(m, egui::Key::ArrowUp);
-                    i.consume_key(m, egui::Key::ArrowDown);
-                    i.consume_key(m, egui::Key::Enter);
-                    i.consume_key(m, egui::Key::Space);
-                    i.consume_key(m, egui::Key::Escape);
-                    i.consume_key(m, egui::Key::Tab);
-                });
             }
 
-            // Handle editor keyboard shortcuts (only when palette is closed)
-            if !palette_is_open {
+            if !terminal_command_layer_open {
                 // Tab closes the editor (go back)
                 if ctx.input(|i| i.key_pressed(Key::Tab)) {
                     self.update_desktop_window_state(DesktopWindow::Editor, false);
@@ -265,14 +252,9 @@ impl RobcoNativeApp {
                     }
                     return;
                 }
-                // F1 opens the command palette
+                // F1 opens the local window menu strip.
                 if ctx.input(|i| i.key_pressed(Key::F1)) {
-                    self.terminal_command_palette = CommandPaletteState {
-                        open: true,
-                        target: CommandPaletteTarget::Editor,
-                        selected: 0,
-                        pending_action: None,
-                    };
+                    self.open_command_layer(CommandLayerTarget::Editor);
                 }
                 if ctx.input(|i| i.key_pressed(Key::N) && i.modifiers.command) {
                     self.run_editor_command(EditorCommand::NewDocument);
@@ -295,7 +277,7 @@ impl RobcoNativeApp {
                         ui.label(RichText::new(&title).color(palette.fg).strong());
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
-                                RichText::new("F1:Cmds  Esc:Back  ^S:Save  ^N:New  ^F:Find")
+                                RichText::new("F1:Menu  Esc:Back  ^S:Save  ^N:New  ^F:Find")
                                     .color(palette.dim)
                                     .small(),
                             );
@@ -330,26 +312,8 @@ impl RobcoNativeApp {
                     }
                 });
             // Auto-focus the text edit so typing works immediately without mouse click
-            if !palette_is_open {
+            if !terminal_command_layer_open {
                 ctx.memory_mut(|m| m.request_focus(text_edit_id));
-            }
-            // Process palette action or deferred text command
-            if let Some(action) = palette_action {
-                self.apply_editor_palette_action(action);
-            }
-            if let Some(action) = self.terminal_command_palette.pending_action.take() {
-                let text_cmd = match action {
-                    CommandPaletteAction::EditorUndo => Some(EditorTextCommand::Undo),
-                    CommandPaletteAction::EditorRedo => Some(EditorTextCommand::Redo),
-                    CommandPaletteAction::EditorCut => Some(EditorTextCommand::Cut),
-                    CommandPaletteAction::EditorCopy => Some(EditorTextCommand::Copy),
-                    CommandPaletteAction::EditorPaste => Some(EditorTextCommand::Paste),
-                    CommandPaletteAction::EditorSelectAll => Some(EditorTextCommand::SelectAll),
-                    _ => None,
-                };
-                if let Some(cmd) = text_cmd {
-                    self.run_editor_text_command(ctx, text_edit_id, cmd);
-                }
             }
             return;
         }
@@ -1701,6 +1665,6 @@ impl RobcoNativeApp {
         self.terminal_mode.open = false;
         self.desktop_window_states
             .remove(&WindowInstanceId::primary(DesktopWindow::TerminalMode));
-        self.open_desktop_terminal_shell();
+        self.launch_desktop_terminal_shell_via_registry();
     }
 }

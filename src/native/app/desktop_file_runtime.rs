@@ -1,3 +1,4 @@
+use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction};
 use super::super::desktop_surface_service::DesktopSurfaceEntry;
 use super::super::file_manager::{FileEntryRow, FileManagerCommand};
 use super::super::file_manager_app::{
@@ -92,7 +93,10 @@ impl RobcoNativeApp {
 
     pub(super) fn open_desktop_surface_path(&mut self, path: PathBuf) {
         if path.is_dir() {
-            self.open_file_manager_at(path);
+            self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+                target: super::launch_registry::file_manager_launch_target(),
+                payload: DesktopLaunchPayload::OpenPath(path),
+            });
             return;
         }
         match file_manager_app::open_target_for_file_manager_action(
@@ -104,7 +108,10 @@ impl RobcoNativeApp {
                 self.shell_status = self.launch_open_with_request(launch);
             }
             Ok(FileManagerOpenTarget::OpenInEditor(path)) => {
-                self.open_file_with_default_app_or_editor(path);
+                self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+                    target: super::launch_registry::editor_launch_target(),
+                    payload: DesktopLaunchPayload::OpenPath(path),
+                });
             }
             Err(status) => self.shell_status = status,
         }

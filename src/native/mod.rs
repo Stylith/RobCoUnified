@@ -3,6 +3,7 @@ mod addons;
 pub mod app;
 mod applications_standalone;
 mod background;
+mod command_layer;
 mod connections_screen;
 mod data;
 mod default_apps_screen;
@@ -33,7 +34,6 @@ mod settings_screen;
 mod settings_standalone;
 mod shell_screen;
 mod standalone_launcher;
-mod terminal_command_palette;
 mod terminal_open_with_picker;
 
 pub use robcos_native_services::{
@@ -55,8 +55,7 @@ pub use addons::{
 pub(crate) use addons::{
     first_party_addon_disabled_reason, first_party_addon_enabled,
     first_party_addon_registry_for_profile, first_party_addon_runtime,
-    first_party_capability_enabled_str, FirstPartyAddonDisabledReason, NativeDesktopRoute,
-    NativeTerminalRoute,
+    FirstPartyAddonDisabledReason, NativeDesktopRoute, NativeTerminalRoute,
 };
 pub use app::{apply_native_appearance, configure_native_context, RobcoNativeApp};
 pub use applications_standalone::RobcoNativeApplicationsApp;

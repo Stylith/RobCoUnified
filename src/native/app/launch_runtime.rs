@@ -1,5 +1,5 @@
 use super::super::data::home_dir_fallback;
-use super::super::desktop_app::{DesktopShellAction, DesktopWindow};
+use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction, DesktopWindow};
 use super::super::desktop_file_service::{load_text_document, reveal_path_location};
 use super::super::desktop_launcher_service::{resolve_catalog_launch, ProgramCatalog};
 use super::super::editor_app::EditorWindow;
@@ -17,7 +17,7 @@ use super::launch_registry::{
 use super::{RobcoNativeApp, SecondaryWindowApp, BUILTIN_TEXT_EDITOR_APP};
 use crate::platform::LaunchTarget;
 use robcos_native_programs_app::{resolve_desktop_games_request, DesktopProgramRequest};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 impl RobcoNativeApp {
     /// Open a desktop window if not already open, otherwise spawn a secondary
@@ -67,27 +67,9 @@ impl RobcoNativeApp {
         ));
     }
 
-    pub(super) fn launch_terminal_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::terminal_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_programs_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::programs_launch_target(),
-        ));
-    }
-
     pub(super) fn launch_settings_via_registry(&mut self) {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
-        ));
-    }
-
-    pub(super) fn launch_connections_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::connections_launch_target(),
         ));
     }
 
@@ -96,34 +78,105 @@ impl RobcoNativeApp {
         self.open_desktop_window(DesktopWindow::Settings);
     }
 
+    fn apply_desktop_launch(&mut self, launch: NativeDesktopLaunch) {
+        match launch {
+            NativeDesktopLaunch::OpenWindow(window) => {
+                self.open_or_spawn_desktop_window(window);
+            }
+            NativeDesktopLaunch::OpenNukeCodes => {
+                self.open_desktop_nuke_codes();
+            }
+            NativeDesktopLaunch::OpenSettingsPanel(Some(panel)) => {
+                self.open_desktop_settings_panel(panel);
+            }
+            NativeDesktopLaunch::OpenSettingsPanel(None) => {
+                self.open_desktop_settings_window();
+            }
+        }
+    }
+
+    fn execute_desktop_launch_target(&mut self, target: LaunchTarget) {
+        match resolve_desktop_launch_target(&target) {
+            Some(launch) => self.apply_desktop_launch(launch),
+            None => {
+                self.shell_status = unresolved_launch_target_status(&target);
+            }
+        }
+    }
+
+    fn reveal_path_in_file_manager(&mut self, path: std::path::PathBuf) {
+        if self.desktop_window_is_open(DesktopWindow::FileManager) {
+            let dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(home_dir_fallback);
+            self.spawn_secondary_window(
+                DesktopWindow::FileManager,
+                SecondaryWindowApp::FileManager {
+                    state: NativeFileManagerState::new(dir),
+                    runtime: FileManagerEditRuntime::default(),
+                },
+            );
+        } else {
+            match reveal_path_location(path) {
+                Ok(location) => {
+                    self.apply_file_manager_location(location);
+                    self.open_desktop_window(DesktopWindow::FileManager);
+                }
+                Err(status) => self.shell_status = status,
+            }
+        }
+    }
+
+    fn execute_desktop_launch_target_with_payload(
+        &mut self,
+        target: LaunchTarget,
+        payload: DesktopLaunchPayload,
+    ) {
+        let Some(launch) = resolve_desktop_launch_target(&target) else {
+            self.shell_status = unresolved_launch_target_status(&target);
+            return;
+        };
+        match (launch, payload) {
+            (
+                NativeDesktopLaunch::OpenWindow(DesktopWindow::TerminalMode),
+                DesktopLaunchPayload::OpenTerminalShell,
+            ) => self.open_desktop_terminal_shell(),
+            (
+                NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager),
+                DesktopLaunchPayload::OpenPath(path),
+            ) => self.open_file_manager_at(path),
+            (
+                NativeDesktopLaunch::OpenWindow(DesktopWindow::FileManager),
+                DesktopLaunchPayload::RevealPath(path),
+            ) => self.reveal_path_in_file_manager(path),
+            (
+                NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor),
+                DesktopLaunchPayload::OpenPath(path),
+            ) => self.open_path_in_editor(path),
+            _ => {
+                self.shell_status =
+                    "Launch target is wired but does not support the requested payload."
+                        .to_string();
+            }
+        }
+    }
+
+    pub(super) fn launch_desktop_terminal_shell_via_registry(&mut self) {
+        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+            target: launch_registry::terminal_launch_target(),
+            payload: DesktopLaunchPayload::OpenTerminalShell,
+        });
+    }
+
     pub(super) fn execute_desktop_shell_action(&mut self, action: DesktopShellAction) {
         match action {
             DesktopShellAction::LaunchByTarget(target) => {
-                match resolve_desktop_launch_target(&target) {
-                    Some(NativeDesktopLaunch::OpenWindow(window)) => {
-                        self.open_or_spawn_desktop_window(window);
-                    }
-                    Some(NativeDesktopLaunch::OpenNukeCodes) => {
-                        self.open_desktop_nuke_codes();
-                    }
-                    Some(NativeDesktopLaunch::OpenSettingsPanel(Some(panel))) => {
-                        self.open_desktop_settings_panel(panel);
-                    }
-                    Some(NativeDesktopLaunch::OpenSettingsPanel(None)) => {
-                        self.open_desktop_settings_window();
-                    }
-                    None => {
-                        self.shell_status = unresolved_launch_target_status(&target);
-                    }
-                }
+                self.execute_desktop_launch_target(target)
             }
-            DesktopShellAction::OpenTextEditor => {
-                self.launch_editor_via_registry();
+            DesktopShellAction::LaunchByTargetWithPayload { target, payload } => {
+                self.execute_desktop_launch_target_with_payload(target, payload);
             }
-            DesktopShellAction::OpenNukeCodes => {
-                self.launch_nuke_codes_via_registry();
-            }
-            DesktopShellAction::OpenDesktopTerminalShell => self.open_desktop_terminal_shell(),
             DesktopShellAction::LaunchConfiguredApp(name) => {
                 self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
                     name,
@@ -132,7 +185,10 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::OpenFileManagerAt(path) => {
-                self.open_file_manager_at(path);
+                self.execute_desktop_launch_target_with_payload(
+                    launch_registry::file_manager_launch_target(),
+                    DesktopLaunchPayload::OpenPath(path),
+                );
             }
             DesktopShellAction::LaunchNetworkProgram(name) => {
                 self.apply_desktop_program_request(DesktopProgramRequest::LaunchCatalog {
@@ -147,33 +203,6 @@ impl RobcoNativeApp {
                 }
                 let request = resolve_desktop_games_request(&name);
                 self.apply_desktop_program_request(request);
-            }
-            DesktopShellAction::OpenPathInEditor(path) => {
-                self.open_path_in_editor(path);
-            }
-            DesktopShellAction::RevealPathInFileManager(path) => {
-                if self.desktop_window_is_open(DesktopWindow::FileManager) {
-                    // Spawn a new embedded instance at the parent directory.
-                    let dir = path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(home_dir_fallback);
-                    self.spawn_secondary_window(
-                        DesktopWindow::FileManager,
-                        SecondaryWindowApp::FileManager {
-                            state: NativeFileManagerState::new(dir),
-                            runtime: FileManagerEditRuntime::default(),
-                        },
-                    );
-                } else {
-                    match reveal_path_location(path) {
-                        Ok(location) => {
-                            self.apply_file_manager_location(location);
-                            self.open_desktop_window(DesktopWindow::FileManager);
-                        }
-                        Err(status) => self.shell_status = status,
-                    }
-                }
             }
         }
     }
@@ -216,6 +245,37 @@ impl RobcoNativeApp {
             }
             NativeTerminalLaunch::OpenNukeCodes => {
                 self.open_nuke_codes_screen(return_screen);
+            }
+        }
+    }
+
+    pub(super) fn execute_terminal_launch_target_with_path(
+        &mut self,
+        target: LaunchTarget,
+        path: PathBuf,
+        return_screen: TerminalScreen,
+    ) {
+        let Some(launch) = resolve_terminal_launch_target(&target) else {
+            crate::sound::play_error();
+            self.shell_status = unresolved_terminal_launch_target_status(&target);
+            return;
+        };
+        match launch {
+            NativeTerminalLaunch::OpenDocumentBrowser => {
+                self.open_embedded_file_manager_at(path);
+                self.terminal_nav.browser_idx = 0;
+                self.terminal_nav.browser_return_screen = return_screen;
+                self.navigate_to_screen(TerminalScreen::DocumentBrowser);
+                self.shell_status = "Opened File Manager.".to_string();
+            }
+            NativeTerminalLaunch::OpenEditor => {
+                self.open_embedded_path_in_editor(path);
+                self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
+            }
+            _ => {
+                self.shell_status =
+                    "Launch target is wired but does not support the requested payload."
+                        .to_string();
             }
         }
     }

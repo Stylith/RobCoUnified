@@ -1,4 +1,10 @@
 use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
+use super::launch_registry::{
+    about_launch_target, connections_launch_target, default_apps_launch_target,
+    desktop_launch_target_available_for_profile, edit_menus_launch_target, editor_launch_target,
+    file_manager_launch_target, nuke_codes_launch_target,
+    terminal_launch_target_available_for_profile,
+};
 use super::*;
 
 impl RobcoNativeApp {
@@ -32,31 +38,50 @@ impl RobcoNativeApp {
 
     pub(super) fn visible_application_builtins(&self) -> (bool, bool, bool) {
         let profile = crate::config::install_profile();
-        let show_file_manager = first_party_capability_enabled_str(profile, "file-browser");
+        let show_file_manager =
+            desktop_launch_target_available_for_profile(&file_manager_launch_target(), profile);
         let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
-            && first_party_capability_enabled_str(profile, "text-editor");
+            && desktop_launch_target_available_for_profile(&editor_launch_target(), profile);
         let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
-            && first_party_capability_enabled_str(profile, "code-reference");
+            && desktop_launch_target_available_for_profile(&nuke_codes_launch_target(), profile);
         (show_file_manager, show_text_editor, show_nuke_codes)
     }
 
     pub(super) fn terminal_settings_visibility(&self) -> TerminalSettingsVisibility {
         let profile = crate::config::install_profile();
         TerminalSettingsVisibility {
-            default_apps: first_party_capability_enabled_str(profile, "default-apps-ui"),
-            connections: first_party_capability_enabled_str(profile, "connections-ui"),
-            edit_menus: first_party_capability_enabled_str(profile, "edit-menus-ui"),
-            about: first_party_capability_enabled_str(profile, "about-ui"),
+            default_apps: terminal_launch_target_available_for_profile(
+                &default_apps_launch_target(),
+                profile,
+            ),
+            connections: terminal_launch_target_available_for_profile(
+                &connections_launch_target(),
+                profile,
+            ),
+            edit_menus: terminal_launch_target_available_for_profile(
+                &edit_menus_launch_target(),
+                profile,
+            ),
+            about: terminal_launch_target_available_for_profile(&about_launch_target(), profile),
         }
     }
 
     pub(super) fn desktop_settings_visibility(&self) -> DesktopSettingsVisibility {
         let profile = crate::config::install_profile();
         DesktopSettingsVisibility {
-            default_apps: first_party_capability_enabled_str(profile, "default-apps-ui"),
-            connections: first_party_capability_enabled_str(profile, "connections-ui"),
-            edit_menus: first_party_capability_enabled_str(profile, "edit-menus-ui"),
-            about: first_party_capability_enabled_str(profile, "about-ui"),
+            default_apps: desktop_launch_target_available_for_profile(
+                &default_apps_launch_target(),
+                profile,
+            ),
+            connections: desktop_launch_target_available_for_profile(
+                &connections_launch_target(),
+                profile,
+            ),
+            edit_menus: desktop_launch_target_available_for_profile(
+                &edit_menus_launch_target(),
+                profile,
+            ),
+            about: desktop_launch_target_available_for_profile(&about_launch_target(), profile),
         }
     }
 

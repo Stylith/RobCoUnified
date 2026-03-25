@@ -90,17 +90,23 @@ pub enum DesktopMenuAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopLaunchPayload {
+    OpenTerminalShell,
+    OpenPath(PathBuf),
+    RevealPath(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopShellAction {
     LaunchByTarget(LaunchTarget),
-    OpenTextEditor,
-    OpenNukeCodes,
-    OpenDesktopTerminalShell,
+    LaunchByTargetWithPayload {
+        target: LaunchTarget,
+        payload: DesktopLaunchPayload,
+    },
     LaunchConfiguredApp(String),
     OpenFileManagerAt(PathBuf),
     LaunchNetworkProgram(String),
     LaunchGameProgram(String),
-    OpenPathInEditor(PathBuf),
-    RevealPathInFileManager(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,6 +662,7 @@ pub fn hosted_app_for_window(window: Option<WindowInstanceId>) -> DesktopHostedA
         .unwrap_or(DesktopHostedApp::Desktop)
 }
 
+#[cfg(test)]
 pub fn desktop_window_title(window: DesktopWindow, pty_title: Option<&str>) -> String {
     desktop_component_spec(window).title(pty_title)
 }
@@ -976,10 +983,18 @@ mod tests {
 
     #[test]
     fn shell_action_can_carry_path_and_program_launches() {
-        let action = DesktopShellAction::RevealPathInFileManager(PathBuf::from("/tmp/demo.txt"));
+        let action = DesktopShellAction::LaunchByTargetWithPayload {
+            target: LaunchTarget::Capability {
+                capability: crate::platform::CapabilityId::from("file-browser"),
+            },
+            payload: DesktopLaunchPayload::RevealPath(PathBuf::from("/tmp/demo.txt")),
+        };
         assert!(matches!(
             action,
-            DesktopShellAction::RevealPathInFileManager(path) if path == PathBuf::from("/tmp/demo.txt")
+            DesktopShellAction::LaunchByTargetWithPayload {
+                payload: DesktopLaunchPayload::RevealPath(path),
+                ..
+            } if path == PathBuf::from("/tmp/demo.txt")
         ));
     }
 }

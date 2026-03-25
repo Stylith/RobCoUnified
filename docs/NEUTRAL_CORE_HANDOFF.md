@@ -54,6 +54,20 @@ Important honesty note:
 - there are still hardwired first-party runtime mappings and shell-owned window/screen enums that know about current first-party addons
 - product branding and theme assumptions are still present in many UI/runtime surfaces
 
+Near-term engineering rules while finishing the current roadmap:
+
+- Do not pause the current roadmap for a full shell-theme rewrite yet.
+- Do stop adding new shell-facing behavior through raw theme checks or scattered capability string checks.
+- Any shell-facing visibility/launch decision touched during normal work should prefer shared registry/launch-target resolution over local `if theme == ...` or `if capability == ...` branches.
+- Treat desktop mode and terminal mode as separate first-class shell profiles, not a single theme with toggles.
+- Separate these concerns explicitly even before the full refactor:
+  - structure/layout profile: which slots or regions exist
+  - component behavior: what fills a slot functionally
+  - skin/presentation: how that component looks
+  - capability/schema: which settings/options are valid for the active component/skin
+- A component and its visual must remain separate objects. For example, `dock` is not the same thing as `macos dock skin`.
+- Do not build the global theme chooser first. The chooser should come after registry/config support for layout profiles, components, skins, and capability-driven settings.
+
 ## What Has Been Implemented So Far
 
 The safe-first sequence has been followed. The project now has:
@@ -687,12 +701,17 @@ Current Phase 1 progress:
 - desktop and terminal addon-backed entry points now mostly route through shared capability/addon resolution
 - first-party runtime resolution is centralized in `src/native/addons.rs` + `src/native/app/launch_registry.rs`
 - profile-aware availability and addon enabled-state both feed launcher policy
+- addon-backed shell visibility should resolve from the same launch-target seam wherever practical, so menu/search visibility does not drift from launch behavior
+- desktop payload-carrying shell actions now have a typed launch-payload seam for editor/file-manager path opens and desktop terminal-shell entry, instead of routing those cases only through ad hoc top-level shell action branches
+- desktop surface file/folder activation now uses that same typed launch-payload seam for file-manager directory opens and built-in editor fallback opens
+- path-open policy is now explicit: desktop-originated path opens stay desktop/windowed, terminal-originated path opens stay terminal-native unless the user explicitly launches a desktop shell/app
+- terminal `F1` command UI should be treated as a window-local menu strip under the active window header, not as a global top-bar replacement; terminal editor/browser input should be inert while that local strip is open
 - settings subtools now have addon identities
 - unresolved status now distinguishes “not wired”, “disabled by install profile”, and “disabled by addon state”
 - remaining direct paths are mostly payload-carrying flows or shell-owned host behavior:
   - settings panel-specific routing
-  - path/payload-specific editor and file-manager behavior
-  - direct desktop/terminal host opening for currently compiled first-party runtimes
+  - broader cross-mode path/payload behavior still uses runtime-owned helpers after resolution
+  - direct desktop/terminal host opening for currently compiled first-party runtimes beyond the new terminal-shell launch seam
 
 Exit criteria:
 
@@ -1133,8 +1152,11 @@ Also keep these additional realities in mind:
 - the codebase is not yet 100% separated; static first-party runtime routing still exists
 - there are still shell-owned window/screen/panel enums that know about current first-party addons
 - theme and branding extraction are still ahead of us
-- future theme work should separate:
+- future shell-composition work should separate:
   - render mode (`monochrome` vs `color`)
   - color themes
-  - shell themes
-  - desktop vs terminal appearance with global fallback
+  - per-mode layout profiles
+  - shell components (`dock`, `taskbar`, `top menu`, `panel`, `window header`, `launcher`)
+  - skins/assets for those components (`macos dock skin`, `windows95 window skin`, icon packs, cursor packs)
+  - capability/schema-driven settings for active components and skins
+- avoid treating all of the above as one flat `theme` object; that will collapse structure, behavior, and presentation back into hardcoded conditionals

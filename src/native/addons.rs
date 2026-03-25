@@ -5,8 +5,10 @@ use crate::config;
 use crate::platform::{
     build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint, AddonId, AddonKind,
     AddonManifest, AddonManifestDiscovery, AddonRegistry, AddonScope, AddonStateOverrides,
-    CapabilityId, DiscoveredAddonManifest, FileAssociation, InstallProfile,
+    DiscoveredAddonManifest, FileAssociation, InstallProfile,
 };
+#[cfg(test)]
+use crate::platform::CapabilityId;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -350,6 +352,7 @@ pub(crate) fn first_party_addon_registry_for_profile(profile: InstallProfile) ->
     )
 }
 
+#[cfg(test)]
 pub(crate) fn first_party_capability_enabled(
     profile: InstallProfile,
     capability: &CapabilityId,
@@ -359,6 +362,7 @@ pub(crate) fn first_party_capability_enabled(
         .is_empty()
 }
 
+#[cfg(test)]
 pub(crate) fn first_party_capability_enabled_str(
     profile: InstallProfile,
     capability: &'static str,

@@ -1,4 +1,5 @@
 use super::super::background::BackgroundResult;
+use super::super::desktop_app::{DesktopLaunchPayload, DesktopShellAction};
 use super::super::desktop_settings_service::{
     load_settings_snapshot, persist_settings_draft, reload_settings_snapshot,
 };
@@ -119,10 +120,22 @@ impl RobcoNativeApp {
                     self.replace_settings_draft(settings);
                 }
                 super::super::ipc::IpcMessage::OpenInEditor { path } => {
-                    self.open_path_in_editor(std::path::PathBuf::from(path));
+                    self.execute_desktop_shell_action(
+                        DesktopShellAction::LaunchByTargetWithPayload {
+                            target: super::launch_registry::editor_launch_target(),
+                            payload: DesktopLaunchPayload::OpenPath(std::path::PathBuf::from(path)),
+                        },
+                    );
                 }
                 super::super::ipc::IpcMessage::RevealInFileManager { path } => {
-                    self.open_file_manager_at(std::path::PathBuf::from(path));
+                    self.execute_desktop_shell_action(
+                        DesktopShellAction::LaunchByTargetWithPayload {
+                            target: super::launch_registry::file_manager_launch_target(),
+                            payload: DesktopLaunchPayload::RevealPath(std::path::PathBuf::from(
+                                path,
+                            )),
+                        },
+                    );
                 }
                 super::super::ipc::IpcMessage::OpenSettings { panel } => {
                     let panel = panel.and_then(|p| standalone_settings_panel_from_arg(&p));

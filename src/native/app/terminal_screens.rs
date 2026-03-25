@@ -1,5 +1,6 @@
 use super::super::about_screen::{draw_about_screen, TerminalAboutRequest};
 use super::super::background::BackgroundResult;
+use super::super::command_layer::CommandLayerTarget;
 use super::super::connections_screen::{
     draw_terminal_connections_screen, TerminalConnectionsRequest,
 };
@@ -41,9 +42,6 @@ use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
-use super::super::terminal_command_palette::{
-    draw_command_palette, CommandPaletteState, CommandPaletteTarget,
-};
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
 use super::launch_registry::{
     editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
@@ -432,6 +430,7 @@ impl RobcoNativeApp {
                     layout.status_row,
                     layout.status_row_alt,
                     layout.content_col,
+                    false,
                 );
                 if let Some(action) = picker_action {
                     match action {
@@ -455,40 +454,13 @@ impl RobcoNativeApp {
             }
         }
         // If command palette is open for the document browser, handle it
-        if self.terminal_command_palette.open
-            && self.terminal_command_palette.target == CommandPaletteTarget::DocumentBrowser
-        {
-            // Let the palette process and consume keys first
-            let palette_action = draw_command_palette(
+        if self.command_layer_open_for(CommandLayerTarget::FileManager) {
+            self.draw_command_layer_at(
                 ctx,
-                &mut self.terminal_command_palette,
-                layout.cols,
-                layout.rows,
+                CommandLayerTarget::FileManager,
+                self.terminal_command_layer_bar_pos(ctx),
+                ctx.screen_rect(),
             );
-            // Consume any remaining navigation keys so the browser doesn't act on them
-            ctx.input_mut(|i| {
-                let m = egui::Modifiers::NONE;
-                i.consume_key(m, egui::Key::ArrowUp);
-                i.consume_key(m, egui::Key::ArrowDown);
-                i.consume_key(m, egui::Key::Enter);
-                i.consume_key(m, egui::Key::Space);
-                i.consume_key(m, egui::Key::Escape);
-                i.consume_key(m, egui::Key::Tab);
-                i.consume_key(m, egui::Key::Q);
-                i.consume_key(m, egui::Key::F2);
-                i.consume_key(m, egui::Key::Delete);
-                i.consume_key(m, egui::Key::Backspace);
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::C);
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::X);
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::V);
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
-                i.consume_key(
-                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-                    egui::Key::N,
-                );
-            });
-            // Draw the browser visually underneath (keys already consumed)
             draw_terminal_document_browser(
                 ctx,
                 &self.file_manager,
@@ -505,10 +477,8 @@ impl RobcoNativeApp {
                 layout.status_row,
                 layout.status_row_alt,
                 layout.content_col,
+                false,
             );
-            if let Some(action) = palette_action {
-                self.apply_fm_palette_action(action);
-            }
             return;
         }
         let event = draw_terminal_document_browser(
@@ -527,6 +497,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.status_row_alt,
             layout.content_col,
+            true,
         );
         match event {
             DocumentBrowserEvent::None => {}
@@ -540,7 +511,7 @@ impl RobcoNativeApp {
                 self.file_manager.up();
                 self.terminal_nav.browser_idx = 0;
             }
-            DocumentBrowserEvent::Activate(_) => {
+            DocumentBrowserEvent::Activate => {
                 match activate_browser_selection(
                     &mut self.file_manager,
                     self.terminal_nav.browser_idx,
@@ -559,12 +530,7 @@ impl RobcoNativeApp {
             }
             DocumentBrowserEvent::OpenCommandPalette => {
                 crate::sound::play_navigate();
-                self.terminal_command_palette = CommandPaletteState {
-                    open: true,
-                    target: CommandPaletteTarget::DocumentBrowser,
-                    selected: 0,
-                    pending_action: None,
-                };
+                self.open_command_layer(CommandLayerTarget::FileManager);
             }
             DocumentBrowserEvent::Copy => {
                 crate::sound::play_navigate();

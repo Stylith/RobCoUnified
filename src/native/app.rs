@@ -1,13 +1,19 @@
 use super::background::{BackgroundResult, BackgroundTasks};
+use super::command_layer::CommandLayerState;
 use super::connections_screen::TerminalConnectionsState;
 use super::data::home_dir_fallback;
 #[cfg(test)]
 use super::desktop_app::DesktopMenuAction;
-use super::desktop_app::{DesktopShellAction, DesktopWindow, WindowInstanceId};
+#[cfg(test)]
+use super::desktop_app::DesktopShellAction;
+use super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::DiscoveredConnection;
+#[cfg(test)]
 use super::desktop_launcher_service::{
     ProgramCatalog, BUILTIN_RED_MENACE_GAME, BUILTIN_ZETA_INVADERS_GAME,
 };
+#[cfg(not(test))]
+use super::desktop_launcher_service::{BUILTIN_RED_MENACE_GAME, BUILTIN_ZETA_INVADERS_GAME};
 #[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
@@ -16,32 +22,43 @@ use super::desktop_settings_service::load_settings_snapshot;
 use super::desktop_status_service::shell_status;
 use super::desktop_surface_service::{DesktopIconGridLayout, DesktopSurfaceEntry};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
-use super::editor_app::{EditorCommand, EditorWindow, EDITOR_APP_TITLE};
-use super::file_manager::{FileEntryRow, FileManagerCommand, NativeFileManagerState};
+#[cfg(test)]
+use super::editor_app::EditorCommand;
+use super::editor_app::{EditorWindow, EDITOR_APP_TITLE};
+#[cfg(test)]
+use super::file_manager::FileEntryRow;
+use super::file_manager::{FileManagerCommand, NativeFileManagerState};
+#[cfg(test)]
 use super::file_manager_app::{
     FileManagerEditRuntime, FileManagerPickerCommit, NativeFileManagerDragPayload,
 };
+#[cfg(not(test))]
+use super::file_manager_app::{FileManagerEditRuntime, NativeFileManagerDragPayload};
 use super::file_manager_desktop::{self, FileManagerDesktopFooterAction};
-use super::first_party_capability_enabled_str;
 use super::installer_screen::{DesktopInstallerState, TerminalInstallerState};
 use super::menu::{
     terminal_runtime_defaults, TerminalLoginState, TerminalNavigationState, TerminalScreen,
 };
 use super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
+#[cfg(test)]
 use super::prompt::{
     FlashAction, TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
 };
+#[cfg(not(test))]
+use super::prompt::{TerminalFlash, TerminalPrompt};
 use super::pty_screen::NativePtyState;
 use super::retro_ui::{
     configure_visuals, configure_visuals_for_settings, current_palette, palette_for_settings,
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
-use super::terminal_command_palette::CommandPaletteState;
 use super::terminal_open_with_picker;
 use crate::config::SavedConnection;
+#[cfg(test)]
 use crate::config::{
     DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, OpenMode, Settings,
 };
+#[cfg(not(test))]
+use crate::config::{DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, Settings};
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
 use eframe::egui::{
@@ -49,6 +66,11 @@ use eframe::egui::{
     RichText, TextEdit, TextStyle, TextureHandle,
 };
 use egui_wgpu::CrtEffects;
+#[cfg(not(test))]
+use robcos_native_programs_app::{
+    build_desktop_applications_sections, DesktopApplicationsSections,
+};
+#[cfg(test)]
 use robcos_native_programs_app::{
     build_desktop_applications_sections, DesktopApplicationsSections, DesktopProgramRequest,
 };
@@ -68,6 +90,7 @@ use std::time::{Duration, Instant};
 
 mod addon_policy;
 mod asset_helpers;
+mod command_layer_runtime;
 mod desktop_component_host;
 mod desktop_file_runtime;
 mod desktop_installer_ui;
@@ -100,6 +123,7 @@ mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod frame_runtime;
 mod settings_panels;
+#[cfg(test)]
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
 use crate::config::CUSTOM_THEME_NAME;
@@ -540,7 +564,7 @@ pub struct RobcoNativeApp {
     terminal_connections: TerminalConnectionsState,
     terminal_prompt: Option<TerminalPrompt>,
     terminal_flash: Option<TerminalFlash>,
-    terminal_command_palette: CommandPaletteState,
+    command_layer: CommandLayerState,
     terminal_open_with_picker: Option<terminal_open_with_picker::OpenWithPickerState>,
     session_leader_until: Option<Instant>,
     session_runtime: HashMap<usize, ParkedSessionState>,
@@ -725,7 +749,7 @@ impl Default for RobcoNativeApp {
             terminal_connections: TerminalConnectionsState::default(),
             terminal_prompt: None,
             terminal_flash: None,
-            terminal_command_palette: CommandPaletteState::default(),
+            command_layer: CommandLayerState::default(),
             terminal_open_with_picker: None,
             session_leader_until: None,
             session_runtime: HashMap::new(),
@@ -935,6 +959,7 @@ mod tests {
     use super::*;
     use crate::config::{DesktopShortcut, FileManagerSortMode, FileManagerViewMode};
     use crate::core::auth::{load_users, save_users, AuthMethod, UserRecord};
+    use crate::native::desktop_app::DesktopLaunchPayload;
     use crate::native::file_manager_app::FileManagerClipboardMode;
     use crate::native::installer_screen::DesktopInstallerView;
     use std::collections::HashMap;
@@ -2015,13 +2040,45 @@ mod tests {
         std::fs::write(&file_path, "demo").expect("write temp file");
 
         let mut app = RobcoNativeApp::default();
-        app.execute_desktop_shell_action(DesktopShellAction::RevealPathInFileManager(
-            file_path.clone(),
-        ));
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+            target: launch_registry::file_manager_launch_target(),
+            payload: DesktopLaunchPayload::RevealPath(file_path.clone()),
+        });
 
         assert!(app.file_manager.open);
         assert_eq!(app.file_manager.cwd, temp.path);
         assert_eq!(app.file_manager.selected, Some(file_path));
+    }
+
+    #[test]
+    fn desktop_surface_directory_open_uses_file_manager_launch_payload() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("desktop_surface_dir");
+        let folder = temp.path.join("docs");
+        std::fs::create_dir_all(&folder).expect("create desktop folder");
+
+        let mut app = RobcoNativeApp::default();
+        app.open_desktop_surface_path(folder.clone());
+
+        assert!(app.file_manager.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::FileManager));
+        assert_eq!(app.file_manager.cwd, folder);
+    }
+
+    #[test]
+    fn desktop_surface_text_file_open_uses_editor_launch_payload() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("desktop_surface_editor");
+        let file_path = temp.path.join("desktop-note.txt");
+        std::fs::write(&file_path, "surface text").expect("write desktop note");
+
+        let mut app = RobcoNativeApp::default();
+        app.open_desktop_surface_path(file_path.clone());
+
+        assert!(app.editor.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Editor));
+        assert_eq!(app.editor.path, Some(file_path));
+        assert_eq!(app.editor.text, "surface text");
     }
 
     #[test]
@@ -2256,7 +2313,9 @@ mod tests {
     fn terminal_launch_target_opens_terminal_window() {
         let mut app = RobcoNativeApp::default();
 
-        app.launch_terminal_via_registry();
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::terminal_launch_target(),
+        ));
 
         assert!(app.terminal_mode.open);
         assert!(app.desktop_window_is_open(DesktopWindow::TerminalMode));
@@ -2266,7 +2325,9 @@ mod tests {
     fn programs_launch_target_opens_applications_window() {
         let mut app = RobcoNativeApp::default();
 
-        app.launch_programs_via_registry();
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::programs_launch_target(),
+        ));
 
         assert!(app.applications.open);
         assert!(app.desktop_window_is_open(DesktopWindow::Applications));
@@ -2276,7 +2337,9 @@ mod tests {
     fn connections_launch_target_opens_settings_connections_panel() {
         let mut app = RobcoNativeApp::default();
 
-        app.launch_connections_via_registry();
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::connections_launch_target(),
+        ));
 
         assert!(app.settings.open);
         assert!(app.desktop_window_is_open(DesktopWindow::Settings));
@@ -2379,7 +2442,9 @@ mod tests {
     fn open_text_editor_action_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
-        app.execute_desktop_shell_action(DesktopShellAction::OpenTextEditor);
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::editor_launch_target(),
+        ));
 
         assert!(app.editor.open);
         assert!(app.desktop_window_is_open(DesktopWindow::Editor));
@@ -2390,7 +2455,9 @@ mod tests {
         let mut app = RobcoNativeApp::default();
         app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
 
-        app.execute_desktop_shell_action(DesktopShellAction::OpenNukeCodes);
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
+            launch_registry::nuke_codes_launch_target(),
+        ));
 
         assert!(app.desktop_window_is_open(DesktopWindow::NukeCodes));
     }
@@ -2435,6 +2502,62 @@ mod tests {
         assert!(!app.spotlight_open);
         assert!(app.terminal_mode.open);
         assert!(app.desktop_window_is_open(DesktopWindow::TerminalMode));
+    }
+
+    #[test]
+    fn launch_target_with_editor_path_payload_opens_requested_file() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("editor_payload_open");
+        let file_path = temp.path.join("notes.txt");
+        std::fs::write(&file_path, "hello").expect("write temp editor file");
+
+        let mut app = RobcoNativeApp::default();
+        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
+            target: launch_registry::editor_launch_target(),
+            payload: DesktopLaunchPayload::OpenPath(file_path.clone()),
+        });
+
+        assert!(app.editor.open);
+        assert!(app.desktop_window_is_open(DesktopWindow::Editor));
+        assert_eq!(app.editor.path, Some(file_path));
+        assert_eq!(app.editor.text, "hello");
+    }
+
+    #[test]
+    fn terminal_document_open_reuses_embedded_editor_surface() {
+        let _guard = session_test_guard();
+        let temp = TempDirGuard::new("terminal_editor_policy");
+        let first_path = temp.path.join("first.txt");
+        let second_path = temp.path.join("second.txt");
+        std::fs::write(&first_path, "first").expect("write first editor file");
+        std::fs::write(&second_path, "second").expect("write second editor file");
+
+        let mut app = RobcoNativeApp::default();
+        app.desktop_mode_open = false;
+        app.open_embedded_path_in_editor(first_path);
+
+        app.open_file_with_default_app_or_editor(second_path.clone());
+
+        assert!(app.editor.open);
+        assert_eq!(app.editor.path, Some(second_path));
+        assert_eq!(app.editor.text, "second");
+        assert!(app
+            .secondary_windows
+            .iter()
+            .all(|window| window.id.kind != DesktopWindow::Editor));
+    }
+
+    #[test]
+    fn start_system_terminal_action_opens_desktop_terminal_shell() {
+        let _guard = session_test_guard();
+        let mut app = RobcoNativeApp::default();
+
+        app.run_start_system_action(desktop_start_menu::StartSystemAction::Terminal);
+
+        assert!(app.terminal_pty.is_some());
+        assert!(!app.terminal_mode.open);
+
+        app.terminate_all_native_pty_children();
     }
 
     #[test]
