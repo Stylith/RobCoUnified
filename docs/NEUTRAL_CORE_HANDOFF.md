@@ -1065,9 +1065,15 @@ Current decoupling status:
   - `nucleon-desktop-addons` commit `43c12d0` adds `sources/`
   - `sources/` contains buildable Rust workspaces for Red Menace, Zeta Invaders, Nuke Codes, plus the generic hosted-addon SDK/contract copy needed by those builds
 - Core workspace membership no longer includes the addon-specific source/build crates.
+- The six addon-specific source/build directories were deleted from this repo after that external workspace was verified:
+  - `crates/native-red-menace-app/`
+  - `crates/wasm-red-menace-addon/`
+  - `crates/native-space-invaders-app/`
+  - `crates/wasm-zeta-invaders-addon/`
+  - `crates/native-nuke-codes-app/`
+  - `crates/wasm-nuke-codes-addon/`
 
 Current biggest remaining leaks:
-- addon-specific source/build directories still physically exist in this repo even though the external repo now owns a buildable copy
 - optional addon package publishing still needs to switch fully onto the external repo workflow
 - the host-context bridge is generic at the file-loading layer, but the data model still needs to be generalized further so the core does not carry addon-shaped host data assumptions long-term
 
@@ -1079,10 +1085,15 @@ Phase A — Move addon source/build ownership out of the core repo:
 - after the external repo can build and publish those packages independently, delete the matching workspace crates from this repo
 
 Phase B — Remove workspace crates from core after external ownership exists:
-- Delete `crates/native-red-menace-app/`, `crates/native-space-invaders-app/`, `crates/native-nuke-codes-app/`
-- Delete `crates/wasm-zeta-invaders-addon/`, `crates/wasm-nuke-codes-addon/`
-- Delete `crates/wasm-red-menace-addon/`
-- Remove their entries from root `Cargo.toml` workspace members and dependencies
+- status: complete
+- deleted from this repo:
+  - `crates/native-red-menace-app/`
+  - `crates/native-space-invaders-app/`
+  - `crates/native-nuke-codes-app/`
+  - `crates/wasm-zeta-invaders-addon/`
+  - `crates/wasm-nuke-codes-addon/`
+  - `crates/wasm-red-menace-addon/`
+- removed from root `Cargo.toml` workspace members/default-members
 
 Phase C — Remove enum variants:
 - `DesktopWindow::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in `crates/native-services/src/shared_types.rs`
