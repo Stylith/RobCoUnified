@@ -6,8 +6,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 
 ## Current Status
 
-- Repo target name: `nucleon-core`
-- Current live checkout/remote name during transition: `RobCoUnified`
+- Repo: `nucleon-core`
 - Working branch: `WIP`
 - Base branch for this work: `experimental`
 - Refactor goal: move from a product-branded, built-in-app shell toward a neutral core platform with first-party and later third-party addons
@@ -982,8 +981,7 @@ All packaging decisions from the prior handoff have been resolved and implemente
    - New test: `install_repository_addon_from_index_installs_ndpkg_bundle`.
 
 2. **External addon repository is the source of truth:**
-   - Repo target name: `nucleon-core-addons`
-   - Current live external repo during transition: `github.com/Stylith/nucleon-desktop-addons`
+   - Repo: `github.com/Stylith/nucleon-core-addons`
    - Layout: `index.json` at root, `.ndpkg` files in category folders (`games/`, `tools/`)
    - `index.json` has a `base_url` pointing at the hosted raw content root
    - Artifact URLs are relative to `base_url`
