@@ -932,7 +932,8 @@ fn stage_repository_artifact(
         return stage_repository_source_path(&path, format, staging_dir);
     }
 
-    if looks_like_http_url(&artifact.url) {
+    let resolved_url = resolve_repository_url(index, repository_source, &artifact.url);
+    if looks_like_http_url(&resolved_url) {
         if matches!(format, "addon-dir" | "directory") {
             return Err(
                 "Directory-form repository artifacts are not supported over HTTP yet.".to_string(),
@@ -944,7 +945,7 @@ fn stage_repository_artifact(
             .arg("--fail")
             .arg("-o")
             .arg(&destination)
-            .arg(resolve_repository_url(index, repository_source, &artifact.url))
+            .arg(&resolved_url)
             .status()
             .map_err(|error| format!("Failed to launch curl: {error}"))?;
         if status.success() {
