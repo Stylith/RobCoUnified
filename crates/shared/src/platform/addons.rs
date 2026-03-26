@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
+use super::hosted::HostedAddonProtocol;
+
 macro_rules! string_id {
     ($name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -78,6 +80,14 @@ pub enum AddonEntrypoint {
     StandaloneBinary {
         binary: String,
         package: Option<String>,
+    },
+    WasmModule {
+        module: String,
+        protocol: HostedAddonProtocol,
+    },
+    HostedProcess {
+        executable: String,
+        protocol: HostedAddonProtocol,
     },
 }
 

@@ -29,7 +29,7 @@ Important constraint summary:
 - Built-in apps must become first-party addons over time.
 - Core must depend on capabilities, not app names.
 - Shell must not depend on app internals.
-- Avoid dynamic plugin loading for now.
+- Avoid native dynamic library plugin loading for now; the current preferred external-addon runtime direction is sandboxed WASM for shell-integrated addons.
 - Keep desktop mode and terminal menu mode aligned; do not let one drift too far ahead of the other.
 
 Current practical status summary:
@@ -44,8 +44,10 @@ Current practical status summary:
   - persisted enable/disable state
   - desktop + terminal installed-addon inventory views
   - essential vs optional addon separation
+  - user-scoped addon install/remove path imports
+  - discovery issue/provenance visibility in addon inventory
 - current essential-addon policy:
-  - all current first-party addons are essential except `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
+- shell-critical first-party addons are essential; optional first-party addons are currently `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
 
 Important honesty note:
 
@@ -897,6 +899,7 @@ Current Phase 4 progress:
 - launcher/policy behavior is largely capability/addon based
 - install-profile rules and addon-state rules now affect effective availability
 - installer UI now exposes installed addons and optional enable/disable state
+- installer UI now also supports user-scoped addon install paths in both terminal and desktop flows
 
 Not done yet:
 
@@ -937,13 +940,44 @@ Current Phase 5 progress:
 - persisted enable/disable overrides exist
 - unified installed-addon inventory exists
 - installer/addon-manager UI now consumes that inventory
+- user-scoped addon install/remove behavior now exists for manifest-file and addon-directory sources
+- user-scoped addon install now also accepts `.zip`, `.tar`, `.tar.gz`, and `.tgz` addon archives for manual installs
+- user-scoped addon removal now removes copied addon directories, not just the manifest file
+- user-scoped install currently rejects first-party built-in addon ids so path imports cannot shadow wired shell runtimes during the static-runtime stage
+- addon inventory now preserves manifest discovery issues with scope/path provenance for installer visibility
+- shared repository-index contract now exists for externally hosted optional addons, with manifest + release/artifact metadata and install-profile artifact selection
+- installer inventory can now consume a local repository index and show feed-backed optional addons separately from installed addons
+- repository-backed optional addons can now be installed from manifest artifacts through the existing user-addon install seam, with SHA-256 verification and cached-then-bundled index lookup
+- repository-backed installs now also support archive artifacts, so feed-hosted addon bundles do not have to be copied as raw directories
+- repository-backed install/update/reinstall actions now run off the UI thread through the shared background task channel for both terminal and desktop installer flows
+- installed optional addons can now expose repository-backed `Update` or `Reinstall` actions when a matching feed entry exists
+- optional addons are no longer seeded by the built-in manifest catalog; they only appear in installer inventory when discovered as installed addons or listed by the repository feed
+- repository-backed installs still preserve the current shell-hosted runtime rule: they install manifests for shell-integrated addons, not dynamic runtime plugins or separate external windows
+- repository artifacts can now also be hosted addon directory bundles (`addon-dir`), which gives the feed a real `manifest + assets/data` package shape while keeping runtime rendering inside the shell
+- `tools.nuke-codes` can now load its provider list from `providers.json` inside the installed addon bundle, which is the first concrete shell-hosted addon-owned data seam
+- shared hosted-addon ABI/protocol types now exist in `robcos-shared` for shell-hosted external addons, together with native bundle-relative hosted-process resolution helpers; this is the runtime boundary needed before games can actually leave the main repo
+- native hosted-process session plumbing now exists for installed addon bundles: the shell can spawn a bundle executable and round-trip newline-delimited JSON protocol messages over stdio, even though the runner is not wired into game windows yet
+- a parallel WASM runtime path now exists for shell-hosted external addons:
+  - addon manifests can declare a `wasm-module` entrypoint with the existing shell-surface protocol
+  - installed user addons can resolve bundle-relative `.wasm` modules
+  - the shell can instantiate a WASM addon in-process and round-trip JSON requests/responses through shared guest memory without a separate OS process
+- current direction change:
+  - prefer WASM for rich shell-integrated external addons like games
+  - keep hosted-process support as a secondary path for simpler or more isolated addons
+- the initial staged external-repo contents now exist under `packaging/first-party-addons-repo/` for:
+  - `games.red-menace`
+  - `games.zeta-invaders`
+  - `tools.nuke-codes`
+- that staged repo includes a checked-in `index.json` plus per-addon manifests and is covered by a shared validation test
 
 Not done yet:
 
-- install/remove workflow for discovered addons
+- richer install workflow than direct path-based manifest/directory import
+- backgrounded or resumable repository download/update behavior for externally hosted addons
 - richer addon-manager actions beyond enable/disable
 - runtime usage of discovered non-static addons
 - packaged first-party addons
+- creating the actual external git repository and publishing the staged contents there
 
 ## Phase 6: Third-Party Addons
 
@@ -1059,13 +1093,14 @@ The next Codex task should be:
 
 1. stay on the addon-management / manifest-externalization track rather than reopening old runtime decomposition work
 2. add the next narrow lifecycle behavior for discovered addons:
-   - likely first target: install/remove handling for user-scoped manifest entries
+   - likely first target: turn read-only repository listings into explicit download/install actions using the existing repository index contract
    - keep runtime behavior static for first-party addons
+   - no dynamic plugin loading
 3. preserve the current essential/optional rule:
    - essential: every current first-party addon except `Red Menace`, `Zeta Invaders`, and `Nuke Codes`
    - optional: only those three for now
 4. keep desktop and terminal installer/addon-manager behavior aligned
-5. do not jump to dynamic loading, generalized third-party runtime plugins, or a whole-repo folder cleanup
+ 5. do not jump to dynamic loading, generalized third-party runtime plugins, or a whole-repo folder cleanup
 
 Alternative next task if addon install/remove is blocked:
 
@@ -1116,7 +1151,8 @@ Important context:
   - optional: only those three
 - Desktop and terminal installer/addon-manager behavior should stay aligned.
 - Do not redesign the contract layer unless there is a concrete bug.
-- Do not introduce dynamic plugin loading.
+- Do not introduce native dynamic library plugin loading.
+- Prefer the new WASM addon runtime path for shell-integrated external addons instead of expanding the older hosted-process route for games.
 - Prefer bounded migration slices over broad rewrites.
 
 Goal for this session:

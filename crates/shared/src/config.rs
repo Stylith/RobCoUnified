@@ -1,6 +1,6 @@
 use crate::platform::{
-    AddonStateOverrides, InstallProfile, PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment,
-    StatePathLayout,
+    AddonRepositoryIndex, AddonStateOverrides, InstallProfile, PlatformPaths,
+    ResolvedPlatformPaths, RuntimeEnvironment, StatePathLayout,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,41 @@ pub fn cache_root_dir() -> PathBuf {
     let dir = platform_paths().cache_root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+pub fn bundled_addon_repository_index_file() -> PathBuf {
+    core_root_dir().join("addon-repository-index.json")
+}
+
+pub fn cached_addon_repository_index_file() -> PathBuf {
+    cache_root_dir().join("addon-repository-index.json")
+}
+
+pub fn addon_downloads_cache_dir() -> PathBuf {
+    let dir = cache_root_dir().join("addon-downloads");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn load_addon_repository_index() -> Result<Option<(AddonRepositoryIndex, PathBuf)>> {
+    for path in [
+        cached_addon_repository_index_file(),
+        bundled_addon_repository_index_file(),
+    ] {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read addon repository index '{}'", path.display()))?;
+        let index = serde_json::from_str(&raw).with_context(|| {
+            format!(
+                "failed to parse addon repository index '{}'",
+                path.display()
+            )
+        })?;
+        return Ok(Some((index, path)));
+    }
+    Ok(None)
 }
 
 pub const BIN_DIR_ENV: &str = "NUCLEON_BIN_DIR";

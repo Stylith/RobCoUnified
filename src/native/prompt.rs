@@ -72,6 +72,7 @@ pub enum TerminalPromptAction {
     },
     InstallerSearch,
     InstallerFilter,
+    InstallerAddonPath,
     InstallerDisplayName {
         pkg: String,
         target: InstallerMenuTarget,

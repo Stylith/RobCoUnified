@@ -1,7 +1,5 @@
 use super::super::desktop_app::DesktopShellAction;
-use super::super::desktop_launcher_service::{
-    grouped_game_menu_names, is_robco_fun_game, robco_fun_game_names, ROBCO_FUN_MENU_LABEL,
-};
+use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog, ROBCO_FUN_MENU_LABEL};
 use super::super::desktop_search_service::{
     start_application_entries, start_document_entries, start_network_entries,
     NativeStartLeafAction, NativeStartLeafEntry,
@@ -11,6 +9,7 @@ use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::prompt::FlashAction;
 use super::super::retro_ui::current_palette;
 use crate::config::install_profile;
+use crate::native::{installed_hosted_game_names, is_installed_hosted_game};
 use crate::platform::{InstallProfile, LaunchTarget};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
 
@@ -326,7 +325,7 @@ impl RobcoNativeApp {
             NativeStartLeafAction::LaunchNetworkProgram(name) => {
                 Some((EditMenuTarget::Network, name.clone()))
             }
-            NativeStartLeafAction::LaunchGameProgram(name) if !is_robco_fun_game(name) => {
+            NativeStartLeafAction::LaunchGameProgram(name) if !is_installed_hosted_game(name) => {
                 Some((EditMenuTarget::Games, name.clone()))
             }
             _ => None,
@@ -334,7 +333,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn start_robco_fun_items(&self) -> Vec<NativeStartLeafEntry> {
-        robco_fun_game_names()
+        installed_hosted_game_names()
             .into_iter()
             .map(|label| NativeStartLeafEntry {
                 action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
@@ -367,17 +366,18 @@ impl RobcoNativeApp {
             ),
             StartLeaf::Network => start_network_entries(),
             StartLeaf::Games => {
-                let groups = grouped_game_menu_names();
+                let hosted_games = installed_hosted_game_names();
+                let mut other_games = catalog_names(ProgramCatalog::Games);
+                other_games.retain(|name| !hosted_games.iter().any(|hosted| hosted == name));
                 let mut items = Vec::new();
-                if !groups.robco_fun.is_empty() {
+                if !hosted_games.is_empty() {
                     items.push(NativeStartLeafEntry {
                         label: ROBCO_FUN_MENU_LABEL.to_string(),
                         action: NativeStartLeafAction::None,
                     });
                 }
                 items.extend(
-                    groups
-                        .other_games
+                    other_games
                         .into_iter()
                         .map(|label| NativeStartLeafEntry {
                             action: NativeStartLeafAction::LaunchGameProgram(label.clone()),

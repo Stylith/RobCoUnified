@@ -2,7 +2,8 @@ use super::menu::draw_terminal_menu_screen;
 use crate::config::get_current_user;
 use crate::native::{
     installed_addon_inventory, installed_addon_inventory_sections, remove_installed_addon,
-    set_addon_enabled_override, InstalledAddonInventorySections, InstalledAddonRecord,
+    repository_sync_action_for_manifest, set_addon_enabled_override,
+    InstalledAddonInventorySections, InstalledAddonRecord, RepositoryAddonRecord,
 };
 pub use robcos_native_installer_app::{
     add_package_to_menu, apply_filter, apply_search_query, available_runtime_tools,
@@ -403,8 +404,10 @@ fn draw_addon_inventory(
 ) -> InstallerEvent {
     #[derive(Clone)]
     enum AddonRow {
+        Install,
         Essential(usize),
         Optional(usize),
+        Repository(usize),
         Prev,
         Next,
         Back,
@@ -412,14 +415,18 @@ fn draw_addon_inventory(
     }
 
     let sections = installed_addon_inventory_sections();
-    let total = sections.essential.len() + sections.optional.len();
+    let installed_total = sections.essential.len() + sections.optional.len();
     let page_size = installer_page_size(menu_start_row, status_row);
-    let total_pages = total.div_ceil(page_size).max(1);
+    let total_pages = paged_addon_total(&sections).div_ceil(page_size).max(1);
     state.addons_page = state.addons_page.min(total_pages.saturating_sub(1));
-    let (paged_rows, total, end) = paged_addon_rows(&sections, state.addons_page, page_size);
+    let (paged_rows, total_rows, end) = paged_addon_rows(&sections, state.addons_page, page_size);
 
     let mut items = Vec::new();
     let mut row_actions = Vec::new();
+    items.push("Install Addon From Path".to_string());
+    row_actions.push(AddonRow::Install);
+    items.push("---".to_string());
+    row_actions.push(AddonRow::Ignore);
     for row in paged_rows {
         match row {
             AddonDisplayRow::SectionHeader(label) => {
@@ -434,13 +441,40 @@ fn draw_addon_inventory(
                 items.push(addon_inventory_menu_label(&sections.optional[idx]));
                 row_actions.push(AddonRow::Optional(idx));
             }
+            AddonDisplayRow::Repository(idx) => {
+                items.push(repository_addon_menu_label(&sections.repository_available[idx]));
+                row_actions.push(AddonRow::Repository(idx));
+            }
         }
+    }
+    if !sections.issues.is_empty() {
+        items.push("### Discovery Issues".to_string());
+        row_actions.push(AddonRow::Ignore);
+        if let Some(issue) = sections.issues.first() {
+            items.push(addon_issue_menu_label(issue));
+            row_actions.push(AddonRow::Ignore);
+        }
+        if sections.issues.len() > 1 {
+            items.push(format!("... {} more issue(s)", sections.issues.len() - 1));
+            row_actions.push(AddonRow::Ignore);
+        }
+    }
+    if let Some(issue) = &sections.repository_issue {
+        items.push("### Repository Feed".to_string());
+        row_actions.push(AddonRow::Ignore);
+        let source = sections
+            .repository_source
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        items.push(format!("{}: {}", source, issue));
+        row_actions.push(AddonRow::Ignore);
     }
     if state.addons_page > 0 {
         items.push("< Prev Page".to_string());
         row_actions.push(AddonRow::Prev);
     }
-    if end < total {
+    if end < total_rows {
         items.push("> Next Page".to_string());
         row_actions.push(AddonRow::Next);
     }
@@ -461,17 +495,26 @@ fn draw_addon_inventory(
         .get(state.addons_idx)
         .copied()
         .and_then(|raw_idx| match row_actions.get(raw_idx) {
+            Some(AddonRow::Install) => Some(
+                "Install a manifest, addon folder, or .zip/.tar(.gz) addon archive into the user addons root."
+                    .to_string(),
+            ),
             Some(AddonRow::Essential(idx)) => {
                 Some(addon_inventory_subtitle(&sections.essential[*idx]))
             }
             Some(AddonRow::Optional(idx)) => {
                 Some(addon_inventory_subtitle(&sections.optional[*idx]))
             }
+            Some(AddonRow::Repository(idx)) => {
+                Some(repository_addon_subtitle(&sections.repository_available[*idx]))
+            }
             _ => None,
         });
     let addon_status = format!(
-        "{} addons tracked   Page {}/{}",
-        total,
+        "{} installed   {} repository   {} issue(s)   Page {}/{}",
+        installed_total,
+        sections.repository_available.len(),
+        sections.issues.len() + usize::from(sections.repository_issue.is_some()),
         state.addons_page + 1,
         total_pages
     );
@@ -502,6 +545,7 @@ fn draw_addon_inventory(
 
     match activated {
         Some(idx) => match row_actions.get(idx) {
+            Some(AddonRow::Install) => InstallerEvent::OpenAddonInstallPrompt,
             Some(AddonRow::Essential(idx)) => {
                 state.action_idx = 0;
                 state.view = InstallerView::AddonActions {
@@ -516,6 +560,10 @@ fn draw_addon_inventory(
                 };
                 InstallerEvent::None
             }
+            Some(AddonRow::Repository(idx)) => InstallerEvent::StartRepositoryAddonInstall {
+                addon_id: sections.repository_available[*idx].manifest.id.to_string(),
+                action_label: "Install".to_string(),
+            },
             Some(AddonRow::Prev) => {
                 state.addons_page = state.addons_page.saturating_sub(1);
                 state.addons_idx = 0;
@@ -557,6 +605,7 @@ fn draw_addon_actions(
     enum AddonAction {
         Toggle,
         Remove,
+        RepositorySync(&'static str),
         Back,
         Ignore,
     }
@@ -582,6 +631,10 @@ fn draw_addon_actions(
     if addon_can_be_removed(&record) {
         items.push("Remove".to_string());
         actions.push(AddonAction::Remove);
+    }
+    if let Ok(Some(action)) = repository_sync_action_for_manifest(&record.manifest) {
+        items.push(action.label().to_string());
+        actions.push(AddonAction::RepositorySync(action.label()));
     }
     items.push("---".to_string());
     actions.push(AddonAction::Ignore);
@@ -630,6 +683,10 @@ fn draw_addon_actions(
                 }
                 Err(err) => InstallerEvent::Status(err),
             },
+            Some(AddonAction::RepositorySync(label)) => InstallerEvent::StartRepositoryAddonInstall {
+                addon_id: record.manifest.id.to_string(),
+                action_label: label.to_string(),
+            },
             Some(AddonAction::Back) => {
                 state.view = InstallerView::AddonInventory;
                 state.action_idx = 0;
@@ -645,6 +702,11 @@ enum AddonDisplayRow {
     SectionHeader(&'static str),
     Essential(usize),
     Optional(usize),
+    Repository(usize),
+}
+
+fn paged_addon_total(sections: &InstalledAddonInventorySections) -> usize {
+    sections.essential.len() + sections.optional.len() + sections.repository_available.len()
 }
 
 fn paged_addon_rows(
@@ -652,7 +714,8 @@ fn paged_addon_rows(
     page: usize,
     page_size: usize,
 ) -> (Vec<AddonDisplayRow>, usize, usize) {
-    let total = sections.essential.len() + sections.optional.len();
+    let installed_total = sections.essential.len() + sections.optional.len();
+    let total = paged_addon_total(sections);
     let start = page * page_size;
     let end = (start + page_size).min(total);
 
@@ -664,6 +727,12 @@ fn paged_addon_rows(
     let optional_end = end
         .saturating_sub(sections.essential.len())
         .min(sections.optional.len());
+    let repository_start = start
+        .saturating_sub(installed_total)
+        .min(sections.repository_available.len());
+    let repository_end = end
+        .saturating_sub(installed_total)
+        .min(sections.repository_available.len());
 
     let mut visible = Vec::new();
     if essential_start < essential_end {
@@ -673,6 +742,10 @@ fn paged_addon_rows(
     if optional_start < optional_end {
         visible.push(AddonDisplayRow::SectionHeader("Optional Addons"));
         visible.extend((optional_start..optional_end).map(AddonDisplayRow::Optional));
+    }
+    if repository_start < repository_end {
+        visible.push(AddonDisplayRow::SectionHeader("Repository Addons"));
+        visible.extend((repository_start..repository_end).map(AddonDisplayRow::Repository));
     }
 
     (visible, total, end)
@@ -694,17 +767,61 @@ fn addon_inventory_menu_label(record: &InstalledAddonRecord) -> String {
 }
 
 fn addon_inventory_subtitle(record: &InstalledAddonRecord) -> String {
-    let source = record
-        .manifest_path
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "static fallback manifest".to_string());
+    let source = addon_source_label(record);
     format!(
         "{} | id={} | source={}",
         addon_enabled_label(record),
         record.manifest.id,
         source
     )
+}
+
+fn addon_source_label(record: &InstalledAddonRecord) -> String {
+    record
+        .manifest_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "static fallback manifest".to_string())
+}
+
+fn addon_issue_menu_label(issue: &crate::platform::AddonManifestLoadIssue) -> String {
+    format!(
+        "[{}] {}: {}",
+        addon_scope_name(issue.scope),
+        issue.manifest_path.display(),
+        issue.detail
+    )
+}
+
+fn repository_addon_menu_label(record: &RepositoryAddonRecord) -> String {
+    let version = record
+        .release
+        .as_ref()
+        .map(|release| release.version.as_str())
+        .unwrap_or(record.manifest.version.as_str());
+    format!("[feed] {} (v{version})", record.manifest.display_name)
+}
+
+fn repository_addon_subtitle(record: &RepositoryAddonRecord) -> String {
+    let channel = record
+        .release
+        .as_ref()
+        .and_then(|release| release.channel.as_deref())
+        .unwrap_or("default");
+    format!(
+        "available from repository | id={} | channel={} | source={}",
+        record.manifest.id,
+        channel,
+        record.repository_source.display()
+    )
+}
+
+fn addon_scope_name(scope: crate::platform::AddonScope) -> &'static str {
+    match scope {
+        crate::platform::AddonScope::Bundled => "bundled",
+        crate::platform::AddonScope::System => "system",
+        crate::platform::AddonScope::User => "user",
+    }
 }
 
 fn addon_enabled_label(record: &InstalledAddonRecord) -> &'static str {
@@ -718,11 +835,7 @@ fn addon_enabled_label(record: &InstalledAddonRecord) -> &'static str {
 }
 
 fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
-    match record.manifest.scope {
-        crate::platform::AddonScope::Bundled => "bundled",
-        crate::platform::AddonScope::System => "system",
-        crate::platform::AddonScope::User => "user",
-    }
+    addon_scope_name(record.manifest.scope)
 }
 
 fn addon_override_value(record: &InstalledAddonRecord, enabled: bool) -> Option<bool> {

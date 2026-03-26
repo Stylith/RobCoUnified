@@ -269,11 +269,8 @@ mod tests {
     }
 
     #[test]
-    fn nuke_codes_capability_resolves_to_nuke_codes_route() {
-        assert_eq!(
-            resolve_desktop_launch_target(&nuke_codes_launch_target()),
-            Some(NativeDesktopLaunch::OpenNukeCodes)
-        );
+    fn nuke_codes_capability_is_unavailable_until_installed() {
+        assert_eq!(resolve_desktop_launch_target(&nuke_codes_launch_target()), None);
     }
 
     #[test]

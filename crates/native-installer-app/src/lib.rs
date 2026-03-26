@@ -130,6 +130,7 @@ pub struct TerminalInstallerState {
     pub package_descriptions: HashMap<String, Option<String>>,
     pub runtime_playsound_installed: Option<bool>,
     pub runtime_blueutil_installed: Option<bool>,
+    pub addon_install_in_flight: Option<String>,
 }
 
 impl Default for TerminalInstallerState {
@@ -156,6 +157,7 @@ impl Default for TerminalInstallerState {
             package_descriptions: HashMap::new(),
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
+            addon_install_in_flight: None,
         }
     }
 }
@@ -166,6 +168,11 @@ pub enum InstallerEvent {
     BackToMainMenu,
     OpenSearchPrompt,
     OpenFilterPrompt,
+    OpenAddonInstallPrompt,
+    StartRepositoryAddonInstall {
+        addon_id: String,
+        action_label: String,
+    },
     OpenConfirmAction {
         pkg: String,
         action: InstallerPackageAction,
@@ -259,6 +266,8 @@ pub struct DesktopInstallerState {
     pub confirm_dialog: Option<DesktopInstallerConfirm>,
     pub notice: Option<DesktopInstallerNotice>,
     pub display_name_input: String,
+    pub addon_install_path_input: String,
+    pub addon_install_in_flight: Option<String>,
 }
 
 impl Default for DesktopInstallerState {
@@ -285,6 +294,8 @@ impl Default for DesktopInstallerState {
             confirm_dialog: None,
             notice: None,
             display_name_input: String::new(),
+            addon_install_path_input: String::new(),
+            addon_install_in_flight: None,
         }
     }
 }
@@ -899,6 +910,10 @@ impl DesktopInstallerState {
 
     pub fn search_in_flight(&self) -> bool {
         self.search_receiver.is_some()
+    }
+
+    pub fn addon_install_in_flight(&self) -> bool {
+        self.addon_install_in_flight.is_some()
     }
 
     pub fn poll_search(&mut self) -> bool {

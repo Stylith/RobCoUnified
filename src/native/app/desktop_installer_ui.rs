@@ -8,8 +8,9 @@ use super::super::installer_screen::{
 };
 use super::super::retro_ui::{current_palette, RetroPalette};
 use super::super::{
-    installed_addon_inventory_sections, remove_installed_addon, set_addon_enabled_override,
-    InstalledAddonRecord,
+    install_user_addon, installed_addon_inventory_sections, remove_installed_addon,
+    repository_sync_action_for_manifest, set_addon_enabled_override, InstalledAddonRecord,
+    RepositoryAddonAction, RepositoryAddonRecord,
 };
 use super::DesktopHeaderAction;
 use eframe::egui::{self, Color32, Context, Id, Key, RichText, TextureHandle};
@@ -20,6 +21,7 @@ enum AddonRowAction {
     None,
     Toggle,
     Remove,
+    RepositorySync(RepositoryAddonAction),
 }
 
 impl RobcoNativeApp {
@@ -31,7 +33,7 @@ impl RobcoNativeApp {
         {
             return;
         }
-        if self.desktop_installer.search_in_flight() {
+        if self.desktop_installer.search_in_flight() || self.desktop_installer.addon_install_in_flight() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let _ = self.desktop_installer.poll_search();
@@ -91,6 +93,7 @@ impl RobcoNativeApp {
         let mut deferred_open_add_to_menu: Option<String> = None;
         let mut deferred_open_runtime_tools = false;
         let mut deferred_open_addons = false;
+        let mut deferred_repository_action: Option<(crate::platform::AddonId, RepositoryAddonAction)> = None;
 
         let view = self.desktop_installer.view.clone();
         let status = self.desktop_installer.status.clone();
@@ -276,6 +279,7 @@ impl RobcoNativeApp {
                             &mut self.desktop_installer,
                             palette,
                             &mut deferred_back,
+                            &mut deferred_repository_action,
                         );
                     }
                 });
@@ -371,6 +375,9 @@ impl RobcoNativeApp {
         if let Some((pkg, target)) = deferred_add_to_menu {
             self.desktop_installer.add_to_menu(&pkg, target);
             self.invalidate_program_catalog_cache();
+        }
+        if let Some((addon_id, action)) = deferred_repository_action {
+            self.start_repository_addon_install(addon_id, action, true);
         }
     }
 
@@ -1003,6 +1010,7 @@ impl RobcoNativeApp {
         state: &mut DesktopInstallerState,
         palette: RetroPalette,
         deferred_back: &mut bool,
+        deferred_repository_action: &mut Option<(crate::platform::AddonId, RepositoryAddonAction)>,
     ) {
         const HEADER_H: f32 = 28.0;
         const FOOTER_H: f32 = 40.0;
@@ -1012,7 +1020,7 @@ impl RobcoNativeApp {
 
         egui::TopBottomPanel::top("inst_addons_top")
             .frame(egui::Frame::none())
-            .exact_height(HEADER_H)
+            .exact_height(HEADER_H + 44.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui
@@ -1024,22 +1032,82 @@ impl RobcoNativeApp {
                     ui.add_space(8.0);
                     ui.label(RichText::new("Installed Addons").color(palette.fg).strong());
                 });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Path:").color(palette.fg));
+                    ui.add_sized(
+                        [320.0, 0.0],
+                        egui::TextEdit::singleline(&mut state.addon_install_path_input)
+                            .hint_text("/path/to/manifest.json, addon directory, or addon archive")
+                            .text_color(palette.fg),
+                    );
+                    if ui
+                        .button(RichText::new("[ Install ]").color(palette.fg))
+                        .clicked()
+                    {
+                        let path = state.addon_install_path_input.trim().to_string();
+                        if path.is_empty() {
+                            state.status = "Addon path cannot be empty.".to_string();
+                        } else {
+                            match install_user_addon(&path) {
+                                Ok(message) => {
+                                    state.status = message;
+                                    state.addon_install_path_input.clear();
+                                }
+                                Err(err) => state.status = err,
+                            }
+                        }
+                    }
+                });
             });
 
         egui::TopBottomPanel::bottom("inst_addons_bottom")
             .frame(egui::Frame::none())
-            .exact_height(FOOTER_H)
+            .exact_height(
+                FOOTER_H
+                    + if sections.issues.is_empty() { 0.0 } else { 56.0 }
+                    + if sections.repository_issue.is_some() {
+                        40.0
+                    } else {
+                        0.0
+                    },
+            )
             .show_inside(ui, |ui| {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
-                        "{} addons tracked | {} essential | {} optional",
+                        "{} installed | {} repository | {} essential | {} optional | {} issue(s)",
                         total,
+                        sections.repository_available.len(),
                         sections.essential.len(),
-                        sections.optional.len()
+                        sections.optional.len(),
+                        sections.issues.len() + usize::from(sections.repository_issue.is_some())
                     ))
                     .color(palette.dim),
                 );
+                if let Some(issue) = sections.issues.first() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Discovery issue [{}]: {}",
+                            Self::addon_scope_name(issue.scope),
+                            issue.manifest_path.display()
+                        ))
+                        .color(Color32::from_rgb(255, 210, 120)),
+                    );
+                    ui.label(
+                        RichText::new(&issue.detail)
+                            .color(Color32::from_rgb(255, 210, 120)),
+                    );
+                }
+                if let Some(issue) = sections.repository_issue.as_ref() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Repository feed issue:")
+                            .color(Color32::from_rgb(255, 210, 120)),
+                    );
+                    ui.label(RichText::new(issue).color(Color32::from_rgb(255, 210, 120)));
+                }
             });
 
         let available = ui.available_rect_before_wrap();
@@ -1113,7 +1181,33 @@ impl RobcoNativeApp {
                                         Err(err) => state.status = err,
                                     }
                                 }
+                                AddonRowAction::RepositorySync(action) => {
+                                    *deferred_repository_action =
+                                        Some((record.manifest.id.clone(), action));
+                                }
                                 AddonRowAction::None => {}
+                            }
+                        }
+                    }
+
+                    if !sections.repository_available.is_empty() {
+                        if !sections.essential.is_empty() || !sections.optional.is_empty() {
+                            ui.add_space(12.0);
+                            ui.separator();
+                            ui.add_space(12.0);
+                        }
+                        ui.label(RichText::new("Repository Addons").color(palette.dim).strong());
+                        ui.add_space(6.0);
+                        for record in &sections.repository_available {
+                            if let Some(action) = Self::draw_installer_repository_addon_row(
+                                ui,
+                                palette,
+                                row_width,
+                                row_height,
+                                record,
+                            ) {
+                                *deferred_repository_action =
+                                    Some((record.manifest.id.clone(), action));
                             }
                         }
                     }
@@ -1154,9 +1248,9 @@ impl RobcoNativeApp {
                         120.0
                     }
                 } else if Self::addon_can_be_removed(record) {
-                    220.0
+                    320.0
                 } else {
-                    112.0
+                    208.0
                 };
                 let text_width = (content_width - action_width - 24.0).max(140.0);
                 ui.horizontal(|ui| {
@@ -1177,6 +1271,14 @@ impl RobcoNativeApp {
                         {
                             action = AddonRowAction::Remove;
                         }
+                        if let Ok(Some(sync_action)) = repository_sync_action_for_manifest(&record.manifest) {
+                            if ui
+                                .button(RichText::new(sync_action.label()).color(palette.fg))
+                                .clicked()
+                            {
+                                action = AddonRowAction::RepositorySync(sync_action);
+                            }
+                        }
                         if record.manifest.essential {
                             ui.label(RichText::new("[ required ]").color(palette.fg));
                         } else if ui
@@ -1194,10 +1296,11 @@ impl RobcoNativeApp {
                     [(content_width - 8.0).max(80.0), 0.0],
                     egui::Label::new(
                         RichText::new(format!(
-                            "{} | {} | {}",
+                            "{} | {} | {} | {}",
                             record.manifest.id,
                             Self::addon_enabled_chip(record),
-                            Self::addon_scope_label(record)
+                            Self::addon_scope_label(record),
+                            Self::addon_source_label(record),
                         ))
                         .color(palette.dim),
                     )
@@ -1206,6 +1309,64 @@ impl RobcoNativeApp {
             });
         });
         action
+    }
+
+    fn draw_installer_repository_addon_row(
+        ui: &mut egui::Ui,
+        palette: RetroPalette,
+        row_width: f32,
+        row_height: f32,
+        record: &RepositoryAddonRecord,
+    ) -> Option<RepositoryAddonAction> {
+        let (_, row_rect) = ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
+        let mut status = None;
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+            let frame = egui::Frame::none()
+                .stroke(egui::Stroke::new(1.0, palette.dim))
+                .inner_margin(egui::Margin::same(2.0));
+            let content_width = (row_width - 4.0).max(80.0);
+            frame.show(ui, |ui| {
+                ui.set_min_width(content_width);
+                ui.set_max_width(content_width);
+                ui.set_min_height(row_height - 8.0);
+                let text_width = (content_width - 104.0).max(140.0);
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [text_width, 0.0],
+                        egui::Label::new(
+                            RichText::new(&record.manifest.display_name)
+                                .color(palette.fg)
+                                .strong(),
+                        )
+                        .truncate(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(RichText::new("Install").color(palette.fg))
+                            .clicked()
+                        {
+                            status = Some(RepositoryAddonAction::Install);
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+                ui.add_sized(
+                    [(content_width - 8.0).max(80.0), 0.0],
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{} | v{} | {} | {}",
+                            record.manifest.id,
+                            Self::repository_release_version(record),
+                            Self::repository_release_channel(record),
+                            record.repository_source.display()
+                        ))
+                        .color(palette.dim),
+                    )
+                    .truncate(),
+                );
+            });
+        });
+        status
     }
 
     fn addon_can_be_removed(record: &InstalledAddonRecord) -> bool {
@@ -1231,11 +1392,39 @@ impl RobcoNativeApp {
     }
 
     fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
-        match record.manifest.scope {
+        Self::addon_scope_name(record.manifest.scope)
+    }
+
+    fn addon_source_label(record: &InstalledAddonRecord) -> String {
+        record
+            .manifest_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "static fallback manifest".to_string())
+    }
+
+    fn addon_scope_name(scope: crate::platform::AddonScope) -> &'static str {
+        match scope {
             crate::platform::AddonScope::Bundled => "bundled",
             crate::platform::AddonScope::System => "system",
             crate::platform::AddonScope::User => "user",
         }
+    }
+
+    fn repository_release_version(record: &RepositoryAddonRecord) -> &str {
+        record
+            .release
+            .as_ref()
+            .map(|release| release.version.as_str())
+            .unwrap_or(record.manifest.version.as_str())
+    }
+
+    fn repository_release_channel(record: &RepositoryAddonRecord) -> &str {
+        record
+            .release
+            .as_ref()
+            .and_then(|release| release.channel.as_deref())
+            .unwrap_or("default")
     }
 
     fn draw_installer_package_actions(

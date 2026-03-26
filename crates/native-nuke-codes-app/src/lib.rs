@@ -1,6 +1,12 @@
 use chrono::Local;
 use std::process::Command;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NukeCodesProvider {
+    pub source: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct NukeCodesData {
     pub alpha: String,
@@ -25,15 +31,26 @@ pub enum NukeCodesEvent {
     Back,
 }
 
-const PROVIDERS: &[(&str, &str)] = &[
-    ("NukaCrypt", "https://nukacrypt.com/"),
-    (
-        "NukaCrypt Legacy",
-        "https://nukacrypt.com/php/home.php?hm=1",
-    ),
-    ("NukaPD Mirror", "https://www.nukapd.com/silo-codes"),
-    ("NukaTrader Mirror", "https://nukatrader.com/launchcodes/"),
-];
+pub fn default_nuke_code_providers() -> Vec<NukeCodesProvider> {
+    vec![
+        NukeCodesProvider {
+            source: "NukaCrypt".to_string(),
+            url: "https://nukacrypt.com/".to_string(),
+        },
+        NukeCodesProvider {
+            source: "NukaCrypt Legacy".to_string(),
+            url: "https://nukacrypt.com/php/home.php?hm=1".to_string(),
+        },
+        NukeCodesProvider {
+            source: "NukaPD Mirror".to_string(),
+            url: "https://www.nukapd.com/silo-codes".to_string(),
+        },
+        NukeCodesProvider {
+            source: "NukaTrader Mirror".to_string(),
+            url: "https://nukatrader.com/launchcodes/".to_string(),
+        },
+    ]
+}
 
 pub fn resolve_nuke_codes_event(refresh: bool, back: bool) -> NukeCodesEvent {
     if refresh {
@@ -46,20 +63,26 @@ pub fn resolve_nuke_codes_event(refresh: bool, back: bool) -> NukeCodesEvent {
 }
 
 pub fn fetch_nuke_codes() -> NukeCodesView {
+    fetch_nuke_codes_with_providers(&default_nuke_code_providers())
+}
+
+pub fn fetch_nuke_codes_with_providers(providers: &[NukeCodesProvider]) -> NukeCodesView {
     let mut last_error = "no provider attempts".to_string();
-    for (source, url) in PROVIDERS {
-        match fetch_html(url).and_then(|html| extract_codes(&html).map(|(a, b, c)| (a, b, c))) {
+    for provider in providers {
+        match fetch_html(&provider.url)
+            .and_then(|html| extract_codes(&html).map(|(a, b, c)| (a, b, c)))
+        {
             Ok((alpha, bravo, charlie)) => {
                 return NukeCodesView::Data(NukeCodesData {
                     alpha,
                     bravo,
                     charlie,
-                    source: (*source).to_string(),
+                    source: provider.source.clone(),
                     fetched_at: Local::now().format("%Y-%m-%d %I:%M %p").to_string(),
                 });
             }
             Err(err) => {
-                last_error = format!("{source}: {err}");
+                last_error = format!("{}: {err}", provider.source);
             }
         }
     }
@@ -151,5 +174,10 @@ mod tests {
             Some("12345678".to_string())
         );
         assert_eq!(first_eight_digit_code("abc 123456789 def"), None);
+    }
+
+    #[test]
+    fn default_provider_list_is_not_empty() {
+        assert!(!default_nuke_code_providers().is_empty());
     }
 }

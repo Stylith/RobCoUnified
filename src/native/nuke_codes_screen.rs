@@ -1,8 +1,75 @@
 use super::retro_ui::{current_palette, RetroScreen};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context, Rect};
-use robcos_native_nuke_codes_app::resolve_nuke_codes_event;
-pub use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesEvent, NukeCodesView};
+use robcos_native_nuke_codes_app::{
+    fetch_nuke_codes as fetch_builtin_nuke_codes, fetch_nuke_codes_with_providers,
+    resolve_nuke_codes_event, NukeCodesProvider,
+};
+pub use robcos_native_nuke_codes_app::{NukeCodesEvent, NukeCodesView};
+use serde::Deserialize;
+use std::path::Path;
+
+const NUKE_CODES_ADDON_ID: &str = "tools.nuke-codes";
+const NUKE_CODES_PROVIDER_FILE: &str = "providers.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct NukeCodesProviderConfig {
+    source: String,
+    url: String,
+}
+
+pub fn fetch_nuke_codes() -> NukeCodesView {
+    match load_nuke_code_providers_from_bundle() {
+        Ok(Some(providers)) if !providers.is_empty() => fetch_nuke_codes_with_providers(&providers),
+        Ok(_) => fetch_builtin_nuke_codes(),
+        Err(err) => NukeCodesView::Error(format!("Addon bundle config error: {err}")),
+    }
+}
+
+fn load_nuke_code_providers_from_bundle() -> Result<Option<Vec<NukeCodesProvider>>, String> {
+    let Some(provider_file) = super::addons::installed_addon_bundle_path(
+        &crate::platform::AddonId::from(NUKE_CODES_ADDON_ID),
+        NUKE_CODES_PROVIDER_FILE,
+    )
+    else {
+        return Ok(None);
+    };
+    load_nuke_code_providers_from_file(&provider_file)
+}
+
+#[cfg(test)]
+fn load_nuke_code_providers_from_dir(dir: &Path) -> Result<Option<Vec<NukeCodesProvider>>, String> {
+    load_nuke_code_providers_from_file(&dir.join(NUKE_CODES_PROVIDER_FILE))
+}
+
+fn load_nuke_code_providers_from_file(path: &Path) -> Result<Option<Vec<NukeCodesProvider>>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read '{}': {error}", path.display()))?;
+    let parsed: Vec<NukeCodesProviderConfig> = serde_json::from_str(&raw)
+        .map_err(|error| format!("failed to parse '{}': {error}", path.display()))?;
+    let providers = parsed
+        .into_iter()
+        .filter(|provider| {
+            let source = provider.source.trim();
+            let url = provider.url.trim();
+            !source.is_empty() && !url.is_empty()
+        })
+        .map(|provider| NukeCodesProvider {
+            source: provider.source,
+            url: provider.url,
+        })
+        .collect::<Vec<_>>();
+    if providers.is_empty() {
+        return Err(format!(
+            "'{}' does not define any usable providers.",
+            path.display()
+        ));
+    }
+    Ok(Some(providers))
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_nuke_codes_screen(
@@ -132,4 +199,44 @@ pub fn draw_nuke_codes_screen(
         });
 
     event
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_nuke_code_providers_from_dir, NUKE_CODES_PROVIDER_FILE};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn loads_nuke_code_providers_from_bundle_file() {
+        let dir = temp_dir("loads_nuke_code_providers_from_bundle_file");
+        fs::write(
+            dir.join(NUKE_CODES_PROVIDER_FILE),
+            r#"[{"source":"Mirror A","url":"https://example.invalid/a"}]"#,
+        )
+        .unwrap();
+
+        let providers = load_nuke_code_providers_from_dir(&dir).unwrap().unwrap();
+
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].source, "Mirror A");
+        assert_eq!(providers[0].url, "https://example.invalid/a");
+    }
+
+    #[test]
+    fn missing_provider_file_falls_back_cleanly() {
+        let dir = temp_dir("missing_provider_file_falls_back_cleanly");
+        assert!(load_nuke_code_providers_from_dir(&dir).unwrap().is_none());
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("robcos-nuke-codes-{label}-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

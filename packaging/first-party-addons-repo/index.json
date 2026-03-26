@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-03-26T00:00:00Z",
+  "addons": [
+    {
+      "manifest": {
+        "id": "games.red-menace",
+        "display_name": "Red Menace",
+        "version": "0.4.4",
+        "kind": "game",
+        "scope": "user",
+        "trust": "first-party",
+        "essential": false,
+        "enabled_by_default": true,
+        "capabilities": [
+          "game-launcher"
+        ],
+        "permissions": [],
+        "file_associations": [],
+        "entrypoint": {
+          "kind": "static-route",
+          "route": "red-menace"
+        }
+      },
+      "releases": [
+        {
+          "version": "0.4.4",
+          "channel": "stable",
+          "artifacts": [
+            {
+              "url": "games/red-menace",
+              "sha256": "4aec8796dec7344ad778187398064a289ea6506a782a07d43a381747cd8cd059",
+              "format": "addon-dir"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "id": "games.zeta-invaders",
+        "display_name": "Zeta Invaders",
+        "version": "0.4.4",
+        "kind": "game",
+        "scope": "user",
+        "trust": "first-party",
+        "essential": false,
+        "enabled_by_default": true,
+        "capabilities": [
+          "game-launcher"
+        ],
+        "permissions": [],
+        "file_associations": [],
+        "entrypoint": {
+          "kind": "static-route",
+          "route": "zeta-invaders"
+        }
+      },
+      "releases": [
+        {
+          "version": "0.4.4",
+          "channel": "stable",
+          "artifacts": [
+            {
+              "url": "games/zeta-invaders",
+              "sha256": "18c4f8e79e1564d79eabe98e85446cf2c60f078de2dedf0a714ed12afaea7ac0",
+              "format": "addon-dir"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "manifest": {
+        "id": "tools.nuke-codes",
+        "display_name": "Nuke Codes",
+        "version": "0.4.4",
+        "kind": "app",
+        "scope": "user",
+        "trust": "first-party",
+        "essential": false,
+        "enabled_by_default": true,
+        "capabilities": [
+          "code-reference"
+        ],
+        "permissions": [],
+        "file_associations": [],
+        "entrypoint": {
+          "kind": "static-route",
+          "route": "nuke-codes"
+        }
+      },
+      "releases": [
+        {
+          "version": "0.4.4",
+          "channel": "stable",
+          "artifacts": [
+            {
+              "url": "tools/nuke-codes",
+              "sha256": "e2b77619e46f71f87e3e1b605f06c36915ed019c03815355759e8d9d2daf84b7",
+              "format": "addon-dir"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

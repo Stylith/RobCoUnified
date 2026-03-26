@@ -1,0 +1,19 @@
+{
+  "id": "games.zeta-invaders",
+  "display_name": "Zeta Invaders",
+  "version": "0.4.4",
+  "kind": "game",
+  "scope": "user",
+  "trust": "first-party",
+  "essential": false,
+  "enabled_by_default": true,
+  "capabilities": [
+    "game-launcher"
+  ],
+  "permissions": [],
+  "file_associations": [],
+  "entrypoint": {
+    "kind": "static-route",
+    "route": "zeta-invaders"
+  }
+}

@@ -18,6 +18,7 @@ mod file_manager_desktop;
 mod file_manager_menu;
 mod file_manager_prompt;
 mod file_manager_standalone;
+mod hosted_addon_runtime;
 mod hacking_screen;
 mod installer_screen;
 mod installer_standalone;
@@ -35,6 +36,7 @@ mod settings_standalone;
 mod shell_screen;
 mod standalone_launcher;
 mod terminal_open_with_picker;
+mod wasm_addon_runtime;
 
 pub use robcos_native_services::{
     desktop_connections_service, desktop_default_apps_service, desktop_documents_service,
@@ -47,10 +49,17 @@ pub use robcos_native_settings_app::NativeSettingsPanel;
 
 pub use addons::{
     addon_state_overrides, discovered_addon_manifest_catalog, effective_addon_enabled,
-    first_party_addon_manifests, first_party_addon_registry, installed_addon_inventory,
-    installed_addon_inventory_sections, installed_addon_manifest_registry,
-    installed_enabled_addon_manifest_registry, remove_installed_addon, set_addon_enabled_override,
-    InstalledAddonInventorySections, InstalledAddonRecord,
+    first_party_addon_manifests, first_party_addon_registry, install_repository_addon,
+    install_user_addon, installed_addon_bundle_dir, installed_addon_bundle_path,
+    installed_addon_inventory, installed_hosted_addon_process, installed_hosted_game_names,
+    installed_wasm_addon_module,
+    installed_addon_inventory_sections,
+    installed_addon_manifest_registry, installed_enabled_addon_manifest_registry,
+    is_installed_hosted_game, remove_installed_addon, repository_addon_for_id,
+    repository_sync_action_for_manifest,
+    set_addon_enabled_override, InstalledAddonInventorySections, InstalledAddonRecord,
+    InstalledHostedAddonProcess, InstalledWasmAddonModule,
+    RepositoryAddonAction, RepositoryAddonRecord,
 };
 pub(crate) use addons::{
     first_party_addon_disabled_reason, first_party_addon_enabled,

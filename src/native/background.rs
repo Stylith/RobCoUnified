@@ -11,6 +11,12 @@ pub enum BackgroundResult {
     NukeCodesFetched(robcos_native_nuke_codes_app::NukeCodesView),
     /// Settings persisted to disk.
     SettingsPersisted,
+    /// Repository-backed addon install/update/reinstall completed.
+    RepositoryAddonInstalled {
+        addon_id: String,
+        status: String,
+        success: bool,
+    },
 }
 
 pub struct BackgroundTasks {

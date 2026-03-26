@@ -8,8 +8,7 @@ use super::super::default_apps_screen::{draw_default_apps_screen, TerminalDefaul
 use super::super::desktop_default_apps_service::apply_default_app_binding;
 use super::super::desktop_documents_service::document_category_path;
 use super::super::desktop_launcher_service::{
-    catalog_names, grouped_game_menu_names, robco_fun_game_names, ProgramCatalog,
-    ROBCO_FUN_MENU_LABEL,
+    catalog_names, ProgramCatalog, ROBCO_FUN_MENU_LABEL,
 };
 use super::super::desktop_session_service::session_tabs as native_session_tabs;
 use super::super::desktop_settings_service::cycle_hacking_difficulty_in_settings;
@@ -35,7 +34,7 @@ use super::super::menu::{
     terminal_settings_refresh_plan, user_management_screen_for_mode, TerminalScreen,
     UserManagementExecutionPlan, UserManagementMode,
 };
-use super::super::nuke_codes_screen::{draw_nuke_codes_screen, NukeCodesEvent};
+use super::super::nuke_codes_screen::{draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView};
 use super::super::programs_screen::{draw_programs_menu, ProgramMenuEvent};
 use super::super::prompt::{draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction};
 use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
@@ -49,9 +48,9 @@ use super::launch_registry::{
 use super::retro_footer_height;
 use super::RobcoNativeApp;
 use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
+use crate::native::installed_hosted_game_names;
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
-use robcos_native_nuke_codes_app::{fetch_nuke_codes, NukeCodesView};
 use robcos_native_programs_app::{
     build_terminal_application_entries, build_terminal_game_entries,
     resolve_terminal_applications_request, resolve_terminal_catalog_request,
@@ -932,12 +931,14 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let groups = grouped_game_menu_names();
+        let hosted_games = installed_hosted_game_names();
+        let mut other_games = catalog_names(ProgramCatalog::Games);
+        other_games.retain(|name| !hosted_games.iter().any(|hosted| hosted == name));
         let mut entries = Vec::new();
-        if !groups.robco_fun.is_empty() {
+        if !hosted_games.is_empty() {
             entries.push(ROBCO_FUN_MENU_LABEL.to_string());
         }
-        entries.extend(groups.other_games);
+        entries.extend(other_games);
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -976,7 +977,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_robco_fun_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let entries = build_terminal_game_entries(&robco_fun_game_names());
+        let entries = build_terminal_game_entries(&installed_hosted_game_names());
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -1109,6 +1110,13 @@ impl RobcoNativeApp {
                     TerminalPromptAction::InstallerFilter,
                 );
             }
+            InstallerEvent::OpenAddonInstallPrompt => {
+                self.open_input_prompt(
+                    "Installed Addons",
+                    "Manifest or addon folder path:",
+                    TerminalPromptAction::InstallerAddonPath,
+                );
+            }
             InstallerEvent::OpenConfirmAction { pkg, action } => {
                 let prompt = match action {
                     InstallerPackageAction::Install => format!("Install {pkg}?"),
@@ -1128,6 +1136,17 @@ impl RobcoNativeApp {
                     format!("Display name for '{pkg}':"),
                     TerminalPromptAction::InstallerDisplayName { pkg, target },
                 );
+            }
+            InstallerEvent::StartRepositoryAddonInstall {
+                addon_id,
+                action_label,
+            } => {
+                let action = match action_label.as_str() {
+                    "Update" => crate::native::RepositoryAddonAction::Update,
+                    "Reinstall" => crate::native::RepositoryAddonAction::Reinstall,
+                    _ => crate::native::RepositoryAddonAction::Install,
+                };
+                self.start_repository_addon_install(crate::platform::AddonId::from(addon_id), action, false);
             }
             InstallerEvent::LaunchCommand {
                 argv,
@@ -1156,6 +1175,9 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_program_installer(&mut self, ctx: &Context) {
+        if self.terminal_installer.addon_install_in_flight.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         let layout = self.terminal_layout();
         let event = draw_installer_screen(
             ctx,

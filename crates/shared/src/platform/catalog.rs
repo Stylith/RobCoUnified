@@ -23,6 +23,7 @@ pub struct DiscoveredAddonManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddonManifestLoadIssue {
+    pub scope: AddonScope,
     pub manifest_path: PathBuf,
     pub detail: String,
 }
@@ -71,6 +72,18 @@ pub fn discover_addon_manifests(paths: &impl PlatformPaths) -> AddonManifestDisc
     discovery
 }
 
+pub fn addon_manifest_path(source: &Path) -> Option<PathBuf> {
+    if source.is_file() && is_json_file(source) {
+        return Some(source.to_path_buf());
+    }
+
+    if source.is_dir() {
+        return directory_manifest_file(source);
+    }
+
+    None
+}
+
 pub fn build_layered_addon_registry<I, J>(layers: I) -> Result<AddonRegistry, RegistryError>
 where
     I: IntoIterator<Item = J>,
@@ -89,7 +102,7 @@ fn discover_addon_manifests_in_root(
     root: &AddonManifestRoot,
     discovery: &mut AddonManifestDiscovery,
 ) {
-    let Ok(entries) = read_root_entries(&root.path, discovery) else {
+    let Ok(entries) = read_root_entries(&root.path, root.scope, discovery) else {
         return;
     };
 
@@ -109,6 +122,7 @@ fn discover_addon_manifests_in_root(
 
 fn read_root_entries(
     root: &Path,
+    scope: AddonScope,
     discovery: &mut AddonManifestDiscovery,
 ) -> Result<Vec<PathBuf>, ()> {
     let entries = match fs::read_dir(root) {
@@ -116,6 +130,7 @@ fn read_root_entries(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(()),
         Err(error) => {
             discovery.issues.push(AddonManifestLoadIssue {
+                scope,
                 manifest_path: root.to_path_buf(),
                 detail: format!("failed to read addon root: {error}"),
             });
@@ -152,6 +167,7 @@ fn load_manifest_file(
         Ok(raw) => raw,
         Err(error) => {
             discovery.issues.push(AddonManifestLoadIssue {
+                scope,
                 manifest_path: manifest_path.to_path_buf(),
                 detail: format!("failed to read addon manifest: {error}"),
             });
@@ -165,6 +181,7 @@ fn load_manifest_file(
             manifest_path: manifest_path.to_path_buf(),
         }),
         Err(error) => discovery.issues.push(AddonManifestLoadIssue {
+            scope,
             manifest_path: manifest_path.to_path_buf(),
             detail: format!("failed to parse addon manifest: {error}"),
         }),
@@ -256,6 +273,7 @@ mod tests {
 
         assert_eq!(discovery.manifests.len(), 1);
         assert_eq!(discovery.issues.len(), 1);
+        assert_eq!(discovery.issues[0].scope, AddonScope::User);
         assert!(discovery.issues[0]
             .detail
             .contains("failed to parse addon manifest"));

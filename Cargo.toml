@@ -35,6 +35,10 @@ fontdue       = "0.8"
 libc          = "0.2"
 resvg         = "0.44"
 usvg          = "0.44"
+wasmi         = "0.40"
+zip           = "2"
+tar           = "0.4"
+flate2        = "1"
 robcos-native-services = { path = "crates/native-services" }
 robcos-shared = { path = "crates/shared" }
 robcos-native-editor-app = { path = "crates/native-editor-app" }
@@ -54,6 +58,9 @@ robcos-native-red-menace-app = { path = "crates/native-red-menace-app" }
 
 [build-dependencies]
 winres        = "0.1"
+
+[dev-dependencies]
+wat = "1"
 
 [features]
 default = []
