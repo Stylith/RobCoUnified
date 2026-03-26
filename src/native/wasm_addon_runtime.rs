@@ -4,11 +4,13 @@ use crate::platform::{
     HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest, HostedColor, HostedDrawCommand,
     HostedInputEvent, HostedTextAlign,
 };
+use chrono::Local;
 use eframe::egui::{self, Align2, Context, FontFamily, FontId, Key, Sense, TextureHandle, Ui};
-use robcos_native_nuke_codes_app::{fetch_nuke_codes_with_providers, load_nuke_code_providers};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use wasmi::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 #[allow(dead_code)]
@@ -423,10 +425,41 @@ fn resolve_bundle_asset_path(bundle_dir: &Path, asset_path: &str) -> Option<Path
     Some(bundle_dir.join(relative))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HostUrlProvider {
+    source: String,
+    url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodeReferenceData {
+    alpha: String,
+    bravo: String,
+    charlie: String,
+    source: String,
+    fetched_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+enum CodeReferenceView {
+    #[default]
+    Unloaded,
+    Data(CodeReferenceData),
+    Error(String),
+}
+
 fn initial_host_context(bundle_dir: &Path) -> Option<Value> {
+    if let Some(spec_path) = resolve_bundle_asset_path(bundle_dir, "host-context.json") {
+        if let Ok(raw) = std::fs::read_to_string(spec_path) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                return Some(value);
+            }
+        }
+    }
+
     let providers_path = resolve_bundle_asset_path(bundle_dir, "providers.json")?;
-    let providers = load_nuke_code_providers(&providers_path).ok()?;
-    serde_json::to_value(fetch_nuke_codes_with_providers(&providers)).ok()
+    let providers = load_host_url_providers(&providers_path).ok()?;
+    serde_json::to_value(fetch_code_reference_with_providers(&providers)).ok()
 }
 
 fn hosted_request_context(request: &HostedAddonRequest) -> Option<Value> {
@@ -444,6 +477,100 @@ fn should_refresh_host_context(input: &[HostedInputEvent]) -> bool {
             HostedInputEvent::Key { key, pressed } if *pressed && key == "r"
         )
     })
+}
+
+fn load_host_url_providers(path: &Path) -> Result<Vec<HostUrlProvider>, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("failed to read host provider file: {error}"))?;
+    serde_json::from_str::<Vec<HostUrlProvider>>(&raw)
+        .map_err(|error| format!("failed to parse host provider file: {error}"))
+}
+
+fn fetch_code_reference_with_providers(providers: &[HostUrlProvider]) -> CodeReferenceView {
+    let mut last_error = "no provider attempts".to_string();
+    for provider in providers {
+        match fetch_html(&provider.url)
+            .and_then(|html| extract_codes(&html).map(|(a, b, c)| (a, b, c)))
+        {
+            Ok((alpha, bravo, charlie)) => {
+                return CodeReferenceView::Data(CodeReferenceData {
+                    alpha,
+                    bravo,
+                    charlie,
+                    source: provider.source.clone(),
+                    fetched_at: Local::now().format("%Y-%m-%d %I:%M %p").to_string(),
+                });
+            }
+            Err(err) => {
+                last_error = format!("{}: {err}", provider.source);
+            }
+        }
+    }
+    CodeReferenceView::Error(last_error)
+}
+
+fn fetch_html(url: &str) -> Result<String, String> {
+    let output = Command::new("curl")
+        .args(["-fsSL", "--connect-timeout", "8", "--max-time", "16", url])
+        .output()
+        .map_err(|error| format!("curl spawn failed: {error}"))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("curl failed: {}", err.trim()));
+    }
+
+    String::from_utf8(output.stdout).map_err(|error| format!("invalid utf8: {error}"))
+}
+
+fn extract_codes(html: &str) -> Result<(String, String, String), String> {
+    let alpha = extract_code_for(html, &["alpha", "site alpha", "silo alpha"]);
+    let bravo = extract_code_for(html, &["bravo", "site bravo", "silo bravo"]);
+    let charlie = extract_code_for(html, &["charlie", "site charlie", "silo charlie"]);
+
+    match (alpha, bravo, charlie) {
+        (Some(a), Some(b), Some(c)) => Ok((a, b, c)),
+        _ => Err("could not parse alpha/bravo/charlie codes".to_string()),
+    }
+}
+
+fn extract_code_for(html: &str, labels: &[&str]) -> Option<String> {
+    let lower = html.to_lowercase();
+    labels
+        .iter()
+        .find_map(|label| {
+            let mut start = 0usize;
+            while let Some(pos) = lower[start..].find(label) {
+                let abs = start + pos;
+                let left = abs.saturating_sub(120);
+                let right = (abs + 220).min(html.len());
+                if let Some(code) = first_eight_digit_code(&html[left..right]) {
+                    return Some(code);
+                }
+                start = abs + label.len();
+            }
+            None
+        })
+        .or_else(|| first_eight_digit_code(html))
+}
+
+fn first_eight_digit_code(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 8 {
+        return None;
+    }
+    for i in 0..=(bytes.len() - 8) {
+        let window = &bytes[i..i + 8];
+        if !window.iter().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let prev_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
+        let next_ok = i + 8 == bytes.len() || !bytes[i + 8].is_ascii_digit();
+        if prev_ok && next_ok {
+            return Some(String::from_utf8_lossy(window).to_string());
+        }
+    }
+    None
 }
 
 fn unpack_ptr_len(packed: i64) -> Result<(usize, usize), String> {

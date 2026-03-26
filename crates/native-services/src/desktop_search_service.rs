@@ -1,5 +1,5 @@
 use super::desktop_documents_service::document_category_entries;
-use super::desktop_launcher_service::{all_game_menu_names, catalog_names, ProgramCatalog};
+use super::desktop_launcher_service::{catalog_names, ProgramCatalog};
 use crate::config::{documents_root_dir, home_dir_fallback, word_processor_documents_dir};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -132,7 +132,7 @@ pub fn start_network_entries() -> Vec<NativeStartLeafEntry> {
 
 pub fn start_game_entries() -> Vec<NativeStartLeafEntry> {
     let mut items = Vec::new();
-    for key in all_game_menu_names() {
+    for key in catalog_names(ProgramCatalog::Games) {
         items.push(NativeStartLeafEntry {
             label: key.clone(),
             action: NativeStartLeafAction::LaunchGameProgram(key),
@@ -170,7 +170,7 @@ pub fn gather_spotlight_results(
         active_username,
         text_editor_name,
         catalog_names(ProgramCatalog::Applications),
-        all_game_menu_names(),
+        catalog_names(ProgramCatalog::Games),
         catalog_names(ProgramCatalog::Network),
     )
 }

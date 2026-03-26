@@ -581,15 +581,6 @@ impl RobcoNativeApp {
                     {
                         changed = true;
                     }
-                    if Self::retro_checkbox_row(
-                        left,
-                        &mut self.settings.draft.builtin_menu_visibility.nuke_codes,
-                        "Show Nuke Codes",
-                    )
-                    .clicked()
-                    {
-                        changed = true;
-                    }
                 }
                 egui::ScrollArea::vertical()
                     .max_height((left.available_height() * 0.7).clamp(180.0, 380.0))

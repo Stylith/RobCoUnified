@@ -1039,11 +1039,22 @@ The external pipeline is done. The remaining Phase 5 work is removing all hardco
 
 Current practical priority order:
 
-1. `games.red-menace`
-   - publish the rebuilt shell-compatible `.ndpkg`
-   - update the external repo index/checksum and install it end-to-end
-2. hardcoded shell removal
-   - only after the external runtime path is complete for all three optional addons
+1. hardcoded shell removal
+   - the runtime path is now complete for all three optional addons
+   - next work is deleting addon-specific ownership from the core repo
+2. repo/name migration
+   - main repo is intended to become `nucleon-core`
+   - external addon repo is intended to become `nucleon-core-addons`
+   - built-in shell modules/addons should move toward the `nucleon-` prefix (`nucleon-text`, `nucleon-files`, `nucleon-extension`, etc.)
+
+Current decoupling status:
+- `src/native/wasm_addon_runtime.rs` no longer imports the Nuke Codes crate directly.
+- The WASM host now loads host context generically from bundle files:
+  - `host-context.json` if present
+  - legacy `providers.json` fallback during transition
+- `crates/native-services/src/desktop_launcher_service.rs` no longer hardcodes Red Menace/Zeta Invaders as built-in launch targets.
+- `crates/native-services/src/desktop_search_service.rs` now reads game entries from the catalog instead of built-in game constants.
+- The stale `Show Nuke Codes` settings toggle was removed from the active settings UI.
 
 **If continuing this work, proceed in this order:**
 
@@ -1071,9 +1082,8 @@ Phase C — Remove app struct fields and draw functions:
 
 Phase D — Remove launch, menu, search, settings, session references:
 - Launch mappings in `name_to_desktop_window()`, `name_to_terminal_screen()`
-- `BUILTIN_NUKE_CODES_APP`, `BUILTIN_RED_MENACE_GAME`, `BUILTIN_ZETA_INVADERS_GAME` constants
-- Desktop launcher service binary mappings
-- Start menu entries, spotlight entries, search service nuke codes results
+- Remaining `BUILTIN_NUKE_CODES_APP`, `BUILTIN_RED_MENACE_GAME`, `BUILTIN_ZETA_INVADERS_GAME` constants
+- Start menu entries, spotlight entries, search service/system references that still mention these specific addons
 - Programs app `OpenNukeCodes` action
 - Settings visibility toggles in `config.rs` and `addon_policy.rs`
 - Session save/restore fields in `session_management.rs` and `session_runtime.rs`
