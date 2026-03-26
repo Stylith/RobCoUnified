@@ -1,0 +1,15 @@
+[package]
+name = "robcos-wasm-red-menace-addon"
+version = "0.4.4"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+robcos-hosted-addon-contract = { path = "../hosted-addon-contract" }
+robcos-native-red-menace-app = { path = "../native-red-menace-app" }
+robcos-wasm-addon-sdk = { path = "../wasm-addon-sdk" }

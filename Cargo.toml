@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/hosted-addon-contract", "crates/wasm-addon-sdk", "crates/native-space-invaders-app", "crates/wasm-zeta-invaders-addon", "crates/native-nuke-codes-app", "crates/wasm-nuke-codes-addon"]
-default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/hosted-addon-contract", "crates/wasm-addon-sdk", "crates/native-space-invaders-app", "crates/wasm-zeta-invaders-addon", "crates/native-nuke-codes-app", "crates/wasm-nuke-codes-addon"]
+members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/hosted-addon-contract", "crates/wasm-addon-sdk", "crates/native-space-invaders-app", "crates/wasm-zeta-invaders-addon", "crates/native-nuke-codes-app", "crates/wasm-nuke-codes-addon", "crates/native-red-menace-app", "crates/wasm-red-menace-addon"]
+default-members = [".", "crates/legacy-shell", "crates/native-services", "crates/native-shell", "crates/shared", "crates/native-editor-app", "crates/native-file-manager-app", "crates/native-terminal-app", "crates/native-installer-app", "crates/native-settings-app", "crates/native-programs-app", "crates/native-default-apps-app", "crates/native-connections-app", "crates/native-edit-menus-app", "crates/native-document-browser-app", "crates/native-about-app", "crates/hosted-addon-contract", "crates/wasm-addon-sdk", "crates/native-space-invaders-app", "crates/wasm-zeta-invaders-addon", "crates/native-nuke-codes-app", "crates/wasm-nuke-codes-addon", "crates/native-red-menace-app", "crates/wasm-red-menace-addon"]
 resolver = "2"
 
 [package]
@@ -53,6 +53,7 @@ robcos-native-edit-menus-app = { path = "crates/native-edit-menus-app" }
 robcos-native-document-browser-app = { path = "crates/native-document-browser-app" }
 robcos-native-about-app = { path = "crates/native-about-app" }
 robcos-native-nuke-codes-app = { path = "crates/native-nuke-codes-app" }
+robcos-native-red-menace-app = { path = "crates/native-red-menace-app" }
 
 [build-dependencies]
 winres        = "0.1"

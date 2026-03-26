@@ -976,6 +976,11 @@ Current addon/runtime state:
   - the guest no longer depends on `wasm-bindgen` / web imports
   - the rebuilt release guest is shell-host compatible and small enough for practical packaging
   - built-in fallback still exists during migration
+- `games.red-menace` is now on the same code path in-tree:
+  - `crates/native-red-menace-app` was restored and made `wasm32-unknown-unknown` safe
+  - it now exports hosted input mapping and a hosted-frame renderer using bundle-relative asset paths
+  - `crates/wasm-red-menace-addon` now builds a real guest `.wasm`
+  - package publishing is still pending; the external repo has not been updated with the rebuilt Red Menace bundle yet
 - Optional addons are now hosted in the external `nucleon-desktop-addons` repo as `.ndpkg` packages:
   - `games.red-menace`
   - `games.zeta-invaders`
@@ -984,6 +989,7 @@ Current addon/runtime state:
   - `nucleon-desktop-addons` commit `00feae6` fixes the published `games.zeta-invaders.ndpkg`
   - old broken package used a web-targeted WASM build
   - fixed package uses the shell addon runtime ABI and updated checksum in `index.json`
+  - `nucleon-desktop-addons` commit `84dfe8e` publishes the rebuilt `games.red-menace.ndpkg` as a `wasm-module`
 
 ## Phase 5 Progress — `.ndpkg` Packaging & External Addon Pipeline (DONE)
 
@@ -1034,8 +1040,8 @@ The external pipeline is done. The remaining Phase 5 work is removing all hardco
 Current practical priority order:
 
 1. `games.red-menace`
-   - rebuild the deleted guest/runtime path the same way Zeta was restored
-   - publish a real shell-compatible `.ndpkg`
+   - publish the rebuilt shell-compatible `.ndpkg`
+   - update the external repo index/checksum and install it end-to-end
 2. hardcoded shell removal
    - only after the external runtime path is complete for all three optional addons
 

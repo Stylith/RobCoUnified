@@ -196,7 +196,7 @@ mod tests {
                     "manifest": {
                         "id": "games.red-menace", "display_name": "Red Menace",
                         "version": "0.4.4", "kind": "game", "scope": "user", "trust": "first-party", "essential": false,
-                        "entrypoint": { "kind": "static-route", "route": "red-menace" }
+                        "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
                     },
                     "releases": [{ "version": "0.4.4", "artifacts": [{
                         "url": "games/games.red-menace.ndpkg",
