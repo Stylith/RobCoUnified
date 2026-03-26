@@ -4,8 +4,8 @@ use robcos::config::{reload_settings, set_current_user};
 use robcos::core::auth::ensure_default_admin;
 use robcos::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    standalone_settings_panel_from_arg, NativeSettingsPanel, RobcoNativeSettingsApp,
-    ROBCOS_NATIVE_STANDALONE_USER_ENV,
+    standalone_env_value, standalone_settings_panel_from_arg, NativeSettingsPanel,
+    RobcoNativeSettingsApp,
 };
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
@@ -22,10 +22,7 @@ fn load_icon() -> Option<IconData> {
 }
 
 fn launch_session_username() -> Option<String> {
-    std::env::var(ROBCOS_NATIVE_STANDALONE_USER_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    standalone_env_value()
 }
 
 fn bind_launch_user(session_username: Option<&str>) {

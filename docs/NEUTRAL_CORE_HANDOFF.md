@@ -6,7 +6,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 
 ## Current Status
 
-- Repo: `RobCoUnified`
+- Repo: current checkout `RobCoUnified` (planned rename: `nucleon-core`)
 - Working branch: `WIP`
 - Base branch for this work: `experimental`
 - Refactor goal: move from a product-branded, built-in-app shell toward a neutral core platform with first-party and later third-party addons

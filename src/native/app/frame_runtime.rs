@@ -16,9 +16,21 @@ use std::time::{Duration, Instant};
 
 use super::software_cursor::draw_software_cursor;
 
+const NUCLEON_STARTUP_PROFILE_LOG_ENV: &str = "NUCLEON_STARTUP_PROFILE_LOG";
+const LEGACY_ROBCOS_STARTUP_PROFILE_LOG_ENV: &str = "ROBCOS_STARTUP_PROFILE_LOG";
+const NUCLEON_REPAINT_TRACE_LOG_ENV: &str = "NUCLEON_REPAINT_TRACE_LOG";
+const LEGACY_ROBCOS_REPAINT_TRACE_LOG_ENV: &str = "ROBCOS_REPAINT_TRACE_LOG";
+
+fn first_var_os(names: &[&str]) -> Option<std::ffi::OsString> {
+    names.iter().find_map(std::env::var_os)
+}
+
 impl RobcoNativeApp {
     fn append_startup_profile_marker(marker: &str) {
-        let Some(path) = std::env::var_os("ROBCOS_STARTUP_PROFILE_LOG") else {
+        let Some(path) = first_var_os(&[
+            NUCLEON_STARTUP_PROFILE_LOG_ENV,
+            LEGACY_ROBCOS_STARTUP_PROFILE_LOG_ENV,
+        ]) else {
             return;
         };
         let Ok(mut file) = std::fs::OpenOptions::new()
@@ -48,7 +60,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn maybe_trace_repaint_causes(&mut self, ctx: &Context) {
-        let Some(path) = std::env::var_os("ROBCOS_REPAINT_TRACE_LOG") else {
+        let Some(path) = first_var_os(&[
+            NUCLEON_REPAINT_TRACE_LOG_ENV,
+            LEGACY_ROBCOS_REPAINT_TRACE_LOG_ENV,
+        ]) else {
             return;
         };
         let pass = ctx.cumulative_pass_nr();

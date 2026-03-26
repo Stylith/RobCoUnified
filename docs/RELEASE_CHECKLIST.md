@@ -6,8 +6,8 @@ Use this before publishing a release tag.
 
 - Run `cargo check`.
 - Run `make release-check`.
-- Confirm [CHANGELOG.md](/Users/hal-9000/RobCoUnified/CHANGELOG.md) has a section for the release version.
-- Confirm [README.md](/Users/hal-9000/RobCoUnified/README.md) and [USER_MANUAL.md](/Users/hal-9000/RobCoUnified/USER_MANUAL.md) are up to date for user-visible changes.
+- Confirm `CHANGELOG.md` has a section for the release version.
+- Confirm `README.md` and `USER_MANUAL.md` are up to date for user-visible changes.
 
 ## Native Smoke Pass
 
@@ -28,7 +28,7 @@ Use this before publishing a release tag.
 - Settings opens, routes between panels correctly, and saves changes.
 - Applications window launches built-ins and configured apps.
 - Installer window opens, searches, and performs install actions.
-- About and Nuke Codes open and close correctly.
+- About and at least one installed optional addon open and close correctly.
 
 ## macOS Bundle Checks
 

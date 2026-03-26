@@ -12,6 +12,20 @@ use robcos_native_settings_app::{desktop_settings_default_panel, NativeSettingsP
 use std::path::PathBuf;
 use std::time::Duration;
 
+const NUCLEON_AUTOLOGIN_USER_ENV: &str = "NUCLEON_AUTOLOGIN_USER";
+const LEGACY_ROBCOS_AUTOLOGIN_USER_ENV: &str = "ROBCOS_AUTOLOGIN_USER";
+
+fn autologin_user_override() -> Option<String> {
+    [NUCLEON_AUTOLOGIN_USER_ENV, LEGACY_ROBCOS_AUTOLOGIN_USER_ENV]
+        .into_iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 impl RobcoNativeApp {
     pub(super) fn apply_autologin_open_mode(&mut self) {
         if matches!(self.settings.draft.default_open_mode, OpenMode::Desktop) {
@@ -25,11 +39,7 @@ impl RobcoNativeApp {
         if self.session.is_some() {
             return;
         }
-        let Some(username) = std::env::var("ROBCOS_AUTOLOGIN_USER")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
+        let Some(username) = autologin_user_override() else {
             return;
         };
         let Some(user) = session_user_record(&username) else {

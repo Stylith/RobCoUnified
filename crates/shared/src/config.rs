@@ -72,8 +72,18 @@ pub fn addon_downloads_cache_dir() -> PathBuf {
     dir
 }
 
+pub const ADDON_REPOSITORY_INDEX_URL_ENV: &str = "NUCLEON_ADDON_REPOSITORY_INDEX_URL";
+pub const LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV: &str = "ROBCOS_ADDON_REPOSITORY_INDEX_URL";
 pub const DEFAULT_ADDON_REPOSITORY_INDEX_URL: &str =
     "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/index.json";
+
+pub fn addon_repository_index_url() -> String {
+    first_non_empty_env_value(&[
+        ADDON_REPOSITORY_INDEX_URL_ENV,
+        LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV,
+    ])
+    .unwrap_or_else(|| DEFAULT_ADDON_REPOSITORY_INDEX_URL.to_string())
+}
 
 /// Spawn a background thread to refresh the cached index from the remote
 /// addon repository.  Safe to call multiple times — skips if cache is fresh.
@@ -99,7 +109,7 @@ pub fn spawn_addon_repository_index_refresh() {
             .arg("15")
             .arg("-o")
             .arg(&cached_path)
-            .arg(DEFAULT_ADDON_REPOSITORY_INDEX_URL)
+            .arg(addon_repository_index_url())
             .status();
     });
 }
@@ -1667,9 +1677,15 @@ pub fn persist_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
 
     struct TempDirGuard {
         path: PathBuf,
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     impl TempDirGuard {
@@ -2038,6 +2054,37 @@ mod tests {
     fn bundled_binary_path_lives_under_bundled_bin_dir() {
         let binary = bundled_binary_path("robcos-editor");
         assert_eq!(binary, bundled_bin_dir().join("robcos-editor"));
+    }
+
+    #[test]
+    fn addon_repository_index_url_prefers_nucleon_env_and_falls_back_to_legacy() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var(ADDON_REPOSITORY_INDEX_URL_ENV);
+            std::env::remove_var(LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV);
+            std::env::set_var(
+                LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV,
+                "https://legacy.example.invalid/index.json",
+            );
+        }
+        assert_eq!(
+            addon_repository_index_url(),
+            "https://legacy.example.invalid/index.json"
+        );
+        unsafe {
+            std::env::set_var(
+                ADDON_REPOSITORY_INDEX_URL_ENV,
+                "https://nucleon.example.invalid/index.json",
+            );
+        }
+        assert_eq!(
+            addon_repository_index_url(),
+            "https://nucleon.example.invalid/index.json"
+        );
+        unsafe {
+            std::env::remove_var(ADDON_REPOSITORY_INDEX_URL_ENV);
+            std::env::remove_var(LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV);
+        }
     }
 
     #[test]

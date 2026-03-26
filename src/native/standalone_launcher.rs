@@ -4,8 +4,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_USER";
-pub const ROBCOS_NATIVE_IPC_SOCKET_ENV: &str = "ROBCOS_NATIVE_IPC_SOCKET";
+pub const NUCLEON_NATIVE_STANDALONE_USER_ENV: &str = "NUCLEON_NATIVE_STANDALONE_USER";
+pub const LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_USER";
+pub const NUCLEON_NATIVE_IPC_SOCKET_ENV: &str = "NUCLEON_NATIVE_IPC_SOCKET";
+pub const LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV: &str = "ROBCOS_NATIVE_IPC_SOCKET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandaloneNativeApp {
@@ -41,10 +43,15 @@ pub fn launch_standalone_app(
     let mut command = Command::new(binary);
     command.args(args);
     if let Some(username) = session_username.filter(|username| !username.is_empty()) {
-        command.env(ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
+        command.env(NUCLEON_NATIVE_STANDALONE_USER_ENV, username);
+        command.env(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
     }
     command.env(
-        ROBCOS_NATIVE_IPC_SOCKET_ENV,
+        NUCLEON_NATIVE_IPC_SOCKET_ENV,
+        super::ipc::socket_path().as_os_str(),
+    );
+    command.env(
+        LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV,
         super::ipc::socket_path().as_os_str(),
     );
     command
@@ -101,9 +108,26 @@ fn platform_binary_file_name(binary_stem: &str) -> OsString {
     OsString::from(binary_stem)
 }
 
+pub fn standalone_env_value() -> Option<String> {
+    [NUCLEON_NATIVE_STANDALONE_USER_ENV, LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV]
+        .into_iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn sibling_binary_file_name_matches_current_platform_convention() {
@@ -120,5 +144,24 @@ mod tests {
         assert_eq!(StandaloneNativeApp::FileManager.label(), "file manager");
         assert_eq!(StandaloneNativeApp::Settings.label(), "settings");
         assert_eq!(StandaloneNativeApp::Editor.label(), "editor");
+    }
+
+    #[test]
+    fn standalone_env_value_prefers_nucleon_env_and_falls_back_to_legacy() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var(NUCLEON_NATIVE_STANDALONE_USER_ENV);
+            std::env::remove_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV);
+            std::env::set_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV, "legacy-user");
+        }
+        assert_eq!(standalone_env_value().as_deref(), Some("legacy-user"));
+        unsafe {
+            std::env::set_var(NUCLEON_NATIVE_STANDALONE_USER_ENV, "nucleon-user");
+        }
+        assert_eq!(standalone_env_value().as_deref(), Some("nucleon-user"));
+        unsafe {
+            std::env::remove_var(NUCLEON_NATIVE_STANDALONE_USER_ENV);
+            std::env::remove_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV);
+        }
     }
 }

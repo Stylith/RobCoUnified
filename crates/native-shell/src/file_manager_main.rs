@@ -4,7 +4,7 @@ use robcos::config::{reload_settings, set_current_user};
 use robcos::core::auth::ensure_default_admin;
 use robcos::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    RobcoNativeFileManagerApp, ROBCOS_NATIVE_STANDALONE_USER_ENV,
+    standalone_env_value, RobcoNativeFileManagerApp,
 };
 use std::path::PathBuf;
 
@@ -26,10 +26,7 @@ fn start_path_from_args() -> Option<PathBuf> {
 }
 
 fn bind_launch_user() {
-    let session_username = std::env::var(ROBCOS_NATIVE_STANDALONE_USER_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let session_username = standalone_env_value();
     if let Some(username) = session_username.as_deref() {
         set_current_user(Some(username));
     } else {

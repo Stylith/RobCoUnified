@@ -14,6 +14,8 @@ const MAX_NATIVE_PTY_ROWS: usize = 80;
 const PERF_ALPHA: f32 = 0.18;
 pub const TERMINAL_MODE_PTY_CELL_W: f32 = 11.5;
 pub const TERMINAL_MODE_PTY_CELL_H: f32 = 22.0;
+const NUCLEON_NATIVE_PTY_TEXTURE_ENV: &str = "NUCLEON_NATIVE_PTY_TEXTURE";
+const LEGACY_ROBCOS_NATIVE_PTY_TEXTURE_ENV: &str = "ROBCOS_NATIVE_PTY_TEXTURE";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LineConnections {
@@ -428,10 +430,14 @@ pub fn draw_embedded_pty_in_ui_sized(
                 cell.ch != ' ' && (fg != palette.fg || cell.bold || cell.italic || cell.underline)
             });
         }
-        let use_texture = std::env::var("ROBCOS_NATIVE_PTY_TEXTURE")
-            .ok()
-            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
-            .unwrap_or(false);
+        let use_texture = [
+            NUCLEON_NATIVE_PTY_TEXTURE_ENV,
+            LEGACY_ROBCOS_NATIVE_PTY_TEXTURE_ENV,
+        ]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
         let allow_texture = !row_requires_cell_draw.iter().any(|needs| *needs);
         let texture_drawn = use_texture
             && allow_texture

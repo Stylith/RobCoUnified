@@ -73,4 +73,7 @@ pub use installer_standalone::RobcoNativeInstallerApp;
 pub use settings_standalone::{
     standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
 };
-pub use standalone_launcher::{ROBCOS_NATIVE_IPC_SOCKET_ENV, ROBCOS_NATIVE_STANDALONE_USER_ENV};
+pub use standalone_launcher::{
+    LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV, LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV,
+    NUCLEON_NATIVE_IPC_SOCKET_ENV, NUCLEON_NATIVE_STANDALONE_USER_ENV, standalone_env_value,
+};

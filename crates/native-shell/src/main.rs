@@ -6,6 +6,8 @@ use robcos::native::desktop_session_service::restore_current_user_from_last_sess
 use robcos::native::{configure_native_context, RobcoNativeApp};
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
+const NUCLEON_NATIVE_WINDOW_MODE_ENV: &str = "NUCLEON_NATIVE_WINDOW_MODE";
+const LEGACY_ROBCOS_NATIVE_WINDOW_MODE_ENV: &str = "ROBCOS_NATIVE_WINDOW_MODE";
 
 fn load_icon() -> Option<IconData> {
     let image = image::load_from_memory(APP_ICON_BYTES).ok()?.into_rgba8();
@@ -52,6 +54,20 @@ fn resolve_native_startup_window_mode(
     parse_native_startup_window_mode_override(override_value).unwrap_or(configured_mode)
 }
 
+fn native_window_mode_override() -> Option<String> {
+    [
+        NUCLEON_NATIVE_WINDOW_MODE_ENV,
+        LEGACY_ROBCOS_NATIVE_WINDOW_MODE_ENV,
+    ]
+    .into_iter()
+    .find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
 fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
     let viewport = ViewportBuilder::default()
         .with_inner_size([1360.0, 840.0])
@@ -85,7 +101,7 @@ fn main() -> Result<()> {
     let settings = get_settings();
     let mode = resolve_native_startup_window_mode(
         settings.native_startup_window_mode,
-        std::env::var("ROBCOS_NATIVE_WINDOW_MODE").ok().as_deref(),
+        native_window_mode_override().as_deref(),
     );
     let mut viewport = build_startup_viewport(mode);
     if let Some(icon) = load_icon() {
