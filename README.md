@@ -48,16 +48,16 @@ Audio works out of the box via platform fallbacks:
 
 ```bash
 # Run the native shell in development mode
-cargo run -p robcos-native-shell --bin robcos-native
+cargo run -p robcos-native-shell --bin nucleon-native
 
 # Build the native shell
-cargo build --release -p robcos-native-shell --bin robcos-native
+cargo build --release -p robcos-native-shell --bin nucleon-native
 
 # Run the release build
-cargo run --release -p robcos-native-shell --bin robcos-native
+cargo run --release -p robcos-native-shell --bin nucleon-native
 
 # Skip startup preflight checks
-cargo run --release -p robcos-native-shell --bin robcos-native -- --no-preflight
+cargo run --release -p robcos-native-shell --bin nucleon-native -- --no-preflight
 
 # Validate the release workflow locally
 make release-check
@@ -67,7 +67,7 @@ Pre-built binaries are on the [GitHub Releases](../../releases) page:
 
 - **macOS**: universal native `.app` bundle in a zip
 - **Linux**: x86_64 and aarch64 native bundles with `.desktop` entry and icon
-- **Windows**: `robcos.exe` native bundle
+- **Windows**: `nucleon-native.exe` native bundle
 
 Release assets ship the native shell only.
 

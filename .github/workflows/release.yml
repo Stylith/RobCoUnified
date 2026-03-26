@@ -23,23 +23,23 @@ jobs:
         include:
           - os: macos-14
             target: universal-apple-darwin
-            source_bin_name: robcos-native
-            package_bin_name: robcos
+            source_bin_name: nucleon-native
+            package_bin_name: nucleon-native
             asset_name: macos-universal
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            source_bin_name: robcos-native
-            package_bin_name: robcos
+            source_bin_name: nucleon-native
+            package_bin_name: nucleon-native
             asset_name: linux-x86_64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            source_bin_name: robcos-native
-            package_bin_name: robcos
+            source_bin_name: nucleon-native
+            package_bin_name: nucleon-native
             asset_name: linux-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            source_bin_name: robcos-native.exe
-            package_bin_name: robcos.exe
+            source_bin_name: nucleon-native.exe
+            package_bin_name: nucleon-native.exe
             asset_name: windows-x86_64
 
     steps:
@@ -77,20 +77,20 @@ jobs:
 
       - name: Build release binary
         if: matrix.target != 'universal-apple-darwin'
-        run: cargo build --release --target ${{ matrix.target }} -p robcos-native-shell --bin robcos-native
+        run: cargo build --release --target ${{ matrix.target }} -p robcos-native-shell --bin nucleon-native
 
       - name: Build release binary (macOS universal)
         if: matrix.target == 'universal-apple-darwin'
         shell: bash
         run: |
-          cargo build --release --target aarch64-apple-darwin -p robcos-native-shell --bin robcos-native
-          cargo build --release --target x86_64-apple-darwin -p robcos-native-shell --bin robcos-native
+          cargo build --release --target aarch64-apple-darwin -p robcos-native-shell --bin nucleon-native
+          cargo build --release --target x86_64-apple-darwin -p robcos-native-shell --bin nucleon-native
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
+          dist_dir="dist/nucleon-core-${{ matrix.asset_name }}"
           app_dir="$dist_dir/RobCoOS.app"
           contents_dir="$app_dir/Contents"
           macos_dir="$contents_dir/MacOS"
@@ -151,7 +151,7 @@ jobs:
           cp README.md LICENSE "$dist_dir/"
           (
             cd dist
-            ditto -c -k --sequesterRsrc --keepParent "RobCoOS-${{ matrix.asset_name }}" "RobCoOS-${{ matrix.asset_name }}.zip"
+            ditto -c -k --sequesterRsrc --keepParent "nucleon-core-${{ matrix.asset_name }}" "nucleon-core-${{ matrix.asset_name }}.zip"
           )
 
       - name: Package (Linux)
@@ -159,34 +159,34 @@ jobs:
         shell: bash
         run: |
           version="$(grep '^version = ' Cargo.toml | head -1 | sed -E 's/version = \"([^\"]+)\"/\1/')"
-          dist_dir="dist/RobCoOS-${{ matrix.asset_name }}"
+          dist_dir="dist/nucleon-core-${{ matrix.asset_name }}"
           mkdir -p "$dist_dir"
           cp "target/${{ matrix.target }}/release/${{ matrix.source_bin_name }}" "$dist_dir/${{ matrix.package_bin_name }}"
           chmod +x "$dist_dir/${{ matrix.package_bin_name }}"
           cp README.md LICENSE icon.png "$dist_dir/"
-          sed "s/__VERSION__/$version/g" packaging/linux/robcos.desktop > "$dist_dir/robcos.desktop"
+          sed "s/__VERSION__/$version/g" packaging/linux/nucleon-native.desktop > "$dist_dir/nucleon-native.desktop"
           (
             cd dist
-            zip -r "RobCoOS-${{ matrix.asset_name }}.zip" "RobCoOS-${{ matrix.asset_name }}"
+            zip -r "nucleon-core-${{ matrix.asset_name }}.zip" "nucleon-core-${{ matrix.asset_name }}"
           )
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $distDir = "dist/RobCoOS-${{ matrix.asset_name }}"
+          $distDir = "dist/nucleon-core-${{ matrix.asset_name }}"
           New-Item -ItemType Directory -Force -Path $distDir | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.source_bin_name }}" "$distDir/${{ matrix.package_bin_name }}"
           Copy-Item "README.md" "$distDir/"
           Copy-Item "LICENSE" "$distDir/"
           Copy-Item "icon.png" "$distDir/"
-          Compress-Archive -Path "$distDir/*" -DestinationPath "dist/RobCoOS-${{ matrix.asset_name }}.zip" -Force
+          Compress-Archive -Path "$distDir/*" -DestinationPath "dist/nucleon-core-${{ matrix.asset_name }}.zip" -Force
 
       - name: Upload zip artifact
         uses: actions/upload-artifact@v6
         with:
           name: zip-${{ matrix.asset_name }}
-          path: dist/RobCoOS-${{ matrix.asset_name }}.zip
+          path: dist/nucleon-core-${{ matrix.asset_name }}.zip
           if-no-files-found: error
 
   publish:

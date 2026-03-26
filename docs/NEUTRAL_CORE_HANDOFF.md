@@ -38,6 +38,7 @@ Important constraint summary:
   - native shell package now exposes both `nucleon-*` and legacy `robcos-*` standalone binaries during transition
   - default product-dir/runtime roots now target `nucleon`
   - legacy `robcos` state/addon/cache/runtime roots auto-merge forward into the new `nucleon` layout when no explicit override is set
+  - release workflow now builds/packages `nucleon-native` and names release archives `nucleon-core-*`, while legacy binary aliases remain available in-tree during transition
 
 Current practical status summary:
 
@@ -1092,7 +1093,7 @@ Phase F — Clean up tests:
 - Remove mock addon fixtures in `addons.rs` that reference these specific addons
 - Keep the generic addon install/inventory tests
 
-**Critical rule:** After each phase, `cargo check --bin robcos-native` must compile. Fix cascading errors before moving to the next phase.
+**Critical rule:** After each phase, `cargo check --bin nucleon-native` must compile. Fix cascading errors before moving to the next phase.
 
 **What must NOT change:** The WASM addon runtime (`wasm_addon_runtime.rs`, `hosted_addon_runtime.rs`), the addon installer UI, the addon discovery/registry system — these are the generic infrastructure that will load these addons dynamically after the hardcoded paths are removed.
 
@@ -1221,7 +1222,7 @@ When resuming:
 1. checkout branch `WIP`
 2. re-run:
    - `cargo test -p robcos-shared platform`
-   - `cargo check --bin robcos-native`
+   - `cargo check --bin nucleon-native`
 3. inspect:
    - `src/native/addons.rs`
    - `src/native/app/launch_registry.rs`
@@ -1252,7 +1253,7 @@ Current state:
 - The staging copy (packaging/first-party-addons-repo/) has been removed from the core repo.
 
 Remaining work: remove all hardcoded references to these three addons from the shell.
-Follow Phases A–E in the handoff doc. After each phase, cargo check --bin robcos-native must compile.
+Follow Phases A–E in the handoff doc. After each phase, cargo check --bin nucleon-native must compile.
 
 Do NOT touch: WASM addon runtime, addon installer UI, addon discovery/registry system.
 Do NOT introduce native dynamic library plugin loading.

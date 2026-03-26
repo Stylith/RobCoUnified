@@ -31,11 +31,11 @@ RobCoOS provides a retro-styled terminal shell and a native desktop interface on
 
 ```bash
 # Development
-cargo run -p robcos-native-shell --bin robcos-native
+cargo run -p robcos-native-shell --bin nucleon-native
 
 # Optimized release build
-cargo build --release -p robcos-native-shell --bin robcos-native
-cargo run --release -p robcos-native-shell --bin robcos-native
+cargo build --release -p robcos-native-shell --bin nucleon-native
+cargo run --release -p robcos-native-shell --bin nucleon-native
 ```
 
 ### Startup Flags
