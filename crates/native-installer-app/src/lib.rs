@@ -1689,7 +1689,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("robcos-installer-{label}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("nucleon-installer-{label}-{unique}"));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }

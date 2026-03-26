@@ -17,7 +17,15 @@ pub enum StandaloneNativeApp {
 }
 
 impl StandaloneNativeApp {
-    pub const fn binary_stem(self) -> &'static str {
+    pub const fn preferred_binary_stem(self) -> &'static str {
+        match self {
+            Self::FileManager => "nucleon-files",
+            Self::Settings => "nucleon-settings",
+            Self::Editor => "nucleon-text",
+        }
+    }
+
+    pub const fn legacy_binary_stem(self) -> &'static str {
         match self {
             Self::FileManager => "robcos-file-manager",
             Self::Settings => "robcos-settings",
@@ -73,16 +81,21 @@ fn resolve_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
 }
 
 fn bundled_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
-    let candidate =
-        crate::config::bundled_binary_path(platform_binary_file_name(app.binary_stem()));
-    candidate.is_file().then_some(candidate)
+    [app.preferred_binary_stem(), app.legacy_binary_stem()]
+        .into_iter()
+        .map(|stem| crate::config::bundled_binary_path(platform_binary_file_name(stem)))
+        .find(|candidate| candidate.is_file())
 }
 
 fn sibling_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok()?;
     sibling_binary_dirs(&current_exe)
         .into_iter()
-        .map(|dir| dir.join(platform_binary_file_name(app.binary_stem())))
+        .flat_map(|dir| {
+            [app.preferred_binary_stem(), app.legacy_binary_stem()]
+                .into_iter()
+                .map(move |stem| dir.join(platform_binary_file_name(stem)))
+        })
         .find(|candidate| candidate.is_file())
 }
 
@@ -131,12 +144,28 @@ mod tests {
 
     #[test]
     fn sibling_binary_file_name_matches_current_platform_convention() {
-        let name = platform_binary_file_name("robcos-settings");
+        let name = platform_binary_file_name("nucleon-settings");
 
         #[cfg(target_os = "windows")]
-        assert_eq!(name, OsString::from("robcos-settings.exe"));
+        assert_eq!(name, OsString::from("nucleon-settings.exe"));
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(name, OsString::from("robcos-settings"));
+        assert_eq!(name, OsString::from("nucleon-settings"));
+    }
+
+    #[test]
+    fn standalone_apps_prefer_nucleon_binary_names() {
+        assert_eq!(
+            StandaloneNativeApp::FileManager.preferred_binary_stem(),
+            "nucleon-files"
+        );
+        assert_eq!(
+            StandaloneNativeApp::Settings.preferred_binary_stem(),
+            "nucleon-settings"
+        );
+        assert_eq!(
+            StandaloneNativeApp::Editor.preferred_binary_stem(),
+            "nucleon-text"
+        );
     }
 
     #[test]

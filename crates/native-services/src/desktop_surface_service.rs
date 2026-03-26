@@ -346,7 +346,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("robcos-{label}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("nucleon-{label}-{unique}"));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }

@@ -657,7 +657,7 @@ fn addon_archive_temp_dir(label: &str) -> Result<PathBuf, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("Failed to create archive temp directory timestamp: {error}"))?
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("robcos-addon-archive-{label}-{unique}"));
+    let dir = std::env::temp_dir().join(format!("nucleon-addon-archive-{label}-{unique}"));
     fs::create_dir_all(&dir)
         .map_err(|error| format!("Failed to create addon archive temp directory: {error}"))?;
     Ok(dir)
@@ -2521,7 +2521,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("robcos-addon-tests-{label}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("nucleon-addon-tests-{label}-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

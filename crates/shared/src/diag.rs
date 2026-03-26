@@ -2,9 +2,14 @@ use crate::config::diagnostics_log_file;
 use std::io::Write;
 use std::path::PathBuf;
 
+const NUCLEON_DIAG_PATH_ENV: &str = "NUCLEON_DIAG_PATH";
+const LEGACY_ROBCOS_DIAG_PATH_ENV: &str = "ROBCOS_DIAG_PATH";
+
 fn diagnostics_path() -> PathBuf {
-    if let Ok(path) = std::env::var("ROBCOS_DIAG_PATH") {
-        return PathBuf::from(path);
+    for name in [NUCLEON_DIAG_PATH_ENV, LEGACY_ROBCOS_DIAG_PATH_ENV] {
+        if let Ok(path) = std::env::var(name) {
+            return PathBuf::from(path);
+        }
     }
     diagnostics_log_file()
 }

@@ -327,7 +327,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("robcos-addon-catalog-{test_name}-{unique}"));
+        let root =
+            std::env::temp_dir().join(format!("nucleon-addon-catalog-{test_name}-{unique}"));
         fs::create_dir_all(&root).unwrap();
         ResolvedPlatformPaths::from_environment(
             "nucleon",

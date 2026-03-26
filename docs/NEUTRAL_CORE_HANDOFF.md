@@ -31,6 +31,10 @@ Important constraint summary:
 - Shell must not depend on app internals.
 - Avoid native dynamic library plugin loading for now; the current preferred external-addon runtime direction is sandboxed WASM for shell-integrated addons.
 - Keep desktop mode and terminal menu mode aligned; do not let one drift too far ahead of the other.
+- Non-UI rename status:
+  - `NUCLEON_*` env names are now canonical for new core launch/runtime paths, with `ROBCOS_*` compatibility aliases kept in place
+  - standalone launcher now prefers `nucleon-*` binary names and falls back to `robcos-*`
+  - native shell package now exposes both `nucleon-*` and legacy `robcos-*` standalone binaries during transition
 
 Current practical status summary:
 

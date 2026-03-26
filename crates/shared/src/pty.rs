@@ -30,6 +30,23 @@ use crate::config::pty_key_debug_log_file;
 use crate::status::render_status_bar;
 use crate::ui::Term;
 
+const NUCLEON_KEY_DEBUG_PATH_ENV: &str = "NUCLEON_KEY_DEBUG_PATH";
+const LEGACY_ROBCOS_KEY_DEBUG_PATH_ENV: &str = "ROBCOS_KEY_DEBUG_PATH";
+const NUCLEON_KEY_DEBUG_ENV: &str = "NUCLEON_KEY_DEBUG";
+const LEGACY_ROBCOS_KEY_DEBUG_ENV: &str = "ROBCOS_KEY_DEBUG";
+const NUCLEON_PTY_RENDER_ENV: &str = "NUCLEON_PTY_RENDER";
+const LEGACY_ROBCOS_PTY_RENDER_ENV: &str = "ROBCOS_PTY_RENDER";
+const NUCLEON_PTY_COLOR_ENV: &str = "NUCLEON_PTY_COLOR";
+const LEGACY_ROBCOS_PTY_COLOR_ENV: &str = "ROBCOS_PTY_COLOR";
+
+fn first_var_os(names: &[&str]) -> Option<std::ffi::OsString> {
+    names.iter().find_map(std::env::var_os)
+}
+
+fn first_var(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| std::env::var(name).ok())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PtyLaunchOptions {
     pub env: Vec<(String, String)>,
@@ -74,7 +91,7 @@ pub fn clear_all_suspended() {
 }
 
 fn key_debug_path() -> std::path::PathBuf {
-    std::env::var_os("ROBCOS_KEY_DEBUG_PATH")
+    first_var_os(&[NUCLEON_KEY_DEBUG_PATH_ENV, LEGACY_ROBCOS_KEY_DEBUG_PATH_ENV])
         .map(std::path::PathBuf::from)
         .unwrap_or_else(pty_key_debug_log_file)
 }
@@ -90,7 +107,7 @@ fn open_key_debug_file() -> Option<std::fs::File> {
         Err(_) => std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("robcos_keys.log")
+            .open("nucleon_keys.log")
             .ok(),
     }
 }
@@ -103,7 +120,7 @@ fn append_marker_line(line: &str) {
 }
 
 fn append_key_debug_line(line: &str) {
-    if std::env::var_os("ROBCOS_KEY_DEBUG").is_none() {
+    if first_var_os(&[NUCLEON_KEY_DEBUG_ENV, LEGACY_ROBCOS_KEY_DEBUG_ENV]).is_none() {
         return;
     }
     let Some(mut file) = open_key_debug_file() else {
@@ -199,8 +216,7 @@ enum PtyRenderMode {
 }
 
 fn render_mode_for_program(program: &str) -> PtyRenderMode {
-    match std::env::var("ROBCOS_PTY_RENDER")
-        .ok()
+    match first_var(&[NUCLEON_PTY_RENDER_ENV, LEGACY_ROBCOS_PTY_RENDER_ENV])
         .map(|v| v.to_ascii_lowercase())
         .as_deref()
     {
@@ -221,8 +237,7 @@ enum PtyColorMode {
 }
 
 fn pty_color_mode() -> PtyColorMode {
-    match std::env::var("ROBCOS_PTY_COLOR")
-        .ok()
+    match first_var(&[NUCLEON_PTY_COLOR_ENV, LEGACY_ROBCOS_PTY_COLOR_ENV])
         .map(|v| v.to_ascii_lowercase())
         .as_deref()
     {
@@ -777,7 +792,7 @@ impl PtySession {
         // to check if more bytes are queued and read them too, so the whole
         // update is parsed as a single batch.
         std::thread::Builder::new()
-            .name("robcos-pty-reader".into())
+            .name("nucleon-pty-reader".into())
             .spawn(move || {
                 let mut reader = reader;
                 let mut buf = [0u8; 16384];

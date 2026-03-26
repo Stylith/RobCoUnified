@@ -10,24 +10,48 @@ name = "robcos-native"
 path = "src/main.rs"
 
 [[bin]]
+name = "nucleon-native"
+path = "src/nucleon_native_main.rs"
+
+[[bin]]
 name = "robcos-file-manager"
 path = "src/file_manager_main.rs"
+
+[[bin]]
+name = "nucleon-files"
+path = "src/nucleon_files_main.rs"
 
 [[bin]]
 name = "robcos-settings"
 path = "src/settings_main.rs"
 
 [[bin]]
+name = "nucleon-settings"
+path = "src/nucleon_settings_main.rs"
+
+[[bin]]
 name = "robcos-editor"
 path = "src/editor_main.rs"
+
+[[bin]]
+name = "nucleon-text"
+path = "src/nucleon_text_main.rs"
 
 [[bin]]
 name = "robcos-applications"
 path = "src/applications_main.rs"
 
 [[bin]]
+name = "nucleon-applications"
+path = "src/nucleon_applications_main.rs"
+
+[[bin]]
 name = "robcos-installer"
 path = "src/installer_main.rs"
+
+[[bin]]
+name = "nucleon-installer"
+path = "src/nucleon_installer_main.rs"
 
 [dependencies]
 anyhow = "1"

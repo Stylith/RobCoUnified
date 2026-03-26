@@ -183,7 +183,7 @@ exit 0
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("robcos-hosted-addon-{label}-{unique}"));
+        let dir = std::env::temp_dir().join(format!("nucleon-hosted-addon-{label}-{unique}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

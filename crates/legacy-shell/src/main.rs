@@ -167,9 +167,10 @@ fn run_terminal_route(
 }
 
 fn write_key_debug_startup_marker() {
-    let path = std::env::var_os("ROBCOS_KEY_DEBUG_PATH")
+    let path = std::env::var_os("NUCLEON_KEY_DEBUG_PATH")
+        .or_else(|| std::env::var_os("ROBCOS_KEY_DEBUG_PATH"))
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/robcos_keys.log"));
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/nucleon_keys.log"));
 
     let mut f = match std::fs::OpenOptions::new()
         .create(true)
@@ -180,7 +181,7 @@ fn write_key_debug_startup_marker() {
         Err(_) => match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("robcos_keys.log")
+            .open("nucleon_keys.log")
         {
             Ok(f) => f,
             Err(_) => return,
