@@ -20,9 +20,8 @@ Bundle format:
 - additional assets/data files live beside those files inside the same addon directory
 
 Repository layout:
-- `index.json`
-- `games/<slug>/manifest.json`
-- `tools/<slug>/manifest.json`
+- `index.json` — addon manifests and release metadata
+- `.ndpkg` archives hosted as GitHub release assets (not committed to the repo)
 
 Current artifact contract:
 - artifact format is `ndpkg` (renamed ZIP archive)
