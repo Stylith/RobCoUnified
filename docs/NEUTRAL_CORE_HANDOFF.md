@@ -17,7 +17,7 @@ Use it when resuming this refactor with Codex or another agent on a different ma
   - Phase 2 path-authority/state-root migration: complete for the current scope
   - Phase 3 `app.rs` coordinator decomposition: done enough for this stage
   - Phase 4 scoped manifests + addon state + inventory UI: started and now materially real
-  - Phase 5 packaged first-party addons / external install-remove lifecycle: not done
+  - Phase 5 packaged first-party addons / external install-remove lifecycle: substantially complete — see "Phase 5 Progress" section below
   - Phase 6 branding/theme/content extraction: not done
   - Phase 7 third-party addon model: intentionally not started
 
@@ -966,37 +966,93 @@ Current addon/runtime state:
   - `tools.nuke-codes`
 - `games.zeta-invaders` in the staged feed is now a real WASM bundle with `addon.wasm` plus `assets/`.
 
-Packaging decision for next session:
+## Phase 5 Progress — `.ndpkg` Packaging & External Addon Pipeline (DONE)
 
-- Do not keep storing built addon payloads directly in git as the long-term model.
-- The better model is:
-  - repo stores manifests, `index.json`, and build metadata
-  - CI/build pipeline produces release artifacts
-  - `index.json` points to release asset URLs, not raw repo blobs
-  - installer downloads and extracts packaged addon artifacts
-- Planned package extension: `.ndpkg`
-  - this is a Nucleon Desktop Package container name, not a new compression algorithm
-  - underneath it should just be a normal archive format like `zip` or `tar.zst`
-  - expected contents: `manifest.json`, `addon.wasm`, `assets/...`
-- Reason for the packaging pivot:
-  - the staged `games/zeta-invaders/addon.wasm` is about `58 MB`
-  - GitHub accepted it but warned because it exceeds the recommended 50 MB size
-  - this is acceptable only as a temporary checkpoint, not as the permanent packaging strategy
+All packaging decisions from the prior handoff have been resolved and implemented:
 
-External repo state:
+### What was done
 
-- User pushed the current external repo checkpoint to `nucleon-desktop-addons` `main` as `d1785cb`.
-- That external repo currently still contains raw committed bundle blobs.
-- Next packaging work should move it away from committed blobs and onto release artifacts.
+1. **`.ndpkg` format defined and implemented:**
+   - `.ndpkg` = renamed ZIP archive. Uses the existing `zip = "2"` crate for extraction.
+   - Internal layout: single subdirectory containing `manifest.json`, optional `addon.wasm`, optional `assets/`.
+   - Added to all 5 dispatch points in `src/native/addons.rs`: archive detection, extraction routing, format whitelist, staging copy, file destination naming.
+   - New test: `install_repository_addon_from_index_installs_ndpkg_bundle`.
 
-Next session focus:
+2. **External addon repository is the source of truth:**
+   - Repo: `github.com/Stylith/nucleon-desktop-addons` (public)
+   - Layout: `index.json` at root, `.ndpkg` files in category folders (`games/`, `tools/`)
+   - `index.json` has `base_url` pointing to `https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/`
+   - Artifact URLs are relative to `base_url` (e.g. `games/games.zeta-invaders.ndpkg`)
 
-- define `.ndpkg` precisely (`zip` vs `tar.zst`, internal layout, hash handling)
-- add installer support for downloading/extracting packaged release artifacts
-- switch repository index artifacts from repo-path blobs to release URLs
-- shrink the Zeta WASM bundle before repeating this for more games
-- then continue migration for `games.red-menace`
-- rebrand `robcos` -> `nucleon-desktop` stays later and should be code/file names first, not UI strings yet
+3. **Staging copy removed from RobCoUnified:**
+   - `packaging/first-party-addons-repo/` deleted entirely
+   - Test converted from `include_str!` against the staging file to inline JSON test data
+   - No addon package data remains in RobCoUnified
+
+4. **Remote index auto-fetch implemented:**
+   - `spawn_addon_repository_index_refresh()` in `config.rs` runs curl in a background thread at app startup
+   - Downloads `index.json` from the external addons repo to the local cache directory
+   - 10-minute cache TTL to avoid hammering GitHub
+   - `load_addon_repository_index()` reads from cache first, falls back to bundled index
+   - Completely non-blocking — UI never waits on network
+
+5. **HTTP download pipeline for relative artifact URLs:**
+   - `stage_repository_artifact()` now calls `resolve_repository_url()` before checking `looks_like_http_url()`
+   - A relative URL like `games/games.zeta-invaders.ndpkg` gets `base_url` prepended → full HTTPS URL → curl download
+   - SHA-256 verification, extraction, and install all work end-to-end
+
+6. **Compression results:**
+   - Zeta Invaders: 58 MB raw → 14 MB `.ndpkg` (76% reduction)
+   - Nuke Codes: 3.8 MB raw → 1.0 MB `.ndpkg` (74% reduction)
+
+### What's in progress — Hardcoded Addon Removal
+
+The external pipeline is done. The remaining Phase 5 work is removing all hardcoded references to the three optional addons from the shell codebase so they load purely through the dynamic WASM addon runtime.
+
+**Addons to decouple:** `games.red-menace`, `games.zeta-invaders`, `tools.nuke-codes`
+
+**If continuing this work, proceed in this order:**
+
+Phase A — Remove workspace crates:
+- Delete `crates/native-red-menace-app/`, `crates/native-space-invaders-app/`, `crates/native-nuke-codes-app/`
+- Delete `crates/wasm-zeta-invaders-addon/`, `crates/wasm-nuke-codes-addon/`
+- Remove their entries from root `Cargo.toml` workspace members and dependencies
+
+Phase B — Remove enum variants:
+- `DesktopWindow::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in `crates/native-services/src/shared_types.rs`
+- `TerminalScreen::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in same file
+- `DesktopBuiltinIconKind::NukeCodes` in `crates/native-services/src/desktop_surface_service.rs`
+- Fix all cascading match arm compile errors across the codebase
+
+Phase C — Remove app struct fields and draw functions:
+- `RedMenaceWindow`, `ZetaInvadersWindow` structs and all associated fields on `RobcoNativeApp`
+- `desktop_nuke_codes_open`, `desktop_nuke_codes_wasm`, `terminal_nuke_codes`, `terminal_nuke_codes_wasm`
+- `desktop_zeta_invaders_wasm`, `terminal_zeta_invaders_wasm`
+- `icon_nuke_codes`, `show_nuke_codes`
+- Draw functions: `draw_red_menace_window`, `draw_zeta_invaders_window`, `draw_nuke_codes_window`
+- Terminal draw functions: `draw_terminal_red_menace`, `draw_terminal_zeta_invaders`, `draw_terminal_nuke_codes`
+- Reset functions: `reset_zeta_invaders_runtime`, `reset_red_menace_runtime`, `reset_nuke_codes_wasm_runtime`
+- WASM detection: `zeta_invaders_uses_wasm_addon`, `nuke_codes_uses_wasm_addon`
+- Desktop component host registrations in `desktop_component_host.rs` and `desktop_app.rs`
+
+Phase D — Remove launch, menu, search, settings, session references:
+- Launch mappings in `name_to_desktop_window()`, `name_to_terminal_screen()`
+- `BUILTIN_NUKE_CODES_APP`, `BUILTIN_RED_MENACE_GAME`, `BUILTIN_ZETA_INVADERS_GAME` constants
+- Desktop launcher service binary mappings
+- Start menu entries, spotlight entries, search service nuke codes results
+- Programs app `OpenNukeCodes` action
+- Settings visibility toggles in `config.rs` and `addon_policy.rs`
+- Session save/restore fields in `session_management.rs` and `session_runtime.rs`
+- Desktop icon registration in `desktop_surface.rs`
+
+Phase E — Clean up tests:
+- Remove game state tests in `app.rs`
+- Remove mock addon fixtures in `addons.rs` that reference these specific addons
+- Keep the generic addon install/inventory tests
+
+**Critical rule:** After each phase, `cargo check --bin robcos-native` must compile. Fix cascading errors before moving to the next phase.
+
+**What must NOT change:** The WASM addon runtime (`wasm_addon_runtime.rs`, `hosted_addon_runtime.rs`), the addon installer UI, the addon discovery/registry system — these are the generic infrastructure that will load these addons dynamically after the hardcoded paths are removed.
 
 ## Phase 6: Third-Party Addons
 
@@ -1108,23 +1164,13 @@ All three platforms should share one runtime model, with different install-profi
 
 ## Recommended Next Task
 
-The next Codex task should be:
+Complete the hardcoded addon removal (Phases A–E described in "Phase 5 Progress" above).
 
-1. stay on the addon-management / manifest-externalization track rather than reopening old runtime decomposition work
-2. add the next narrow lifecycle behavior for discovered addons:
-   - likely first target: turn read-only repository listings into explicit download/install actions using the existing repository index contract
-   - keep runtime behavior static for first-party addons
-   - no dynamic plugin loading
-3. preserve the current essential/optional rule:
-   - essential: every current first-party addon except `Red Menace`, `Zeta Invaders`, and `Nuke Codes`
-   - optional: only those three for now
-4. keep desktop and terminal installer/addon-manager behavior aligned
- 5. do not jump to dynamic loading, generalized third-party runtime plugins, or a whole-repo folder cleanup
-
-Alternative next task if addon install/remove is blocked:
-
-1. continue path-authority cleanup for remaining user/content/package layout helpers
-2. keep it compatibility-safe and bounded to one slice
+After that:
+1. Verify WASM addon runtime discovers and launches all three optional addons from the external repo
+2. Continue to Phase 6 (branding/theme extraction) or Phase 7 (third-party addon model)
+3. Keep desktop and terminal addon behavior aligned
+4. Do not introduce native dynamic library plugin loading
 
 ## Suggested Continuation Steps For The Next Session
 
@@ -1133,9 +1179,7 @@ When resuming:
 1. checkout branch `WIP`
 2. re-run:
    - `cargo test -p robcos-shared platform`
-   - `cargo test -p robcos-native-installer-app --lib`
-   - `cargo test -p robcos installed_inventory_sections_split_essential_and_optional_addons --lib`
-   - `cargo test -p robcos addon_state_disabled_reason_is_reported_separately_from_profile_policy --lib`
+   - `cargo check --bin robcos-native`
 3. inspect:
    - `src/native/addons.rs`
    - `src/native/app/launch_registry.rs`
@@ -1150,36 +1194,26 @@ When resuming:
 6. keep runtime loading static
 7. verify desktop and terminal stay aligned
 
-## Suggested Prompt For The Next Codex Session
+## Suggested Prompt For The Next Session
 
-Copy this into the next Codex session after pointing it at this repo:
+Copy this into the next session after pointing it at this repo:
 
 ```text
 You are continuing the neutral-core/addon refactor on branch WIP.
 
-Read these files first:
-- docs/NEUTRAL_CORE_HANDOFF.md
-- docs/PROJECT_CONTEXT_FOR_LLM.md
-- docs/NATIVE_ROADMAP.md
+Read docs/NEUTRAL_CORE_HANDOFF.md first — specifically the "Phase 5 Progress" section.
 
-Important context:
-- Neutral contracts, major runtime adoption, first compatibility path migration, and the main `app.rs` decomposition are already done enough.
-- Scoped manifest discovery, addon enabled-state, and installer inventory UI are already implemented.
-- Essential addon policy is currently:
-  - essential: every current first-party addon except `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
-  - optional: only those three
-- Desktop and terminal installer/addon-manager behavior should stay aligned.
-- Do not redesign the contract layer unless there is a concrete bug.
-- Do not introduce native dynamic library plugin loading.
-- Prefer the new WASM addon runtime path for shell-integrated external addons instead of expanding the older hosted-process route for games.
-- Prefer bounded migration slices over broad rewrites.
+Current state:
+- .ndpkg packaging is DONE. External addon repo pipeline is DONE.
+- Optional addons (Red Menace, Zeta Invaders, Nuke Codes) are hosted externally in nucleon-desktop-addons as .ndpkg packages.
+- The app auto-fetches index.json from the external repo at startup and can download/install addons via curl.
+- The staging copy (packaging/first-party-addons-repo/) has been removed from RobCoUnified.
 
-Goal for this session:
-- continue from the current addon-management/path-authority stage
-- either add a narrow install/remove behavior for discovered user/system manifests, or take the next bounded compatibility path migration slice
-- keep first-party runtime behavior static
-- keep visible behavior unchanged except for the targeted management surface
-- add focused tests and update docs/NEUTRAL_CORE_HANDOFF.md
+Remaining work: remove all hardcoded references to these three addons from the shell.
+Follow Phases A–E in the handoff doc. After each phase, cargo check --bin robcos-native must compile.
+
+Do NOT touch: WASM addon runtime, addon installer UI, addon discovery/registry system.
+Do NOT introduce native dynamic library plugin loading.
 ```
 
 ## Reference Files To Inspect Next
