@@ -42,6 +42,7 @@ use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
+use super::super::wasm_addon_runtime::{draw_hosted_addon_frame, WasmHostedAddonState};
 use super::launch_registry::{
     editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
 };
@@ -59,7 +60,7 @@ use robcos_native_programs_app::{
 use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::TerminalSettingsPanel;
 use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
-use robcos_shared::platform::LaunchTarget;
+use robcos_shared::platform::{HostedAddonSize, HostedAddonSurface, LaunchTarget};
 use std::time::Duration;
 
 impl RobcoNativeApp {
@@ -167,7 +168,9 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
-        {
+        if self.nuke_codes_uses_wasm_addon() {
+            self.terminal_nuke_codes_wasm = None;
+        } else {
             let tx = self.background.sender();
             std::thread::spawn(move || {
                 let view = fetch_nuke_codes();
@@ -1010,6 +1013,87 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {
+        if self.nuke_codes_uses_wasm_addon() {
+            let back = ctx.input(|i| {
+                i.key_pressed(egui::Key::Q)
+                    || i.key_pressed(egui::Key::Escape)
+                    || i.key_pressed(egui::Key::Tab)
+            });
+            let refresh = ctx.input(|i| i.key_pressed(egui::Key::R));
+            let title = self
+                .terminal_nuke_codes_wasm
+                .as_ref()
+                .map(|state| state.title().to_string())
+                .unwrap_or_else(|| "Nuke Codes".to_string());
+
+            Self::draw_terminal_game_shell(
+                ctx,
+                &title,
+                "R REFRESH   Q / ESC / TAB BACK",
+                |ui| {
+                    let available = ui.available_size_before_wrap();
+                    let size = HostedAddonSize {
+                        width: available.x.max(320.0),
+                        height: available.y.max(200.0),
+                    };
+                    let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
+                    let result = (|| -> Result<(), String> {
+                        let module = super::super::installed_wasm_addon_module(
+                            &crate::platform::AddonId::from("tools.nuke-codes"),
+                        )
+                        .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
+                        if self.terminal_nuke_codes_wasm.is_none() {
+                            self.terminal_nuke_codes_wasm = Some(WasmHostedAddonState::spawn(
+                                &module,
+                                HostedAddonSurface::Terminal,
+                                size,
+                            )?);
+                        }
+                        if let Some(state) = self.terminal_nuke_codes_wasm.as_mut() {
+                            state.update(size, dt)?;
+                            draw_hosted_addon_frame(ui, state.frame());
+                            if let Some(status) = &state.frame().status_line {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(status)
+                                        .monospace()
+                                        .small()
+                                        .color(current_palette().dim),
+                                );
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(err) = result {
+                        self.terminal_nuke_codes_wasm = None;
+                        ui.label(
+                            RichText::new("WASM ADDON FAILED")
+                                .monospace()
+                                .strong()
+                                .color(current_palette().fg),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(err)
+                                .monospace()
+                                .small()
+                                .color(current_palette().dim),
+                        );
+                    }
+                },
+            );
+
+            if refresh {
+                self.terminal_nuke_codes_wasm = None;
+            }
+            if back {
+                self.terminal_nuke_codes_wasm = None;
+                self.navigate_to_screen(self.terminal_nav.nuke_codes_return_screen);
+                self.apply_status_update(clear_shell_status());
+            }
+            return;
+        }
+
         let layout = self.terminal_layout();
         match draw_nuke_codes_screen(
             ctx,

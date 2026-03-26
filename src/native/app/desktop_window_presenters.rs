@@ -13,6 +13,7 @@ use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
+use super::super::wasm_addon_runtime::{draw_hosted_addon_frame, WasmHostedAddonState};
 use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
@@ -31,6 +32,7 @@ use robcos_native_settings_app::{
     SettingsHomeTileAction,
 };
 use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
+use robcos_shared::platform::{HostedAddonSize, HostedAddonSurface};
 use std::path::PathBuf;
 
 impl RobcoNativeApp {
@@ -1366,27 +1368,68 @@ impl RobcoNativeApp {
         );
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, "Nuke Codes", maximized);
+            let title = self
+                .desktop_nuke_codes_wasm
+                .as_ref()
+                .map(|state| state.title().to_string())
+                .unwrap_or_else(|| "Nuke Codes".to_string());
+            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
             if Self::retro_full_width_button(ui, "Refresh").clicked() {
                 refresh = true;
             }
             ui.separator();
             ui.add_space(12.0);
-            match &self.terminal_nuke_codes {
-                NukeCodesView::Unloaded => {
-                    ui.monospace("Codes are not loaded yet.");
+            if self.nuke_codes_uses_wasm_addon() {
+                let available = ui.available_size_before_wrap();
+                let size = HostedAddonSize {
+                    width: available.x.max(320.0),
+                    height: available.y.max(200.0),
+                };
+                let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
+                let result = (|| -> Result<(), String> {
+                    let module = super::super::installed_wasm_addon_module(
+                        &crate::platform::AddonId::from("tools.nuke-codes"),
+                    )
+                    .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
+                    if self.desktop_nuke_codes_wasm.is_none() {
+                        self.desktop_nuke_codes_wasm = Some(WasmHostedAddonState::spawn(
+                            &module,
+                            HostedAddonSurface::Desktop,
+                            size,
+                        )?);
+                    }
+                    if let Some(state) = self.desktop_nuke_codes_wasm.as_mut() {
+                        state.update(size, dt)?;
+                        draw_hosted_addon_frame(ui, state.frame());
+                        if let Some(status) = &state.frame().status_line {
+                            ui.add_space(8.0);
+                            ui.small(status);
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(err) = result {
+                    self.desktop_nuke_codes_wasm = None;
+                    ui.monospace("WASM ADDON FAILED");
+                    ui.small(err);
                 }
-                NukeCodesView::Error(err) => {
-                    ui.monospace("UNABLE TO FETCH LIVE CODES");
-                    ui.small(format!("ERROR: {err}"));
-                }
-                NukeCodesView::Data(codes) => {
-                    ui.monospace(format!("ALPHA   : {}", codes.alpha));
-                    ui.monospace(format!("BRAVO   : {}", codes.bravo));
-                    ui.monospace(format!("CHARLIE : {}", codes.charlie));
-                    ui.add_space(6.0);
-                    ui.small(format!("Source: {}", codes.source));
-                    ui.small(format!("Fetched: {}", codes.fetched_at));
+            } else {
+                match &self.terminal_nuke_codes {
+                    NukeCodesView::Unloaded => {
+                        ui.monospace("Codes are not loaded yet.");
+                    }
+                    NukeCodesView::Error(err) => {
+                        ui.monospace("UNABLE TO FETCH LIVE CODES");
+                        ui.small(format!("ERROR: {err}"));
+                    }
+                    NukeCodesView::Data(codes) => {
+                        ui.monospace(format!("ALPHA   : {}", codes.alpha));
+                        ui.monospace(format!("BRAVO   : {}", codes.bravo));
+                        ui.monospace(format!("CHARLIE : {}", codes.charlie));
+                        ui.add_space(6.0);
+                        ui.small(format!("Source: {}", codes.source));
+                        ui.small(format!("Fetched: {}", codes.fetched_at));
+                    }
                 }
             }
         });
@@ -1403,12 +1446,16 @@ impl RobcoNativeApp {
             shown_contains_pointer,
         );
         if refresh {
-            let tx = self.background.sender();
-            std::thread::spawn(move || {
-                let view = fetch_nuke_codes();
-                let _ = tx.send(BackgroundResult::NukeCodesFetched(view));
-            });
-            self.terminal_nuke_codes = NukeCodesView::Unloaded;
+            if self.nuke_codes_uses_wasm_addon() {
+                self.desktop_nuke_codes_wasm = None;
+            } else {
+                let tx = self.background.sender();
+                std::thread::spawn(move || {
+                    let view = fetch_nuke_codes();
+                    let _ = tx.send(BackgroundResult::NukeCodesFetched(view));
+                });
+                self.terminal_nuke_codes = NukeCodesView::Unloaded;
+            }
         }
         self.finish_desktop_window_host(
             ctx,

@@ -53,6 +53,7 @@ use super::retro_ui::{
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
+use super::wasm_addon_runtime::WasmHostedAddonState;
 use crate::config::SavedConnection;
 #[cfg(test)]
 use crate::config::{
@@ -536,6 +537,7 @@ pub struct RobcoNativeApp {
     zeta_invaders: ZetaInvadersWindow,
     red_menace: RedMenaceWindow,
     desktop_nuke_codes_open: bool,
+    desktop_nuke_codes_wasm: Option<WasmHostedAddonState>,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<WindowInstanceId, DesktopWindowState>,
@@ -558,6 +560,7 @@ pub struct RobcoNativeApp {
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
+    terminal_nuke_codes_wasm: Option<WasmHostedAddonState>,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
@@ -726,6 +729,7 @@ impl Default for RobcoNativeApp {
             zeta_invaders: ZetaInvadersWindow::default(),
             red_menace: RedMenaceWindow::default(),
             desktop_nuke_codes_open: false,
+            desktop_nuke_codes_wasm: None,
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
             desktop_window_states: HashMap::new(),
@@ -745,6 +749,7 @@ impl Default for RobcoNativeApp {
             terminal_nav: terminal_defaults,
             terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_nuke_codes: NukeCodesView::default(),
+            terminal_nuke_codes_wasm: None,
             terminal_pty: None,
             terminal_pty_surface: None,
             terminal_installer: TerminalInstallerState::default(),
@@ -871,8 +876,20 @@ impl RobcoNativeApp {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
     }
 
+    fn nuke_codes_uses_wasm_addon(&self) -> bool {
+        super::installed_wasm_addon_module(&crate::platform::AddonId::from("tools.nuke-codes"))
+            .is_some()
+    }
+
+    fn reset_nuke_codes_wasm_runtime(&mut self) {
+        self.desktop_nuke_codes_wasm = None;
+        self.terminal_nuke_codes_wasm = None;
+    }
+
     fn open_desktop_nuke_codes(&mut self) {
-        if matches!(self.terminal_nuke_codes, NukeCodesView::Unloaded) {
+        if self.nuke_codes_uses_wasm_addon() {
+            self.desktop_nuke_codes_wasm = None;
+        } else if matches!(self.terminal_nuke_codes, NukeCodesView::Unloaded) {
             let tx = self.background.sender();
             std::thread::spawn(move || {
                 let view = fetch_nuke_codes();

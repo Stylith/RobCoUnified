@@ -972,16 +972,18 @@ Current Phase 5 progress:
   - `tools.nuke-codes`
 - that staged repo includes a checked-in `index.json` plus per-addon manifests and is covered by a shared validation test
 - `tools.nuke-codes` in the staged repo now also includes a real `addon.wasm` built from a guest addon crate, and its staged manifest/index entrypoint is now `wasm-module`
+- the first actual shell-hosted WASM addon surface is now wired for `tools.nuke-codes`:
+  - desktop mode can open it inside the existing desktop window chrome
+  - terminal mode can open it inside the fullscreen terminal shell with the usual back/refresh controls
+  - both sides lazily spawn the installed WASM module, update it each frame, and fall back cleanly if the addon is missing or errors
 
 Not done yet:
 
 - richer install workflow than direct path-based manifest/directory import
-- backgrounded or resumable repository download/update behavior for externally hosted addons
 - richer addon-manager actions beyond enable/disable
-- runtime usage of discovered non-static addons
-- first shell render/input host wired to a real WASM addon surface
+- broader runtime usage of discovered non-static addons beyond the first `tools.nuke-codes` surface
 - packaged first-party addons
-- creating the actual external git repository and publishing the staged contents there
+- moving game runtime/rendering off the built-in Rust paths and onto external WASM bundles
 
 ## Phase 6: Third-Party Addons
 

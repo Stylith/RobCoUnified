@@ -1,5 +1,9 @@
 use crate::native::InstalledWasmAddonModule;
-use crate::platform::{HostedAddonRequest, HostedAddonResponse};
+use crate::platform::{
+    HostedAddonFrame, HostedAddonInitRequest, HostedAddonRequest, HostedAddonResponse,
+    HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest, HostedColor, HostedDrawCommand,
+};
+use eframe::egui::{self, Align2, FontFamily, FontId, Sense, Ui};
 use wasmi::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 #[allow(dead_code)]
@@ -8,6 +12,12 @@ pub(crate) struct WasmAddonModuleSession {
     memory: Memory,
     alloc: TypedFunc<i32, i32>,
     handle_json: TypedFunc<(i32, i32), i64>,
+}
+
+pub(crate) struct WasmHostedAddonState {
+    session: WasmAddonModuleSession,
+    title: String,
+    frame: HostedAddonFrame,
 }
 
 #[allow(dead_code)]
@@ -102,6 +112,157 @@ impl WasmAddonModuleSession {
         serde_json::from_slice(&response_bytes)
             .map_err(|error| format!("Failed to decode WASM addon response: {error}"))
     }
+}
+
+impl WasmHostedAddonState {
+    pub(crate) fn spawn(
+        module: &InstalledWasmAddonModule,
+        surface: HostedAddonSurface,
+        size: HostedAddonSize,
+    ) -> Result<Self, String> {
+        let init = HostedAddonRequest::Initialize(HostedAddonInitRequest {
+            addon_id: module.addon_id.to_string(),
+            surface,
+            size,
+            scale_factor: 1.0,
+        });
+        let (session, response) = WasmAddonModuleSession::spawn(module, &init)?;
+        match response {
+            HostedAddonResponse::Ready { title, frame } => Ok(Self {
+                session,
+                title,
+                frame,
+            }),
+            HostedAddonResponse::Frame { frame } => Ok(Self {
+                session,
+                title: module.addon_id.to_string(),
+                frame,
+            }),
+            HostedAddonResponse::Exit { reason } => Err(format!(
+                "WASM addon '{}' exited during initialization: {reason}",
+                module.addon_id
+            )),
+            HostedAddonResponse::Error { message } => Err(format!(
+                "WASM addon '{}' initialization failed: {message}",
+                module.addon_id
+            )),
+        }
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        size: HostedAddonSize,
+        delta_seconds: f32,
+    ) -> Result<(), String> {
+        match self.session.request(&HostedAddonRequest::Update(HostedAddonUpdateRequest {
+            size,
+            delta_seconds,
+            input: Vec::new(),
+        }))? {
+            HostedAddonResponse::Ready { title, frame } => {
+                self.title = title;
+                self.frame = frame;
+                Ok(())
+            }
+            HostedAddonResponse::Frame { frame } => {
+                self.frame = frame;
+                Ok(())
+            }
+            HostedAddonResponse::Exit { reason } => Err(format!("WASM addon exited: {reason}")),
+            HostedAddonResponse::Error { message } => Err(message),
+        }
+    }
+
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn frame(&self) -> &HostedAddonFrame {
+        &self.frame
+    }
+}
+
+pub(crate) fn draw_hosted_addon_frame(ui: &mut Ui, frame: &HostedAddonFrame) {
+    let available = ui.available_size_before_wrap();
+    let desired = egui::vec2(
+        available.x.max(frame.size.width.max(1.0)),
+        available.y.max(frame.size.height.max(1.0)),
+    );
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter_at(rect);
+    if let Some(clear) = &frame.clear {
+        painter.rect_filled(rect, 0.0, hosted_color(clear));
+    }
+
+    let scale_x = if frame.size.width > 0.0 {
+        rect.width() / frame.size.width
+    } else {
+        1.0
+    };
+    let scale_y = if frame.size.height > 0.0 {
+        rect.height() / frame.size.height
+    } else {
+        1.0
+    };
+
+    for command in &frame.commands {
+        match command {
+            HostedDrawCommand::Rect {
+                x,
+                y,
+                width,
+                height,
+                fill,
+            } => {
+                let min = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                let size = egui::vec2(width * scale_x, height * scale_y);
+                painter.rect_filled(egui::Rect::from_min_size(min, size), 0.0, hosted_color(fill));
+            }
+            HostedDrawCommand::Text {
+                x,
+                y,
+                text,
+                color,
+                size,
+            } => {
+                let pos = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                painter.text(
+                    pos,
+                    Align2::LEFT_TOP,
+                    text,
+                    FontId::new((size * scale_y).max(10.0), FontFamily::Monospace),
+                    hosted_color(color),
+                );
+            }
+            HostedDrawCommand::Image {
+                x,
+                y,
+                width,
+                height,
+                asset_path,
+            } => {
+                let min = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                let size = egui::vec2(width * scale_x, height * scale_y);
+                let image_rect = egui::Rect::from_min_size(min, size);
+                painter.rect_stroke(
+                    image_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(64, 160, 64)),
+                );
+                painter.text(
+                    image_rect.left_top() + egui::vec2(6.0, 6.0),
+                    Align2::LEFT_TOP,
+                    format!("IMAGE {}", asset_path),
+                    FontId::new(10.0, FontFamily::Monospace),
+                    egui::Color32::from_rgb(96, 208, 96),
+                );
+            }
+        }
+    }
+}
+
+fn hosted_color(color: &HostedColor) -> egui::Color32 {
+    egui::Color32::from_rgba_premultiplied(color.r, color.g, color.b, color.a)
 }
 
 fn unpack_ptr_len(packed: i64) -> Result<(usize, usize), String> {

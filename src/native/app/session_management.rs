@@ -136,6 +136,7 @@ impl RobcoNativeApp {
         self.apply_terminal_navigation_state(parked.terminal_nav);
         self.terminal_settings_panel = parked.terminal_settings_panel;
         self.terminal_nuke_codes = parked.terminal_nuke_codes;
+        self.reset_nuke_codes_wasm_runtime();
         self.terminal_pty = parked.terminal_pty;
         self.terminal_pty_surface = parked.terminal_pty_surface;
         self.terminal_installer = parked.terminal_installer;
