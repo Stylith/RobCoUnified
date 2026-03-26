@@ -13,6 +13,10 @@ use crate::ui::{
 const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
 
+fn legacy_nuke_codes_visible() -> bool {
+    true
+}
+
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
 fn add_entry<L, S>(terminal: &mut Term, kind: &str, mut load: L, mut save: S) -> Result<()>
@@ -84,7 +88,7 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             break;
         }
         let apps = load_apps();
-        let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+        let nuke_codes_visible = legacy_nuke_codes_visible();
         let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
         let mut choices: Vec<String> = Vec::new();
         if nuke_codes_visible {
@@ -191,7 +195,7 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        let nuke_codes_label = if get_settings().builtin_menu_visibility.nuke_codes {
+        let nuke_codes_label = if legacy_nuke_codes_visible() {
             "Nuke Codes in Applications: VISIBLE [toggle]"
         } else {
             "Nuke Codes in Applications: HIDDEN [toggle]"
@@ -219,11 +223,11 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Selected(s) => match s.as_str() {
                 s if is_back_menu_label(s) => break,
                 l if l == nuke_codes_label => {
-                    update_settings(|cfg| {
-                        cfg.builtin_menu_visibility.nuke_codes =
-                            !cfg.builtin_menu_visibility.nuke_codes;
-                    });
-                    persist_settings();
+                    flash_message(
+                        terminal,
+                        "Legacy Nuke Codes visibility is fixed during addon migration.",
+                        800,
+                    )?;
                 }
                 l if l == text_editor_label => {
                     update_settings(|cfg| {

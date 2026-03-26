@@ -1061,10 +1061,14 @@ Current decoupling status:
   - configured catalog games
 - Terminal Games now uses that same merged game list model.
 - `crates/native-services/src/desktop_surface_service.rs` no longer reserves a special shortcut rank for `nuke_codes`.
+- External addon source/build now has a real home in the addon repo:
+  - `nucleon-desktop-addons` commit `43c12d0` adds `sources/`
+  - `sources/` contains buildable Rust workspaces for Red Menace, Zeta Invaders, Nuke Codes, plus the generic hosted-addon SDK/contract copy needed by those builds
+- Core workspace membership no longer includes the addon-specific source/build crates.
 
 Current biggest remaining leaks:
-- addon-specific source/build crates still live in this repo
-- optional addon package production still depends on this repo instead of the external addon repo owning the build
+- addon-specific source/build directories still physically exist in this repo even though the external repo now owns a buildable copy
+- optional addon package publishing still needs to switch fully onto the external repo workflow
 - the host-context bridge is generic at the file-loading layer, but the data model still needs to be generalized further so the core does not carry addon-shaped host data assumptions long-term
 
 **If continuing this work, proceed in this order:**

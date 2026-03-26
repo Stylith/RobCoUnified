@@ -224,7 +224,7 @@ struct DesktopApplicationsSectionsCache {
     sections: Arc<DesktopApplicationsSections>,
 }
 
-// Note: show_nuke_codes was removed — Nuke Codes is now a dynamic addon
+// Note: the old built-in Nuke Codes toggle was removed — addons now drive visibility dynamically
 
 struct SettingsHomeRowsCache {
     visibility: DesktopSettingsVisibility,

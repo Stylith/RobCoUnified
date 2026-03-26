@@ -47,6 +47,10 @@ use crate::ui::{
     sel_style, session_switch_scope, title_style, MenuResult, Term,
 };
 
+fn legacy_nuke_codes_visible() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopExit {
     ReturnToTerminal,
@@ -1348,7 +1352,7 @@ fn build_command_leaf_items(
 
 fn refresh_start_leaf_items(state: &mut StartState) {
     let apps = load_apps();
-    let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+    let nuke_codes_visible = legacy_nuke_codes_visible();
     let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
     let mut app_items = Vec::new();
     if nuke_codes_visible {
@@ -1634,7 +1638,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
     match hub.kind {
         DesktopHubKind::Applications => {
             let apps = load_apps();
-            let nuke_codes_visible = get_settings().builtin_menu_visibility.nuke_codes;
+            let nuke_codes_visible = legacy_nuke_codes_visible();
             let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
             let mut items = Vec::new();
             if nuke_codes_visible {
@@ -2385,7 +2389,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 DesktopHubItem {
                     label: format!(
                         "Nuke Codes in Applications: {} [toggle]",
-                        if get_settings().builtin_menu_visibility.nuke_codes {
+                        if legacy_nuke_codes_visible() {
                             "VISIBLE"
                         } else {
                             "HIDDEN"
@@ -13007,10 +13011,6 @@ fn run_desktop_hub_action(
             }
         }
         DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility => {
-            update_settings(|s| {
-                s.builtin_menu_visibility.nuke_codes = !s.builtin_menu_visibility.nuke_codes;
-            });
-            persist_settings();
             refresh_start_leaf_items(&mut state.start);
             refresh_desktop_hub_windows(state, DesktopHubKind::EditApps);
             refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
