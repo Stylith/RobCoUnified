@@ -815,6 +815,7 @@ impl Default for RobcoNativeApp {
             background: BackgroundTasks::new(),
             ipc: super::ipc::start_listener(),
         };
+        crate::config::spawn_addon_repository_index_refresh();
         app.maybe_apply_profile_autologin();
         app
     }
