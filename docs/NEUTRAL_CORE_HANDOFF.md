@@ -6,7 +6,8 @@ Use it when resuming this refactor with Codex or another agent on a different ma
 
 ## Current Status
 
-- Repo: current checkout `RobCoUnified` (planned rename: `nucleon-core`)
+- Repo target name: `nucleon-core`
+- Current live checkout/remote name during transition: `RobCoUnified`
 - Working branch: `WIP`
 - Base branch for this work: `experimental`
 - Refactor goal: move from a product-branded, built-in-app shell toward a neutral core platform with first-party and later third-party addons
@@ -978,15 +979,16 @@ All packaging decisions from the prior handoff have been resolved and implemente
    - New test: `install_repository_addon_from_index_installs_ndpkg_bundle`.
 
 2. **External addon repository is the source of truth:**
-   - Repo: external first-party addon repository (currently `github.com/Stylith/nucleon-desktop-addons`, planned rename: `nucleon-core-addons`)
+   - Repo target name: `nucleon-core-addons`
+   - Current live external repo during transition: `github.com/Stylith/nucleon-desktop-addons`
    - Layout: `index.json` at root, `.ndpkg` files in category folders (`games/`, `tools/`)
    - `index.json` has a `base_url` pointing at the hosted raw content root
    - Artifact URLs are relative to `base_url`
 
-3. **Staging copy removed from RobCoUnified:**
+3. **Staging copy removed from the core repo:**
    - `packaging/first-party-addons-repo/` deleted entirely
    - Test converted from `include_str!` against the staging file to inline JSON test data
-   - No addon package data remains in RobCoUnified
+   - No addon package data remains in the core repo
 
 4. **Remote index auto-fetch implemented:**
    - `spawn_addon_repository_index_refresh()` in `config.rs` runs curl in a background thread at app startup
@@ -1013,8 +1015,8 @@ Current practical priority order:
    - the runtime path is now complete for all three optional addons
    - next work is deleting addon-specific ownership from the core repo
 2. repo/name migration
-   - main repo is intended to become `nucleon-core`
-   - external addon repo is intended to become `nucleon-core-addons`
+   - main repo target name is `nucleon-core`
+   - external addon repo target name is `nucleon-core-addons`
    - built-in shell modules/addons should move toward the `nucleon-` prefix (`nucleon-text`, `nucleon-files`, `nucleon-extension`, etc.)
 
 Current decoupling status:
@@ -1245,7 +1247,7 @@ Current state:
 - .ndpkg packaging is DONE. External addon repo pipeline is DONE.
 - Optional addons are hosted externally in the addon repo as `.ndpkg` packages.
 - The app auto-fetches index.json from the external repo at startup and can download/install addons via curl.
-- The staging copy (packaging/first-party-addons-repo/) has been removed from RobCoUnified.
+- The staging copy (packaging/first-party-addons-repo/) has been removed from the core repo.
 
 Remaining work: remove all hardcoded references to these three addons from the shell.
 Follow Phases A–E in the handoff doc. After each phase, cargo check --bin robcos-native must compile.

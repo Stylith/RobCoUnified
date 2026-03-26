@@ -7,9 +7,10 @@ resolver = "2"
 name = "robcos"
 version = "0.4.4"
 edition = "2021"
-description = "RobCoOS — Fallout-style terminal OS in Rust"
+description = "nucleon-core shell/runtime platform"
 license = "GPL-3.0-only"
 readme = "README.md"
+# Keep the current live repo URL until the GitHub rename lands.
 repository = "https://github.com/Stylith/RobCoUnified"
 autobins = false
 

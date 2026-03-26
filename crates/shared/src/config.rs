@@ -74,7 +74,10 @@ pub fn addon_downloads_cache_dir() -> PathBuf {
 
 pub const ADDON_REPOSITORY_INDEX_URL_ENV: &str = "NUCLEON_ADDON_REPOSITORY_INDEX_URL";
 pub const LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV: &str = "ROBCOS_ADDON_REPOSITORY_INDEX_URL";
+pub const TARGET_ADDON_REPOSITORY_NAME: &str = "nucleon-core-addons";
+pub const LIVE_ADDON_REPOSITORY_NAME: &str = "nucleon-desktop-addons";
 pub const DEFAULT_ADDON_REPOSITORY_INDEX_URL: &str =
+    // Keep the live feed URL on the current repo until the GitHub rename lands.
     "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/index.json";
 
 pub fn addon_repository_index_url() -> String {

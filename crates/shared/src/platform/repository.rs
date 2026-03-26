@@ -190,7 +190,7 @@ mod tests {
     fn ndpkg_repository_index_round_trips_with_expected_addon_structure() {
         let raw = r#"{
             "schema_version": 1,
-            "base_url": "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/",
+            "base_url": "https://example.invalid/nucleon-core-addons/",
             "addons": [
                 {
                     "manifest": {
