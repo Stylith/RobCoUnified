@@ -214,7 +214,7 @@ mod tests {
             .all(|addon| addon.releases.first().is_some()));
         assert_eq!(
             index.addons[0].releases[0].artifacts[0].url,
-            "games.red-menace.ndpkg"
+            "games/games.red-menace.ndpkg"
         );
         assert_eq!(
             index.addons[0].releases[0].artifacts[0].format.as_deref(),
@@ -222,7 +222,7 @@ mod tests {
         );
         assert_eq!(
             index.addons[1].releases[0].artifacts[0].url,
-            "games.zeta-invaders.ndpkg"
+            "games/games.zeta-invaders.ndpkg"
         );
         assert_eq!(
             index.addons[1].releases[0].artifacts[0].format.as_deref(),
@@ -230,7 +230,7 @@ mod tests {
         );
         assert_eq!(
             index.addons[2].releases[0].artifacts[0].url,
-            "tools.nuke-codes.ndpkg"
+            "tools/tools.nuke-codes.ndpkg"
         );
         assert_eq!(
             index.addons[2].releases[0].artifacts[0].format.as_deref(),
