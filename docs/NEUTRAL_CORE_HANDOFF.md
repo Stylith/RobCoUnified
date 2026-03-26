@@ -47,7 +47,7 @@ Current practical status summary:
   - user-scoped addon install/remove path imports
   - discovery issue/provenance visibility in addon inventory
 - current essential-addon policy:
-- shell-critical first-party addons are essential; optional first-party addons are currently `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes`
+- shell-critical first-party addons are essential; optional first-party addons are treated as external packages and should not be named or owned by the core repo
 
 Important honesty note:
 
@@ -130,9 +130,6 @@ That file currently defines code-backed manifests for:
 - connections
 - edit menus
 - about
-- Red Menace
-- Zeta Invaders
-- nuke codes
 
 Current essential/optional split:
 
@@ -149,9 +146,7 @@ Current essential/optional split:
   - edit menus
   - about
 - optional:
-  - Red Menace
-  - Zeta Invaders
-  - nuke codes
+  - externally distributed first-party addons only
 
 Runtime adoption is no longer limited to Settings. The shell now uses capability/addon routing for a broad first-party set.
 
@@ -159,7 +154,7 @@ Adopted runtime flows in the native shell include:
 
 - `src/native/app/launch_registry.rs` was added as the first runtime launch adapter
 - `DesktopShellAction` now supports a shared `LaunchTarget`
-- desktop Start/Spotlight/menu/context/IPC launch paths for Settings, File Manager, Editor, Terminal, Applications, Installer, Connections, Default Apps, Edit Menus, About, and Nuke Codes now route through capability/addon resolution where appropriate
+- desktop Start/Spotlight/menu/context/IPC launch paths for Settings, File Manager, Editor, Terminal, Applications, Installer, Connections, Default Apps, Edit Menus, About, and optional addon entries now route through capability/addon resolution where appropriate
 - terminal menu mode now uses the same registry seam for addon-backed destinations instead of a separate local lookup table
 - settings subtools now have addon-backed identities even where they still render inside the Settings host
 - visible behavior has been intentionally preserved; most of the change is in launch contract and ownership boundaries
@@ -238,8 +233,8 @@ The additional menu/context tests verify:
 - desktop program-request File Manager uses the registry-backed launch path
 - desktop program-request Editor uses the registry-backed launch path
 - shell-level OpenTextEditor now uses the registry-backed launch path
-- desktop program-request Nuke Codes uses the registry-backed launch path
-- shell-level OpenNukeCodes now uses the registry-backed launch path
+- desktop program-request optional addon entries use the registry-backed launch path
+- shell-level optional addon launches now use the registry-backed launch path
 
 Additional path-adoption slice:
 
@@ -339,7 +334,7 @@ Additional window-runtime extraction slice:
 Additional desktop-runtime extraction slice:
 
 - desktop standalone-window preparation and update flow moved out of `src/native/app.rs` into `src/native/app/desktop_runtime.rs`
-- that module now owns profile autologin open-mode handling, standalone session restore for desktop windows, standalone Settings/Editor/Applications/Nuke Codes/Installer shell prep and repaint flow, and the unsaved-editor viewport-close interception path
+- that module now owns profile autologin open-mode handling, standalone session restore for desktop windows, standalone Settings/Editor/Applications/Installer shell prep and repaint flow, and the unsaved-editor viewport-close interception path
 - this establishes a concrete `desktop_runtime` module without changing runtime behavior
 
 Additional terminal-runtime extraction slice:
@@ -507,7 +502,7 @@ Additional addon-policy adoption slice:
 
 - first-party launcher/profile policy now consumes the effective enabled addon catalog instead of the old static first-party manifest list
 - addon-state overrides are now live behavior: disabling a wired optional first-party addon removes it from the profile-aware registry used for capability visibility and launch resolution
-- all current first-party addons except `Red Menace`, `Zeta Invaders`, and `Nuke Codes` are now marked essential in their manifests and ignore disable requests
+- shell-critical first-party addons are marked essential in their manifests and ignore disable requests
 - install-profile policy still applies on top of that state, so profile restrictions such as macOS Connections remain authoritative
 - launch-registry status messages now distinguish between:
   - disabled by install profile
@@ -939,57 +934,32 @@ Current Phase 5 progress:
 - layered manifest precedence exists
 Current addon/runtime state:
 
-- `origin/WIP` was at `98e3840` before the latest shell/runtime addon fixes in the current worktree.
-- Optional first-party addons are no longer seeded from the built-in manifest catalog. They now come from discovered installed manifests or the repository feed.
-- Installer/addon-manager state is already in place:
-  - local manual install supports manifest paths, addon directories, and `.zip` / `.tar` / `.tar.gz` / `.tgz`
+- Optional first-party addons are no longer seeded from the built-in manifest catalog. They come from discovered installed manifests or the repository feed.
+- Installer/addon-manager state is in place:
+  - local manual install supports manifest paths, addon directories, `.ndpkg`, and common archive formats
   - feed-backed install/update/reinstall exists
   - discovery issues are preserved for UI visibility
-- Shell-integrated external addon runtime direction is now:
-  - prefer WASM for rich integrated addons like games
+- Shell-integrated external addon runtime direction:
+  - prefer WASM for rich integrated addons
   - keep hosted-process support only as a secondary path
 - Shared runtime pieces already exist:
-  - `robcos-hosted-addon-contract`
-  - `robcos-wasm-addon-sdk`
+  - hosted-addon contract
+  - WASM addon SDK
   - native WASM host with bundle-relative module resolution
   - keyboard input forwarding into hosted addons
   - real image loading from addon bundle assets
+  - aspect-preserving and tint-aware hosted rendering
 - installed optional addon apps/games now show up through normal shell surfaces:
   - terminal Applications / Games
   - desktop Start menu
   - Spotlight
-- desktop and terminal launch paths now intercept installed WASM addon manifests directly instead of only hardcoded runtime-known apps.
-- hosted addon desktop windows now use the addon title instead of the generic `PTY App` fallback.
-- hosted frame rendering now:
-  - preserves aspect ratio instead of stretching to fill
-  - supports optional tinted image sprites from the addon guest
-- `tools.nuke-codes` now has the first real host-context bridge:
-  - shell host reads `providers.json` from the addon bundle
-  - shell fetches silo code data natively
-  - host sends that data into the WASM guest as JSON context on init/update
-  - `R` triggers a host-side refresh
-  - external repo commit `378b493` publishes the fixed `tools.nuke-codes.ndpkg`
-- `games.zeta-invaders` is the first game on the migration path:
-  - `crates/native-space-invaders-app` can now export hosted frames and map hosted input events
-  - `crates/wasm-zeta-invaders-addon` builds a real guest `.wasm`
-  - desktop and terminal Zeta Invaders surfaces now prefer the installed WASM addon runtime when present
-  - the guest no longer depends on `wasm-bindgen` / web imports
-  - the rebuilt release guest is shell-host compatible and small enough for practical packaging
-  - built-in fallback still exists during migration
-- `games.red-menace` is now on the same code path in-tree:
-  - `crates/native-red-menace-app` was restored and made `wasm32-unknown-unknown` safe
-  - it now exports hosted input mapping and a hosted-frame renderer using bundle-relative asset paths
-  - `crates/wasm-red-menace-addon` now builds a real guest `.wasm`
-  - package publishing is still pending; the external repo has not been updated with the rebuilt Red Menace bundle yet
-- Optional addons are now hosted in the external `nucleon-desktop-addons` repo as `.ndpkg` packages:
-  - `games.red-menace`
-  - `games.zeta-invaders`
-  - `tools.nuke-codes`
-- external repo checkpoint:
-  - `nucleon-desktop-addons` commit `00feae6` fixes the published `games.zeta-invaders.ndpkg`
-  - old broken package used a web-targeted WASM build
-  - fixed package uses the shell addon runtime ABI and updated checksum in `index.json`
-  - `nucleon-desktop-addons` commit `84dfe8e` publishes the rebuilt `games.red-menace.ndpkg` as a `wasm-module`
+- desktop and terminal launch paths now intercept installed WASM addon manifests directly instead of only hardcoded runtime-known apps
+- hosted addon desktop windows now use the addon title instead of the generic `PTY App` fallback
+- the first real host-context bridge exists:
+  - shell host can read addon-bundle context files
+  - host can fetch native data and pass it into the WASM guest as JSON context on init/update
+  - guest refresh can request a host-side refresh cycle
+- Optional addons are hosted in the external addon repo as `.ndpkg` packages and built from that repo’s `sources/` workspace, not from core-owned addon crates
 
 ## Phase 5 Progress — `.ndpkg` Packaging & External Addon Pipeline (DONE)
 
@@ -1004,10 +974,10 @@ All packaging decisions from the prior handoff have been resolved and implemente
    - New test: `install_repository_addon_from_index_installs_ndpkg_bundle`.
 
 2. **External addon repository is the source of truth:**
-   - Repo: `github.com/Stylith/nucleon-desktop-addons` (public)
+   - Repo: external first-party addon repository (currently `github.com/Stylith/nucleon-desktop-addons`, planned rename: `nucleon-core-addons`)
    - Layout: `index.json` at root, `.ndpkg` files in category folders (`games/`, `tools/`)
-   - `index.json` has `base_url` pointing to `https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/`
-   - Artifact URLs are relative to `base_url` (e.g. `games/games.zeta-invaders.ndpkg`)
+   - `index.json` has a `base_url` pointing at the hosted raw content root
+   - Artifact URLs are relative to `base_url`
 
 3. **Staging copy removed from RobCoUnified:**
    - `packaging/first-party-addons-repo/` deleted entirely
@@ -1023,19 +993,15 @@ All packaging decisions from the prior handoff have been resolved and implemente
 
 5. **HTTP download pipeline for relative artifact URLs:**
    - `stage_repository_artifact()` now calls `resolve_repository_url()` before checking `looks_like_http_url()`
-   - A relative URL like `games/games.zeta-invaders.ndpkg` gets `base_url` prepended → full HTTPS URL → curl download
+   - A relative URL gets `base_url` prepended → full HTTPS URL → curl download
    - SHA-256 verification, extraction, and install all work end-to-end
 
-6. **Compression results:**
-   - Original broken Zeta package: 58 MB raw → 14 MB `.ndpkg`
-   - Fixed shell-compatible Zeta package: 184 KB raw wasm → 801 KB `.ndpkg` with assets
-   - Nuke Codes: 3.8 MB raw → 1.0 MB `.ndpkg` (placeholder guest)
+6. **Packaging result:**
+   - `.ndpkg` is practical enough for public feed distribution, but large binary artifacts should ultimately live in release assets rather than git history
 
 ### What's in progress — Hardcoded Addon Removal / Runtime Completion
 
-The external pipeline is done. The remaining Phase 5 work is removing all hardcoded references to the three optional addons from the shell codebase so they load purely through the dynamic WASM addon runtime.
-
-**Addons to decouple:** `games.red-menace`, `games.zeta-invaders`, `tools.nuke-codes`
+The external pipeline is done. The remaining Phase 5 work is removing all hardcoded references to optional addons from the shell codebase so they load purely through the dynamic addon runtime.
 
 Current practical priority order:
 
@@ -1048,13 +1014,13 @@ Current practical priority order:
    - built-in shell modules/addons should move toward the `nucleon-` prefix (`nucleon-text`, `nucleon-files`, `nucleon-extension`, etc.)
 
 Current decoupling status:
-- `src/native/wasm_addon_runtime.rs` no longer imports the Nuke Codes crate directly.
+- `src/native/wasm_addon_runtime.rs` no longer imports an addon-specific crate directly.
 - The WASM host now loads host context generically from bundle files:
   - `host-context.json` if present
   - legacy `providers.json` fallback during transition
-- `crates/native-services/src/desktop_launcher_service.rs` no longer hardcodes Red Menace/Zeta Invaders as built-in launch targets.
+- `crates/native-services/src/desktop_launcher_service.rs` no longer hardcodes built-in optional game targets.
 - `crates/native-services/src/desktop_search_service.rs` now reads game entries from the catalog instead of built-in game constants.
-- The stale `Show Nuke Codes` settings toggle was removed from the active settings UI.
+- The stale built-in optional-addon settings toggle was removed from the active settings UI.
 - Terminal Games no longer has a separate `RobCo Fun` / `GamesRobcoFun` submenu path.
 - Desktop Start -> Games is now one flat generic game list built from:
   - installed hosted game addons
@@ -1062,16 +1028,12 @@ Current decoupling status:
 - Terminal Games now uses that same merged game list model.
 - `crates/native-services/src/desktop_surface_service.rs` no longer reserves a special shortcut rank for `nuke_codes`.
 - External addon source/build now has a real home in the addon repo:
-  - `nucleon-desktop-addons` commit `43c12d0` adds `sources/`
-  - `sources/` contains buildable Rust workspaces for Red Menace, Zeta Invaders, Nuke Codes, plus the generic hosted-addon SDK/contract copy needed by those builds
+  - the addon repo contains `sources/`
+  - `sources/` contains buildable Rust workspaces for current optional addons plus the generic hosted-addon SDK/contract copy needed by those builds
 - Core workspace membership no longer includes the addon-specific source/build crates.
 - The six addon-specific source/build directories were deleted from this repo after that external workspace was verified:
-  - `crates/native-red-menace-app/`
-  - `crates/wasm-red-menace-addon/`
-  - `crates/native-space-invaders-app/`
-  - `crates/wasm-zeta-invaders-addon/`
-  - `crates/native-nuke-codes-app/`
-  - `crates/wasm-nuke-codes-addon/`
+  - native optional addon crates
+  - wasm optional addon crates
 
 Current biggest remaining leaks:
 - optional addon package publishing still needs to switch fully onto the external repo workflow
@@ -1080,19 +1042,15 @@ Current biggest remaining leaks:
 **If continuing this work, proceed in this order:**
 
 Phase A — Move addon source/build ownership out of the core repo:
-- move the actual source/assets/build scripts for `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes` into the external addons repo (or per-addon repos if desired later)
+- move the actual source/assets/build scripts for optional addons into the external addons repo (or per-addon repos if desired later)
 - make `nucleon-core-addons` own the `.wasm` / `.ndpkg` build pipeline
 - after the external repo can build and publish those packages independently, delete the matching workspace crates from this repo
 
 Phase B — Remove workspace crates from core after external ownership exists:
 - status: complete
 - deleted from this repo:
-  - `crates/native-red-menace-app/`
-  - `crates/native-space-invaders-app/`
-  - `crates/native-nuke-codes-app/`
-  - `crates/wasm-zeta-invaders-addon/`
-  - `crates/wasm-nuke-codes-addon/`
-  - `crates/wasm-red-menace-addon/`
+  - native optional addon crates
+  - wasm optional addon crates
 - removed from root `Cargo.toml` workspace members/default-members
 
 Phase C — Remove enum variants:
@@ -1281,7 +1239,7 @@ Read docs/NEUTRAL_CORE_HANDOFF.md first — specifically the "Phase 5 Progress" 
 
 Current state:
 - .ndpkg packaging is DONE. External addon repo pipeline is DONE.
-- Optional addons (Red Menace, Zeta Invaders, Nuke Codes) are hosted externally in nucleon-desktop-addons as .ndpkg packages.
+- Optional addons are hosted externally in the addon repo as `.ndpkg` packages.
 - The app auto-fetches index.json from the external repo at startup and can download/install addons via curl.
 - The staging copy (packaging/first-party-addons-repo/) has been removed from RobCoUnified.
 

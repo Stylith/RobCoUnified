@@ -1752,7 +1752,7 @@ mod tests {
     fn terminal_back_from_addon_actions_returns_to_inventory() {
         let mut state = TerminalInstallerState {
             view: InstallerView::AddonActions {
-                addon_id: "tools.nuke-codes".to_string(),
+                addon_id: "tools.sample-addon".to_string(),
             },
             ..TerminalInstallerState::default()
         };

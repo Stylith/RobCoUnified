@@ -1498,6 +1498,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use zip::write::SimpleFileOptions;
 
+    const TOOL_ADDON_ID: &str = "tools.reference-tool";
+    const TOOL_ADDON_NAME: &str = "Reference Tool";
+    const TOOL_STATIC_NAME: &str = "Static Reference Tool";
+    const TOOL_USER_NAME: &str = "User Reference Tool";
+    const TOOL_MANIFEST_PATH: &str = "/tmp/addons/reference-tool/manifest.json";
+    const TOOL_ARTIFACT_STEM: &str = "reference-tool";
+    const GAME_ADDON_A_ID: &str = "games.arcade-alpha";
+    const GAME_ADDON_A_NAME: &str = "Arcade Alpha";
+    const GAME_ADDON_B_ID: &str = "games.arcade-beta";
+    const GAME_ADDON_B_NAME: &str = "Arcade Beta";
+
     #[test]
     fn first_party_registry_exposes_core_capabilities() {
         let registry = first_party_addon_registry();
@@ -1583,14 +1594,14 @@ mod tests {
 
     #[test]
     fn effective_addon_enabled_uses_override_when_present() {
-        let manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User);
+        let manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User);
         let mut overrides = AddonStateOverrides::default();
 
         assert!(effective_addon_enabled_with_overrides(
             &manifest, &overrides
         ));
 
-        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        overrides.set_enabled(AddonId::from(TOOL_ADDON_ID), Some(false));
         assert!(!effective_addon_enabled_with_overrides(
             &manifest, &overrides
         ));
@@ -1603,11 +1614,11 @@ mod tests {
                 .manifest(&AddonId::from("shell.settings"))
                 .cloned()
                 .expect("settings manifest"),
-            manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User),
+            manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User),
         ])
         .unwrap();
         let mut overrides = AddonStateOverrides::default();
-        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        overrides.set_enabled(AddonId::from(TOOL_ADDON_ID), Some(false));
         let registry =
             installed_enabled_addon_manifest_registry_with_overrides(&registry, &overrides);
 
@@ -1615,24 +1626,23 @@ mod tests {
             .manifest(&AddonId::from("shell.settings"))
             .is_some());
         assert!(registry
-            .manifest(&AddonId::from("tools.nuke-codes"))
+            .manifest(&AddonId::from(TOOL_ADDON_ID))
             .is_none());
     }
 
     #[test]
     fn installed_inventory_prefers_discovered_manifest_and_applies_override() {
-        let static_manifest =
-            manifest("tools.nuke-codes", "Static Nuke Codes", AddonScope::Bundled);
-        let discovered_manifest = manifest("tools.nuke-codes", "User Nuke Codes", AddonScope::User);
+        let static_manifest = manifest(TOOL_ADDON_ID, TOOL_STATIC_NAME, AddonScope::Bundled);
+        let discovered_manifest = manifest(TOOL_ADDON_ID, TOOL_USER_NAME, AddonScope::User);
         let mut overrides = AddonStateOverrides::default();
-        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        overrides.set_enabled(AddonId::from(TOOL_ADDON_ID), Some(false));
 
         let records = installed_addon_inventory_with_overrides(
             vec![static_manifest],
             AddonManifestDiscovery {
                 manifests: vec![DiscoveredAddonManifest {
                     manifest: discovered_manifest,
-                    manifest_path: PathBuf::from("/tmp/addons/nuke-codes/manifest.json"),
+                    manifest_path: PathBuf::from(TOOL_MANIFEST_PATH),
                 }],
                 issues: Vec::new(),
             },
@@ -1641,11 +1651,11 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         let record = &records[0];
-        assert_eq!(record.manifest.display_name, "User Nuke Codes");
+        assert_eq!(record.manifest.display_name, TOOL_USER_NAME);
         assert_eq!(record.manifest.scope, AddonScope::User);
         assert_eq!(
             record.manifest_path.as_deref(),
-            Some(PathBuf::from("/tmp/addons/nuke-codes/manifest.json").as_path())
+            Some(PathBuf::from(TOOL_MANIFEST_PATH).as_path())
         );
         assert_eq!(record.explicit_enabled, Some(false));
         assert!(!record.effective_enabled);
@@ -1674,13 +1684,13 @@ mod tests {
     #[test]
     fn addon_state_disabled_addon_is_removed_from_profile_registry() {
         let mut overrides = AddonStateOverrides::default();
-        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
+        overrides.set_enabled(AddonId::from(TOOL_ADDON_ID), Some(false));
         let registry = AddonRegistry::from_manifests([
             first_party_addon_registry()
                 .manifest(&AddonId::from("shell.settings"))
                 .cloned()
                 .expect("settings manifest"),
-            manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User),
+            manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User),
         ])
         .unwrap();
         let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
@@ -1697,7 +1707,7 @@ mod tests {
             .manifest(&AddonId::from("shell.settings"))
             .is_some());
         assert!(registry
-            .manifest(&AddonId::from("tools.nuke-codes"))
+            .manifest(&AddonId::from(TOOL_ADDON_ID))
             .is_none());
     }
 
@@ -1770,8 +1780,8 @@ mod tests {
             vec![manifest("shell.settings", "Settings", AddonScope::Bundled).essential()],
             AddonManifestDiscovery {
                 manifests: vec![DiscoveredAddonManifest {
-                    manifest: manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User),
-                    manifest_path: PathBuf::from("/tmp/addons/nuke-codes/manifest.json"),
+                    manifest: manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User),
+                    manifest_path: PathBuf::from(TOOL_MANIFEST_PATH),
                 }],
                 issues: Vec::new(),
             },
@@ -1785,7 +1795,7 @@ mod tests {
         assert!(sections
             .optional
             .iter()
-            .any(|record| record.manifest.id.as_str() == "tools.nuke-codes"));
+            .any(|record| record.manifest.id.as_str() == TOOL_ADDON_ID));
         assert!(sections
             .optional
             .iter()
@@ -1807,8 +1817,8 @@ mod tests {
     fn hosted_game_names_only_include_installed_runtime_known_games() {
         let registry = AddonRegistry::from_manifests([
             AddonManifest::new(
-                "games.red-menace",
-                "Red Menace",
+                GAME_ADDON_A_ID,
+                GAME_ADDON_A_NAME,
                 "0.1.0",
                 AddonKind::Game,
                 AddonEntrypoint::WasmModule {
@@ -1824,23 +1834,23 @@ mod tests {
 
         assert_eq!(
             hosted_game_names_from_registry(&registry),
-            vec!["Red Menace"]
+            vec![GAME_ADDON_A_NAME]
         );
     }
 
     #[test]
     fn installed_hosted_addon_process_resolves_bundle_relative_executable() {
         let root = temp_dir("installed_hosted_addon_process_resolves_bundle_relative_executable");
-        let addon_dir = root.join("games.red-menace");
+        let addon_dir = root.join(GAME_ADDON_A_ID);
         fs::create_dir_all(addon_dir.join("bin")).unwrap();
         let manifest_path = addon_dir.join("manifest.json");
         let manifest = AddonManifest::new(
-            "games.red-menace",
-            "Red Menace",
+            GAME_ADDON_A_ID,
+            GAME_ADDON_A_NAME,
             "0.1.0",
             AddonKind::Game,
             AddonEntrypoint::HostedProcess {
-                executable: "bin/red-menace-addon".to_string(),
+                executable: "bin/arcade-alpha-addon".to_string(),
                 protocol: HostedAddonProtocol::ShellSurfaceV1,
             },
         )
@@ -1855,27 +1865,27 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(process.addon_id.as_str(), "games.red-menace");
+        assert_eq!(process.addon_id.as_str(), GAME_ADDON_A_ID);
         assert_eq!(process.protocol, HostedAddonProtocol::ShellSurfaceV1);
         assert_eq!(
             process.executable_path,
-            addon_dir.join("bin").join("red-menace-addon")
+            addon_dir.join("bin").join("arcade-alpha-addon")
         );
     }
 
     #[test]
     fn installed_wasm_addon_module_resolves_bundle_relative_module() {
         let root = temp_dir("installed_wasm_addon_module_resolves_bundle_relative_module");
-        let addon_dir = root.join("games.zeta-invaders");
+        let addon_dir = root.join(GAME_ADDON_B_ID);
         fs::create_dir_all(addon_dir.join("wasm")).unwrap();
         let manifest_path = addon_dir.join("manifest.json");
         let manifest = AddonManifest::new(
-            "games.zeta-invaders",
-            "Zeta Invaders",
+            GAME_ADDON_B_ID,
+            GAME_ADDON_B_NAME,
             "0.1.0",
             AddonKind::Game,
             AddonEntrypoint::WasmModule {
-                module: "wasm/zeta-invaders.wasm".to_string(),
+                module: "wasm/arcade-beta.wasm".to_string(),
                 protocol: HostedAddonProtocol::ShellSurfaceV1,
             },
         )
@@ -1890,11 +1900,11 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(module.addon_id.as_str(), "games.zeta-invaders");
+        assert_eq!(module.addon_id.as_str(), GAME_ADDON_B_ID);
         assert_eq!(module.protocol, HostedAddonProtocol::ShellSurfaceV1);
         assert_eq!(
             module.module_path,
-            addon_dir.join("wasm").join("zeta-invaders.wasm")
+            addon_dir.join("wasm").join("arcade-beta.wasm")
         );
     }
 
@@ -2168,8 +2178,8 @@ mod tests {
             temp_dir("install_repository_addon_allows_runtime_known_optional_addon_id_install");
         let downloads_root =
             temp_dir("install_repository_addon_allows_runtime_known_optional_addon_id_download");
-        let artifact_path = repository_root.join("nuke-codes.json");
-        let artifact_manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User)
+        let artifact_path = repository_root.join(format!("{TOOL_ARTIFACT_STEM}.json"));
+        let artifact_manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User)
             .with_capability("code-reference");
         fs::write(&artifact_path, serde_json::to_string(&artifact_manifest).unwrap()).unwrap();
 
@@ -2185,7 +2195,7 @@ mod tests {
                         channel: Some("stable".to_string()),
                         artifacts: vec![AddonArtifact {
                             install_profile: Some(InstallProfile::LinuxDesktop),
-                            url: "nuke-codes.json".to_string(),
+                            url: format!("{TOOL_ARTIFACT_STEM}.json"),
                             sha256: file_sha256(&artifact_path),
                             signature_url: None,
                             size_bytes: None,
@@ -2195,20 +2205,15 @@ mod tests {
                 }],
             },
             &repository_root.join("addon-repository-index.json"),
-            &AddonId::from("tools.nuke-codes"),
+            &AddonId::from(TOOL_ADDON_ID),
             InstallProfile::LinuxDesktop,
             &downloads_root,
             &install_root,
         )
         .unwrap();
 
-        assert_eq!(message, "Installed Nuke Codes.");
-        assert!(
-            install_root
-                .join("tools.nuke-codes")
-                .join("manifest.json")
-                .exists()
-        );
+        assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
+        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
     }
 
     #[test]
@@ -2219,9 +2224,9 @@ mod tests {
             temp_dir("install_repository_addon_from_index_installs_directory_bundle_install");
         let downloads_root =
             temp_dir("install_repository_addon_from_index_installs_directory_bundle_download");
-        let bundle_dir = repository_root.join("nuke-codes");
+        let bundle_dir = repository_root.join(TOOL_ARTIFACT_STEM);
         fs::create_dir_all(bundle_dir.join("assets")).unwrap();
-        let artifact_manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User)
+        let artifact_manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User)
             .with_capability("code-reference");
         fs::write(
             bundle_dir.join("manifest.json"),
@@ -2242,7 +2247,7 @@ mod tests {
                         channel: Some("stable".to_string()),
                         artifacts: vec![AddonArtifact {
                             install_profile: Some(InstallProfile::LinuxDesktop),
-                            url: "nuke-codes".to_string(),
+                            url: TOOL_ARTIFACT_STEM.to_string(),
                             sha256: directory_sha256_for_test(&bundle_dir),
                             signature_url: None,
                             size_bytes: None,
@@ -2252,28 +2257,18 @@ mod tests {
                 }],
             },
             &repository_root.join("addon-repository-index.json"),
-            &AddonId::from("tools.nuke-codes"),
+            &AddonId::from(TOOL_ADDON_ID),
             InstallProfile::LinuxDesktop,
             &downloads_root,
             &install_root,
         )
         .unwrap();
 
-        assert_eq!(message, "Installed Nuke Codes.");
-        assert!(
-            install_root
-                .join("tools.nuke-codes")
-                .join("manifest.json")
-                .exists()
-        );
+        assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
+        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
         assert_eq!(
-            fs::read_to_string(
-                install_root
-                    .join("tools.nuke-codes")
-                    .join("assets")
-                    .join("help.txt")
-            )
-            .unwrap(),
+            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
+                .unwrap(),
             "launch codes"
         );
     }
@@ -2327,17 +2322,17 @@ mod tests {
         let install_root = temp_dir("install_repository_addon_from_index_installs_zip_bundle_install");
         let downloads_root =
             temp_dir("install_repository_addon_from_index_installs_zip_bundle_download");
-        let archive_path = repository_root.join("nuke-codes.zip");
-        let artifact_manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User)
+        let archive_path = repository_root.join(format!("{TOOL_ARTIFACT_STEM}.zip"));
+        let artifact_manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User)
             .with_capability("code-reference");
         write_zip_archive(
             &archive_path,
             &[
                 (
-                    "nuke-codes/manifest.json",
+                    "reference-tool/manifest.json",
                     serde_json::to_string(&artifact_manifest).unwrap(),
                 ),
-                ("nuke-codes/assets/help.txt", "launch codes".to_string()),
+                ("reference-tool/assets/help.txt", "launch codes".to_string()),
             ],
         );
 
@@ -2353,7 +2348,7 @@ mod tests {
                         channel: Some("stable".to_string()),
                         artifacts: vec![AddonArtifact {
                             install_profile: Some(InstallProfile::LinuxDesktop),
-                            url: "nuke-codes.zip".to_string(),
+                            url: format!("{TOOL_ARTIFACT_STEM}.zip"),
                             sha256: file_sha256(&archive_path),
                             signature_url: None,
                             size_bytes: None,
@@ -2363,28 +2358,18 @@ mod tests {
                 }],
             },
             &repository_root.join("addon-repository-index.json"),
-            &AddonId::from("tools.nuke-codes"),
+            &AddonId::from(TOOL_ADDON_ID),
             InstallProfile::LinuxDesktop,
             &downloads_root,
             &install_root,
         )
         .unwrap();
 
-        assert_eq!(message, "Installed Nuke Codes.");
-        assert!(
-            install_root
-                .join("tools.nuke-codes")
-                .join("manifest.json")
-                .exists()
-        );
+        assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
+        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
         assert_eq!(
-            fs::read_to_string(
-                install_root
-                    .join("tools.nuke-codes")
-                    .join("assets")
-                    .join("help.txt")
-            )
-            .unwrap(),
+            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
+                .unwrap(),
             "launch codes"
         );
     }
@@ -2397,17 +2382,17 @@ mod tests {
             temp_dir("install_repository_addon_from_index_installs_ndpkg_bundle_install");
         let downloads_root =
             temp_dir("install_repository_addon_from_index_installs_ndpkg_bundle_download");
-        let archive_path = repository_root.join("nuke-codes.ndpkg");
-        let artifact_manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User)
+        let archive_path = repository_root.join(format!("{TOOL_ARTIFACT_STEM}.ndpkg"));
+        let artifact_manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User)
             .with_capability("code-reference");
         write_zip_archive(
             &archive_path,
             &[
                 (
-                    "nuke-codes/manifest.json",
+                    "reference-tool/manifest.json",
                     serde_json::to_string(&artifact_manifest).unwrap(),
                 ),
-                ("nuke-codes/assets/help.txt", "launch codes".to_string()),
+                ("reference-tool/assets/help.txt", "launch codes".to_string()),
             ],
         );
 
@@ -2423,7 +2408,7 @@ mod tests {
                         channel: Some("stable".to_string()),
                         artifacts: vec![AddonArtifact {
                             install_profile: Some(InstallProfile::LinuxDesktop),
-                            url: "nuke-codes.ndpkg".to_string(),
+                            url: format!("{TOOL_ARTIFACT_STEM}.ndpkg"),
                             sha256: file_sha256(&archive_path),
                             signature_url: None,
                             size_bytes: None,
@@ -2433,28 +2418,18 @@ mod tests {
                 }],
             },
             &repository_root.join("addon-repository-index.json"),
-            &AddonId::from("tools.nuke-codes"),
+            &AddonId::from(TOOL_ADDON_ID),
             InstallProfile::LinuxDesktop,
             &downloads_root,
             &install_root,
         )
         .unwrap();
 
-        assert_eq!(message, "Installed Nuke Codes.");
-        assert!(
-            install_root
-                .join("tools.nuke-codes")
-                .join("manifest.json")
-                .exists()
-        );
+        assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
+        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
         assert_eq!(
-            fs::read_to_string(
-                install_root
-                    .join("tools.nuke-codes")
-                    .join("assets")
-                    .join("help.txt")
-            )
-            .unwrap(),
+            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
+                .unwrap(),
             "launch codes"
         );
     }

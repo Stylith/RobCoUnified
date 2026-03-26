@@ -194,34 +194,34 @@ mod tests {
             "addons": [
                 {
                     "manifest": {
-                        "id": "games.red-menace", "display_name": "Red Menace",
+                        "id": "games.arcade-alpha", "display_name": "Arcade Alpha",
                         "version": "0.4.4", "kind": "game", "scope": "user", "trust": "first-party", "essential": false,
                         "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
                     },
                     "releases": [{ "version": "0.4.4", "artifacts": [{
-                        "url": "games/games.red-menace.ndpkg",
+                        "url": "games/games.arcade-alpha.ndpkg",
                         "sha256": "aabb", "format": "ndpkg"
                     }]}]
                 },
                 {
                     "manifest": {
-                        "id": "games.zeta-invaders", "display_name": "Zeta Invaders",
+                        "id": "games.arcade-beta", "display_name": "Arcade Beta",
                         "version": "0.4.4", "kind": "game", "scope": "user", "trust": "first-party", "essential": false,
                         "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
                     },
                     "releases": [{ "version": "0.4.4", "artifacts": [{
-                        "url": "games/games.zeta-invaders.ndpkg",
+                        "url": "games/games.arcade-beta.ndpkg",
                         "sha256": "ccdd", "format": "ndpkg"
                     }]}]
                 },
                 {
                     "manifest": {
-                        "id": "tools.nuke-codes", "display_name": "Nuke Codes",
+                        "id": "tools.reference-tool", "display_name": "Reference Tool",
                         "version": "0.4.4", "kind": "app", "scope": "user", "trust": "first-party", "essential": false,
                         "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
                     },
                     "releases": [{ "version": "0.4.4", "artifacts": [{
-                        "url": "tools/tools.nuke-codes.ndpkg",
+                        "url": "tools/tools.reference-tool.ndpkg",
                         "sha256": "eeff", "format": "ndpkg"
                     }]}]
                 }
@@ -237,7 +237,7 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["games.red-menace", "games.zeta-invaders", "tools.nuke-codes"]
+            vec!["games.arcade-alpha", "games.arcade-beta", "tools.reference-tool"]
         );
         assert!(index.addons.iter().all(|a| !a.manifest.essential));
         assert!(index.addons.iter().all(|a| a.releases.first().is_some()));
