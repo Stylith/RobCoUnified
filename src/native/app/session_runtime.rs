@@ -49,6 +49,8 @@ impl RobcoNativeApp {
         self.desktop_mode_open = launch_default_desktop;
         self.apply_terminal_navigation_state(terminal_defaults);
         self.terminal_nuke_codes = NukeCodesView::default();
+        self.desktop_zeta_invaders_wasm = None;
+        self.terminal_zeta_invaders_wasm = None;
         self.reset_nuke_codes_wasm_runtime();
         if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();

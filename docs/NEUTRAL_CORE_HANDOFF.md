@@ -976,6 +976,14 @@ Current Phase 5 progress:
   - desktop mode can open it inside the existing desktop window chrome
   - terminal mode can open it inside the fullscreen terminal shell with the usual back/refresh controls
   - both sides lazily spawn the installed WASM module, update it each frame, and fall back cleanly if the addon is missing or errors
+- the WASM host now supports the first real game-facing capabilities:
+  - keyboard input forwarding into hosted addons
+  - real image loading from addon bundle asset paths instead of placeholder `IMAGE ...` boxes
+- `games.zeta-invaders` is now the first game moving onto that path:
+  - the shared native game crate can export hosted frames and map hosted input events
+  - a real `robcos-wasm-zeta-invaders-addon` guest crate now builds to `.wasm`
+  - the staged external repo bundle for `games.zeta-invaders` now contains `addon.wasm` plus the game asset directory and uses a `wasm-module` entrypoint
+  - the terminal and desktop Zeta Invaders shell surfaces now prefer the installed WASM addon runtime when present, while retaining the built-in fallback during migration
 
 Not done yet:
 
@@ -983,7 +991,8 @@ Not done yet:
 - richer addon-manager actions beyond enable/disable
 - broader runtime usage of discovered non-static addons beyond the first `tools.nuke-codes` surface
 - packaged first-party addons
-- moving game runtime/rendering off the built-in Rust paths and onto external WASM bundles
+- fully removing the built-in runtime ownership for `games.zeta-invaders` and `games.red-menace`
+- syncing the updated staged `games.zeta-invaders` WASM bundle into the external `nucleon-desktop-addons` repo
 
 ## Phase 6: Third-Party Addons
 

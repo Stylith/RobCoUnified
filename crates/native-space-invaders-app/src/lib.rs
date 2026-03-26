@@ -3,6 +3,10 @@ use egui::{
     TextureHandle, Ui, Vec2,
 };
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
+use robcos_hosted_addon_contract::{
+    HostedAddonFrame, HostedAddonSize, HostedColor, HostedDrawCommand, HostedInputEvent,
+    HostedTextAlign,
+};
 use std::{collections::HashMap, path::PathBuf};
 
 pub const BUILTIN_ZETA_INVADERS_GAME: &str = "Zeta Invaders";
@@ -520,6 +524,273 @@ impl SpaceInvadersGame {
         self.draw_effects(&painter, world, atlas);
         self.draw_player(&painter, world, atlas);
         self.draw_overlay(&painter, world, atlas);
+    }
+
+    pub fn hosted_frame(&self) -> HostedAddonFrame {
+        let mut commands = Vec::new();
+
+        if self.state.phase == GamePhase::Title {
+            commands.push(HostedDrawCommand::Image {
+                x: 0.0,
+                y: 0.0,
+                width: WORLD_W,
+                height: WORLD_H,
+                asset_path: hosted_asset_path(self.title_frame()).to_string(),
+            });
+            return HostedAddonFrame {
+                size: HostedAddonSize {
+                    width: WORLD_W,
+                    height: WORLD_H,
+                },
+                clear: Some(hosted_color(Color32::BLACK)),
+                commands,
+                status_line: Some(
+                    "ARROWS/A D MOVE   SPACE FIRE   ENTER START   ESC/P PAUSE".to_string(),
+                ),
+            };
+        }
+
+        push_starfield_commands(&mut commands, self.theme);
+        push_rect_border(
+            &mut commands,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(WORLD_W, WORLD_H)),
+            self.theme.neutral,
+            2.0,
+        );
+        self.push_hosted_hud(&mut commands);
+        self.push_hosted_barns(&mut commands);
+        self.push_hosted_ufo(&mut commands);
+        self.push_hosted_aliens(&mut commands);
+        self.push_hosted_player_bullet(&mut commands);
+        self.push_hosted_alien_bullets(&mut commands);
+        self.push_hosted_effects(&mut commands);
+        self.push_hosted_player(&mut commands);
+        self.push_hosted_overlay(&mut commands);
+
+        HostedAddonFrame {
+            size: HostedAddonSize {
+                width: WORLD_W,
+                height: WORLD_H,
+            },
+            clear: Some(hosted_color(Color32::BLACK)),
+            commands,
+            status_line: Some(format!(
+                "SCORE {:05}   HI {:05}   WAVE {:02}   LIVES {}",
+                self.state.score, self.high_score, self.state.wave, self.state.lives
+            )),
+        }
+    }
+
+    fn title_frame(&self) -> FrameId {
+        title_animation_frame(self.state.animation_ticks * TITLE_ANIM_SPEED)
+    }
+
+    fn push_hosted_hud(&self, commands: &mut Vec<HostedDrawCommand>) {
+        let score_icon = Rect::from_center_size(pos2(14.0, 10.0), vec2(12.0, 12.0));
+        push_image(commands, score_icon, FrameId::ScoreIcon);
+        push_text(
+            commands,
+            score_icon.right() + 8.0,
+            score_icon.center().y,
+            &format!("{:05}", self.state.score),
+            14.0,
+            self.theme.ui,
+            Align2::LEFT_CENTER,
+        );
+
+        push_text(
+            commands,
+            WORLD_W * 0.5,
+            10.0,
+            &format!("HI {:05}", self.high_score),
+            14.0,
+            self.theme.ui,
+            Align2::CENTER_CENTER,
+        );
+
+        let wave_icon =
+            Rect::from_center_size(pos2(WORLD_W * 0.5 - 14.0, 24.0), vec2(12.0, 12.0));
+        push_image(commands, wave_icon, FrameId::WaveIcon);
+        push_text(
+            commands,
+            wave_icon.right() + 8.0,
+            wave_icon.center().y,
+            &format!("W{:02}", self.state.wave),
+            12.0,
+            self.theme.neutral,
+            Align2::LEFT_CENTER,
+        );
+
+        let mut life_x = WORLD_W - 16.0;
+        for _ in 0..self.state.lives {
+            push_image(
+                commands,
+                Rect::from_center_size(pos2(life_x, 10.0), vec2(12.0, 12.0)),
+                FrameId::LifeIcon,
+            );
+            life_x -= 18.0;
+        }
+    }
+
+    fn push_hosted_barns(&self, commands: &mut Vec<HostedDrawCommand>) {
+        for barn in &self.state.barns {
+            for idx in 0..barn.pieces_alive.len() {
+                if !barn.pieces_alive[idx] {
+                    continue;
+                }
+                let piece_rect = barn.piece_rect(idx);
+                let (frame, _) = barn_piece_visual(idx);
+                push_image(commands, piece_rect, frame);
+            }
+        }
+    }
+
+    fn push_hosted_ufo(&self, commands: &mut Vec<HostedDrawCommand>) {
+        let Some(ufo) = self.state.ufo else {
+            return;
+        };
+        let frame = match ufo.state {
+            UfoState::Flying => ufo_animation_frame(
+                self.state.animation_ticks * UFO_ANIM_SPEED
+                    + if ufo.direction < 0.0 { 4.0 } else { 0.0 },
+            ),
+            UfoState::Exploding { .. } => FrameId::UfoExplosion,
+        };
+        push_image(commands, game_rect_from_entity(ufo.pos, UFO_SIZE), frame);
+    }
+
+    fn push_hosted_aliens(&self, commands: &mut Vec<HostedDrawCommand>) {
+        for alien in self
+            .state
+            .formation
+            .aliens
+            .iter()
+            .copied()
+            .filter(|alien| alien.alive)
+        {
+            let frame = match alien.kind {
+                AlienKind::Squid => alien_squid_frame(self.state.formation.anim_frame_idx),
+                AlienKind::Crab => alien_crab_frame(self.state.formation.anim_frame_idx),
+                AlienKind::Octo => alien_octo_frame(self.state.formation.anim_frame_idx),
+            };
+            push_image(
+                commands,
+                game_rect_from_entity(
+                    alien_world_pos(alien, self.state.formation.offset),
+                    ALIEN_SIZE,
+                ),
+                frame,
+            );
+        }
+    }
+
+    fn push_hosted_player_bullet(&self, commands: &mut Vec<HostedDrawCommand>) {
+        let Some(bullet) = self.state.player_bullet else {
+            return;
+        };
+        push_image(
+            commands,
+            game_rect_from_entity(bullet.pos, PLAYER_BULLET_DRAW_SIZE),
+            FrameId::PlayerBullet,
+        );
+    }
+
+    fn push_hosted_alien_bullets(&self, commands: &mut Vec<HostedDrawCommand>) {
+        for bullet in &self.state.alien_bullets {
+            let anim_ticks = match bullet.kind {
+                BulletKind::AlienSlow => bullet.age * 42.0,
+                BulletKind::AlienFast => bullet.age * 72.0,
+                BulletKind::Player => bullet.age * 60.0,
+            };
+            push_image(
+                commands,
+                game_rect_from_entity(bullet.pos, ALIEN_BULLET_DRAW_SIZE),
+                alien_bullet_frame(anim_ticks),
+            );
+        }
+    }
+
+    fn push_hosted_effects(&self, commands: &mut Vec<HostedDrawCommand>) {
+        for effect in &self.state.effects {
+            let progress = 1.0 - effect.timer / effect.duration.max(f32::EPSILON);
+            let frame = match effect.kind {
+                EffectKind::Spark => spark_frame(progress * 24.0),
+                EffectKind::ExplosionSmall => explosion_small_frame(progress * 24.0),
+            };
+            push_image(commands, game_rect_from_entity(effect.pos, vec2(14.0, 14.0)), frame);
+        }
+    }
+
+    fn push_hosted_player(&self, commands: &mut Vec<HostedDrawCommand>) {
+        if let Some(explosion) = self.state.player_explosion {
+            let progress = 1.0 - explosion.timer / explosion.duration.max(f32::EPSILON);
+            push_image(
+                commands,
+                game_rect_from_entity(explosion.pos, PLAYER_SIZE),
+                player_explode_frame(progress * 24.0),
+            );
+            return;
+        }
+
+        if self.state.phase == GamePhase::Respawning {
+            return;
+        }
+
+        let frame = if self.state.player.flash_timer > 0.0 {
+            FrameId::PlayerShoot
+        } else if self.state.player.visual_dir < 0 {
+            FrameId::PlayerMoveLeft
+        } else if self.state.player.visual_dir > 0 {
+            FrameId::PlayerMoveRight
+        } else {
+            FrameId::PlayerIdle
+        };
+        push_image(
+            commands,
+            game_rect_from_entity(self.state.player.pos, PLAYER_SIZE),
+            frame,
+        );
+    }
+
+    fn push_hosted_overlay(&self, commands: &mut Vec<HostedDrawCommand>) {
+        let (title, subtitle) = match self.state.phase {
+            GamePhase::Title => return,
+            GamePhase::Ready => ("READY", "Clear the wave"),
+            GamePhase::Paused => ("PAUSED", "Press P or Esc to resume"),
+            GamePhase::Respawning => ("HIT", "Get back in position"),
+            GamePhase::GameOver => ("GAME OVER", "Press fire to restart"),
+            GamePhase::Playing => return,
+        };
+
+        let overlay = Rect::from_center_size(
+            pos2(WORLD_W * 0.5, WORLD_H * 0.5),
+            vec2(WORLD_W * 0.54, 54.0),
+        );
+        push_rect(commands, overlay, Color32::BLACK);
+        push_rect_border(commands, overlay, self.theme.ui, 2.0);
+        let icon_rect = Rect::from_center_size(
+            pos2(overlay.center().x, overlay.top() + 16.0),
+            vec2(18.0, 18.0),
+        );
+        push_image(commands, icon_rect, FrameId::ReadyIcon);
+        push_text(
+            commands,
+            overlay.center().x,
+            overlay.top() + 32.0,
+            title,
+            16.0,
+            self.theme.ui,
+            Align2::CENTER_TOP,
+        );
+        push_text(
+            commands,
+            overlay.center().x,
+            overlay.bottom() - 10.0,
+            subtitle,
+            12.0,
+            self.theme.neutral,
+            Align2::CENTER_BOTTOM,
+        );
     }
 
     fn draw_title_screen(&self, painter: &egui::Painter, world: Rect, atlas: &AtlasTextures) {
@@ -1841,6 +2112,16 @@ impl Barn {
     }
 }
 
+pub fn input_from_hosted_events(events: &[HostedInputEvent]) -> GameInput {
+    GameInput {
+        left: hosted_key_active(events, &["arrow-left", "a"]),
+        right: hosted_key_active(events, &["arrow-right", "d"]),
+        fire: hosted_key_active(events, &["space"]),
+        start: hosted_key_active(events, &["enter"]),
+        pause: hosted_key_active(events, &["p", "escape"]),
+    }
+}
+
 pub fn input_from_ctx(ctx: &Context) -> GameInput {
     GameInput {
         left: ctx.input(|i| i.key_down(Key::ArrowLeft) || i.key_down(Key::A)),
@@ -1849,6 +2130,15 @@ pub fn input_from_ctx(ctx: &Context) -> GameInput {
         start: ctx.input(|i| i.key_pressed(Key::Enter)),
         pause: ctx.input(|i| i.key_pressed(Key::P) || i.key_pressed(Key::Escape)),
     }
+}
+
+fn hosted_key_active(events: &[HostedInputEvent], accepted: &[&str]) -> bool {
+    events.iter().any(|event| match event {
+        HostedInputEvent::Key { key, pressed } => {
+            *pressed && accepted.iter().any(|accepted_key| key == accepted_key)
+        }
+        _ => false,
+    })
 }
 
 fn player_spawn_pos() -> Vec2 {
@@ -2001,6 +2291,262 @@ fn world_rect_from_game_rect(world: Rect, rect: Rect) -> Rect {
 
 fn world_icon_rect(world: Rect, pos: Vec2) -> Rect {
     world_rect_from_entity(world, pos, vec2(12.0, 12.0))
+}
+
+fn game_rect_from_entity(pos: Vec2, size: Vec2) -> Rect {
+    Rect::from_center_size(pos2(pos.x, pos.y), size)
+}
+
+fn push_starfield_commands(commands: &mut Vec<HostedDrawCommand>, theme: Theme) {
+    for (idx, star) in STAR_FIELD.iter().enumerate() {
+        let color = if idx % 3 == 0 {
+            theme.neutral
+        } else {
+            theme.ui.gamma_multiply(0.5)
+        };
+        push_rect(
+            commands,
+            Rect::from_center_size(pos2(star.x, star.y), vec2(2.0, 2.0)),
+            color,
+        );
+    }
+}
+
+fn push_rect(commands: &mut Vec<HostedDrawCommand>, rect: Rect, color: Color32) {
+    commands.push(HostedDrawCommand::Rect {
+        x: rect.left(),
+        y: rect.top(),
+        width: rect.width(),
+        height: rect.height(),
+        fill: hosted_color(color),
+    });
+}
+
+fn push_rect_border(
+    commands: &mut Vec<HostedDrawCommand>,
+    rect: Rect,
+    color: Color32,
+    thickness: f32,
+) {
+    let t = thickness.max(1.0);
+    push_rect(
+        commands,
+        Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + t)),
+        color,
+    );
+    push_rect(
+        commands,
+        Rect::from_min_max(pos2(rect.left(), rect.bottom() - t), rect.max),
+        color,
+    );
+    push_rect(
+        commands,
+        Rect::from_min_max(pos2(rect.left(), rect.top() + t), pos2(rect.left() + t, rect.bottom() - t)),
+        color,
+    );
+    push_rect(
+        commands,
+        Rect::from_min_max(pos2(rect.right() - t, rect.top() + t), pos2(rect.right(), rect.bottom() - t)),
+        color,
+    );
+}
+
+fn push_text(
+    commands: &mut Vec<HostedDrawCommand>,
+    x: f32,
+    y: f32,
+    text: &str,
+    size: f32,
+    color: Color32,
+    align: Align2,
+) {
+    commands.push(HostedDrawCommand::Text {
+        x,
+        y,
+        text: text.to_string(),
+        color: hosted_color(color),
+        size,
+        align: hosted_text_align(align),
+    });
+}
+
+fn push_image(commands: &mut Vec<HostedDrawCommand>, rect: Rect, frame_id: FrameId) {
+    commands.push(HostedDrawCommand::Image {
+        x: rect.left(),
+        y: rect.top(),
+        width: rect.width(),
+        height: rect.height(),
+        asset_path: hosted_asset_path(frame_id).to_string(),
+    });
+}
+
+fn hosted_color(color: Color32) -> HostedColor {
+    HostedColor {
+        r: color.r(),
+        g: color.g(),
+        b: color.b(),
+        a: color.a(),
+    }
+}
+
+fn hosted_text_align(align: Align2) -> HostedTextAlign {
+    match align {
+        Align2::LEFT_TOP => HostedTextAlign::LeftTop,
+        Align2::LEFT_CENTER => HostedTextAlign::LeftCenter,
+        Align2::CENTER_TOP => HostedTextAlign::CenterTop,
+        Align2::CENTER_CENTER => HostedTextAlign::CenterCenter,
+        Align2::CENTER_BOTTOM => HostedTextAlign::CenterBottom,
+        _ => HostedTextAlign::LeftTop,
+    }
+}
+
+fn title_animation_frame(ticks: f32) -> FrameId {
+    title_frame_by_index(((ticks.max(0.0) as u32) / 4) as usize)
+}
+
+fn title_frame_by_index(index: usize) -> FrameId {
+    const FRAMES: [FrameId; 20] = [
+        FrameId::Title01,
+        FrameId::Title02,
+        FrameId::Title03,
+        FrameId::Title04,
+        FrameId::Title05,
+        FrameId::Title06,
+        FrameId::Title07,
+        FrameId::Title08,
+        FrameId::Title09,
+        FrameId::Title10,
+        FrameId::Title11,
+        FrameId::Title12,
+        FrameId::Title13,
+        FrameId::Title14,
+        FrameId::Title15,
+        FrameId::Title16,
+        FrameId::Title17,
+        FrameId::Title18,
+        FrameId::Title19,
+        FrameId::Title20,
+    ];
+    FRAMES[index.min(FRAMES.len().saturating_sub(1))]
+}
+
+fn alien_squid_frame(index: usize) -> FrameId {
+    [FrameId::AlienSquid1, FrameId::AlienSquid2][index % 2]
+}
+
+fn alien_crab_frame(index: usize) -> FrameId {
+    [FrameId::AlienCrab1, FrameId::AlienCrab2][index % 2]
+}
+
+fn alien_octo_frame(index: usize) -> FrameId {
+    [FrameId::AlienOcto1, FrameId::AlienOcto2][index % 2]
+}
+
+fn player_explode_frame(ticks: f32) -> FrameId {
+    [FrameId::PlayerExplosion1, FrameId::PlayerExplosion2][((ticks as usize) / 5) % 2]
+}
+
+fn alien_bullet_frame(ticks: f32) -> FrameId {
+    [FrameId::AlienBullet1, FrameId::AlienBullet2][((ticks as usize) / 4) % 2]
+}
+
+fn spark_frame(ticks: f32) -> FrameId {
+    [FrameId::Spark1, FrameId::Spark2][((ticks as usize) / 4) % 2]
+}
+
+fn explosion_small_frame(ticks: f32) -> FrameId {
+    const FRAMES: [FrameId; 6] = [
+        FrameId::ExplosionSmall1,
+        FrameId::ExplosionSmall2,
+        FrameId::ExplosionSmall3,
+        FrameId::ExplosionSmall4,
+        FrameId::ExplosionSmall5,
+        FrameId::ExplosionSmall6,
+    ];
+    FRAMES[((ticks as usize) / 5).min(FRAMES.len().saturating_sub(1))]
+}
+
+fn ufo_animation_frame(ticks: f32) -> FrameId {
+    [FrameId::UfoIdle, FrameId::UfoFlash][((ticks as usize) / 8) % 2]
+}
+
+fn hosted_asset_path(frame_id: FrameId) -> &'static str {
+    match frame_id {
+        FrameId::PlayerIdle => "assets/png/player_idle.png",
+        FrameId::PlayerMoveLeft => "assets/png/player_move_left.png",
+        FrameId::PlayerMoveRight => "assets/png/player_move_right.png",
+        FrameId::PlayerShoot => "assets/png/player_shoot.png",
+        FrameId::PlayerExplosion1 => "assets/png/player_explosion_1.png",
+        FrameId::PlayerExplosion2 => "assets/png/player_explosion_2.png",
+        FrameId::AlienSquid1 => "assets/png/alien_squid_1.png",
+        FrameId::AlienSquid2 => "assets/png/alien_squid_2.png",
+        FrameId::AlienCrab1 => "assets/png/alien_crab_1.png",
+        FrameId::AlienCrab2 => "assets/png/alien_crab_2.png",
+        FrameId::AlienOcto1 => "assets/png/alien_octo_1.png",
+        FrameId::AlienOcto2 => "assets/png/alien_octo_2.png",
+        FrameId::AlienExplosion => "assets/png/alien_explosion.png",
+        FrameId::PlayerBullet => "assets/png/player_bullet.png",
+        FrameId::AlienBullet1 => "assets/png/alien_bullet_1.png",
+        FrameId::AlienBullet2 => "assets/png/alien_bullet_2.png",
+        FrameId::Spark1 => "assets/png/spark_1.png",
+        FrameId::Spark2 => "assets/png/spark_2.png",
+        FrameId::ExplosionSmall1 => "assets/png/explosion_small_1.png",
+        FrameId::ExplosionSmall2 => "assets/png/explosion_small_2.png",
+        FrameId::ExplosionSmall3 => "assets/png/explosion_small_3.png",
+        FrameId::ExplosionSmall4 => "assets/png/explosion_small_4.png",
+        FrameId::ExplosionSmall5 => "assets/png/explosion_small_5.png",
+        FrameId::ExplosionSmall6 => "assets/png/explosion_small_6.png",
+        FrameId::BarrierFull => "assets/png/barrier_full.png",
+        FrameId::BarrierDamage1 => "assets/png/barrier_damage_1.png",
+        FrameId::BarrierDamage2 => "assets/png/barrier_damage_2.png",
+        FrameId::BarrierDamage3 => "assets/png/barrier_damage_3.png",
+        FrameId::BarrierChunk => "assets/png/barrier_chunk.png",
+        FrameId::BarnPiece00 => "assets/png/barn_piece_00.png",
+        FrameId::BarnPiece01 => "assets/png/barn_piece_01.png",
+        FrameId::BarnPiece02 => "assets/png/barn_piece_02.png",
+        FrameId::BarnPiece03 => "assets/png/barn_piece_03.png",
+        FrameId::BarnPiece04 => "assets/png/barn_piece_04.png",
+        FrameId::BarnPiece05 => "assets/png/barn_piece_05.png",
+        FrameId::BarnPiece06 => "assets/png/barn_piece_06.png",
+        FrameId::BarnPiece07 => "assets/png/barn_piece_07.png",
+        FrameId::BarnPiece08 => "assets/png/barn_piece_08.png",
+        FrameId::BarnPiece09 => "assets/png/barn_piece_09.png",
+        FrameId::BarnPiece10 => "assets/png/barn_piece_10.png",
+        FrameId::BarnPiece11 => "assets/png/barn_piece_11.png",
+        FrameId::BarnPiece12 => "assets/png/barn_piece_12.png",
+        FrameId::BarnPiece13 => "assets/png/barn_piece_13.png",
+        FrameId::BarnPiece14 => "assets/png/barn_piece_14.png",
+        FrameId::BarnPiece15 => "assets/png/barn_piece_15.png",
+        FrameId::BarnPiece16 => "assets/png/barn_piece_16.png",
+        FrameId::BarnPiece17 => "assets/png/barn_piece_17.png",
+        FrameId::UfoIdle => "assets/png/ufo_idle.png",
+        FrameId::UfoFlash => "assets/png/ufo_flash.png",
+        FrameId::UfoExplosion => "assets/png/ufo_explosion.png",
+        FrameId::LifeIcon => "assets/png/life_icon.png",
+        FrameId::ScoreIcon => "assets/png/score_icon.png",
+        FrameId::WaveIcon => "assets/png/wave_icon.png",
+        FrameId::ReadyIcon => "assets/png/ready_icon.png",
+        FrameId::Title01 => "assets/png/title_01.png",
+        FrameId::Title02 => "assets/png/title_02.png",
+        FrameId::Title03 => "assets/png/title_03.png",
+        FrameId::Title04 => "assets/png/title_04.png",
+        FrameId::Title05 => "assets/png/title_05.png",
+        FrameId::Title06 => "assets/png/title_06.png",
+        FrameId::Title07 => "assets/png/title_07.png",
+        FrameId::Title08 => "assets/png/title_08.png",
+        FrameId::Title09 => "assets/png/title_09.png",
+        FrameId::Title10 => "assets/png/title_10.png",
+        FrameId::Title11 => "assets/png/title_11.png",
+        FrameId::Title12 => "assets/png/title_12.png",
+        FrameId::Title13 => "assets/png/title_13.png",
+        FrameId::Title14 => "assets/png/title_14.png",
+        FrameId::Title15 => "assets/png/title_15.png",
+        FrameId::Title16 => "assets/png/title_16.png",
+        FrameId::Title17 => "assets/png/title_17.png",
+        FrameId::Title18 => "assets/png/title_18.png",
+        FrameId::Title19 => "assets/png/title_19.png",
+        FrameId::Title20 => "assets/png/title_20.png",
+    }
 }
 
 const STAR_FIELD: [Vec2; 18] = [
@@ -2214,5 +2760,42 @@ mod tests {
         ] {
             image::load_from_memory(bytes).expect("placeholder png should decode");
         }
+    }
+
+    #[test]
+    fn hosted_input_maps_expected_keys() {
+        let input = input_from_hosted_events(&[
+            HostedInputEvent::Key {
+                key: "arrow-left".to_string(),
+                pressed: true,
+            },
+            HostedInputEvent::Key {
+                key: "space".to_string(),
+                pressed: true,
+            },
+            HostedInputEvent::Key {
+                key: "enter".to_string(),
+                pressed: true,
+            },
+        ]);
+
+        assert!(input.left);
+        assert!(input.fire);
+        assert!(input.start);
+        assert!(!input.right);
+        assert!(!input.pause);
+    }
+
+    #[test]
+    fn hosted_frame_uses_bundle_asset_paths() {
+        let game = SpaceInvadersGame::new(SpaceInvadersConfig::default());
+        let frame = game.hosted_frame();
+
+        assert_eq!(frame.size.width, WORLD_W);
+        assert_eq!(frame.size.height, WORLD_H);
+        assert!(frame.commands.iter().any(|command| matches!(
+            command,
+            HostedDrawCommand::Image { asset_path, .. } if asset_path.starts_with("assets/png/")
+        )));
     }
 }

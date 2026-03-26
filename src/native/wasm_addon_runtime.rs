@@ -2,8 +2,11 @@ use crate::native::InstalledWasmAddonModule;
 use crate::platform::{
     HostedAddonFrame, HostedAddonInitRequest, HostedAddonRequest, HostedAddonResponse,
     HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest, HostedColor, HostedDrawCommand,
+    HostedInputEvent, HostedTextAlign,
 };
-use eframe::egui::{self, Align2, FontFamily, FontId, Sense, Ui};
+use eframe::egui::{self, Align2, Context, FontFamily, FontId, Key, Sense, TextureHandle, Ui};
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 use wasmi::{Engine, Linker, Memory, Module, Store, TypedFunc};
 
 #[allow(dead_code)]
@@ -18,6 +21,8 @@ pub(crate) struct WasmHostedAddonState {
     session: WasmAddonModuleSession,
     title: String,
     frame: HostedAddonFrame,
+    bundle_dir: PathBuf,
+    textures: HashMap<String, TextureHandle>,
 }
 
 #[allow(dead_code)]
@@ -132,11 +137,15 @@ impl WasmHostedAddonState {
                 session,
                 title,
                 frame,
+                bundle_dir: module.bundle_dir.clone(),
+                textures: HashMap::new(),
             }),
             HostedAddonResponse::Frame { frame } => Ok(Self {
                 session,
                 title: module.addon_id.to_string(),
                 frame,
+                bundle_dir: module.bundle_dir.clone(),
+                textures: HashMap::new(),
             }),
             HostedAddonResponse::Exit { reason } => Err(format!(
                 "WASM addon '{}' exited during initialization: {reason}",
@@ -153,11 +162,12 @@ impl WasmHostedAddonState {
         &mut self,
         size: HostedAddonSize,
         delta_seconds: f32,
+        input: Vec<HostedInputEvent>,
     ) -> Result<(), String> {
         match self.session.request(&HostedAddonRequest::Update(HostedAddonUpdateRequest {
             size,
             delta_seconds,
-            input: Vec::new(),
+            input,
         }))? {
             HostedAddonResponse::Ready { title, frame } => {
                 self.title = title;
@@ -180,89 +190,198 @@ impl WasmHostedAddonState {
     pub(crate) fn frame(&self) -> &HostedAddonFrame {
         &self.frame
     }
-}
 
-pub(crate) fn draw_hosted_addon_frame(ui: &mut Ui, frame: &HostedAddonFrame) {
-    let available = ui.available_size_before_wrap();
-    let desired = egui::vec2(
-        available.x.max(frame.size.width.max(1.0)),
-        available.y.max(frame.size.height.max(1.0)),
-    );
-    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
-    let painter = ui.painter_at(rect);
-    if let Some(clear) = &frame.clear {
-        painter.rect_filled(rect, 0.0, hosted_color(clear));
-    }
+    pub(crate) fn draw(&mut self, ui: &mut Ui) {
+        let frame = self.frame.clone();
+        let available = ui.available_size_before_wrap();
+        let desired = egui::vec2(
+            available.x.max(frame.size.width.max(1.0)),
+            available.y.max(frame.size.height.max(1.0)),
+        );
+        let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+        let painter = ui.painter_at(rect);
+        if let Some(clear) = &frame.clear {
+            painter.rect_filled(rect, 0.0, hosted_color(clear));
+        }
 
-    let scale_x = if frame.size.width > 0.0 {
-        rect.width() / frame.size.width
-    } else {
-        1.0
-    };
-    let scale_y = if frame.size.height > 0.0 {
-        rect.height() / frame.size.height
-    } else {
-        1.0
-    };
+        let scale_x = if frame.size.width > 0.0 {
+            rect.width() / frame.size.width
+        } else {
+            1.0
+        };
+        let scale_y = if frame.size.height > 0.0 {
+            rect.height() / frame.size.height
+        } else {
+            1.0
+        };
 
-    for command in &frame.commands {
-        match command {
-            HostedDrawCommand::Rect {
-                x,
-                y,
-                width,
-                height,
-                fill,
-            } => {
-                let min = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
-                let size = egui::vec2(width * scale_x, height * scale_y);
-                painter.rect_filled(egui::Rect::from_min_size(min, size), 0.0, hosted_color(fill));
-            }
-            HostedDrawCommand::Text {
-                x,
-                y,
-                text,
-                color,
-                size,
-            } => {
-                let pos = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
-                painter.text(
-                    pos,
-                    Align2::LEFT_TOP,
+        for command in &frame.commands {
+            match command {
+                HostedDrawCommand::Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                    fill,
+                } => {
+                    let min =
+                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                    let size = egui::vec2(width * scale_x, height * scale_y);
+                    painter
+                        .rect_filled(egui::Rect::from_min_size(min, size), 0.0, hosted_color(fill));
+                }
+                HostedDrawCommand::Text {
+                    x,
+                    y,
                     text,
-                    FontId::new((size * scale_y).max(10.0), FontFamily::Monospace),
-                    hosted_color(color),
-                );
-            }
-            HostedDrawCommand::Image {
-                x,
-                y,
-                width,
-                height,
-                asset_path,
-            } => {
-                let min = egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
-                let size = egui::vec2(width * scale_x, height * scale_y);
-                let image_rect = egui::Rect::from_min_size(min, size);
-                painter.rect_stroke(
-                    image_rect,
-                    0.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(64, 160, 64)),
-                );
-                painter.text(
-                    image_rect.left_top() + egui::vec2(6.0, 6.0),
-                    Align2::LEFT_TOP,
-                    format!("IMAGE {}", asset_path),
-                    FontId::new(10.0, FontFamily::Monospace),
-                    egui::Color32::from_rgb(96, 208, 96),
-                );
+                    color,
+                    size,
+                    align,
+                } => {
+                    let pos =
+                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                    painter.text(
+                        pos,
+                        hosted_align(*align),
+                        text,
+                        FontId::new((size * scale_y).max(10.0), FontFamily::Monospace),
+                        hosted_color(color),
+                    );
+                }
+                HostedDrawCommand::Image {
+                    x,
+                    y,
+                    width,
+                    height,
+                    asset_path,
+                } => {
+                    let min =
+                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                    let size = egui::vec2(width * scale_x, height * scale_y);
+                    let image_rect = egui::Rect::from_min_size(min, size);
+                    if let Some(texture) = self.load_texture(ui.ctx(), asset_path) {
+                        let uv = egui::Rect::from_min_max(
+                            egui::pos2(0.0, 0.0),
+                            egui::pos2(1.0, 1.0),
+                        );
+                        let mut mesh = egui::epaint::Mesh::with_texture(texture.id());
+                        mesh.add_rect_with_uv(image_rect, uv, egui::Color32::WHITE);
+                        painter.add(egui::Shape::mesh(mesh));
+                    } else {
+                        painter.rect_stroke(
+                            image_rect,
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(64, 160, 64)),
+                        );
+                        painter.text(
+                            image_rect.left_top() + egui::vec2(6.0, 6.0),
+                            Align2::LEFT_TOP,
+                            format!("IMAGE {}", asset_path),
+                            FontId::new(10.0, FontFamily::Monospace),
+                            egui::Color32::from_rgb(96, 208, 96),
+                        );
+                    }
+                }
             }
         }
     }
+
+    fn load_texture(&mut self, ctx: &Context, asset_path: &str) -> Option<&TextureHandle> {
+        if self.textures.contains_key(asset_path) {
+            return self.textures.get(asset_path);
+        }
+
+        let absolute = resolve_bundle_asset_path(&self.bundle_dir, asset_path)?;
+        let bytes = std::fs::read(&absolute).ok()?;
+        let image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+        let (width, height) = image.dimensions();
+        let texture = ctx.load_texture(
+            format!(
+                "hosted_addon_asset_{}_{}",
+                self.title.replace(' ', "_"),
+                asset_path.replace('/', "_")
+            ),
+            egui::ColorImage::from_rgba_unmultiplied(
+                [width as usize, height as usize],
+                image.as_raw(),
+            ),
+            egui::TextureOptions::NEAREST,
+        );
+        self.textures.insert(asset_path.to_string(), texture);
+        self.textures.get(asset_path)
+    }
+}
+
+pub(crate) fn draw_hosted_addon_frame(ui: &mut Ui, state: &mut WasmHostedAddonState) {
+    state.draw(ui);
+}
+
+pub(crate) fn collect_hosted_keyboard_input(ctx: &Context, active: bool) -> Vec<HostedInputEvent> {
+    if !active {
+        return Vec::new();
+    }
+    let held_keys = [
+        (Key::ArrowLeft, "arrow-left"),
+        (Key::ArrowRight, "arrow-right"),
+        (Key::ArrowUp, "arrow-up"),
+        (Key::ArrowDown, "arrow-down"),
+        (Key::A, "a"),
+        (Key::D, "d"),
+        (Key::W, "w"),
+        (Key::S, "s"),
+        (Key::Space, "space"),
+    ];
+    let pressed_keys = [
+        (Key::Enter, "enter"),
+        (Key::Escape, "escape"),
+        (Key::P, "p"),
+    ];
+    let mut events = Vec::new();
+    for (key, label) in held_keys {
+        if ctx.input(|i| i.key_down(key)) {
+            events.push(HostedInputEvent::Key {
+                key: label.to_string(),
+                pressed: true,
+            });
+        }
+    }
+    for (key, label) in pressed_keys {
+        if ctx.input(|i| i.key_pressed(key)) {
+            events.push(HostedInputEvent::Key {
+                key: label.to_string(),
+                pressed: true,
+            });
+        }
+    }
+    events
 }
 
 fn hosted_color(color: &HostedColor) -> egui::Color32 {
     egui::Color32::from_rgba_premultiplied(color.r, color.g, color.b, color.a)
+}
+
+fn hosted_align(align: HostedTextAlign) -> Align2 {
+    match align {
+        HostedTextAlign::LeftTop => Align2::LEFT_TOP,
+        HostedTextAlign::LeftCenter => Align2::LEFT_CENTER,
+        HostedTextAlign::CenterTop => Align2::CENTER_TOP,
+        HostedTextAlign::CenterCenter => Align2::CENTER_CENTER,
+        HostedTextAlign::CenterBottom => Align2::CENTER_BOTTOM,
+    }
+}
+
+fn resolve_bundle_asset_path(bundle_dir: &Path, asset_path: &str) -> Option<PathBuf> {
+    let relative = Path::new(asset_path);
+    if relative.is_absolute() {
+        return None;
+    }
+    if relative
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+    {
+        return None;
+    }
+    Some(bundle_dir.join(relative))
 }
 
 fn unpack_ptr_len(packed: i64) -> Result<(usize, usize), String> {

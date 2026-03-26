@@ -42,7 +42,9 @@ use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
-use super::super::wasm_addon_runtime::{draw_hosted_addon_frame, WasmHostedAddonState};
+use super::super::wasm_addon_runtime::{
+    collect_hosted_keyboard_input, draw_hosted_addon_frame, WasmHostedAddonState,
+};
 use super::launch_registry::{
     editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
 };
@@ -241,8 +243,79 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_zeta_invaders(&mut self, ctx: &Context) {
-        let input = zeta_invaders_input_from_ctx(ctx);
         let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
+        if self.zeta_invaders_uses_wasm_addon() {
+            let back = ctx.input(|i| i.key_pressed(egui::Key::Tab));
+            let title = self
+                .terminal_zeta_invaders_wasm
+                .as_ref()
+                .map(|state| state.title().to_string())
+                .unwrap_or_else(|| "Zeta Invaders".to_string());
+            Self::draw_terminal_game_shell(
+                ctx,
+                &title,
+                "TAB BACK   ARROWS/A D MOVE   SPACE FIRE   ENTER START   ESC/P PAUSE",
+                |ui| {
+                    let available = ui.available_size_before_wrap();
+                    let size = HostedAddonSize {
+                        width: available.x.max(320.0),
+                        height: available.y.max(240.0),
+                    };
+                    let input = collect_hosted_keyboard_input(ctx, true);
+                    let result = (|| -> Result<(), String> {
+                        let module = super::super::installed_wasm_addon_module(
+                            &crate::platform::AddonId::from("games.zeta-invaders"),
+                        )
+                        .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
+                        if self.terminal_zeta_invaders_wasm.is_none() {
+                            self.terminal_zeta_invaders_wasm = Some(WasmHostedAddonState::spawn(
+                                &module,
+                                HostedAddonSurface::Terminal,
+                                size,
+                            )?);
+                        }
+                        if let Some(state) = self.terminal_zeta_invaders_wasm.as_mut() {
+                            state.update(size, dt, input)?;
+                            draw_hosted_addon_frame(ui, state);
+                            if let Some(status) = &state.frame().status_line {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(status)
+                                        .monospace()
+                                        .small()
+                                        .color(current_palette().dim),
+                                );
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(err) = result {
+                        self.terminal_zeta_invaders_wasm = None;
+                        ui.label(
+                            RichText::new("WASM ADDON FAILED")
+                                .monospace()
+                                .strong()
+                                .color(current_palette().fg),
+                        );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(err)
+                                .monospace()
+                                .small()
+                                .color(current_palette().dim),
+                        );
+                    }
+                },
+            );
+            if back {
+                self.terminal_zeta_invaders_wasm = None;
+                self.navigate_to_screen(self.terminal_nav.game_return_screen);
+                self.apply_status_update(clear_shell_status());
+            }
+            return;
+        }
+
+        let input = zeta_invaders_input_from_ctx(ctx);
         self.zeta_invaders.game.update(&input, dt);
         if self.zeta_invaders.atlas.is_none() {
             self.zeta_invaders.atlas =
@@ -1050,8 +1123,8 @@ impl RobcoNativeApp {
                             )?);
                         }
                         if let Some(state) = self.terminal_nuke_codes_wasm.as_mut() {
-                            state.update(size, dt)?;
-                            draw_hosted_addon_frame(ui, state.frame());
+                            state.update(size, dt, Vec::new())?;
+                            draw_hosted_addon_frame(ui, state);
                             if let Some(status) = &state.frame().status_line {
                                 ui.add_space(8.0);
                                 ui.label(

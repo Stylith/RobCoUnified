@@ -13,7 +13,9 @@ use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
-use super::super::wasm_addon_runtime::{draw_hosted_addon_frame, WasmHostedAddonState};
+use super::super::wasm_addon_runtime::{
+    collect_hosted_keyboard_input, draw_hosted_addon_frame, WasmHostedAddonState,
+};
 use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
@@ -1399,8 +1401,8 @@ impl RobcoNativeApp {
                         )?);
                     }
                     if let Some(state) = self.desktop_nuke_codes_wasm.as_mut() {
-                        state.update(size, dt)?;
-                        draw_hosted_addon_frame(ui, state.frame());
+                        state.update(size, dt, Vec::new())?;
+                        draw_hosted_addon_frame(ui, state);
                         if let Some(status) = &state.frame().status_line {
                             ui.add_space(8.0);
                             ui.small(status);
@@ -1479,15 +1481,17 @@ impl RobcoNativeApp {
             && !self.spotlight_open
             && self.terminal_prompt.is_none();
         let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
-        let input = if input_enabled {
-            zeta_invaders_input_from_ctx(ctx)
-        } else {
-            Default::default()
-        };
-        self.zeta_invaders.game.update(&input, dt);
-        if self.zeta_invaders.atlas.is_none() {
-            self.zeta_invaders.atlas =
-                Some(robcos_native_zeta_invaders_app::AtlasTextures::new(ctx));
+        if !self.zeta_invaders_uses_wasm_addon() {
+            let input = if input_enabled {
+                zeta_invaders_input_from_ctx(ctx)
+            } else {
+                Default::default()
+            };
+            self.zeta_invaders.game.update(&input, dt);
+            if self.zeta_invaders.atlas.is_none() {
+                self.zeta_invaders.atlas =
+                    Some(robcos_native_zeta_invaders_app::AtlasTextures::new(ctx));
+            }
         }
 
         let mut open = self.zeta_invaders.open;
@@ -1506,15 +1510,56 @@ impl RobcoNativeApp {
         );
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, "Zeta Invaders", maximized);
+            let title = self
+                .desktop_zeta_invaders_wasm
+                .as_ref()
+                .map(|state| state.title().to_string())
+                .unwrap_or_else(|| "Zeta Invaders".to_string());
+            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
             ui.add_space(6.0);
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-            let atlas = self
-                .zeta_invaders
-                .atlas
-                .as_ref()
-                .expect("zeta invaders atlas should be loaded");
-            self.zeta_invaders.game.draw(ui, atlas);
+            if self.zeta_invaders_uses_wasm_addon() {
+                let available = ui.available_size_before_wrap();
+                let size = HostedAddonSize {
+                    width: available.x.max(320.0),
+                    height: available.y.max(240.0),
+                };
+                let input = collect_hosted_keyboard_input(ctx, input_enabled);
+                let result = (|| -> Result<(), String> {
+                    let module = super::super::installed_wasm_addon_module(
+                        &crate::platform::AddonId::from("games.zeta-invaders"),
+                    )
+                    .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
+                    if self.desktop_zeta_invaders_wasm.is_none() {
+                        self.desktop_zeta_invaders_wasm = Some(WasmHostedAddonState::spawn(
+                            &module,
+                            HostedAddonSurface::Desktop,
+                            size,
+                        )?);
+                    }
+                    if let Some(state) = self.desktop_zeta_invaders_wasm.as_mut() {
+                        state.update(size, dt, input)?;
+                        draw_hosted_addon_frame(ui, state);
+                        if let Some(status) = &state.frame().status_line {
+                            ui.add_space(8.0);
+                            ui.small(status);
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(err) = result {
+                    self.desktop_zeta_invaders_wasm = None;
+                    ui.monospace("WASM ADDON FAILED");
+                    ui.small(err);
+                }
+            } else {
+                let atlas = self
+                    .zeta_invaders
+                    .atlas
+                    .as_ref()
+                    .expect("zeta invaders atlas should be loaded");
+                self.zeta_invaders.game.draw(ui, atlas);
+            }
         });
         let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
         let shown_contains_pointer = shown

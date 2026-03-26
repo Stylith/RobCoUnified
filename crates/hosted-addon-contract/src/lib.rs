@@ -79,6 +79,17 @@ pub struct HostedColor {
     pub a: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostedTextAlign {
+    #[default]
+    LeftTop,
+    LeftCenter,
+    CenterTop,
+    CenterCenter,
+    CenterBottom,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HostedDrawCommand {
@@ -95,6 +106,8 @@ pub enum HostedDrawCommand {
         text: String,
         color: HostedColor,
         size: f32,
+        #[serde(default)]
+        align: HostedTextAlign,
     },
     Image {
         x: f32,
@@ -139,6 +152,7 @@ mod tests {
     use super::{
         HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol, HostedAddonRequest,
         HostedAddonResponse, HostedAddonSize, HostedAddonSurface, HostedColor, HostedDrawCommand,
+        HostedTextAlign,
     };
 
     #[test]
@@ -193,6 +207,7 @@ mod tests {
                         a: 255,
                     },
                     size: 18.0,
+                    align: HostedTextAlign::LeftTop,
                 }],
                 status_line: Some("Hosted addon ready.".to_string()),
             },

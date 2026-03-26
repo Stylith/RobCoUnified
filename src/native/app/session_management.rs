@@ -119,6 +119,8 @@ impl RobcoNativeApp {
         self.settings = parked.settings;
         self.applications = parked.applications;
         self.zeta_invaders = parked.zeta_invaders;
+        self.desktop_zeta_invaders_wasm = None;
+        self.terminal_zeta_invaders_wasm = None;
         self.red_menace = parked.red_menace;
         self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.desktop_installer = parked.desktop_installer;

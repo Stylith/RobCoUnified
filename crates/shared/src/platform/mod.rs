@@ -21,7 +21,7 @@ pub use catalog::{
 pub use hosted::{
     HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol, HostedAddonRequest,
     HostedAddonResponse, HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest,
-    HostedColor, HostedDrawCommand, HostedInputEvent, HostedPointerButton,
+    HostedColor, HostedDrawCommand, HostedInputEvent, HostedPointerButton, HostedTextAlign,
 };
 pub use paths::{LogicalRoot, PlatformPathEnvironment, PlatformPaths, ResolvedPlatformPaths};
 pub use profile::{InstallProfile, IntegrationLevel};

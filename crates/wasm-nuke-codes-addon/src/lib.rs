@@ -1,6 +1,6 @@
 use robcos_hosted_addon_contract::{
     HostedAddonFrame, HostedAddonInitRequest, HostedAddonResponse, HostedAddonSize,
-    HostedAddonUpdateRequest, HostedColor, HostedDrawCommand,
+    HostedAddonUpdateRequest, HostedColor, HostedDrawCommand, HostedTextAlign,
 };
 use robcos_wasm_addon_sdk::{export_wasm_addon, WasmAddon};
 
@@ -45,6 +45,7 @@ impl NukeCodesAddon {
                     text: self.title.clone(),
                     color: color(120, 255, 120),
                     size: 22.0,
+                    align: HostedTextAlign::LeftTop,
                 },
                 HostedDrawCommand::Text {
                     x: 20.0,
@@ -52,6 +53,7 @@ impl NukeCodesAddon {
                     text: format!("SURFACE: {}", self.surface_label),
                     color: color(96, 208, 96),
                     size: 14.0,
+                    align: HostedTextAlign::LeftTop,
                 },
                 HostedDrawCommand::Rect {
                     x: 20.0,
@@ -66,6 +68,7 @@ impl NukeCodesAddon {
                     text: "This addon is now hosted from an external WASM bundle.".to_string(),
                     color: color(120, 255, 120),
                     size: 16.0,
+                    align: HostedTextAlign::LeftTop,
                 },
                 HostedDrawCommand::Text {
                     x: 20.0,
@@ -73,6 +76,7 @@ impl NukeCodesAddon {
                     text: "Next step: expose provider/data access through the shell host.".to_string(),
                     color: color(96, 208, 96),
                     size: 14.0,
+                    align: HostedTextAlign::LeftTop,
                 },
             ],
             status_line: Some(status.to_string()),

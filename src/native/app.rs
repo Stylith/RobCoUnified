@@ -535,6 +535,7 @@ pub struct RobcoNativeApp {
     settings: SettingsWindow,
     applications: ApplicationsWindow,
     zeta_invaders: ZetaInvadersWindow,
+    desktop_zeta_invaders_wasm: Option<WasmHostedAddonState>,
     red_menace: RedMenaceWindow,
     desktop_nuke_codes_open: bool,
     desktop_nuke_codes_wasm: Option<WasmHostedAddonState>,
@@ -561,6 +562,7 @@ pub struct RobcoNativeApp {
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_nuke_codes: NukeCodesView,
     terminal_nuke_codes_wasm: Option<WasmHostedAddonState>,
+    terminal_zeta_invaders_wasm: Option<WasmHostedAddonState>,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
@@ -727,6 +729,7 @@ impl Default for RobcoNativeApp {
             },
             applications: ApplicationsWindow::default(),
             zeta_invaders: ZetaInvadersWindow::default(),
+            desktop_zeta_invaders_wasm: None,
             red_menace: RedMenaceWindow::default(),
             desktop_nuke_codes_open: false,
             desktop_nuke_codes_wasm: None,
@@ -750,6 +753,7 @@ impl Default for RobcoNativeApp {
             terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_nuke_codes: NukeCodesView::default(),
             terminal_nuke_codes_wasm: None,
+            terminal_zeta_invaders_wasm: None,
             terminal_pty: None,
             terminal_pty_surface: None,
             terminal_installer: TerminalInstallerState::default(),
@@ -820,6 +824,8 @@ impl RobcoNativeApp {
     fn reset_zeta_invaders_runtime(&mut self, open: bool) {
         self.zeta_invaders.game.reset();
         self.zeta_invaders.last_frame_at = None;
+        self.desktop_zeta_invaders_wasm = None;
+        self.terminal_zeta_invaders_wasm = None;
         self.zeta_invaders.open = open;
     }
 
@@ -878,6 +884,11 @@ impl RobcoNativeApp {
 
     fn nuke_codes_uses_wasm_addon(&self) -> bool {
         super::installed_wasm_addon_module(&crate::platform::AddonId::from("tools.nuke-codes"))
+            .is_some()
+    }
+
+    fn zeta_invaders_uses_wasm_addon(&self) -> bool {
+        super::installed_wasm_addon_module(&crate::platform::AddonId::from("games.zeta-invaders"))
             .is_some()
     }
 

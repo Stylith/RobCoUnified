@@ -52,8 +52,9 @@
         "permissions": [],
         "file_associations": [],
         "entrypoint": {
-          "kind": "static-route",
-          "route": "zeta-invaders"
+          "kind": "wasm-module",
+          "module": "addon.wasm",
+          "protocol": "shell-surface-v1"
         }
       },
       "releases": [
@@ -63,7 +64,7 @@
           "artifacts": [
             {
               "url": "games/zeta-invaders",
-              "sha256": "18c4f8e79e1564d79eabe98e85446cf2c60f078de2dedf0a714ed12afaea7ac0",
+              "sha256": "3283f850d15de862bebab2aac0ad36cccbc047611d3ed1ebdb426c6ddf4895d8",
               "format": "addon-dir"
             }
           ]
