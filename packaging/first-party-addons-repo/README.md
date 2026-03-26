@@ -25,9 +25,10 @@ Repository layout:
 - `tools/<slug>/manifest.json`
 
 Current artifact contract:
-- artifact format is `addon-dir`
-- artifact URL points to the addon directory itself
-- installer verifies SHA-256
+- artifact format is `ndpkg` (renamed ZIP archive)
+- artifact URL is a filename relative to the index `base_url` (GitHub release asset)
+- installer downloads the `.ndpkg` archive, verifies SHA-256, extracts via the `zip` crate
+- `addon-dir` format is still supported for local development but release artifacts use `ndpkg`
 - installed addon is still hosted inside the shell UI rather than launching as a separate OS window
 
 Not included yet:

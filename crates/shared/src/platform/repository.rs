@@ -78,6 +78,9 @@ pub struct AddonArtifact {
     pub signature_url: Option<String>,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    /// Recognized values: `"manifest-json"`, `"addon-dir"`, `"directory"`,
+    /// `"zip"`, `"addon-zip"`, `"ndpkg"`, `"tar"`, `"tar-gz"`, `"tgz"`.
+    /// `.ndpkg` is internally treated as ZIP.
     #[serde(default)]
     pub format: Option<String>,
 }
@@ -211,27 +214,27 @@ mod tests {
             .all(|addon| addon.releases.first().is_some()));
         assert_eq!(
             index.addons[0].releases[0].artifacts[0].url,
-            "games/red-menace"
+            "games.red-menace.ndpkg"
         );
         assert_eq!(
             index.addons[0].releases[0].artifacts[0].format.as_deref(),
-            Some("addon-dir")
+            Some("ndpkg")
         );
         assert_eq!(
             index.addons[1].releases[0].artifacts[0].url,
-            "games/zeta-invaders"
+            "games.zeta-invaders.ndpkg"
         );
         assert_eq!(
             index.addons[1].releases[0].artifacts[0].format.as_deref(),
-            Some("addon-dir")
+            Some("ndpkg")
         );
         assert_eq!(
             index.addons[2].releases[0].artifacts[0].url,
-            "tools/nuke-codes"
+            "tools.nuke-codes.ndpkg"
         );
         assert_eq!(
             index.addons[2].releases[0].artifacts[0].format.as_deref(),
-            Some("addon-dir")
+            Some("ndpkg")
         );
     }
 }

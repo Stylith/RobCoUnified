@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "generated_at": "2026-03-26T00:00:00Z",
+  "base_url": "https://github.com/Stylith/RobCoUnified/releases/download/addons-v0.4.4/",
   "addons": [
     {
       "manifest": {
@@ -28,9 +29,9 @@
           "channel": "stable",
           "artifacts": [
             {
-              "url": "games/red-menace",
-              "sha256": "4aec8796dec7344ad778187398064a289ea6506a782a07d43a381747cd8cd059",
-              "format": "addon-dir"
+              "url": "games.red-menace.ndpkg",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "format": "ndpkg"
             }
           ]
         }
@@ -63,9 +64,9 @@
           "channel": "stable",
           "artifacts": [
             {
-              "url": "games/zeta-invaders",
-              "sha256": "3283f850d15de862bebab2aac0ad36cccbc047611d3ed1ebdb426c6ddf4895d8",
-              "format": "addon-dir"
+              "url": "games.zeta-invaders.ndpkg",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "format": "ndpkg"
             }
           ]
         }
@@ -98,9 +99,9 @@
           "channel": "stable",
           "artifacts": [
             {
-              "url": "tools/nuke-codes",
-              "sha256": "325e0bbe7bb8bc8eea80b245bcca3dfeb76a5a5b27ddb57e0d9fb565571c156f",
-              "format": "addon-dir"
+              "url": "tools.nuke-codes.ndpkg",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "format": "ndpkg"
             }
           ]
         }

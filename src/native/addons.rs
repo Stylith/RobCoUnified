@@ -612,6 +612,7 @@ fn is_supported_addon_archive(path: &Path) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
     name.ends_with(".zip")
+        || name.ends_with(".ndpkg")
         || name.ends_with(".tar")
         || name.ends_with(".tar.gz")
         || name.ends_with(".tgz")
@@ -651,7 +652,7 @@ fn extract_addon_archive(source_path: &Path, destination_dir: &Path) -> Result<(
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if file_name.ends_with(".zip") {
+    if file_name.ends_with(".zip") || file_name.ends_with(".ndpkg") {
         return extract_zip_archive(source_path, destination_dir);
     }
     if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
@@ -893,6 +894,7 @@ fn install_repository_addon_from_index(
             | "directory"
             | "zip"
             | "addon-zip"
+            | "ndpkg"
             | "tar"
             | "tar-gz"
             | "tgz"
@@ -977,7 +979,7 @@ fn stage_repository_source_path(
             copy_dir_contents(source_path, &staged_dir)?;
             Ok(staged_dir)
         }
-        "zip" | "addon-zip" | "tar" | "tar-gz" | "tgz" => {
+        "zip" | "addon-zip" | "ndpkg" | "tar" | "tar-gz" | "tgz" => {
             if !source_path.is_file() {
                 return Err(format!(
                     "Repository artifact '{}' is not an archive file.",
@@ -1015,6 +1017,7 @@ fn stage_repository_source_path(
 fn staged_repository_file_destination(staging_dir: &Path, format: &str) -> PathBuf {
     let file_name = match format {
         "zip" | "addon-zip" => "addon.zip",
+        "ndpkg" => "addon.ndpkg",
         "tar" => "addon.tar",
         "tar-gz" | "tgz" => "addon.tar.gz",
         _ => "manifest.json",
@@ -2318,6 +2321,76 @@ mod tests {
                             signature_url: None,
                             size_bytes: None,
                             format: Some("zip".to_string()),
+                        }],
+                    }],
+                }],
+            },
+            &repository_root.join("addon-repository-index.json"),
+            &AddonId::from("tools.nuke-codes"),
+            InstallProfile::LinuxDesktop,
+            &downloads_root,
+            &install_root,
+        )
+        .unwrap();
+
+        assert_eq!(message, "Installed Nuke Codes.");
+        assert!(
+            install_root
+                .join("tools.nuke-codes")
+                .join("manifest.json")
+                .exists()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("tools.nuke-codes")
+                    .join("assets")
+                    .join("help.txt")
+            )
+            .unwrap(),
+            "launch codes"
+        );
+    }
+
+    #[test]
+    fn install_repository_addon_from_index_installs_ndpkg_bundle() {
+        let repository_root =
+            temp_dir("install_repository_addon_from_index_installs_ndpkg_bundle_repo");
+        let install_root =
+            temp_dir("install_repository_addon_from_index_installs_ndpkg_bundle_install");
+        let downloads_root =
+            temp_dir("install_repository_addon_from_index_installs_ndpkg_bundle_download");
+        let archive_path = repository_root.join("nuke-codes.ndpkg");
+        let artifact_manifest = manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User)
+            .with_capability("code-reference");
+        write_zip_archive(
+            &archive_path,
+            &[
+                (
+                    "nuke-codes/manifest.json",
+                    serde_json::to_string(&artifact_manifest).unwrap(),
+                ),
+                ("nuke-codes/assets/help.txt", "launch codes".to_string()),
+            ],
+        );
+
+        let message = super::install_repository_addon_from_index(
+            &AddonRepositoryIndex {
+                schema_version: 1,
+                generated_at: None,
+                base_url: None,
+                addons: vec![IndexedAddonPackage {
+                    manifest: artifact_manifest.clone(),
+                    releases: vec![AddonRelease {
+                        version: artifact_manifest.version.clone(),
+                        channel: Some("stable".to_string()),
+                        artifacts: vec![AddonArtifact {
+                            install_profile: Some(InstallProfile::LinuxDesktop),
+                            url: "nuke-codes.ndpkg".to_string(),
+                            sha256: file_sha256(&archive_path),
+                            signature_url: None,
+                            size_bytes: None,
+                            format: Some("ndpkg".to_string()),
                         }],
                     }],
                 }],
