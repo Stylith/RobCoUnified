@@ -86,8 +86,9 @@
         "permissions": [],
         "file_associations": [],
         "entrypoint": {
-          "kind": "static-route",
-          "route": "nuke-codes"
+          "kind": "wasm-module",
+          "module": "addon.wasm",
+          "protocol": "shell-surface-v1"
         }
       },
       "releases": [
@@ -97,7 +98,7 @@
           "artifacts": [
             {
               "url": "tools/nuke-codes",
-              "sha256": "e2b77619e46f71f87e3e1b605f06c36915ed019c03815355759e8d9d2daf84b7",
+              "sha256": "325e0bbe7bb8bc8eea80b245bcca3dfeb76a5a5b27ddb57e0d9fb565571c156f",
               "format": "addon-dir"
             }
           ]

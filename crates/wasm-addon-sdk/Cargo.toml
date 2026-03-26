@@ -1,0 +1,13 @@
+[package]
+name = "robcos-wasm-addon-sdk"
+version = "0.4.4"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+robcos-hosted-addon-contract = { path = "../hosted-addon-contract" }
+serde_json = "1"

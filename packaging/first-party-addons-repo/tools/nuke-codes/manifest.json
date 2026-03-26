@@ -13,7 +13,8 @@
   "permissions": [],
   "file_associations": [],
   "entrypoint": {
-    "kind": "static-route",
-    "route": "nuke-codes"
+    "kind": "wasm-module",
+    "module": "addon.wasm",
+    "protocol": "shell-surface-v1"
   }
 }

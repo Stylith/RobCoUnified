@@ -961,6 +961,8 @@ Current Phase 5 progress:
   - addon manifests can declare a `wasm-module` entrypoint with the existing shell-surface protocol
   - installed user addons can resolve bundle-relative `.wasm` modules
   - the shell can instantiate a WASM addon in-process and round-trip JSON requests/responses through shared guest memory without a separate OS process
+- the hosted-addon protocol is now split into a tiny shared contract crate (`robcos-hosted-addon-contract`) so WASM guests do not depend on the full `robcos-shared` runtime stack
+- a guest helper crate (`robcos-wasm-addon-sdk`) now exists for exported `nd_alloc` / `nd_handle_json` glue and request dispatch inside WASM addons
 - current direction change:
   - prefer WASM for rich shell-integrated external addons like games
   - keep hosted-process support as a secondary path for simpler or more isolated addons
@@ -969,6 +971,7 @@ Current Phase 5 progress:
   - `games.zeta-invaders`
   - `tools.nuke-codes`
 - that staged repo includes a checked-in `index.json` plus per-addon manifests and is covered by a shared validation test
+- `tools.nuke-codes` in the staged repo now also includes a real `addon.wasm` built from a guest addon crate, and its staged manifest/index entrypoint is now `wasm-module`
 
 Not done yet:
 
@@ -976,6 +979,7 @@ Not done yet:
 - backgrounded or resumable repository download/update behavior for externally hosted addons
 - richer addon-manager actions beyond enable/disable
 - runtime usage of discovered non-static addons
+- first shell render/input host wired to a real WASM addon surface
 - packaged first-party addons
 - creating the actual external git repository and publishing the staged contents there
 

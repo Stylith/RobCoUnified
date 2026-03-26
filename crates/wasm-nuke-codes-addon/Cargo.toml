@@ -1,0 +1,15 @@
+[package]
+name = "robcos-wasm-nuke-codes-addon"
+version = "0.4.4"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+robcos-hosted-addon-contract = { path = "../hosted-addon-contract" }
+robcos-wasm-addon-sdk = { path = "../wasm-addon-sdk" }
+getrandom = { version = "0.2", features = ["js"] }

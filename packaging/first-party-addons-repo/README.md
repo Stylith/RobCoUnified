@@ -13,6 +13,12 @@ Current optional addons staged here:
 - `games.zeta-invaders`
 - `tools.nuke-codes`
 
+Bundle format:
+
+- each addon bundle contains `manifest.json`
+- shell-hosted WASM addons also contain an `addon.wasm` module
+- additional assets/data files live beside those files inside the same addon directory
+
 Repository layout:
 - `index.json`
 - `games/<slug>/manifest.json`
