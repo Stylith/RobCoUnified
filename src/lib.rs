@@ -5,7 +5,7 @@ pub use robcos_shared::{
 
 pub mod legacy;
 pub use legacy::{
-    apps, auth, boot, checks, desktop, docedit, documents, hacking, installer, nuke_codes,
+    apps, auth, boot, checks, desktop, docedit, documents, hacking, installer,
     settings, shell_terminal,
 };
 

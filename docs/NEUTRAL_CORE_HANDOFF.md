@@ -258,7 +258,7 @@ Additional runtime-registry slice:
 - desktop launch resolution no longer infers behavior from manifest route strings; it resolves manifest target -> addon id -> runtime registry entry
 - the first Start-menu Program Installer action now launches through `LaunchTarget::Capability("installer-ui")`
 - the Spotlight Terminal system result now launches through `LaunchTarget::Capability("terminal-tool")`
-- native helper methods now exist for registry-backed launches of settings, file manager, editor, nuke codes, terminal, and applications/program catalog
+- native helper methods now exist for registry-backed launches of first-party shell surfaces and generic catalog/program entries
 - the old `DesktopShellAction::OpenWindow(...)` bypass was removed from active code paths
 - shared default-app builtin resolution now accepts first-party addon ids, with legacy `robco_terminal_writer` mapped to `shell.editor` for compatibility
 - native and legacy document-open paths now accept `ResolvedDocumentOpen::BuiltinAddon(...)` instead of the older product-specific builtin enum variant
@@ -1046,54 +1046,20 @@ Current biggest remaining leaks:
 - optional addon package publishing still needs to switch fully onto the external repo workflow
 - the host-context bridge is generic at the file-loading layer, but the data model still needs to be generalized further so the core does not carry addon-shaped host data assumptions long-term
 
-**If continuing this work, proceed in this order:**
+**Addon Decoupling Status**
 
-Phase A — Move addon source/build ownership out of the core repo:
-- move the actual source/assets/build scripts for optional addons into the external addons repo (or per-addon repos if desired later)
-- make `nucleon-core-addons` own the `.wasm` / `.ndpkg` build pipeline
-- after the external repo can build and publish those packages independently, delete the matching workspace crates from this repo
+- optional addon source/build ownership is now externalized to `nucleon-core-addons`
+- optional addon workspace crates have been removed from core
+- hardcoded optional-addon enum variants, launch paths, menu entries, and legacy shell injection paths have been removed from active core code
+- core now keeps only the generic addon host/runtime, installer/update flow, manifest/index parsing, and shell integration surfaces
 
-Phase B — Remove workspace crates from core after external ownership exists:
-- status: complete
-- deleted from this repo:
-  - native optional addon crates
-  - wasm optional addon crates
-- removed from root `Cargo.toml` workspace members/default-members
+**What remains after this cleanup**
 
-Phase C — Remove enum variants:
-- `DesktopWindow::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in `crates/native-services/src/shared_types.rs`
-- `TerminalScreen::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in same file
-- `DesktopBuiltinIconKind::NukeCodes` in `crates/native-services/src/desktop_surface_service.rs`
-- Fix all cascading match arm compile errors across the codebase
+- keep future addon work generic: capabilities, permissions, host APIs, and shell surfaces only
+- if more cleanup is needed later, target stale compatibility scaffolding and generic runtime abstractions, not addon-specific branches
+- the next major product phase is the modular shell/theme/composition system, which should start from this addon-agnostic baseline
 
-Phase D — Remove app struct fields and draw functions:
-- `RedMenaceWindow`, `ZetaInvadersWindow` structs and all associated fields on `RobcoNativeApp`
-- `desktop_nuke_codes_open`, `desktop_nuke_codes_wasm`, `terminal_nuke_codes`, `terminal_nuke_codes_wasm`
-- `desktop_zeta_invaders_wasm`, `terminal_zeta_invaders_wasm`
-- `icon_nuke_codes`, `show_nuke_codes`
-- Draw functions: `draw_red_menace_window`, `draw_zeta_invaders_window`, `draw_nuke_codes_window`
-- Terminal draw functions: `draw_terminal_red_menace`, `draw_terminal_zeta_invaders`, `draw_terminal_nuke_codes`
-- Reset functions: `reset_zeta_invaders_runtime`, `reset_red_menace_runtime`, `reset_nuke_codes_wasm_runtime`
-- WASM detection: `zeta_invaders_uses_wasm_addon`, `nuke_codes_uses_wasm_addon`
-- Desktop component host registrations in `desktop_component_host.rs` and `desktop_app.rs`
-
-Phase E — Remove launch, menu, search, settings, session references:
-- Launch mappings in `name_to_desktop_window()`, `name_to_terminal_screen()`
-- Remaining `BUILTIN_NUKE_CODES_APP`, `BUILTIN_RED_MENACE_GAME`, `BUILTIN_ZETA_INVADERS_GAME` constants
-- Start menu entries, spotlight entries, search service/system references that still mention these specific addons
-- Programs app `OpenNukeCodes` action
-- Settings visibility toggles in `config.rs` and `addon_policy.rs`
-- Session save/restore fields in `session_management.rs` and `session_runtime.rs`
-- Desktop icon registration in `desktop_surface.rs`
-
-Phase F — Clean up tests:
-- Remove game state tests in `app.rs`
-- Remove mock addon fixtures in `addons.rs` that reference these specific addons
-- Keep the generic addon install/inventory tests
-
-**Critical rule:** After each phase, `cargo check --bin nucleon-native` must compile. Fix cascading errors before moving to the next phase.
-
-**What must NOT change:** The WASM addon runtime (`wasm_addon_runtime.rs`, `hosted_addon_runtime.rs`), the addon installer UI, the addon discovery/registry system — these are the generic infrastructure that will load these addons dynamically after the hardcoded paths are removed.
+**Critical rule:** Keep the generic addon host/runtime, installer UI, and discovery/registry system intact while doing future cleanup work; those are the platform surface that external addons depend on.
 
 ## Phase 6: Third-Party Addons
 

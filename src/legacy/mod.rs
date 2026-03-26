@@ -7,6 +7,5 @@ pub mod docedit;
 pub mod documents;
 pub mod hacking;
 pub mod installer;
-pub mod nuke_codes;
 pub mod settings;
 pub mod shell_terminal;

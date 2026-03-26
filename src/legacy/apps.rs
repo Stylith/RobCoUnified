@@ -10,12 +10,7 @@ use crate::ui::{
     confirm, flash_message, input_prompt, is_back_menu_label, run_menu, MenuResult, Term,
 };
 
-const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
-
-fn legacy_nuke_codes_visible() -> bool {
-    true
-}
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
@@ -88,22 +83,13 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             break;
         }
         let apps = load_apps();
-        let nuke_codes_visible = legacy_nuke_codes_visible();
         let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
         let mut choices: Vec<String> = Vec::new();
-        if nuke_codes_visible {
-            choices.push(BUILTIN_NUKE_CODES_APP.to_string());
-        }
         if text_editor_visible {
             choices.push(BUILTIN_TEXT_EDITOR_APP.to_string());
         }
         choices.extend(
-            apps.keys()
-                .filter(|name| {
-                    name.as_str() != BUILTIN_NUKE_CODES_APP
-                        && name.as_str() != BUILTIN_TEXT_EDITOR_APP
-                })
-                .cloned(),
+            apps.keys().filter(|name| name.as_str() != BUILTIN_TEXT_EDITOR_APP).cloned(),
         );
         choices.push("---".to_string());
         choices.push("Back".to_string());
@@ -112,12 +98,6 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
         match run_menu(terminal, "Applications", &opts, Some("Select App"))? {
             MenuResult::Back => break,
             MenuResult::Selected(s) if s == "Back" => break,
-            MenuResult::Selected(s) if s == BUILTIN_NUKE_CODES_APP => {
-                crate::nuke_codes::nuke_codes_screen(terminal)?;
-                if crate::session::has_switch_request() {
-                    break;
-                }
-            }
             MenuResult::Selected(s) if s == BUILTIN_TEXT_EDITOR_APP => {
                 crate::documents::text_editor_menu(terminal)?;
                 if crate::session::has_switch_request() {
@@ -195,11 +175,6 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
 
 pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
-        let nuke_codes_label = if legacy_nuke_codes_visible() {
-            "Nuke Codes in Applications: VISIBLE [toggle]"
-        } else {
-            "Nuke Codes in Applications: HIDDEN [toggle]"
-        };
         let text_editor_label = if get_settings().builtin_menu_visibility.text_editor {
             "ROBCO Word Processor in Applications: VISIBLE [toggle]"
         } else {
@@ -209,7 +184,6 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
             terminal,
             "Edit Applications",
             &[
-                nuke_codes_label,
                 text_editor_label,
                 "---",
                 "Add App",
@@ -222,13 +196,6 @@ pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
             MenuResult::Back => break,
             MenuResult::Selected(s) => match s.as_str() {
                 s if is_back_menu_label(s) => break,
-                l if l == nuke_codes_label => {
-                    flash_message(
-                        terminal,
-                        "Legacy Nuke Codes visibility is fixed during addon migration.",
-                        800,
-                    )?;
-                }
                 l if l == text_editor_label => {
                     update_settings(|cfg| {
                         cfg.builtin_menu_visibility.text_editor =

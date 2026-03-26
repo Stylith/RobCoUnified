@@ -27,7 +27,6 @@ pub enum DesktopHostedApp {
     Editor,
     Settings,
     Applications,
-    Utility,
     Terminal,
     Installer,
     PtyApp,

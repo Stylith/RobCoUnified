@@ -47,10 +47,6 @@ use crate::ui::{
     sel_style, session_switch_scope, title_style, MenuResult, Term,
 };
 
-fn legacy_nuke_codes_visible() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopExit {
     ReturnToTerminal,
@@ -105,7 +101,6 @@ enum StartAction {
     None,
     Launch(StartLaunch),
     LaunchCommand { title: String, cmd: Vec<String> },
-    LaunchNukeCodes,
     OpenTextEditorApp,
     OpenDocumentLogs,
     OpenDocumentCategory { name: String, path: PathBuf },
@@ -770,13 +765,11 @@ enum WindowKind {
 enum DesktopHubItemAction {
     None,
     CloseFocusedWindow,
-    ToggleBuiltinNukeCodesVisibility,
     ToggleBuiltinTextEditorVisibility,
     LaunchCommand {
         title: String,
         cmd: Vec<String>,
     },
-    LaunchNukeCodes,
     LaunchTextEditor,
     OpenTextEditorPicker,
     OpenTextEditorDocument(PathBuf),
@@ -1352,15 +1345,8 @@ fn build_command_leaf_items(
 
 fn refresh_start_leaf_items(state: &mut StartState) {
     let apps = load_apps();
-    let nuke_codes_visible = legacy_nuke_codes_visible();
     let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
     let mut app_items = Vec::new();
-    if nuke_codes_visible {
-        app_items.push(StartLeafItem {
-            label: BUILTIN_NUKE_CODES_APP.to_string(),
-            action: StartAction::LaunchNukeCodes,
-        });
-    }
     if text_editor_visible {
         app_items.push(StartLeafItem {
             label: BUILTIN_TEXT_EDITOR_APP.to_string(),
@@ -1368,7 +1354,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
         });
     }
     for key in sorted_json_keys(&apps) {
-        if key == BUILTIN_NUKE_CODES_APP || key == BUILTIN_TEXT_EDITOR_APP {
+        if key == BUILTIN_TEXT_EDITOR_APP {
             continue;
         }
         if let Some(v) = apps.get(&key) {
@@ -1638,16 +1624,8 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
     match hub.kind {
         DesktopHubKind::Applications => {
             let apps = load_apps();
-            let nuke_codes_visible = legacy_nuke_codes_visible();
             let text_editor_visible = get_settings().builtin_menu_visibility.text_editor;
             let mut items = Vec::new();
-            if nuke_codes_visible {
-                items.push(DesktopHubItem {
-                    label: BUILTIN_NUKE_CODES_APP.to_string(),
-                    action: DesktopHubItemAction::LaunchNukeCodes,
-                    enabled: true,
-                });
-            }
             if text_editor_visible {
                 items.push(DesktopHubItem {
                     label: BUILTIN_TEXT_EDITOR_APP.to_string(),
@@ -1656,7 +1634,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 });
             }
             for key in sorted_json_keys(&apps) {
-                if key == BUILTIN_NUKE_CODES_APP || key == BUILTIN_TEXT_EDITOR_APP {
+                if key == BUILTIN_TEXT_EDITOR_APP {
                     continue;
                 }
                 if let Some(value) = apps.get(&key) {
@@ -2388,18 +2366,6 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             let mut items = vec![
                 DesktopHubItem {
                     label: format!(
-                        "Nuke Codes in Applications: {} [toggle]",
-                        if legacy_nuke_codes_visible() {
-                            "VISIBLE"
-                        } else {
-                            "HIDDEN"
-                        }
-                    ),
-                    action: DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility,
-                    enabled: true,
-                },
-                DesktopHubItem {
-                    label: format!(
                         "ROBCO Word Processor in Applications: {} [toggle]",
                         if get_settings().builtin_menu_visibility.text_editor {
                             "VISIBLE"
@@ -3012,7 +2978,6 @@ fn apply_hover_target(state: &mut StartState, target: StartHoverTarget) {
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 const START_HOVER_DELAY: Duration = Duration::from_millis(170);
 const TOP_MENU_HOVER_DELAY: Duration = Duration::from_millis(110);
-const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const TITLE_MIN_BUTTON: &str = "[-]";
 const TITLE_MAX_BUTTON: &str = "[+]";
 const TITLE_RESTORE_BUTTON: &str = "[R]";
@@ -4573,17 +4538,6 @@ fn run_start_action(
             }
             Ok(None)
         }
-        StartAction::LaunchNukeCodes => {
-            if let Err(err) = open_pty_window_named(
-                terminal,
-                state,
-                &build_desktop_tool_command(current_user, "nuke-codes")?,
-                Some("Nuke Codes"),
-            ) {
-                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
-            }
-            Ok(None)
-        }
         StartAction::OpenTextEditorApp => {
             open_desktop_hub_window(state, DesktopHubKind::TextEditorMenu);
             Ok(None)
@@ -5671,18 +5625,6 @@ fn default_shell_command() -> Vec<String> {
     vec![shell]
 }
 
-fn build_desktop_tool_command(current_user: &str, tool: &str) -> Result<Vec<String>> {
-    let exe = std::env::current_exe()?;
-    let exe = exe.to_string_lossy().to_string();
-    Ok(vec![
-        exe,
-        "--desktop-tool".to_string(),
-        tool.to_string(),
-        "--desktop-user".to_string(),
-        current_user.to_string(),
-        "--no-preflight".to_string(),
-    ])
-}
 
 fn close_window_by_id(state: &mut DesktopState, window_id: u64) {
     if let Some(pos) = state.windows.iter().position(|w| w.id == window_id) {
@@ -13010,11 +12952,6 @@ fn run_desktop_hub_action(
                 close_window_by_id(state, id);
             }
         }
-        DesktopHubItemAction::ToggleBuiltinNukeCodesVisibility => {
-            refresh_start_leaf_items(&mut state.start);
-            refresh_desktop_hub_windows(state, DesktopHubKind::EditApps);
-            refresh_desktop_hub_windows(state, DesktopHubKind::Applications);
-        }
         DesktopHubItemAction::ToggleBuiltinTextEditorVisibility => {
             update_settings(|s| {
                 s.builtin_menu_visibility.text_editor = !s.builtin_menu_visibility.text_editor;
@@ -13026,16 +12963,6 @@ fn run_desktop_hub_action(
         }
         DesktopHubItemAction::LaunchCommand { title, cmd } => {
             if let Err(err) = open_pty_window_named(terminal, state, &cmd, Some(title.as_str())) {
-                flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
-            }
-        }
-        DesktopHubItemAction::LaunchNukeCodes => {
-            if let Err(err) = open_pty_window_named(
-                terminal,
-                state,
-                &build_desktop_tool_command(current_user, "nuke-codes")?,
-                Some("Nuke Codes"),
-            ) {
                 flash_message(terminal, &format!("Launch failed: {err}"), 1200)?;
             }
         }

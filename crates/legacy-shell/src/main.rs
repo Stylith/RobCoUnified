@@ -10,7 +10,7 @@ use robcos::checks::{print_preflight, run_preflight};
 use robcos::config::{get_settings, set_current_user, OpenMode};
 use robcos::ui::{flash_message, run_menu_with_index, MenuResult, Term};
 use robcos::{
-    apps, boot, config, desktop, documents, installer, nuke_codes, pty, session, settings,
+    apps, boot, config, desktop, documents, installer, pty, session, settings,
     shell_terminal, sound,
 };
 use std::collections::HashMap;
@@ -20,7 +20,6 @@ use std::io::stdout;
 enum DesktopToolMode {
     ProgramInstaller,
     Settings,
-    NukeCodes,
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -43,7 +42,6 @@ fn parse_desktop_tool_mode(args: &[String]) -> Option<DesktopToolMode> {
     match tool.to_ascii_lowercase().as_str() {
         "program-installer" | "installer" | "appstore" => Some(DesktopToolMode::ProgramInstaller),
         "settings" => Some(DesktopToolMode::Settings),
-        "nuke-codes" | "nukecodes" | "nuke" => Some(DesktopToolMode::NukeCodes),
         _ => None,
     }
 }
@@ -58,7 +56,6 @@ fn run_desktop_tool_mode(terminal: &mut Term, args: &[String]) -> Result<bool> {
     match mode {
         DesktopToolMode::ProgramInstaller => installer::appstore_menu(terminal)?,
         DesktopToolMode::Settings => settings::settings_menu(terminal, &desktop_user)?,
-        DesktopToolMode::NukeCodes => nuke_codes::nuke_codes_screen(terminal)?,
     }
     Ok(true)
 }

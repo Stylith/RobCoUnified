@@ -211,9 +211,6 @@ impl WasmHostedAddonState {
         &self.title
     }
 
-    pub(crate) fn frame(&self) -> &HostedAddonFrame {
-        &self.frame
-    }
 
     pub(crate) fn draw(&mut self, ui: &mut Ui) {
         let frame = self.frame.clone();

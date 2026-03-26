@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn hosted_addon_request_round_trips() {
         let request = HostedAddonRequest::Initialize(HostedAddonInitRequest {
-            addon_id: "games.red-menace".to_string(),
+            addon_id: "games.example-addon".to_string(),
             surface: HostedAddonSurface::Desktop,
             size: HostedAddonSize {
                 width: 826.0,
