@@ -164,7 +164,9 @@ pub fn base_dir() -> PathBuf {
 }
 
 fn detect_base_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("ROBCOS_BASE_DIR") {
+    if let Some(path) = std::env::var_os("NUCLEON_BASE_DIR")
+        .or_else(|| std::env::var_os("ROBCOS_BASE_DIR"))
+    {
         let dir = PathBuf::from(path);
         let _ = std::fs::create_dir_all(&dir);
         return dir;
@@ -2050,7 +2052,7 @@ mod tests {
     #[test]
     fn pty_key_debug_log_file_lives_under_runtime_root() {
         let key_log = pty_key_debug_log_file();
-        assert_eq!(key_log, runtime_root_dir().join("robcos_keys.log"));
+        assert_eq!(key_log, runtime_root_dir().join("nucleon_keys.log"));
     }
 
     #[test]

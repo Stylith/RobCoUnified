@@ -36,6 +36,8 @@ Important constraint summary:
   - `NUCLEON_*` env names are now canonical for new core launch/runtime paths, with `ROBCOS_*` compatibility aliases kept in place
   - standalone launcher now prefers `nucleon-*` binary names and falls back to `robcos-*`
   - native shell package now exposes both `nucleon-*` and legacy `robcos-*` standalone binaries during transition
+  - default product-dir/runtime roots now target `nucleon`
+  - legacy `robcos` state/addon/cache/runtime roots auto-merge forward into the new `nucleon` layout when no explicit override is set
 
 Current practical status summary:
 
