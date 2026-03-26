@@ -937,62 +937,66 @@ Current Phase 5 progress:
 
 - scoped manifest discovery exists for bundled/system/user roots
 - layered manifest precedence exists
-- persisted enable/disable overrides exist
-- unified installed-addon inventory exists
-- installer/addon-manager UI now consumes that inventory
-- user-scoped addon install/remove behavior now exists for manifest-file and addon-directory sources
-- user-scoped addon install now also accepts `.zip`, `.tar`, `.tar.gz`, and `.tgz` addon archives for manual installs
-- user-scoped addon removal now removes copied addon directories, not just the manifest file
-- user-scoped install currently rejects first-party built-in addon ids so path imports cannot shadow wired shell runtimes during the static-runtime stage
-- addon inventory now preserves manifest discovery issues with scope/path provenance for installer visibility
-- shared repository-index contract now exists for externally hosted optional addons, with manifest + release/artifact metadata and install-profile artifact selection
-- installer inventory can now consume a local repository index and show feed-backed optional addons separately from installed addons
-- repository-backed optional addons can now be installed from manifest artifacts through the existing user-addon install seam, with SHA-256 verification and cached-then-bundled index lookup
-- repository-backed installs now also support archive artifacts, so feed-hosted addon bundles do not have to be copied as raw directories
-- repository-backed install/update/reinstall actions now run off the UI thread through the shared background task channel for both terminal and desktop installer flows
-- installed optional addons can now expose repository-backed `Update` or `Reinstall` actions when a matching feed entry exists
-- optional addons are no longer seeded by the built-in manifest catalog; they only appear in installer inventory when discovered as installed addons or listed by the repository feed
-- repository-backed installs still preserve the current shell-hosted runtime rule: they install manifests for shell-integrated addons, not dynamic runtime plugins or separate external windows
-- repository artifacts can now also be hosted addon directory bundles (`addon-dir`), which gives the feed a real `manifest + assets/data` package shape while keeping runtime rendering inside the shell
-- `tools.nuke-codes` can now load its provider list from `providers.json` inside the installed addon bundle, which is the first concrete shell-hosted addon-owned data seam
-- shared hosted-addon ABI/protocol types now exist in `robcos-shared` for shell-hosted external addons, together with native bundle-relative hosted-process resolution helpers; this is the runtime boundary needed before games can actually leave the main repo
-- native hosted-process session plumbing now exists for installed addon bundles: the shell can spawn a bundle executable and round-trip newline-delimited JSON protocol messages over stdio, even though the runner is not wired into game windows yet
-- a parallel WASM runtime path now exists for shell-hosted external addons:
-  - addon manifests can declare a `wasm-module` entrypoint with the existing shell-surface protocol
-  - installed user addons can resolve bundle-relative `.wasm` modules
-  - the shell can instantiate a WASM addon in-process and round-trip JSON requests/responses through shared guest memory without a separate OS process
-- the hosted-addon protocol is now split into a tiny shared contract crate (`robcos-hosted-addon-contract`) so WASM guests do not depend on the full `robcos-shared` runtime stack
-- a guest helper crate (`robcos-wasm-addon-sdk`) now exists for exported `nd_alloc` / `nd_handle_json` glue and request dispatch inside WASM addons
-- current direction change:
-  - prefer WASM for rich shell-integrated external addons like games
-  - keep hosted-process support as a secondary path for simpler or more isolated addons
-- the initial staged external-repo contents now exist under `packaging/first-party-addons-repo/` for:
+Current addon/runtime state:
+
+- `origin/WIP` is at `98e3840` (`Stage first external WASM game migration`).
+- Optional first-party addons are no longer seeded from the built-in manifest catalog. They now come from discovered installed manifests or the repository feed.
+- Installer/addon-manager state is already in place:
+  - local manual install supports manifest paths, addon directories, and `.zip` / `.tar` / `.tar.gz` / `.tgz`
+  - feed-backed install/update/reinstall exists
+  - discovery issues are preserved for UI visibility
+- Shell-integrated external addon runtime direction is now:
+  - prefer WASM for rich integrated addons like games
+  - keep hosted-process support only as a secondary path
+- Shared runtime pieces already exist:
+  - `robcos-hosted-addon-contract`
+  - `robcos-wasm-addon-sdk`
+  - native WASM host with bundle-relative module resolution
+  - keyboard input forwarding into hosted addons
+  - real image loading from addon bundle assets
+- `tools.nuke-codes` is the first fully wired shell-hosted WASM addon surface in both desktop and terminal mode.
+- `games.zeta-invaders` is the first game on the migration path:
+  - `crates/native-space-invaders-app` can now export hosted frames and map hosted input events
+  - `crates/wasm-zeta-invaders-addon` builds a real guest `.wasm`
+  - desktop and terminal Zeta Invaders surfaces now prefer the installed WASM addon runtime when present
+  - built-in fallback still exists during migration
+- The staged external feed under `packaging/first-party-addons-repo/` now contains:
   - `games.red-menace`
   - `games.zeta-invaders`
   - `tools.nuke-codes`
-- that staged repo includes a checked-in `index.json` plus per-addon manifests and is covered by a shared validation test
-- `tools.nuke-codes` in the staged repo now also includes a real `addon.wasm` built from a guest addon crate, and its staged manifest/index entrypoint is now `wasm-module`
-- the first actual shell-hosted WASM addon surface is now wired for `tools.nuke-codes`:
-  - desktop mode can open it inside the existing desktop window chrome
-  - terminal mode can open it inside the fullscreen terminal shell with the usual back/refresh controls
-  - both sides lazily spawn the installed WASM module, update it each frame, and fall back cleanly if the addon is missing or errors
-- the WASM host now supports the first real game-facing capabilities:
-  - keyboard input forwarding into hosted addons
-  - real image loading from addon bundle asset paths instead of placeholder `IMAGE ...` boxes
-- `games.zeta-invaders` is now the first game moving onto that path:
-  - the shared native game crate can export hosted frames and map hosted input events
-  - a real `robcos-wasm-zeta-invaders-addon` guest crate now builds to `.wasm`
-  - the staged external repo bundle for `games.zeta-invaders` now contains `addon.wasm` plus the game asset directory and uses a `wasm-module` entrypoint
-  - the terminal and desktop Zeta Invaders shell surfaces now prefer the installed WASM addon runtime when present, while retaining the built-in fallback during migration
+- `games.zeta-invaders` in the staged feed is now a real WASM bundle with `addon.wasm` plus `assets/`.
 
-Not done yet:
+Packaging decision for next session:
 
-- richer install workflow than direct path-based manifest/directory import
-- richer addon-manager actions beyond enable/disable
-- broader runtime usage of discovered non-static addons beyond the first `tools.nuke-codes` surface
-- packaged first-party addons
-- fully removing the built-in runtime ownership for `games.zeta-invaders` and `games.red-menace`
-- syncing the updated staged `games.zeta-invaders` WASM bundle into the external `nucleon-desktop-addons` repo
+- Do not keep storing built addon payloads directly in git as the long-term model.
+- The better model is:
+  - repo stores manifests, `index.json`, and build metadata
+  - CI/build pipeline produces release artifacts
+  - `index.json` points to release asset URLs, not raw repo blobs
+  - installer downloads and extracts packaged addon artifacts
+- Planned package extension: `.ndpkg`
+  - this is a Nucleon Desktop Package container name, not a new compression algorithm
+  - underneath it should just be a normal archive format like `zip` or `tar.zst`
+  - expected contents: `manifest.json`, `addon.wasm`, `assets/...`
+- Reason for the packaging pivot:
+  - the staged `games/zeta-invaders/addon.wasm` is about `58 MB`
+  - GitHub accepted it but warned because it exceeds the recommended 50 MB size
+  - this is acceptable only as a temporary checkpoint, not as the permanent packaging strategy
+
+External repo state:
+
+- User pushed the current external repo checkpoint to `nucleon-desktop-addons` `main` as `d1785cb`.
+- That external repo currently still contains raw committed bundle blobs.
+- Next packaging work should move it away from committed blobs and onto release artifacts.
+
+Next session focus:
+
+- define `.ndpkg` precisely (`zip` vs `tar.zst`, internal layout, hash handling)
+- add installer support for downloading/extracting packaged release artifacts
+- switch repository index artifacts from repo-path blobs to release URLs
+- shrink the Zeta WASM bundle before repeating this for more games
+- then continue migration for `games.red-menace`
+- rebrand `robcos` -> `nucleon-desktop` stays later and should be code/file names first, not UI strings yet
 
 ## Phase 6: Third-Party Addons
 
