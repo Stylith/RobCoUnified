@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_at": "2026-03-26T00:00:00Z",
-  "base_url": "https://github.com/Stylith/RobCoUnified/releases/download/addons-v0.4.4/",
+  "base_url": "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/",
   "addons": [
     {
       "manifest": {
