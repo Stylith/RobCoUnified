@@ -187,54 +187,63 @@ mod tests {
     }
 
     #[test]
-    fn staged_first_party_optional_repository_index_stays_valid() {
-        let index: AddonRepositoryIndex = serde_json::from_str(include_str!(
-            "../../../../packaging/first-party-addons-repo/index.json"
-        ))
-        .unwrap();
+    fn ndpkg_repository_index_round_trips_with_expected_addon_structure() {
+        let raw = r#"{
+            "schema_version": 1,
+            "base_url": "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/",
+            "addons": [
+                {
+                    "manifest": {
+                        "id": "games.red-menace", "display_name": "Red Menace",
+                        "version": "0.4.4", "kind": "game", "scope": "user", "trust": "first-party", "essential": false,
+                        "entrypoint": { "kind": "static-route", "route": "red-menace" }
+                    },
+                    "releases": [{ "version": "0.4.4", "artifacts": [{
+                        "url": "games/games.red-menace.ndpkg",
+                        "sha256": "aabb", "format": "ndpkg"
+                    }]}]
+                },
+                {
+                    "manifest": {
+                        "id": "games.zeta-invaders", "display_name": "Zeta Invaders",
+                        "version": "0.4.4", "kind": "game", "scope": "user", "trust": "first-party", "essential": false,
+                        "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
+                    },
+                    "releases": [{ "version": "0.4.4", "artifacts": [{
+                        "url": "games/games.zeta-invaders.ndpkg",
+                        "sha256": "ccdd", "format": "ndpkg"
+                    }]}]
+                },
+                {
+                    "manifest": {
+                        "id": "tools.nuke-codes", "display_name": "Nuke Codes",
+                        "version": "0.4.4", "kind": "app", "scope": "user", "trust": "first-party", "essential": false,
+                        "entrypoint": { "kind": "wasm-module", "module": "addon.wasm", "protocol": "shell-surface-v1" }
+                    },
+                    "releases": [{ "version": "0.4.4", "artifacts": [{
+                        "url": "tools/tools.nuke-codes.ndpkg",
+                        "sha256": "eeff", "format": "ndpkg"
+                    }]}]
+                }
+            ]
+        }"#;
 
-        let ids = index
+        let index: AddonRepositoryIndex = serde_json::from_str(raw).unwrap();
+
+        let ids: Vec<_> = index
             .addons
             .iter()
-            .map(|addon| addon.manifest.id.as_str().to_string())
-            .collect::<Vec<_>>();
-
+            .map(|a| a.manifest.id.as_str().to_string())
+            .collect();
         assert_eq!(
             ids,
-            vec![
-                "games.red-menace".to_string(),
-                "games.zeta-invaders".to_string(),
-                "tools.nuke-codes".to_string()
-            ]
+            vec!["games.red-menace", "games.zeta-invaders", "tools.nuke-codes"]
         );
-        assert!(index.addons.iter().all(|addon| !addon.manifest.essential));
-        assert!(index
-            .addons
-            .iter()
-            .all(|addon| addon.releases.first().is_some()));
+        assert!(index.addons.iter().all(|a| !a.manifest.essential));
+        assert!(index.addons.iter().all(|a| a.releases.first().is_some()));
         assert_eq!(
-            index.addons[0].releases[0].artifacts[0].url,
-            "games/games.red-menace.ndpkg"
-        );
-        assert_eq!(
-            index.addons[0].releases[0].artifacts[0].format.as_deref(),
-            Some("ndpkg")
-        );
-        assert_eq!(
-            index.addons[1].releases[0].artifacts[0].url,
-            "games/games.zeta-invaders.ndpkg"
-        );
-        assert_eq!(
-            index.addons[1].releases[0].artifacts[0].format.as_deref(),
-            Some("ndpkg")
-        );
-        assert_eq!(
-            index.addons[2].releases[0].artifacts[0].url,
-            "tools/tools.nuke-codes.ndpkg"
-        );
-        assert_eq!(
-            index.addons[2].releases[0].artifacts[0].format.as_deref(),
-            Some("ndpkg")
+            index.addons.iter().map(|a| a.releases[0].artifacts[0].format.as_deref()).collect::<Vec<_>>(),
+            vec![Some("ndpkg"), Some("ndpkg"), Some("ndpkg")]
         );
     }
 }

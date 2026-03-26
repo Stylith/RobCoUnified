@@ -960,7 +960,7 @@ Current addon/runtime state:
   - `crates/wasm-zeta-invaders-addon` builds a real guest `.wasm`
   - desktop and terminal Zeta Invaders surfaces now prefer the installed WASM addon runtime when present
   - built-in fallback still exists during migration
-- The staged external feed under `packaging/first-party-addons-repo/` now contains:
+- Optional addons are now hosted in the external `nucleon-desktop-addons` repo as `.ndpkg` packages:
   - `games.red-menace`
   - `games.zeta-invaders`
   - `tools.nuke-codes`
