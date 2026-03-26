@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{OnceLock, RwLock};
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -71,7 +72,46 @@ pub fn addon_downloads_cache_dir() -> PathBuf {
     dir
 }
 
+pub const DEFAULT_ADDON_REPOSITORY_INDEX_URL: &str =
+    "https://raw.githubusercontent.com/Stylith/nucleon-desktop-addons/main/index.json";
+
+/// Try to refresh the cached index from the remote addon repository.
+/// Returns `Ok(true)` if the index was updated, `Ok(false)` if the fetch
+/// was skipped (recent cache exists) or failed silently.
+pub fn refresh_addon_repository_index() -> Result<bool> {
+    let cached_path = cached_addon_repository_index_file();
+
+    // Skip if the cached file was modified less than 10 minutes ago.
+    if let Ok(metadata) = std::fs::metadata(&cached_path) {
+        if let Ok(modified) = metadata.modified() {
+            if modified.elapsed().unwrap_or_default() < std::time::Duration::from_secs(600) {
+                return Ok(false);
+            }
+        }
+    }
+
+    let _ = std::fs::create_dir_all(cache_root_dir());
+    let status = Command::new("curl")
+        .arg("-L")
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--max-time")
+        .arg("15")
+        .arg("-o")
+        .arg(&cached_path)
+        .arg(DEFAULT_ADDON_REPOSITORY_INDEX_URL)
+        .status();
+
+    match status {
+        Ok(exit) if exit.success() => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 pub fn load_addon_repository_index() -> Result<Option<(AddonRepositoryIndex, PathBuf)>> {
+    // Try refreshing the cached index from the remote repo first.
+    let _ = refresh_addon_repository_index();
+
     for path in [
         cached_addon_repository_index_file(),
         bundled_addon_repository_index_file(),
