@@ -129,6 +129,7 @@ exit 0
                 height: 200.0,
             },
             scale_factor: 1.0,
+            host_context: None,
         });
 
         let (mut session, ready) = HostedAddonProcessSession::spawn(&process, &init).unwrap();
@@ -156,6 +157,7 @@ exit 0
                 },
                 delta_seconds: 1.0 / 60.0,
                 input: Vec::new(),
+                host_context: None,
             }))
             .unwrap();
         assert_eq!(

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -53,6 +54,8 @@ pub struct HostedAddonInitRequest {
     pub surface: HostedAddonSurface,
     pub size: HostedAddonSize,
     pub scale_factor: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_context: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -61,6 +64,8 @@ pub struct HostedAddonUpdateRequest {
     pub delta_seconds: f32,
     #[serde(default)]
     pub input: Vec<HostedInputEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_context: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,6 +180,7 @@ mod tests {
                 height: 700.0,
             },
             scale_factor: 1.25,
+            host_context: None,
         });
 
         let encoded = serde_json::to_string(&request).unwrap();

@@ -152,6 +152,7 @@ mod tests {
                 height: 25.0,
             },
             scale_factor: 1.0,
+            host_context: None,
         });
         let ready = dispatch_request::<MockAddon>(&instance, init);
         assert!(matches!(ready, HostedAddonResponse::Ready { .. }));
@@ -165,6 +166,7 @@ mod tests {
                 },
                 delta_seconds: 1.0 / 60.0,
                 input: Vec::new(),
+                host_context: None,
             }),
         );
         assert!(matches!(frame, HostedAddonResponse::Frame { .. }));
@@ -181,6 +183,7 @@ mod tests {
                 height: 200.0,
             },
             scale_factor: 1.0,
+            host_context: None,
         });
         let encoded = serde_json::to_vec(&request).unwrap();
         let response_bytes = handle_json_bytes::<MockAddon>(&instance, &encoded);

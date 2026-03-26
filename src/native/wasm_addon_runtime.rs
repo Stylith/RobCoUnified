@@ -5,6 +5,8 @@ use crate::platform::{
     HostedInputEvent, HostedTextAlign,
 };
 use eframe::egui::{self, Align2, Context, FontFamily, FontId, Key, Sense, TextureHandle, Ui};
+use robcos_native_nuke_codes_app::{fetch_nuke_codes_with_providers, load_nuke_code_providers};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use wasmi::{Engine, Linker, Memory, Module, Store, TypedFunc};
@@ -22,6 +24,7 @@ pub(crate) struct WasmHostedAddonState {
     title: String,
     frame: HostedAddonFrame,
     bundle_dir: PathBuf,
+    host_context: Option<Value>,
     textures: HashMap<String, TextureHandle>,
 }
 
@@ -142,6 +145,7 @@ impl WasmHostedAddonState {
             surface,
             size,
             scale_factor: 1.0,
+            host_context: initial_host_context(&module.bundle_dir),
         });
         let (session, response) = WasmAddonModuleSession::spawn(module, &init)?;
         match response {
@@ -150,6 +154,7 @@ impl WasmHostedAddonState {
                 title,
                 frame,
                 bundle_dir: module.bundle_dir.clone(),
+                host_context: hosted_request_context(&init),
                 textures: HashMap::new(),
             }),
             HostedAddonResponse::Frame { frame } => Ok(Self {
@@ -157,6 +162,7 @@ impl WasmHostedAddonState {
                 title: module.addon_id.to_string(),
                 frame,
                 bundle_dir: module.bundle_dir.clone(),
+                host_context: hosted_request_context(&init),
                 textures: HashMap::new(),
             }),
             HostedAddonResponse::Exit { reason } => Err(format!(
@@ -176,10 +182,14 @@ impl WasmHostedAddonState {
         delta_seconds: f32,
         input: Vec<HostedInputEvent>,
     ) -> Result<(), String> {
+        if should_refresh_host_context(&input) || self.host_context.is_none() {
+            self.host_context = initial_host_context(&self.bundle_dir);
+        }
         match self.session.request(&HostedAddonRequest::Update(HostedAddonUpdateRequest {
             size,
             delta_seconds,
             input,
+            host_context: self.host_context.clone(),
         }))? {
             HostedAddonResponse::Ready { title, frame } => {
                 self.title = title;
@@ -363,6 +373,7 @@ pub(crate) fn collect_hosted_keyboard_input(ctx: &Context, active: bool) -> Vec<
         (Key::Enter, "enter"),
         (Key::Escape, "escape"),
         (Key::P, "p"),
+        (Key::R, "r"),
     ];
     let mut events = Vec::new();
     for (key, label) in held_keys {
@@ -412,6 +423,29 @@ fn resolve_bundle_asset_path(bundle_dir: &Path, asset_path: &str) -> Option<Path
     Some(bundle_dir.join(relative))
 }
 
+fn initial_host_context(bundle_dir: &Path) -> Option<Value> {
+    let providers_path = resolve_bundle_asset_path(bundle_dir, "providers.json")?;
+    let providers = load_nuke_code_providers(&providers_path).ok()?;
+    serde_json::to_value(fetch_nuke_codes_with_providers(&providers)).ok()
+}
+
+fn hosted_request_context(request: &HostedAddonRequest) -> Option<Value> {
+    match request {
+        HostedAddonRequest::Initialize(init) => init.host_context.clone(),
+        HostedAddonRequest::Update(update) => update.host_context.clone(),
+        HostedAddonRequest::Shutdown => None,
+    }
+}
+
+fn should_refresh_host_context(input: &[HostedInputEvent]) -> bool {
+    input.iter().any(|event| {
+        matches!(
+            event,
+            HostedInputEvent::Key { key, pressed } if *pressed && key == "r"
+        )
+    })
+}
+
 fn unpack_ptr_len(packed: i64) -> Result<(usize, usize), String> {
     let ptr = usize::try_from((packed >> 32) as u32)
         .map_err(|_| "WASM addon returned an invalid response pointer.".to_string())?;
@@ -453,6 +487,7 @@ mod tests {
                 height: 200.0,
             },
             scale_factor: 1.0,
+            host_context: None,
         });
 
         let (mut session, ready) = WasmAddonModuleSession::spawn(&module, &init).unwrap();
@@ -480,6 +515,7 @@ mod tests {
                 },
                 delta_seconds: 1.0 / 60.0,
                 input: Vec::new(),
+                host_context: None,
             }))
             .unwrap();
         assert_eq!(

@@ -963,7 +963,12 @@ Current addon/runtime state:
 - hosted frame rendering now:
   - preserves aspect ratio instead of stretching to fill
   - supports optional tinted image sprites from the addon guest
-- `tools.nuke-codes` is still an external WASM addon, but the currently published guest is only a placeholder surface. The shell-side plumbing is working; the addon itself still needs a real provider/data bridge.
+- `tools.nuke-codes` now has the first real host-context bridge:
+  - shell host reads `providers.json` from the addon bundle
+  - shell fetches silo code data natively
+  - host sends that data into the WASM guest as JSON context on init/update
+  - `R` triggers a host-side refresh
+  - external repo commit `378b493` publishes the fixed `tools.nuke-codes.ndpkg`
 - `games.zeta-invaders` is the first game on the migration path:
   - `crates/native-space-invaders-app` can now export hosted frames and map hosted input events
   - `crates/wasm-zeta-invaders-addon` builds a real guest `.wasm`
@@ -1028,14 +1033,10 @@ The external pipeline is done. The remaining Phase 5 work is removing all hardco
 
 Current practical priority order:
 
-1. `tools.nuke-codes`
-   - keep the external WASM route
-   - add a real provider/data bridge for shell-hosted addons
-   - replace the placeholder guest output with actual fetched/provider-backed codes
-2. `games.red-menace`
+1. `games.red-menace`
    - rebuild the deleted guest/runtime path the same way Zeta was restored
    - publish a real shell-compatible `.ndpkg`
-3. hardcoded shell removal
+2. hardcoded shell removal
    - only after the external runtime path is complete for all three optional addons
 
 **If continuing this work, proceed in this order:**
