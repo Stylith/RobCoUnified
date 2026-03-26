@@ -249,7 +249,6 @@ impl RobcoNativeApp {
                 TerminalScreen::Logs => self.draw_terminal_logs(ctx),
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
-                TerminalScreen::GamesRobcoFun => self.draw_terminal_robco_fun_games(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),

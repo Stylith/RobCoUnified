@@ -352,7 +352,6 @@ pub struct TerminalNavigationState {
     pub logs_idx: usize,
     pub network_idx: usize,
     pub games_idx: usize,
-    pub robco_fun_games_idx: usize,
     pub game_return_screen: TerminalScreen,
     pub settings_idx: usize,
     pub default_apps_idx: usize,
@@ -375,7 +374,6 @@ pub enum TerminalSelectionIndexTarget {
     Logs,
     Network,
     Games,
-    GamesRobcoFun,
     ProgramInstallerRoot,
     Settings,
     ConnectionsRoot,
@@ -806,8 +804,7 @@ pub fn terminal_runtime_defaults() -> TerminalNavigationState {
         logs_idx: 0,
         network_idx: 0,
         games_idx: 0,
-        robco_fun_games_idx: 0,
-        game_return_screen: TerminalScreen::GamesRobcoFun,
+        game_return_screen: TerminalScreen::Games,
         settings_idx: 0,
         default_apps_idx: 0,
         default_app_choice_idx: 0,
@@ -874,17 +871,6 @@ pub fn terminal_screen_open_plan(
         TerminalScreen::Games => TerminalScreenOpenPlan {
             screen,
             index_target: TerminalSelectionIndexTarget::Games,
-            selected_idx,
-            reset_installer: false,
-            reset_connections: false,
-            clear_settings_choice: false,
-            clear_default_app_slot: false,
-            reset_user_management_to_root: false,
-            clear_status,
-        },
-        TerminalScreen::GamesRobcoFun => TerminalScreenOpenPlan {
-            screen,
-            index_target: TerminalSelectionIndexTarget::GamesRobcoFun,
             selected_idx,
             reset_installer: false,
             reset_connections: false,
@@ -1050,11 +1036,6 @@ pub fn resolve_terminal_back_action(context: TerminalBackContext) -> TerminalBac
         | TerminalScreen::Settings
         | TerminalScreen::UserManagement => TerminalBackAction::NavigateTo {
             screen: TerminalScreen::MainMenu,
-            clear_status: true,
-            reset_installer: false,
-        },
-        TerminalScreen::GamesRobcoFun => TerminalBackAction::NavigateTo {
-            screen: TerminalScreen::Games,
             clear_status: true,
             reset_installer: false,
         },
@@ -1550,7 +1531,7 @@ mod tests {
     fn runtime_defaults_start_in_main_menu_and_root_user_management() {
         let defaults = terminal_runtime_defaults();
         assert_eq!(defaults.screen, TerminalScreen::MainMenu);
-        assert_eq!(defaults.game_return_screen, TerminalScreen::GamesRobcoFun);
+        assert_eq!(defaults.game_return_screen, TerminalScreen::Games);
         assert_eq!(defaults.browser_return_screen, TerminalScreen::Documents);
         assert_eq!(defaults.user_management_mode, UserManagementMode::Root);
         assert!(!defaults.suppress_next_menu_submit);
@@ -1567,7 +1548,7 @@ mod tests {
             has_embedded_pty: false,
             pty_return_screen: TerminalScreen::MainMenu,
 
-            game_return_screen: TerminalScreen::GamesRobcoFun,
+            game_return_screen: TerminalScreen::Games,
             browser_return_screen: TerminalScreen::Documents,
         });
         assert_eq!(action, TerminalBackAction::ClearSettingsChoice);
@@ -1584,7 +1565,7 @@ mod tests {
             has_embedded_pty: false,
             pty_return_screen: TerminalScreen::MainMenu,
 
-            game_return_screen: TerminalScreen::GamesRobcoFun,
+            game_return_screen: TerminalScreen::Games,
             browser_return_screen: TerminalScreen::Documents,
         });
         assert_eq!(action, TerminalBackAction::UseConnectionsInnerBack);
@@ -1601,7 +1582,7 @@ mod tests {
             has_embedded_pty: true,
             pty_return_screen: TerminalScreen::Network,
 
-            game_return_screen: TerminalScreen::GamesRobcoFun,
+            game_return_screen: TerminalScreen::Games,
             browser_return_screen: TerminalScreen::Documents,
         });
         assert_eq!(

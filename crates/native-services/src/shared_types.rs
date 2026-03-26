@@ -61,7 +61,6 @@ pub enum TerminalScreen {
     Documents,
     Network,
     Games,
-    GamesRobcoFun,
     PtyApp,
     ProgramInstaller,
     Logs,

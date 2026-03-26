@@ -200,8 +200,7 @@ fn shortcut_type_rank(shortcut_kind: &str) -> usize {
     match shortcut_kind {
         "network" => 22,
         "game" => 23,
-        "nuke_codes" => 24,
-        "editor" => 25,
+        "editor" => 24,
         _ => 21,
     }
 }

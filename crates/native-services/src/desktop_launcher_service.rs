@@ -27,36 +27,8 @@ pub struct ResolvedProgramLaunch {
     pub argv: Vec<String>,
 }
 
-pub const ROBCO_FUN_MENU_LABEL: &str = "RobCo Fun";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameMenuGroups {
-    pub robco_fun: Vec<String>,
-    pub other_games: Vec<String>,
-}
-
-pub fn is_robco_fun_game(name: &str) -> bool {
-    load_games().contains_key(name)
-}
-
-pub fn robco_fun_game_names() -> Vec<String> {
-    sorted_source_names(&load_games())
-}
-
-pub fn grouped_game_menu_names() -> GameMenuGroups {
-    GameMenuGroups {
-        robco_fun: robco_fun_game_names(),
-        other_games: Vec::new(),
-    }
-}
-
 pub fn all_game_menu_names() -> Vec<String> {
-    let groups = grouped_game_menu_names();
-    groups
-        .robco_fun
-        .into_iter()
-        .chain(groups.other_games)
-        .collect()
+    sorted_source_names(&load_games())
 }
 
 fn load_catalog_source(catalog: ProgramCatalog) -> Map<String, Value> {

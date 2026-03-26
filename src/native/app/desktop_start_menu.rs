@@ -1,5 +1,5 @@
 use super::super::desktop_app::DesktopShellAction;
-use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog, ROBCO_FUN_MENU_LABEL};
+use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
 use super::super::desktop_search_service::{
     start_application_entries_with_names, start_document_entries, start_network_entries,
     NativeStartLeafAction, NativeStartLeafEntry,
@@ -28,7 +28,6 @@ use super::ContextMenuAction;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StartSubmenu {
     System,
-    RobCoFun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +191,6 @@ impl RobcoNativeApp {
         if let Some(submenu) = self.start_open_submenu {
             let items_len = match submenu {
                 StartSubmenu::System => self.start_system_items().len(),
-                StartSubmenu::RobCoFun => self.start_robco_fun_items().len(),
             };
             if items_len > 0 {
                 let max_idx = items_len.saturating_sub(1) as isize;
@@ -220,12 +218,6 @@ impl RobcoNativeApp {
                         self.run_start_system_action(*action);
                     }
                 }
-                StartSubmenu::RobCoFun => {
-                    let items = self.start_robco_fun_items();
-                    if let Some(item) = items.get(self.start_system_selected) {
-                        self.run_start_leaf_action(item.action.clone());
-                    }
-                }
             }
             return;
         }
@@ -233,12 +225,7 @@ impl RobcoNativeApp {
         if let Some(leaf) = self.start_open_leaf {
             let items = self.start_leaf_items(leaf);
             if let Some(item) = items.get(self.start_leaf_selected) {
-                if leaf == StartLeaf::Games && item.label == ROBCO_FUN_MENU_LABEL {
-                    self.start_open_submenu = Some(StartSubmenu::RobCoFun);
-                    self.start_system_selected = 0;
-                } else {
-                    self.run_start_leaf_action(item.action.clone());
-                }
+                self.run_start_leaf_action(item.action.clone());
             }
             return;
         }
@@ -266,27 +253,13 @@ impl RobcoNativeApp {
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
                 handled = true;
             } else if i.key_pressed(Key::ArrowRight) {
-                if self.start_open_submenu == Some(StartSubmenu::RobCoFun) {
-                    // Already inside the innermost games submenu.
-                } else if self.start_open_leaf == Some(StartLeaf::Games) {
-                    let items = self.start_leaf_items(StartLeaf::Games);
-                    if items
-                        .get(self.start_leaf_selected)
-                        .is_some_and(|item| item.label == ROBCO_FUN_MENU_LABEL)
-                    {
-                        self.start_open_submenu = Some(StartSubmenu::RobCoFun);
-                        self.start_system_selected = 0;
-                    }
-                } else if self.start_open_leaf.is_none() && self.start_open_submenu.is_none() {
+                if self.start_open_leaf.is_none() && self.start_open_submenu.is_none() {
                     self.start_menu_open_current_panel();
                 }
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
                 handled = true;
             } else if i.key_pressed(Key::ArrowLeft) {
-                if self.start_open_submenu == Some(StartSubmenu::RobCoFun) {
-                    self.start_open_submenu = None;
-                    self.start_system_selected = 0;
-                } else if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
+                if self.start_open_leaf.is_some() || self.start_open_submenu.is_some() {
                     self.close_start_menu_panel();
                 } else {
                     self.close_start_menu();
@@ -334,16 +307,6 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn start_robco_fun_items(&self) -> Vec<NativeStartLeafEntry> {
-        installed_hosted_game_names()
-            .into_iter()
-            .map(|label| NativeStartLeafEntry {
-                action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
-                label,
-            })
-            .collect()
-    }
-
     pub(super) fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<NativeStartLeafEntry> {
         let profile = install_profile();
         match leaf {
@@ -372,18 +335,16 @@ impl RobcoNativeApp {
             ),
             StartLeaf::Network => start_network_entries(),
             StartLeaf::Games => {
-                let hosted_games = installed_hosted_game_names();
-                let mut other_games = catalog_names(ProgramCatalog::Games);
-                other_games.retain(|name| !hosted_games.iter().any(|hosted| hosted == name));
-                let mut items = Vec::new();
-                if !hosted_games.is_empty() {
-                    items.push(NativeStartLeafEntry {
-                        label: ROBCO_FUN_MENU_LABEL.to_string(),
-                        action: NativeStartLeafAction::None,
-                    });
+                let mut game_names = catalog_names(ProgramCatalog::Games);
+                for name in installed_hosted_game_names() {
+                    if !game_names.iter().any(|existing| existing == &name) {
+                        game_names.push(name);
+                    }
                 }
+                game_names.sort();
+                let mut items = Vec::new();
                 items.extend(
-                    other_games
+                    game_names
                         .into_iter()
                         .map(|label| NativeStartLeafEntry {
                             action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
@@ -548,10 +509,6 @@ impl RobcoNativeApp {
             return;
         };
 
-        let mut leaf_rect: Option<egui::Rect> = None;
-        let mut leaf_branch_anchor_y = screen.top() + EDGE_PAD;
-        let mut leaf_branch_x = branch_x + LEAF_W - 2.0;
-
         if let Some(leaf) = self.start_open_leaf {
             let items = self.start_leaf_items(leaf);
             self.start_leaf_selected = self.start_leaf_selected.min(items.len().saturating_sub(1));
@@ -563,7 +520,7 @@ impl RobcoNativeApp {
                 .fixed_pos([branch_x, leaf_y])
                 .interactable(true)
                 .show(ctx, |ui| {
-                    let frame_response = egui::Frame::none()
+                    egui::Frame::none()
                         .fill(palette.panel)
                         .stroke(egui::Stroke::new(2.0, palette.fg))
                         .inner_margin(egui::Margin::same(8.0))
@@ -573,46 +530,17 @@ impl RobcoNativeApp {
                             ui.set_max_width(LEAF_W);
                             for (idx, item) in items.iter().enumerate() {
                                 let selected = self.start_leaf_selected == idx;
-                                let display_label = if leaf == StartLeaf::Games
-                                    && item.label == ROBCO_FUN_MENU_LABEL
-                                {
-                                    format!("{} >", item.label)
-                                } else {
-                                    item.label.clone()
-                                };
                                 let response = Self::start_menu_row(
                                     ui,
-                                    &display_label,
+                                    &item.label,
                                     selected,
                                     LEAF_W - 16.0,
                                 );
                                 if response.hovered() {
                                     self.start_leaf_selected = idx;
-                                    if leaf == StartLeaf::Games
-                                        && item.label == ROBCO_FUN_MENU_LABEL
-                                    {
-                                        self.start_open_submenu = Some(StartSubmenu::RobCoFun);
-                                    } else {
-                                        self.start_open_submenu = None;
-                                    }
                                 }
                                 if response.clicked() {
-                                    if leaf == StartLeaf::Games
-                                        && item.label == ROBCO_FUN_MENU_LABEL
-                                    {
-                                        self.start_open_submenu = Some(StartSubmenu::RobCoFun);
-                                        self.start_system_selected = 0;
-                                    } else {
-                                        self.start_open_submenu = None;
-                                        self.run_start_leaf_action(item.action.clone());
-                                    }
-                                }
-                                if leaf == StartLeaf::Games
-                                    && item.label == ROBCO_FUN_MENU_LABEL
-                                    && (selected
-                                        || self.start_open_submenu == Some(StartSubmenu::RobCoFun))
-                                {
-                                    leaf_branch_anchor_y = response.rect.top() - 2.0;
+                                    self.run_start_leaf_action(item.action.clone());
                                 }
                                 if matches!(
                                     leaf,
@@ -663,8 +591,6 @@ impl RobcoNativeApp {
                                 }
                             }
                         });
-                    leaf_rect = Some(frame_response.response.rect);
-                    leaf_branch_x = frame_response.response.rect.right() - 2.0;
                 });
             if let Some(action) = leaf_context_action {
                 self.context_menu_action = Some(action);
@@ -702,47 +628,6 @@ impl RobcoNativeApp {
                                         }
                                         if response.clicked() {
                                             self.run_start_system_action(*action);
-                                        }
-                                    }
-                                });
-                        });
-                }
-                StartSubmenu::RobCoFun => {
-                    let items = self.start_robco_fun_items();
-                    self.start_system_selected = self
-                        .start_system_selected
-                        .min(items.len().saturating_sub(1));
-                    let anchor_bottom = leaf_rect
-                        .map(|rect| rect.bottom())
-                        .unwrap_or(root_rect.bottom());
-                    let sub_h = PANEL_PAD_H + ROW_H * (items.len() as f32);
-                    let sub_y =
-                        leaf_branch_anchor_y.clamp(screen.top() + EDGE_PAD, anchor_bottom - sub_h);
-                    egui::Area::new(Id::new("native_start_robco_fun_submenu_panel"))
-                        .fixed_pos([leaf_branch_x, sub_y])
-                        .interactable(true)
-                        .show(ctx, |ui| {
-                            egui::Frame::none()
-                                .fill(palette.panel)
-                                .stroke(egui::Stroke::new(2.0, palette.fg))
-                                .inner_margin(egui::Margin::same(8.0))
-                                .show(ui, |ui| {
-                                    Self::apply_start_menu_highlight_style(ui);
-                                    ui.set_min_width(LEAF_W);
-                                    ui.set_max_width(LEAF_W);
-                                    for (idx, item) in items.iter().enumerate() {
-                                        let selected = self.start_system_selected == idx;
-                                        let response = Self::start_menu_row(
-                                            ui,
-                                            &item.label,
-                                            selected,
-                                            LEAF_W - 16.0,
-                                        );
-                                        if response.hovered() {
-                                            self.start_system_selected = idx;
-                                        }
-                                        if response.clicked() {
-                                            self.run_start_leaf_action(item.action.clone());
                                         }
                                     }
                                 });

@@ -6,9 +6,7 @@ use super::super::connections_screen::{
 use super::super::default_apps_screen::{draw_default_apps_screen, TerminalDefaultAppsRequest};
 use super::super::desktop_default_apps_service::apply_default_app_binding;
 use super::super::desktop_documents_service::document_category_path;
-use super::super::desktop_launcher_service::{
-    catalog_names, ProgramCatalog, ROBCO_FUN_MENU_LABEL,
-};
+use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
 use super::super::desktop_session_service::session_tabs as native_session_tabs;
 use super::super::desktop_settings_service::cycle_hacking_difficulty_in_settings;
 use super::super::desktop_status_service::{clear_shell_status, saved_shell_status};
@@ -852,14 +850,14 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let hosted_games = installed_hosted_game_names();
-        let mut other_games = catalog_names(ProgramCatalog::Games);
-        other_games.retain(|name| !hosted_games.iter().any(|hosted| hosted == name));
-        let mut entries = Vec::new();
-        if !hosted_games.is_empty() {
-            entries.push(ROBCO_FUN_MENU_LABEL.to_string());
+        let mut configured_names = catalog_names(ProgramCatalog::Games);
+        for name in installed_hosted_game_names() {
+            if !configured_names.iter().any(|existing| existing == &name) {
+                configured_names.push(name);
+            }
         }
-        entries.extend(other_games);
+        configured_names.sort();
+        let entries = build_terminal_game_entries(&configured_names);
         let event = draw_programs_menu(
             ctx,
             "Games",
@@ -884,48 +882,9 @@ impl RobcoNativeApp {
                 self.navigate_to_screen(TerminalScreen::MainMenu);
                 self.apply_status_update(clear_shell_status());
             }
-            ProgramMenuEvent::Launch(name) if name == ROBCO_FUN_MENU_LABEL => {
-                self.navigate_to_screen(TerminalScreen::GamesRobcoFun);
-                self.terminal_nav.robco_fun_games_idx = 0;
-                self.apply_status_update(clear_shell_status());
-            }
             other => {
                 let request = resolve_terminal_games_request(other);
                 self.apply_terminal_program_request(request, TerminalScreen::Games);
-            }
-        }
-    }
-
-    pub(super) fn draw_terminal_robco_fun_games(&mut self, ctx: &Context) {
-        let layout = self.terminal_layout();
-        let entries = build_terminal_game_entries(&installed_hosted_game_names());
-        let event = draw_programs_menu(
-            ctx,
-            "Games",
-            Some(ROBCO_FUN_MENU_LABEL),
-            &entries,
-            &mut self.terminal_nav.robco_fun_games_idx,
-            &self.shell_status,
-            layout.cols,
-            layout.rows,
-            layout.header_start_row,
-            layout.separator_top_row,
-            layout.title_row,
-            layout.separator_bottom_row,
-            layout.subtitle_row,
-            layout.menu_start_row,
-            layout.status_row,
-            layout.content_col,
-        );
-        match event {
-            ProgramMenuEvent::None => {}
-            ProgramMenuEvent::Back => {
-                self.navigate_to_screen(TerminalScreen::Games);
-                self.apply_status_update(clear_shell_status());
-            }
-            other => {
-                let request = resolve_terminal_games_request(other);
-                self.apply_terminal_program_request(request, TerminalScreen::GamesRobcoFun);
             }
         }
     }

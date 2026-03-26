@@ -216,9 +216,6 @@ impl RobcoNativeApp {
                 self.terminal_nav.network_idx = plan.selected_idx
             }
             TerminalSelectionIndexTarget::Games => self.terminal_nav.games_idx = plan.selected_idx,
-            TerminalSelectionIndexTarget::GamesRobcoFun => {
-                self.terminal_nav.robco_fun_games_idx = plan.selected_idx
-            }
             TerminalSelectionIndexTarget::ProgramInstallerRoot => {
                 self.terminal_installer.root_idx = plan.selected_idx;
             }

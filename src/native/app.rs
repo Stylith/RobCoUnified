@@ -1202,13 +1202,12 @@ mod tests {
         assert_eq!(app.shell_status, "Closed session 3.");
     }
 
-    fn terminal_submenu_screens() -> [TerminalScreen; 13] {
+    fn terminal_submenu_screens() -> [TerminalScreen; 12] {
         [
             TerminalScreen::Applications,
             TerminalScreen::Documents,
             TerminalScreen::Network,
             TerminalScreen::Games,
-            TerminalScreen::GamesRobcoFun,
             TerminalScreen::ProgramInstaller,
             TerminalScreen::Logs,
             TerminalScreen::DocumentBrowser,

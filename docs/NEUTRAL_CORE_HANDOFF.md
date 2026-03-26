@@ -1055,21 +1055,38 @@ Current decoupling status:
 - `crates/native-services/src/desktop_launcher_service.rs` no longer hardcodes Red Menace/Zeta Invaders as built-in launch targets.
 - `crates/native-services/src/desktop_search_service.rs` now reads game entries from the catalog instead of built-in game constants.
 - The stale `Show Nuke Codes` settings toggle was removed from the active settings UI.
+- Terminal Games no longer has a separate `RobCo Fun` / `GamesRobcoFun` submenu path.
+- Desktop Start -> Games is now one flat generic game list built from:
+  - installed hosted game addons
+  - configured catalog games
+- Terminal Games now uses that same merged game list model.
+- `crates/native-services/src/desktop_surface_service.rs` no longer reserves a special shortcut rank for `nuke_codes`.
+
+Current biggest remaining leaks:
+- addon-specific source/build crates still live in this repo
+- optional addon package production still depends on this repo instead of the external addon repo owning the build
+- the host-context bridge is generic at the file-loading layer, but the data model still needs to be generalized further so the core does not carry addon-shaped host data assumptions long-term
 
 **If continuing this work, proceed in this order:**
 
-Phase A — Remove workspace crates:
+Phase A — Move addon source/build ownership out of the core repo:
+- move the actual source/assets/build scripts for `games.red-menace`, `games.zeta-invaders`, and `tools.nuke-codes` into the external addons repo (or per-addon repos if desired later)
+- make `nucleon-core-addons` own the `.wasm` / `.ndpkg` build pipeline
+- after the external repo can build and publish those packages independently, delete the matching workspace crates from this repo
+
+Phase B — Remove workspace crates from core after external ownership exists:
 - Delete `crates/native-red-menace-app/`, `crates/native-space-invaders-app/`, `crates/native-nuke-codes-app/`
 - Delete `crates/wasm-zeta-invaders-addon/`, `crates/wasm-nuke-codes-addon/`
+- Delete `crates/wasm-red-menace-addon/`
 - Remove their entries from root `Cargo.toml` workspace members and dependencies
 
-Phase B — Remove enum variants:
+Phase C — Remove enum variants:
 - `DesktopWindow::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in `crates/native-services/src/shared_types.rs`
 - `TerminalScreen::RedMenace`, `::ZetaInvaders`, `::NukeCodes` in same file
 - `DesktopBuiltinIconKind::NukeCodes` in `crates/native-services/src/desktop_surface_service.rs`
 - Fix all cascading match arm compile errors across the codebase
 
-Phase C — Remove app struct fields and draw functions:
+Phase D — Remove app struct fields and draw functions:
 - `RedMenaceWindow`, `ZetaInvadersWindow` structs and all associated fields on `RobcoNativeApp`
 - `desktop_nuke_codes_open`, `desktop_nuke_codes_wasm`, `terminal_nuke_codes`, `terminal_nuke_codes_wasm`
 - `desktop_zeta_invaders_wasm`, `terminal_zeta_invaders_wasm`
@@ -1080,7 +1097,7 @@ Phase C — Remove app struct fields and draw functions:
 - WASM detection: `zeta_invaders_uses_wasm_addon`, `nuke_codes_uses_wasm_addon`
 - Desktop component host registrations in `desktop_component_host.rs` and `desktop_app.rs`
 
-Phase D — Remove launch, menu, search, settings, session references:
+Phase E — Remove launch, menu, search, settings, session references:
 - Launch mappings in `name_to_desktop_window()`, `name_to_terminal_screen()`
 - Remaining `BUILTIN_NUKE_CODES_APP`, `BUILTIN_RED_MENACE_GAME`, `BUILTIN_ZETA_INVADERS_GAME` constants
 - Start menu entries, spotlight entries, search service/system references that still mention these specific addons
@@ -1089,7 +1106,7 @@ Phase D — Remove launch, menu, search, settings, session references:
 - Session save/restore fields in `session_management.rs` and `session_runtime.rs`
 - Desktop icon registration in `desktop_surface.rs`
 
-Phase E — Clean up tests:
+Phase F — Clean up tests:
 - Remove game state tests in `app.rs`
 - Remove mock addon fixtures in `addons.rs` that reference these specific addons
 - Keep the generic addon install/inventory tests
