@@ -1,5 +1,4 @@
 use super::super::about_screen::{draw_about_screen, TerminalAboutRequest};
-use super::super::background::BackgroundResult;
 use super::super::command_layer::CommandLayerTarget;
 use super::super::connections_screen::{
     draw_terminal_connections_screen, TerminalConnectionsRequest,
@@ -41,11 +40,14 @@ use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
+use super::super::wasm_addon_runtime::{
+    collect_hosted_keyboard_input, draw_hosted_addon_frame,
+};
 use super::launch_registry::{editor_launch_target, file_manager_launch_target};
 use super::retro_footer_height;
 use super::RobcoNativeApp;
 use super::BUILTIN_TEXT_EDITOR_APP;
-use crate::native::installed_hosted_game_names;
+use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
 use robcos_native_programs_app::{
@@ -54,7 +56,7 @@ use robcos_native_programs_app::{
     resolve_terminal_games_request, DesktopProgramRequest, TerminalProgramRequest,
 };
 use robcos_native_settings_app::TerminalSettingsPanel;
-use robcos_shared::platform::LaunchTarget;
+use robcos_shared::platform::{HostedAddonSize, LaunchTarget};
 use std::time::Duration;
 
 impl RobcoNativeApp {
@@ -126,10 +128,17 @@ impl RobcoNativeApp {
     pub(super) fn draw_terminal_applications(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let (show_file_manager, show_text_editor) = self.visible_application_builtins();
+        let mut configured_names = catalog_names(ProgramCatalog::Applications);
+        for name in installed_hosted_application_names() {
+            if !configured_names.iter().any(|existing| existing == &name) {
+                configured_names.push(name);
+            }
+        }
+        configured_names.sort();
         let entries = build_terminal_application_entries(
             show_file_manager,
             show_text_editor,
-            &catalog_names(ProgramCatalog::Applications),
+            &configured_names,
             BUILTIN_TEXT_EDITOR_APP,
         );
         let event = draw_programs_menu(
@@ -922,6 +931,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_pty(&mut self, ctx: &Context) {
+        if self.terminal_wasm_addon.is_some() {
+            self.draw_terminal_wasm_addon(ctx);
+            return;
+        }
         let layout = self.terminal_layout();
         if !self.primary_embedded_pty_open() {
             self.navigate_to_screen(TerminalScreen::MainMenu);
@@ -965,6 +978,59 @@ impl RobcoNativeApp {
                 }
             }
         }
+    }
+
+    fn draw_terminal_wasm_addon(&mut self, ctx: &Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+            let return_screen = self
+                .terminal_wasm_addon_return_screen
+                .unwrap_or(TerminalScreen::Games);
+            self.clear_terminal_wasm_addon();
+            self.navigate_to_screen(return_screen);
+            self.apply_status_update(clear_shell_status());
+            return;
+        }
+
+        let dt = Self::next_embedded_game_dt(&mut self.terminal_wasm_addon_last_frame_at);
+        let input = collect_hosted_keyboard_input(ctx, true);
+        let title = self
+            .terminal_wasm_addon
+            .as_ref()
+            .map(|state| state.title().to_string())
+            .unwrap_or_else(|| "Addon".to_string());
+        let mut failed = None;
+
+        Self::draw_terminal_game_shell(
+            ctx,
+            &title,
+            "TAB BACK  ARROWS/WASD MOVE  SPACE/ENTER ACTION",
+            |ui| {
+                let available = ui.available_size_before_wrap();
+                let size = HostedAddonSize {
+                    width: available.x.max(1.0),
+                    height: available.y.max(1.0),
+                };
+                if let Some(state) = self.terminal_wasm_addon.as_mut() {
+                    if let Err(err) = state.update(size, dt, input) {
+                        failed = Some(err);
+                    } else {
+                        draw_hosted_addon_frame(ui, state);
+                    }
+                }
+            },
+        );
+
+        if let Some(err) = failed {
+            let return_screen = self
+                .terminal_wasm_addon_return_screen
+                .unwrap_or(TerminalScreen::Games);
+            self.clear_terminal_wasm_addon();
+            self.navigate_to_screen(return_screen);
+            self.shell_status = err;
+            return;
+        }
+
+        ctx.request_repaint();
     }
 
     pub(super) fn apply_installer_event(&mut self, event: InstallerEvent) {

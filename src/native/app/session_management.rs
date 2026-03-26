@@ -66,6 +66,8 @@ impl RobcoNativeApp {
             terminal_settings_panel: self.terminal_settings_panel,
             terminal_pty: self.terminal_pty.take(),
             terminal_pty_surface: self.terminal_pty_surface.take(),
+            terminal_wasm_addon: self.terminal_wasm_addon.take(),
+            terminal_wasm_addon_return_screen: self.terminal_wasm_addon_return_screen.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
             terminal_edit_menus: std::mem::take(&mut self.terminal_edit_menus),
             terminal_connections: std::mem::take(&mut self.terminal_connections),
@@ -77,6 +79,7 @@ impl RobcoNativeApp {
             shell_status: std::mem::take(&mut self.shell_status),
             start_menu_rename: self.start_menu_rename.take(),
             secondary_windows: std::mem::take(&mut self.secondary_windows),
+            desktop_wasm_addon: self.desktop_wasm_addon.take(),
         };
         self.session_runtime.insert(idx, parked);
     }
@@ -130,6 +133,9 @@ impl RobcoNativeApp {
         self.terminal_settings_panel = parked.terminal_settings_panel;
         self.terminal_pty = parked.terminal_pty;
         self.terminal_pty_surface = parked.terminal_pty_surface;
+        self.terminal_wasm_addon = parked.terminal_wasm_addon;
+        self.terminal_wasm_addon_return_screen = parked.terminal_wasm_addon_return_screen;
+        self.terminal_wasm_addon_last_frame_at = None;
         self.terminal_installer = parked.terminal_installer;
         self.terminal_edit_menus = parked.terminal_edit_menus;
         self.terminal_connections = parked.terminal_connections;
@@ -142,6 +148,8 @@ impl RobcoNativeApp {
         self.shell_status = parked.shell_status;
         self.start_menu_rename = parked.start_menu_rename;
         self.secondary_windows = parked.secondary_windows;
+        self.desktop_wasm_addon = parked.desktop_wasm_addon;
+        self.desktop_wasm_addon_last_frame_at = None;
         true
     }
 
@@ -199,7 +207,10 @@ impl RobcoNativeApp {
                 pty.session.terminate();
             }
             parked.terminal_pty_surface = None;
+            parked.terminal_wasm_addon = None;
+            parked.terminal_wasm_addon_return_screen = None;
             Self::terminate_secondary_window_ptys(&mut parked.secondary_windows);
+            parked.desktop_wasm_addon = None;
         }
     }
 

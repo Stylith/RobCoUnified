@@ -51,13 +51,7 @@ impl WasmAddonModuleSession {
         let instance = linker
             .instantiate(&mut store, &compiled)
             .and_then(|pre| pre.start(&mut store))
-            .map_err(|error| {
-                format!(
-                    "Failed to instantiate WASM addon '{}' from '{}': {error}",
-                    module.addon_id,
-                    module.module_path.display()
-                )
-            })?;
+            .map_err(|error| format_wasm_instantiate_error(module, &error.to_string()))?;
         let memory = instance
             .get_memory(&store, "memory")
             .ok_or_else(|| "WASM addon did not export memory.".to_string())?;
@@ -117,6 +111,24 @@ impl WasmAddonModuleSession {
         serde_json::from_slice(&response_bytes)
             .map_err(|error| format!("Failed to decode WASM addon response: {error}"))
     }
+}
+
+fn format_wasm_instantiate_error(
+    module: &InstalledWasmAddonModule,
+    error: &str,
+) -> String {
+    if error.contains("__wbindgen_placeholder__") {
+        return format!(
+            "WASM addon '{}' from '{}' expects wasm-bindgen/web imports and is not compatible with the shell addon host.",
+            module.addon_id,
+            module.module_path.display()
+        );
+    }
+    format!(
+        "Failed to instantiate WASM addon '{}' from '{}': {error}",
+        module.addon_id,
+        module.module_path.display()
+    )
 }
 
 impl WasmHostedAddonState {
@@ -214,6 +226,9 @@ impl WasmHostedAddonState {
         } else {
             1.0
         };
+        let scale = scale_x.min(scale_y).max(0.0001);
+        let content_size = egui::vec2(frame.size.width * scale, frame.size.height * scale);
+        let content_rect = egui::Rect::from_center_size(rect.center(), content_size);
 
         for command in &frame.commands {
             match command {
@@ -224,9 +239,11 @@ impl WasmHostedAddonState {
                     height,
                     fill,
                 } => {
-                    let min =
-                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
-                    let size = egui::vec2(width * scale_x, height * scale_y);
+                    let min = egui::pos2(
+                        content_rect.left() + (*x * scale),
+                        content_rect.top() + (*y * scale),
+                    );
+                    let size = egui::vec2(width * scale, height * scale);
                     painter
                         .rect_filled(egui::Rect::from_min_size(min, size), 0.0, hosted_color(fill));
                 }
@@ -238,13 +255,15 @@ impl WasmHostedAddonState {
                     size,
                     align,
                 } => {
-                    let pos =
-                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
+                    let pos = egui::pos2(
+                        content_rect.left() + (*x * scale),
+                        content_rect.top() + (*y * scale),
+                    );
                     painter.text(
                         pos,
                         hosted_align(*align),
                         text,
-                        FontId::new((size * scale_y).max(10.0), FontFamily::Monospace),
+                        FontId::new((size * scale).max(10.0), FontFamily::Monospace),
                         hosted_color(color),
                     );
                 }
@@ -254,10 +273,13 @@ impl WasmHostedAddonState {
                     width,
                     height,
                     asset_path,
+                    tint,
                 } => {
-                    let min =
-                        egui::pos2(rect.left() + (*x * scale_x), rect.top() + (*y * scale_y));
-                    let size = egui::vec2(width * scale_x, height * scale_y);
+                    let min = egui::pos2(
+                        content_rect.left() + (*x * scale),
+                        content_rect.top() + (*y * scale),
+                    );
+                    let size = egui::vec2(width * scale, height * scale);
                     let image_rect = egui::Rect::from_min_size(min, size);
                     if let Some(texture) = self.load_texture(ui.ctx(), asset_path) {
                         let uv = egui::Rect::from_min_max(
@@ -265,7 +287,13 @@ impl WasmHostedAddonState {
                             egui::pos2(1.0, 1.0),
                         );
                         let mut mesh = egui::epaint::Mesh::with_texture(texture.id());
-                        mesh.add_rect_with_uv(image_rect, uv, egui::Color32::WHITE);
+                        mesh.add_rect_with_uv(
+                            image_rect,
+                            uv,
+                            tint.as_ref()
+                                .map(hosted_color)
+                                .unwrap_or(egui::Color32::WHITE),
+                        );
                         painter.add(egui::Shape::mesh(mesh));
                     } else {
                         painter.rect_stroke(

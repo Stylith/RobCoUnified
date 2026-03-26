@@ -12,6 +12,9 @@ use super::super::file_manager_desktop;
 use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{current_palette, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
+use super::super::wasm_addon_runtime::{
+    collect_hosted_keyboard_input, draw_hosted_addon_frame,
+};
 use super::desktop_window_mgmt::{
     DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
 };
@@ -22,6 +25,7 @@ use crate::config::{
     WallpaperSizeMode, CUSTOM_THEME_NAME, THEMES,
 };
 use eframe::egui::{self, Context, Id, Key, Layout, RichText, TextEdit};
+use crate::platform::HostedAddonSize;
 use robcos_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
 use robcos_native_settings_app::{
     desktop_settings_back_target, desktop_settings_connections_nav_items,
@@ -1339,6 +1343,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_desktop_pty_window(&mut self, ctx: &Context) {
+        if self.desktop_wasm_addon.is_some() {
+            self.draw_desktop_wasm_addon_window(ctx);
+            return;
+        }
         if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
             return;
         }
@@ -1458,6 +1466,79 @@ impl RobcoNativeApp {
             DesktopWindowRectTracking::FullRect,
             header_action,
         );
+    }
+
+    fn draw_desktop_wasm_addon_window(&mut self, ctx: &Context) {
+        if self.desktop_window_is_minimized(DesktopWindow::PtyApp) {
+            return;
+        }
+        let wid = self.current_window_id(DesktopWindow::PtyApp);
+        let default_size = Self::desktop_default_window_size(DesktopWindow::PtyApp);
+        let default_pos = Self::desktop_default_window_pos(ctx, default_size);
+        let focused = self.desktop_active_window == Some(wid);
+        let title = self
+            .desktop_wasm_addon
+            .as_ref()
+            .map(|state| state.title().to_string())
+            .unwrap_or_else(|| "Addon".to_string());
+        let mut open = true;
+        let mut header_action = DesktopHeaderAction::None;
+        let mut close_requested = false;
+        let (window, maximized) = self.build_resizable_desktop_window(
+            ctx,
+            DesktopWindow::PtyApp,
+            title.clone(),
+            &mut open,
+            ResizableDesktopWindowOptions {
+                min_size: egui::vec2(480.0, 320.0),
+                default_size,
+                default_pos: Some(default_pos),
+                clamp_restore: true,
+            },
+        );
+        let shown = window.show(ctx, |ui| {
+            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            let available = ui.available_size();
+            let size = HostedAddonSize {
+                width: available.x.max(1.0),
+                height: available.y.max(1.0),
+            };
+            let dt = Self::next_embedded_game_dt(&mut self.desktop_wasm_addon_last_frame_at);
+            let input = collect_hosted_keyboard_input(ctx, focused);
+            let mut failed = None;
+            if let Some(state) = self.desktop_wasm_addon.as_mut() {
+                if let Err(err) = state.update(size, dt, input) {
+                    failed = Some(err);
+                } else {
+                    draw_hosted_addon_frame(ui, state);
+                }
+            }
+            if let Some(err) = failed {
+                self.clear_desktop_wasm_addon();
+                self.shell_status = err;
+                close_requested = true;
+            }
+        });
+        if close_requested {
+            open = false;
+        }
+        let shown_rect = shown.as_ref().map(|inner| inner.response.rect);
+        let shown_contains_pointer = shown
+            .as_ref()
+            .is_some_and(|inner| inner.response.contains_pointer());
+        self.finish_desktop_window_host(
+            ctx,
+            DesktopWindow::PtyApp,
+            &mut open,
+            maximized,
+            shown_rect,
+            shown_contains_pointer,
+            DesktopWindowRectTracking::FullRect,
+            header_action,
+        );
+        if open && self.desktop_wasm_addon.is_some() {
+            ctx.request_repaint();
+        }
     }
 
     pub(super) fn draw_terminal_mode(&mut self, ctx: &Context) {

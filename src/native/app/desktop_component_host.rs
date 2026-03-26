@@ -104,14 +104,17 @@ impl RobcoNativeApp {
     }
 
     pub(crate) fn desktop_component_pty_is_open(&self) -> bool {
-        self.primary_desktop_pty_open()
+        self.primary_desktop_pty_open() || self.desktop_wasm_addon.is_some()
     }
 
     pub(crate) fn desktop_component_pty_set_open(&mut self, open: bool) {
-        if !open && self.primary_desktop_pty_open() {
-            if let Some(mut pty) = self.take_primary_pty() {
-                pty.session.terminate();
+        if !open {
+            if self.primary_desktop_pty_open() {
+                if let Some(mut pty) = self.take_primary_pty() {
+                    pty.session.terminate();
+                }
             }
+            self.clear_desktop_wasm_addon();
         }
     }
 

@@ -231,8 +231,25 @@ pub fn installed_wasm_addon_module(addon_id: &AddonId) -> Option<InstalledWasmAd
     installed_wasm_addon_module_from_record(record)
 }
 
+pub fn installed_wasm_addon_module_by_display_name(
+    display_name: &str,
+) -> Option<InstalledWasmAddonModule> {
+    installed_addon_inventory()
+        .into_iter()
+        .find(|record| {
+            record.effective_enabled
+                && record.manifest.display_name == display_name
+                && matches!(record.manifest.entrypoint, AddonEntrypoint::WasmModule { .. })
+        })
+        .and_then(installed_wasm_addon_module_from_record)
+}
+
 pub fn installed_hosted_game_names() -> Vec<String> {
     hosted_game_names_from_registry(&installed_enabled_addon_manifest_registry())
+}
+
+pub fn installed_hosted_application_names() -> Vec<String> {
+    hosted_application_names_from_registry(&installed_enabled_addon_manifest_registry())
 }
 
 pub fn is_installed_hosted_game(name: &str) -> bool {
@@ -245,11 +262,30 @@ fn hosted_game_names_from_registry(registry: &AddonRegistry) -> Vec<String> {
     let mut names = registry
         .iter()
         .filter(|manifest| manifest.kind == AddonKind::Game)
-        .filter(|manifest| first_party_addon_runtime(&manifest.id).is_some())
+        .filter(|manifest| is_hosted_addon_entrypoint(&manifest.entrypoint))
         .map(|manifest| manifest.display_name.clone())
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn hosted_application_names_from_registry(registry: &AddonRegistry) -> Vec<String> {
+    let mut names = registry
+        .iter()
+        .filter(|manifest| manifest.kind == AddonKind::App)
+        .filter(|manifest| !manifest.essential)
+        .filter(|manifest| is_hosted_addon_entrypoint(&manifest.entrypoint))
+        .map(|manifest| manifest.display_name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+fn is_hosted_addon_entrypoint(entrypoint: &AddonEntrypoint) -> bool {
+    matches!(
+        entrypoint,
+        AddonEntrypoint::WasmModule { .. } | AddonEntrypoint::HostedProcess { .. }
+    )
 }
 
 fn installed_hosted_addon_process_from_record(
@@ -1769,18 +1805,15 @@ mod tests {
 
     #[test]
     fn hosted_game_names_only_include_installed_runtime_known_games() {
-        // After removing hardcoded game runtimes, only games with entries in
-        // FIRST_PARTY_ADDON_RUNTIMES appear.  Since the old hardcoded games
-        // (Red Menace, Zeta Invaders) were removed, a registry with those
-        // addon IDs produces no hosted game names.
         let registry = AddonRegistry::from_manifests([
             AddonManifest::new(
                 "games.red-menace",
                 "Red Menace",
                 "0.1.0",
                 AddonKind::Game,
-                AddonEntrypoint::StaticRoute {
-                    route: "red-menace".to_string(),
+                AddonEntrypoint::WasmModule {
+                    module: "addon.wasm".to_string(),
+                    protocol: HostedAddonProtocol::ShellSurfaceV1,
                 },
             )
             .with_scope(AddonScope::User)
@@ -1791,7 +1824,7 @@ mod tests {
 
         assert_eq!(
             hosted_game_names_from_registry(&registry),
-            Vec::<String>::new()
+            vec!["Red Menace"]
         );
     }
 

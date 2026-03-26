@@ -115,6 +115,8 @@ pub enum HostedDrawCommand {
         width: f32,
         height: f32,
         asset_path: String,
+        #[serde(default)]
+        tint: Option<HostedColor>,
     },
 }
 

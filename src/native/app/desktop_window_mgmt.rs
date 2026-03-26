@@ -161,6 +161,11 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn desktop_window_title_for_instance(&self, id: WindowInstanceId) -> String {
+        if id.kind == DesktopWindow::PtyApp && id.instance == 0 {
+            if let Some(state) = self.desktop_wasm_addon.as_ref() {
+                return state.title().to_string();
+            }
+        }
         let pty_title = self.desktop_pty_state(id).map(|state| state.title.as_str());
         desktop_component_spec(id.kind).title(pty_title)
     }

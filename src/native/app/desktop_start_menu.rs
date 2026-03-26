@@ -1,7 +1,7 @@
 use super::super::desktop_app::DesktopShellAction;
 use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog, ROBCO_FUN_MENU_LABEL};
 use super::super::desktop_search_service::{
-    start_application_entries, start_document_entries, start_network_entries,
+    start_application_entries_with_names, start_document_entries, start_network_entries,
     NativeStartLeafAction, NativeStartLeafEntry,
 };
 use super::super::edit_menus_screen::EditMenuTarget;
@@ -9,7 +9,9 @@ use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::prompt::FlashAction;
 use super::super::retro_ui::current_palette;
 use crate::config::install_profile;
-use crate::native::{installed_hosted_game_names, is_installed_hosted_game};
+use crate::native::{
+    installed_hosted_application_names, installed_hosted_game_names, is_installed_hosted_game,
+};
 use crate::platform::{InstallProfile, LaunchTarget};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
 
@@ -345,7 +347,17 @@ impl RobcoNativeApp {
     pub(super) fn start_leaf_items(&self, leaf: StartLeaf) -> Vec<NativeStartLeafEntry> {
         let profile = install_profile();
         match leaf {
-            StartLeaf::Applications => start_application_entries(
+            StartLeaf::Applications => start_application_entries_with_names(
+                {
+                    let mut application_names = catalog_names(ProgramCatalog::Applications);
+                    for name in installed_hosted_application_names() {
+                        if !application_names.iter().any(|existing| existing == &name) {
+                            application_names.push(name);
+                        }
+                    }
+                    application_names.sort();
+                    application_names
+                },
                 self.settings.draft.builtin_menu_visibility.text_editor
                     && super::launch_registry::desktop_launch_target_available_for_profile(
                         &super::launch_registry::editor_launch_target(),

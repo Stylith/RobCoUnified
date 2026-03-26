@@ -8,7 +8,10 @@ use super::super::file_manager_app::FileManagerEditRuntime;
 use super::super::menu::{
     terminal_screen_open_plan, terminal_settings_refresh_plan, TerminalScreen,
 };
+use super::super::wasm_addon_runtime::WasmHostedAddonState;
 use super::super::NativeSettingsPanel;
+use crate::native::installed_wasm_addon_module_by_display_name;
+use crate::platform::{HostedAddonSize, HostedAddonSurface};
 use super::launch_registry::{
     self, resolve_desktop_launch_target, resolve_terminal_launch_target,
     unresolved_launch_target_status, unresolved_terminal_launch_target_status, NativeDesktopLaunch,
@@ -44,6 +47,64 @@ impl RobcoNativeApp {
         } else {
             self.launch_shell_command_in_embedded_surface(title, argv, return_screen);
         }
+    }
+
+    pub(super) fn clear_terminal_wasm_addon(&mut self) {
+        self.terminal_wasm_addon = None;
+        self.terminal_wasm_addon_return_screen = None;
+        self.terminal_wasm_addon_last_frame_at = None;
+    }
+
+    pub(super) fn clear_desktop_wasm_addon(&mut self) {
+        self.desktop_wasm_addon = None;
+        self.desktop_wasm_addon_last_frame_at = None;
+    }
+
+    pub(super) fn launch_embedded_wasm_addon(
+        &mut self,
+        name: &str,
+        return_screen: TerminalScreen,
+    ) -> Result<(), String> {
+        let module = installed_wasm_addon_module_by_display_name(name)
+            .ok_or_else(|| format!("Installed addon '{name}' is not a runnable WASM addon."))?;
+        let state = WasmHostedAddonState::spawn(
+            &module,
+            HostedAddonSurface::Terminal,
+            HostedAddonSize {
+                width: 640.0,
+                height: 480.0,
+            },
+        )?;
+        if let Some(mut pty) = self.take_primary_pty() {
+            pty.session.terminate();
+        }
+        self.terminal_wasm_addon = Some(state);
+        self.terminal_wasm_addon_return_screen = Some(return_screen);
+        self.terminal_wasm_addon_last_frame_at = None;
+        self.navigate_to_screen(TerminalScreen::PtyApp);
+        self.shell_status = format!("Opened {name}.");
+        Ok(())
+    }
+
+    pub(super) fn launch_desktop_wasm_addon(&mut self, name: &str) -> Result<(), String> {
+        let module = installed_wasm_addon_module_by_display_name(name)
+            .ok_or_else(|| format!("Installed addon '{name}' is not a runnable WASM addon."))?;
+        let state = WasmHostedAddonState::spawn(
+            &module,
+            HostedAddonSurface::Desktop,
+            HostedAddonSize {
+                width: 960.0,
+                height: 600.0,
+            },
+        )?;
+        if let Some(mut pty) = self.take_primary_pty() {
+            pty.session.terminate();
+        }
+        self.desktop_wasm_addon = Some(state);
+        self.desktop_wasm_addon_last_frame_at = None;
+        self.open_desktop_window(DesktopWindow::PtyApp);
+        self.shell_status = format!("Opened {name}.");
+        Ok(())
     }
 
     /// Open a desktop window if not already open, otherwise spawn a secondary
@@ -337,6 +398,14 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
+        if matches!(catalog, ProgramCatalog::Applications | ProgramCatalog::Games)
+            && installed_wasm_addon_module_by_display_name(name).is_some()
+        {
+            if let Err(err) = self.launch_desktop_wasm_addon(name) {
+                self.shell_status = err;
+            }
+            return;
+        }
         match resolve_catalog_launch(name, catalog) {
             Ok(launch) => self.launch_shell_command_in_desktop_surface(&launch.title, &launch.argv),
             Err(err) => self.shell_status = err,
@@ -349,6 +418,14 @@ impl RobcoNativeApp {
         catalog: ProgramCatalog,
         return_screen: TerminalScreen,
     ) {
+        if matches!(catalog, ProgramCatalog::Applications | ProgramCatalog::Games)
+            && installed_wasm_addon_module_by_display_name(name).is_some()
+        {
+            if let Err(err) = self.launch_embedded_wasm_addon(name, return_screen) {
+                self.shell_status = err;
+            }
+            return;
+        }
         match resolve_catalog_launch(name, catalog) {
             Ok(launch) => self.launch_shell_command_in_embedded_surface(
                 &launch.title,

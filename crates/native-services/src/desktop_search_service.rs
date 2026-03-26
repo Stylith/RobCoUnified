@@ -71,6 +71,14 @@ fn start_application_entries_from_names(
     items
 }
 
+pub fn start_application_entries_with_names(
+    application_names: Vec<String>,
+    show_text_editor: bool,
+    text_editor_name: &str,
+) -> Vec<NativeStartLeafEntry> {
+    start_application_entries_from_names(application_names, show_text_editor, text_editor_name)
+}
+
 pub fn start_application_entries(
     show_text_editor: bool,
     text_editor_name: &str,
@@ -275,6 +283,26 @@ fn gather_spotlight_results_with_names(
 
     results.truncate(50);
     results
+}
+
+pub fn gather_spotlight_results_with_catalog_names(
+    query: &str,
+    tab: u8,
+    active_username: Option<&str>,
+    text_editor_name: &str,
+    application_names: Vec<String>,
+    game_names: Vec<String>,
+    network_names: Vec<String>,
+) -> Vec<NativeSpotlightResult> {
+    gather_spotlight_results_with_names(
+        query,
+        tab,
+        active_username,
+        text_editor_name,
+        application_names,
+        game_names,
+        network_names,
+    )
 }
 
 #[cfg(test)]

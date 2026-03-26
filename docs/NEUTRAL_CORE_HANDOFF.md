@@ -939,7 +939,7 @@ Current Phase 5 progress:
 - layered manifest precedence exists
 Current addon/runtime state:
 
-- `origin/WIP` is at `98e3840` (`Stage first external WASM game migration`).
+- `origin/WIP` was at `98e3840` before the latest shell/runtime addon fixes in the current worktree.
 - Optional first-party addons are no longer seeded from the built-in manifest catalog. They now come from discovered installed manifests or the repository feed.
 - Installer/addon-manager state is already in place:
   - local manual install supports manifest paths, addon directories, and `.zip` / `.tar` / `.tar.gz` / `.tgz`
@@ -954,17 +954,31 @@ Current addon/runtime state:
   - native WASM host with bundle-relative module resolution
   - keyboard input forwarding into hosted addons
   - real image loading from addon bundle assets
-- `tools.nuke-codes` is the first fully wired shell-hosted WASM addon surface in both desktop and terminal mode.
+- installed optional addon apps/games now show up through normal shell surfaces:
+  - terminal Applications / Games
+  - desktop Start menu
+  - Spotlight
+- desktop and terminal launch paths now intercept installed WASM addon manifests directly instead of only hardcoded runtime-known apps.
+- hosted addon desktop windows now use the addon title instead of the generic `PTY App` fallback.
+- hosted frame rendering now:
+  - preserves aspect ratio instead of stretching to fill
+  - supports optional tinted image sprites from the addon guest
+- `tools.nuke-codes` is still an external WASM addon, but the currently published guest is only a placeholder surface. The shell-side plumbing is working; the addon itself still needs a real provider/data bridge.
 - `games.zeta-invaders` is the first game on the migration path:
   - `crates/native-space-invaders-app` can now export hosted frames and map hosted input events
   - `crates/wasm-zeta-invaders-addon` builds a real guest `.wasm`
   - desktop and terminal Zeta Invaders surfaces now prefer the installed WASM addon runtime when present
+  - the guest no longer depends on `wasm-bindgen` / web imports
+  - the rebuilt release guest is shell-host compatible and small enough for practical packaging
   - built-in fallback still exists during migration
 - Optional addons are now hosted in the external `nucleon-desktop-addons` repo as `.ndpkg` packages:
   - `games.red-menace`
   - `games.zeta-invaders`
   - `tools.nuke-codes`
-- `games.zeta-invaders` in the staged feed is now a real WASM bundle with `addon.wasm` plus `assets/`.
+- external repo checkpoint:
+  - `nucleon-desktop-addons` commit `00feae6` fixes the published `games.zeta-invaders.ndpkg`
+  - old broken package used a web-targeted WASM build
+  - fixed package uses the shell addon runtime ABI and updated checksum in `index.json`
 
 ## Phase 5 Progress — `.ndpkg` Packaging & External Addon Pipeline (DONE)
 
@@ -1002,14 +1016,27 @@ All packaging decisions from the prior handoff have been resolved and implemente
    - SHA-256 verification, extraction, and install all work end-to-end
 
 6. **Compression results:**
-   - Zeta Invaders: 58 MB raw → 14 MB `.ndpkg` (76% reduction)
-   - Nuke Codes: 3.8 MB raw → 1.0 MB `.ndpkg` (74% reduction)
+   - Original broken Zeta package: 58 MB raw → 14 MB `.ndpkg`
+   - Fixed shell-compatible Zeta package: 184 KB raw wasm → 801 KB `.ndpkg` with assets
+   - Nuke Codes: 3.8 MB raw → 1.0 MB `.ndpkg` (placeholder guest)
 
-### What's in progress — Hardcoded Addon Removal
+### What's in progress — Hardcoded Addon Removal / Runtime Completion
 
 The external pipeline is done. The remaining Phase 5 work is removing all hardcoded references to the three optional addons from the shell codebase so they load purely through the dynamic WASM addon runtime.
 
 **Addons to decouple:** `games.red-menace`, `games.zeta-invaders`, `tools.nuke-codes`
+
+Current practical priority order:
+
+1. `tools.nuke-codes`
+   - keep the external WASM route
+   - add a real provider/data bridge for shell-hosted addons
+   - replace the placeholder guest output with actual fetched/provider-backed codes
+2. `games.red-menace`
+   - rebuild the deleted guest/runtime path the same way Zeta was restored
+   - publish a real shell-compatible `.ndpkg`
+3. hardcoded shell removal
+   - only after the external runtime path is complete for all three optional addons
 
 **If continuing this work, proceed in this order:**
 

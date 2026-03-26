@@ -1,4 +1,5 @@
 use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
+use crate::native::installed_hosted_application_names;
 use super::launch_registry::{
     about_launch_target, connections_launch_target, default_apps_launch_target,
     desktop_launch_target_available_for_profile, edit_menus_launch_target, editor_launch_target,
@@ -115,7 +116,13 @@ impl RobcoNativeApp {
                     || cache.show_text_editor != show_text_editor
             });
         if needs_rebuild {
-            let configured_names = catalog_names(ProgramCatalog::Applications);
+            let mut configured_names = catalog_names(ProgramCatalog::Applications);
+            for name in installed_hosted_application_names() {
+                if !configured_names.iter().any(|existing| existing == &name) {
+                    configured_names.push(name);
+                }
+            }
+            configured_names.sort();
             let sections = Arc::new(build_desktop_applications_sections(
                 show_file_manager,
                 show_text_editor,

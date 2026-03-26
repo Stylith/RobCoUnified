@@ -1,4 +1,4 @@
-use super::background::{BackgroundResult, BackgroundTasks};
+use super::background::BackgroundTasks;
 use super::command_layer::CommandLayerState;
 use super::connections_screen::TerminalConnectionsState;
 use super::data::home_dir_fallback;
@@ -9,13 +9,11 @@ use super::desktop_app::DesktopShellAction;
 use super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::DiscoveredConnection;
 #[cfg(test)]
-use super::desktop_launcher_service::ProgramCatalog;
-#[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::restore_current_user_from_last_session;
 use super::desktop_settings_service::load_settings_snapshot;
-use super::desktop_status_service::shell_status;
+use super::wasm_addon_runtime::WasmHostedAddonState;
 use super::desktop_surface_service::{DesktopIconGridLayout, DesktopSurfaceEntry};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
 #[cfg(test)]
@@ -512,6 +510,9 @@ pub struct RobcoNativeApp {
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
+    terminal_wasm_addon: Option<WasmHostedAddonState>,
+    terminal_wasm_addon_return_screen: Option<TerminalScreen>,
+    terminal_wasm_addon_last_frame_at: Option<Instant>,
     terminal_installer: TerminalInstallerState,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
@@ -566,6 +567,8 @@ pub struct RobcoNativeApp {
     spotlight_last_tab: u8,
     // Background I/O task runner
     pub(super) background: BackgroundTasks,
+    desktop_wasm_addon: Option<WasmHostedAddonState>,
+    desktop_wasm_addon_last_frame_at: Option<Instant>,
     // IPC receiver for messages from standalone apps
     ipc: super::ipc::IpcReceiver,
 }
@@ -591,6 +594,8 @@ pub(super) struct ParkedSessionState {
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
+    terminal_wasm_addon: Option<WasmHostedAddonState>,
+    terminal_wasm_addon_return_screen: Option<TerminalScreen>,
     terminal_installer: TerminalInstallerState,
     terminal_edit_menus: TerminalEditMenusState,
     terminal_connections: TerminalConnectionsState,
@@ -602,6 +607,7 @@ pub(super) struct ParkedSessionState {
     shell_status: String,
     start_menu_rename: Option<StartMenuRenameState>,
     secondary_windows: Vec<SecondaryWindow>,
+    desktop_wasm_addon: Option<WasmHostedAddonState>,
 }
 
 /// App-specific state for a secondary (non-primary) window instance.
@@ -691,6 +697,9 @@ impl Default for RobcoNativeApp {
             terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_pty: None,
             terminal_pty_surface: None,
+            terminal_wasm_addon: None,
+            terminal_wasm_addon_return_screen: None,
+            terminal_wasm_addon_last_frame_at: None,
             terminal_installer: TerminalInstallerState::default(),
             terminal_edit_menus: TerminalEditMenusState::default(),
             terminal_connections: TerminalConnectionsState::default(),
@@ -748,6 +757,8 @@ impl Default for RobcoNativeApp {
             spotlight_last_query: String::new(),
             spotlight_last_tab: u8::MAX,
             background: BackgroundTasks::new(),
+            desktop_wasm_addon: None,
+            desktop_wasm_addon_last_frame_at: None,
             ipc: super::ipc::start_listener(),
         };
         crate::config::spawn_addon_repository_index_refresh();

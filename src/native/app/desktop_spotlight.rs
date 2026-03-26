@@ -1,6 +1,6 @@
 use super::super::desktop_app::DesktopShellAction;
 use super::super::desktop_search_service::{
-    gather_spotlight_results, spotlight_category_tag, NativeSpotlightCategory,
+    gather_spotlight_results_with_catalog_names, spotlight_category_tag, NativeSpotlightCategory,
     NativeSpotlightResult,
 };
 use super::super::desktop_session_service::active_session_username as active_native_session_username;
@@ -11,6 +11,7 @@ use eframe::egui::{self, Color32, Context, Key, RichText, TextEdit};
 const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
 use super::RobcoNativeApp;
+use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
 
 impl RobcoNativeApp {
     pub(super) fn spotlight_gather_results(&mut self) {
@@ -23,11 +24,26 @@ impl RobcoNativeApp {
         self.spotlight_last_query = query.clone();
         self.spotlight_last_tab = tab;
         let active_username = active_native_session_username();
-        self.spotlight_results = gather_spotlight_results(
+        let mut application_names =
+            super::super::desktop_launcher_service::catalog_names(
+                super::super::desktop_launcher_service::ProgramCatalog::Applications,
+            );
+        for name in installed_hosted_application_names() {
+            if !application_names.iter().any(|existing| existing == &name) {
+                application_names.push(name);
+            }
+        }
+        application_names.sort();
+        self.spotlight_results = gather_spotlight_results_with_catalog_names(
             &query,
             tab,
             active_username.as_deref(),
             BUILTIN_TEXT_EDITOR_APP,
+            application_names,
+            installed_hosted_game_names(),
+            super::super::desktop_launcher_service::catalog_names(
+                super::super::desktop_launcher_service::ProgramCatalog::Network,
+            ),
         );
         let show_file_manager = self
             .spotlight_system_entry_enabled(&super::launch_registry::file_manager_launch_target());
