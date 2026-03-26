@@ -50,9 +50,6 @@ impl RobcoNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             applications: self.applications.clone(),
-            zeta_invaders: self.zeta_invaders.clone(),
-            red_menace: self.red_menace.clone(),
-            desktop_nuke_codes_open: self.desktop_nuke_codes_open,
             desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
             desktop_window_states: self.desktop_window_states.clone(),
@@ -67,7 +64,6 @@ impl RobcoNativeApp {
             start_open_leaf: self.start_open_leaf,
             terminal_nav: self.current_terminal_navigation_state(),
             terminal_settings_panel: self.terminal_settings_panel,
-            terminal_nuke_codes: self.terminal_nuke_codes.clone(),
             terminal_pty: self.terminal_pty.take(),
             terminal_pty_surface: self.terminal_pty_surface.take(),
             terminal_installer: std::mem::take(&mut self.terminal_installer),
@@ -118,11 +114,6 @@ impl RobcoNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.applications = parked.applications;
-        self.zeta_invaders = parked.zeta_invaders;
-        self.desktop_zeta_invaders_wasm = None;
-        self.terminal_zeta_invaders_wasm = None;
-        self.red_menace = parked.red_menace;
-        self.desktop_nuke_codes_open = parked.desktop_nuke_codes_open;
         self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;
         self.desktop_window_states = parked.desktop_window_states;
@@ -137,8 +128,6 @@ impl RobcoNativeApp {
         self.start_open_leaf = parked.start_open_leaf;
         self.apply_terminal_navigation_state(parked.terminal_nav);
         self.terminal_settings_panel = parked.terminal_settings_panel;
-        self.terminal_nuke_codes = parked.terminal_nuke_codes;
-        self.reset_nuke_codes_wasm_runtime();
         self.terminal_pty = parked.terminal_pty;
         self.terminal_pty_surface = parked.terminal_pty_surface;
         self.terminal_installer = parked.terminal_installer;

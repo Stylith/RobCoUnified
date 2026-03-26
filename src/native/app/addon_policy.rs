@@ -2,7 +2,7 @@ use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
 use super::launch_registry::{
     about_launch_target, connections_launch_target, default_apps_launch_target,
     desktop_launch_target_available_for_profile, edit_menus_launch_target, editor_launch_target,
-    file_manager_launch_target, nuke_codes_launch_target,
+    file_manager_launch_target,
     terminal_launch_target_available_for_profile,
 };
 use super::*;
@@ -36,15 +36,13 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    pub(super) fn visible_application_builtins(&self) -> (bool, bool, bool) {
+    pub(super) fn visible_application_builtins(&self) -> (bool, bool) {
         let profile = crate::config::install_profile();
         let show_file_manager =
             desktop_launch_target_available_for_profile(&file_manager_launch_target(), profile);
         let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
             && desktop_launch_target_available_for_profile(&editor_launch_target(), profile);
-        let show_nuke_codes = self.settings.draft.builtin_menu_visibility.nuke_codes
-            && desktop_launch_target_available_for_profile(&nuke_codes_launch_target(), profile);
-        (show_file_manager, show_text_editor, show_nuke_codes)
+        (show_file_manager, show_text_editor)
     }
 
     pub(super) fn terminal_settings_visibility(&self) -> TerminalSettingsVisibility {
@@ -107,7 +105,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
-        let (show_file_manager, show_text_editor, show_nuke_codes) =
+        let (show_file_manager, show_text_editor) =
             self.visible_application_builtins();
         let needs_rebuild = self
             .desktop_applications_sections_cache
@@ -115,22 +113,18 @@ impl RobcoNativeApp {
             .is_none_or(|cache| {
                 cache.show_file_manager != show_file_manager
                     || cache.show_text_editor != show_text_editor
-                    || cache.show_nuke_codes != show_nuke_codes
             });
         if needs_rebuild {
             let configured_names = catalog_names(ProgramCatalog::Applications);
             let sections = Arc::new(build_desktop_applications_sections(
                 show_file_manager,
                 show_text_editor,
-                show_nuke_codes,
                 &configured_names,
                 BUILTIN_TEXT_EDITOR_APP,
-                BUILTIN_NUKE_CODES_APP,
             ));
             self.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
                 show_file_manager,
                 show_text_editor,
-                show_nuke_codes,
                 sections,
             });
         }

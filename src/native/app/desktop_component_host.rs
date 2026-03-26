@@ -67,50 +67,6 @@ impl RobcoNativeApp {
         self.draw_applications(ctx);
     }
 
-    pub(crate) fn desktop_component_zeta_invaders_is_open(&self) -> bool {
-        self.zeta_invaders.open
-    }
-
-    pub(crate) fn desktop_component_zeta_invaders_set_open(&mut self, open: bool) {
-        if open {
-            self.zeta_invaders.open = true;
-        } else {
-            self.reset_zeta_invaders_runtime(false);
-        }
-    }
-
-    pub(crate) fn desktop_component_zeta_invaders_draw(&mut self, ctx: &Context) {
-        self.draw_zeta_invaders_window(ctx);
-    }
-
-    pub(crate) fn desktop_component_red_menace_is_open(&self) -> bool {
-        self.red_menace.open
-    }
-
-    pub(crate) fn desktop_component_red_menace_set_open(&mut self, open: bool) {
-        if open {
-            self.red_menace.open = true;
-        } else {
-            self.reset_red_menace_runtime(false);
-        }
-    }
-
-    pub(crate) fn desktop_component_red_menace_draw(&mut self, ctx: &Context) {
-        self.draw_red_menace_window(ctx);
-    }
-
-    pub(crate) fn desktop_component_nuke_codes_is_open(&self) -> bool {
-        self.desktop_nuke_codes_open
-    }
-
-    pub(crate) fn desktop_component_nuke_codes_set_open(&mut self, open: bool) {
-        self.desktop_nuke_codes_open = open;
-    }
-
-    pub(crate) fn desktop_component_nuke_codes_draw(&mut self, ctx: &Context) {
-        self.draw_nuke_codes_window(ctx);
-    }
-
     pub(crate) fn desktop_component_installer_is_open(&self) -> bool {
         self.desktop_installer.open
     }

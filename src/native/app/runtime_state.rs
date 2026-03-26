@@ -99,9 +99,6 @@ impl RobcoNativeApp {
         }
         for result in results {
             match result {
-                BackgroundResult::NukeCodesFetched(view) => {
-                    self.terminal_nuke_codes = view;
-                }
                 BackgroundResult::SettingsPersisted => {
                     super::super::ipc::notify_settings_changed();
                 }

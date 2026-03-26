@@ -87,12 +87,6 @@ impl RobcoNativeApp {
         ));
     }
 
-    pub(super) fn launch_nuke_codes_via_registry(&mut self) {
-        self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::nuke_codes_launch_target(),
-        ));
-    }
-
     pub(super) fn launch_settings_via_registry(&mut self) {
         self.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::settings_launch_target(),
@@ -152,9 +146,6 @@ impl RobcoNativeApp {
         match launch {
             NativeDesktopLaunch::OpenWindow(window) => {
                 self.open_or_spawn_desktop_window(window);
-            }
-            NativeDesktopLaunch::OpenNukeCodes => {
-                self.open_desktop_nuke_codes();
             }
             NativeDesktopLaunch::OpenSettingsPanel(Some(panel)) => {
                 self.open_desktop_settings_panel(panel);
@@ -269,9 +260,6 @@ impl RobcoNativeApp {
                 });
             }
             DesktopShellAction::LaunchGameProgram(name) => {
-                if self.open_hosted_robco_fun_game(&name) {
-                    return;
-                }
                 let request = resolve_desktop_games_request(&name);
                 self.apply_desktop_program_request(request);
             }
@@ -313,9 +301,6 @@ impl RobcoNativeApp {
                     self.new_document();
                 }
                 self.shell_status = format!("Opened {BUILTIN_TEXT_EDITOR_APP}.");
-            }
-            NativeTerminalLaunch::OpenNukeCodes => {
-                self.open_nuke_codes_screen(return_screen);
             }
         }
     }

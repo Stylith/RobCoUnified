@@ -34,7 +34,6 @@ use super::super::menu::{
     terminal_settings_refresh_plan, user_management_screen_for_mode, TerminalScreen,
     UserManagementExecutionPlan, UserManagementMode,
 };
-use super::super::nuke_codes_screen::{draw_nuke_codes_screen, fetch_nuke_codes, NukeCodesEvent, NukeCodesView};
 use super::super::programs_screen::{draw_programs_menu, ProgramMenuEvent};
 use super::super::prompt::{draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction};
 use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
@@ -42,15 +41,10 @@ use super::super::retro_ui::{current_palette, RetroScreen};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
-use super::super::wasm_addon_runtime::{
-    collect_hosted_keyboard_input, draw_hosted_addon_frame, WasmHostedAddonState,
-};
-use super::launch_registry::{
-    editor_launch_target, file_manager_launch_target, nuke_codes_launch_target,
-};
+use super::launch_registry::{editor_launch_target, file_manager_launch_target};
 use super::retro_footer_height;
 use super::RobcoNativeApp;
-use super::{BUILTIN_NUKE_CODES_APP, BUILTIN_TEXT_EDITOR_APP};
+use super::BUILTIN_TEXT_EDITOR_APP;
 use crate::native::installed_hosted_game_names;
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
@@ -59,10 +53,8 @@ use robcos_native_programs_app::{
     resolve_terminal_applications_request, resolve_terminal_catalog_request,
     resolve_terminal_games_request, DesktopProgramRequest, TerminalProgramRequest,
 };
-use robcos_native_red_menace_app::input_from_ctx as red_menace_input_from_ctx;
 use robcos_native_settings_app::TerminalSettingsPanel;
-use robcos_native_zeta_invaders_app::input_from_ctx as zeta_invaders_input_from_ctx;
-use robcos_shared::platform::{HostedAddonSize, HostedAddonSurface, LaunchTarget};
+use robcos_shared::platform::LaunchTarget;
 use std::time::Duration;
 
 impl RobcoNativeApp {
@@ -133,15 +125,12 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_applications(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let (show_file_manager, show_text_editor, show_nuke_codes) =
-            self.visible_application_builtins();
+        let (show_file_manager, show_text_editor) = self.visible_application_builtins();
         let entries = build_terminal_application_entries(
             show_file_manager,
             show_text_editor,
-            show_nuke_codes,
             &catalog_names(ProgramCatalog::Applications),
             BUILTIN_TEXT_EDITOR_APP,
-            BUILTIN_NUKE_CODES_APP,
         );
         let event = draw_programs_menu(
             ctx,
@@ -161,28 +150,8 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
         );
-        let request = resolve_terminal_applications_request(
-            event,
-            BUILTIN_TEXT_EDITOR_APP,
-            BUILTIN_NUKE_CODES_APP,
-        );
+        let request = resolve_terminal_applications_request(event, BUILTIN_TEXT_EDITOR_APP);
         self.apply_terminal_program_request(request, TerminalScreen::Applications);
-    }
-
-    pub(super) fn open_nuke_codes_screen(&mut self, return_screen: TerminalScreen) {
-        if self.nuke_codes_uses_wasm_addon() {
-            self.terminal_nuke_codes_wasm = None;
-        } else {
-            let tx = self.background.sender();
-            std::thread::spawn(move || {
-                let view = fetch_nuke_codes();
-                let _ = tx.send(BackgroundResult::NukeCodesFetched(view));
-            });
-            self.terminal_nuke_codes = NukeCodesView::Unloaded;
-        }
-        self.terminal_nav.nuke_codes_return_screen = return_screen;
-        self.navigate_to_screen(TerminalScreen::NukeCodes);
-        self.apply_status_update(clear_shell_status());
     }
 
     pub(super) fn apply_terminal_program_request(
@@ -199,12 +168,6 @@ impl RobcoNativeApp {
             TerminalProgramRequest::OpenTextEditor => {
                 self.execute_terminal_launch_target(editor_launch_target(), launch_return_screen);
             }
-            TerminalProgramRequest::OpenNukeCodes => {
-                self.execute_terminal_launch_target(
-                    nuke_codes_launch_target(),
-                    launch_return_screen,
-                );
-            }
             TerminalProgramRequest::OpenFileManager => {
                 self.execute_terminal_launch_target(
                     file_manager_launch_target(),
@@ -212,11 +175,6 @@ impl RobcoNativeApp {
                 );
             }
             TerminalProgramRequest::LaunchCatalog { name, catalog } => {
-                if catalog == ProgramCatalog::Games
-                    && self.open_terminal_robco_fun_game(&name, launch_return_screen)
-                {
-                    return;
-                }
                 self.open_embedded_catalog_launch(&name, catalog, launch_return_screen);
             }
         }
@@ -227,129 +185,13 @@ impl RobcoNativeApp {
             DesktopProgramRequest::OpenTextEditor { close_window: _ } => {
                 self.launch_editor_via_registry();
             }
-            DesktopProgramRequest::OpenNukeCodes { close_window: _ } => {
-                self.launch_nuke_codes_via_registry();
-            }
             DesktopProgramRequest::OpenFileManager => {
                 self.launch_file_manager_via_registry();
             }
             DesktopProgramRequest::LaunchCatalog { name, catalog, .. } => {
-                if catalog == ProgramCatalog::Games && self.open_hosted_robco_fun_game(&name) {
-                    return;
-                }
                 self.open_desktop_catalog_launch(&name, catalog);
             }
         }
-    }
-
-    pub(super) fn draw_terminal_zeta_invaders(&mut self, ctx: &Context) {
-        let dt = Self::next_embedded_game_dt(&mut self.zeta_invaders.last_frame_at);
-        if self.zeta_invaders_uses_wasm_addon() {
-            let back = ctx.input(|i| i.key_pressed(egui::Key::Tab));
-            let title = self
-                .terminal_zeta_invaders_wasm
-                .as_ref()
-                .map(|state| state.title().to_string())
-                .unwrap_or_else(|| "Zeta Invaders".to_string());
-            Self::draw_terminal_game_shell(
-                ctx,
-                &title,
-                "TAB BACK   ARROWS/A D MOVE   SPACE FIRE   ENTER START   ESC/P PAUSE",
-                |ui| {
-                    let available = ui.available_size_before_wrap();
-                    let size = HostedAddonSize {
-                        width: available.x.max(320.0),
-                        height: available.y.max(240.0),
-                    };
-                    let input = collect_hosted_keyboard_input(ctx, true);
-                    let result = (|| -> Result<(), String> {
-                        let module = super::super::installed_wasm_addon_module(
-                            &crate::platform::AddonId::from("games.zeta-invaders"),
-                        )
-                        .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
-                        if self.terminal_zeta_invaders_wasm.is_none() {
-                            self.terminal_zeta_invaders_wasm = Some(WasmHostedAddonState::spawn(
-                                &module,
-                                HostedAddonSurface::Terminal,
-                                size,
-                            )?);
-                        }
-                        if let Some(state) = self.terminal_zeta_invaders_wasm.as_mut() {
-                            state.update(size, dt, input)?;
-                            draw_hosted_addon_frame(ui, state);
-                            if let Some(status) = &state.frame().status_line {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new(status)
-                                        .monospace()
-                                        .small()
-                                        .color(current_palette().dim),
-                                );
-                            }
-                        }
-                        Ok(())
-                    })();
-                    if let Err(err) = result {
-                        self.terminal_zeta_invaders_wasm = None;
-                        ui.label(
-                            RichText::new("WASM ADDON FAILED")
-                                .monospace()
-                                .strong()
-                                .color(current_palette().fg),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(err)
-                                .monospace()
-                                .small()
-                                .color(current_palette().dim),
-                        );
-                    }
-                },
-            );
-            if back {
-                self.terminal_zeta_invaders_wasm = None;
-                self.navigate_to_screen(self.terminal_nav.game_return_screen);
-                self.apply_status_update(clear_shell_status());
-            }
-            return;
-        }
-
-        let input = zeta_invaders_input_from_ctx(ctx);
-        self.zeta_invaders.game.update(&input, dt);
-        if self.zeta_invaders.atlas.is_none() {
-            self.zeta_invaders.atlas =
-                Some(robcos_native_zeta_invaders_app::AtlasTextures::new(ctx));
-        }
-
-        Self::draw_terminal_game_shell(
-            ctx,
-            "ZETA INVADERS",
-            "ARROWS/A D MOVE   SPACE FIRE   ENTER START   ESC PAUSE",
-            |ui| {
-                let atlas = self
-                    .zeta_invaders
-                    .atlas
-                    .as_ref()
-                    .expect("zeta invaders atlas should be loaded");
-                self.zeta_invaders.game.draw(ui, atlas);
-            },
-        );
-    }
-
-    pub(super) fn draw_terminal_red_menace(&mut self, ctx: &Context) {
-        let input = red_menace_input_from_ctx(ctx);
-        let dt = Self::next_embedded_game_dt(&mut self.red_menace.last_frame_at);
-        self.red_menace.game.update(&input, dt);
-
-        Self::draw_terminal_game_shell(
-            ctx,
-            "RED MENACE",
-            "ARROWS/WASD MOVE   SPACE ACTION/JUMP   ENTER START",
-            |ui| {
-                self.red_menace.game.draw(ui);
-            },
-        );
     }
 
     pub(super) fn draw_terminal_documents(&mut self, ctx: &Context) {
@@ -724,7 +566,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_edit_menus(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let (_, show_text_editor, show_nuke_codes) = self.visible_application_builtins();
+        let (_, show_text_editor) = self.visible_application_builtins();
         let applications = self.edit_program_entries(EditMenuTarget::Applications);
         let documents = self.edit_program_entries(EditMenuTarget::Documents);
         let network = self.edit_program_entries(EditMenuTarget::Network);
@@ -738,7 +580,6 @@ impl RobcoNativeApp {
                 network: &network,
                 games: &games,
             },
-            show_nuke_codes,
             show_text_editor,
             &self.shell_status,
             layout.cols,
@@ -756,11 +597,6 @@ impl RobcoNativeApp {
             TerminalEditMenusRequest::None => {}
             TerminalEditMenusRequest::BackToSettings => {
                 self.apply_terminal_screen_open_plan(terminal_settings_refresh_plan());
-            }
-            TerminalEditMenusRequest::PersistToggleBuiltinNukeCodes => {
-                self.settings.draft.builtin_menu_visibility.nuke_codes =
-                    !self.settings.draft.builtin_menu_visibility.nuke_codes;
-                self.persist_native_settings();
             }
             TerminalEditMenusRequest::PersistToggleBuiltinTextEditor => {
                 self.settings.draft.builtin_menu_visibility.text_editor =
@@ -1081,118 +917,6 @@ impl RobcoNativeApp {
             other => {
                 let request = resolve_terminal_games_request(other);
                 self.apply_terminal_program_request(request, TerminalScreen::GamesRobcoFun);
-            }
-        }
-    }
-
-    pub(super) fn draw_terminal_nuke_codes(&mut self, ctx: &Context) {
-        if self.nuke_codes_uses_wasm_addon() {
-            let back = ctx.input(|i| {
-                i.key_pressed(egui::Key::Q)
-                    || i.key_pressed(egui::Key::Escape)
-                    || i.key_pressed(egui::Key::Tab)
-            });
-            let refresh = ctx.input(|i| i.key_pressed(egui::Key::R));
-            let title = self
-                .terminal_nuke_codes_wasm
-                .as_ref()
-                .map(|state| state.title().to_string())
-                .unwrap_or_else(|| "Nuke Codes".to_string());
-
-            Self::draw_terminal_game_shell(
-                ctx,
-                &title,
-                "R REFRESH   Q / ESC / TAB BACK",
-                |ui| {
-                    let available = ui.available_size_before_wrap();
-                    let size = HostedAddonSize {
-                        width: available.x.max(320.0),
-                        height: available.y.max(200.0),
-                    };
-                    let dt = ctx.input(|i| i.stable_dt).max(1.0 / 60.0);
-                    let result = (|| -> Result<(), String> {
-                        let module = super::super::installed_wasm_addon_module(
-                            &crate::platform::AddonId::from("tools.nuke-codes"),
-                        )
-                        .ok_or_else(|| "Installed WASM module disappeared.".to_string())?;
-                        if self.terminal_nuke_codes_wasm.is_none() {
-                            self.terminal_nuke_codes_wasm = Some(WasmHostedAddonState::spawn(
-                                &module,
-                                HostedAddonSurface::Terminal,
-                                size,
-                            )?);
-                        }
-                        if let Some(state) = self.terminal_nuke_codes_wasm.as_mut() {
-                            state.update(size, dt, Vec::new())?;
-                            draw_hosted_addon_frame(ui, state);
-                            if let Some(status) = &state.frame().status_line {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new(status)
-                                        .monospace()
-                                        .small()
-                                        .color(current_palette().dim),
-                                );
-                            }
-                        }
-                        Ok(())
-                    })();
-                    if let Err(err) = result {
-                        self.terminal_nuke_codes_wasm = None;
-                        ui.label(
-                            RichText::new("WASM ADDON FAILED")
-                                .monospace()
-                                .strong()
-                                .color(current_palette().fg),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(err)
-                                .monospace()
-                                .small()
-                                .color(current_palette().dim),
-                        );
-                    }
-                },
-            );
-
-            if refresh {
-                self.terminal_nuke_codes_wasm = None;
-            }
-            if back {
-                self.terminal_nuke_codes_wasm = None;
-                self.navigate_to_screen(self.terminal_nav.nuke_codes_return_screen);
-                self.apply_status_update(clear_shell_status());
-            }
-            return;
-        }
-
-        let layout = self.terminal_layout();
-        match draw_nuke_codes_screen(
-            ctx,
-            &self.terminal_nuke_codes,
-            layout.cols,
-            layout.rows,
-            layout.header_start_row,
-            layout.separator_top_row,
-            layout.title_row,
-            layout.separator_bottom_row,
-            layout.menu_start_row,
-            layout.status_row,
-            layout.content_col,
-        ) {
-            NukeCodesEvent::None => {}
-            NukeCodesEvent::Refresh => {
-                let tx = self.background.sender();
-                std::thread::spawn(move || {
-                    let view = fetch_nuke_codes();
-                    let _ = tx.send(BackgroundResult::NukeCodesFetched(view));
-                });
-                self.terminal_nuke_codes = NukeCodesView::Unloaded;
-            }
-            NukeCodesEvent::Back => {
-                self.navigate_to_screen(self.terminal_nav.nuke_codes_return_screen);
-                self.apply_status_update(clear_shell_status());
             }
         }
     }

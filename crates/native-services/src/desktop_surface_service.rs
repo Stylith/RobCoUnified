@@ -11,7 +11,6 @@ pub enum DesktopBuiltinIconKind {
     Editor,
     Installer,
     Settings,
-    NukeCodes,
     Terminal,
 }
 
@@ -66,7 +65,7 @@ impl DesktopSurfaceEntry {
     }
 }
 
-const DESKTOP_BUILTIN_ICONS: [DesktopBuiltinIconEntry; 6] = [
+const DESKTOP_BUILTIN_ICONS: [DesktopBuiltinIconEntry; 5] = [
     DesktopBuiltinIconEntry {
         kind: DesktopBuiltinIconKind::FileManager,
         key: "builtin_0",
@@ -94,13 +93,6 @@ const DESKTOP_BUILTIN_ICONS: [DesktopBuiltinIconEntry; 6] = [
         label: "Settings",
         ascii: "[CFG]",
         target_window: Some(DesktopWindow::Settings),
-    },
-    DesktopBuiltinIconEntry {
-        kind: DesktopBuiltinIconKind::NukeCodes,
-        key: "builtin_4",
-        label: "Nuke Codes",
-        ascii: "[!]",
-        target_window: Some(DesktopWindow::NukeCodes),
     },
     DesktopBuiltinIconEntry {
         kind: DesktopBuiltinIconKind::Terminal,

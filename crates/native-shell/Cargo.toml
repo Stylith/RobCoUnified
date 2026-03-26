@@ -26,10 +26,6 @@ name = "robcos-applications"
 path = "src/applications_main.rs"
 
 [[bin]]
-name = "robcos-nuke-codes"
-path = "src/nuke_codes_main.rs"
-
-[[bin]]
 name = "robcos-installer"
 path = "src/installer_main.rs"
 

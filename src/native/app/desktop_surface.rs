@@ -161,12 +161,6 @@ impl RobcoNativeApp {
                 include_bytes!("../../Icons/pixel--file-import-solid.svg"),
                 Some(ICON_SIZE),
             ),
-            icon_nuke_codes: Self::load_svg_icon(
-                ctx,
-                "icon_nuke_codes",
-                include_bytes!("../../Icons/pixel--exclamation-triangle-solid.svg"),
-                Some(ICON_SIZE),
-            ),
             icon_editor: Self::load_svg_icon(
                 ctx,
                 "icon_editor",
@@ -695,7 +689,6 @@ impl RobcoNativeApp {
             tex_editor,
             tex_installer,
             tex_settings,
-            tex_nuke_codes,
             tex_terminal,
             tex_connections,
         ) = {
@@ -707,7 +700,6 @@ impl RobcoNativeApp {
                 cache.icon_editor.clone(),
                 cache.icon_installer.clone(),
                 cache.icon_settings.clone(),
-                cache.icon_nuke_codes.clone(),
                 cache.icon_terminal.clone(),
                 cache.icon_connections.clone(),
             )
@@ -781,7 +773,6 @@ impl RobcoNativeApp {
                 DesktopBuiltinIconKind::Editor => &tex_editor,
                 DesktopBuiltinIconKind::Installer => &tex_installer,
                 DesktopBuiltinIconKind::Settings => &tex_settings,
-                DesktopBuiltinIconKind::NukeCodes => &tex_nuke_codes,
                 DesktopBuiltinIconKind::Terminal => &tex_terminal,
             };
             let top_left = {
@@ -1077,7 +1068,6 @@ impl RobcoNativeApp {
                     } else {
                         let kind_tex = match shortcut.shortcut_kind.as_str() {
                             "network" => &tex_connections,
-                            "nuke_codes" => &tex_nuke_codes,
                             "editor" => &tex_editor,
                             _ => &tex_app,
                         };

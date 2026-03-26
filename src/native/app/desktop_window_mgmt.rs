@@ -523,10 +523,7 @@ impl RobcoNativeApp {
             DesktopWindow::Editor => egui::vec2(400.0, 300.0),
             DesktopWindow::Settings => Self::desktop_settings_window_min_size(),
             DesktopWindow::Applications => egui::vec2(320.0, 250.0),
-            DesktopWindow::NukeCodes => egui::vec2(300.0, 200.0),
             DesktopWindow::Installer => Self::desktop_installer_window_min_size(),
-            DesktopWindow::ZetaInvaders => egui::vec2(480.0, 360.0),
-            DesktopWindow::RedMenace => egui::vec2(620.0, 460.0),
             DesktopWindow::PtyApp => self
                 .desktop_pty_state(id)
                 .map(Self::native_pty_window_min_size)
@@ -1104,7 +1101,6 @@ impl RobcoNativeApp {
         self.secondary_windows.clear();
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
-        self.desktop_nuke_codes_open = false;
     }
 }
 

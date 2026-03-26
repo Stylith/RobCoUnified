@@ -171,7 +171,7 @@ pub struct DesktopComponentSpec {
     title_kind: DesktopTitleKind,
 }
 
-const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 10] = [
+const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 7] = [
     DesktopComponentBinding {
         spec: DesktopComponentSpec {
             window: DesktopWindow::FileManager,
@@ -233,54 +233,6 @@ const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 10] = [
         is_open: RobcoNativeApp::desktop_component_applications_is_open,
         set_open: RobcoNativeApp::desktop_component_applications_set_open,
         draw: RobcoNativeApp::desktop_component_applications_draw,
-        on_open: None,
-        on_closed: None,
-    },
-    DesktopComponentBinding {
-        spec: DesktopComponentSpec {
-            window: DesktopWindow::ZetaInvaders,
-            hosted_app: DesktopHostedApp::Utility,
-            id_salt: "native_zeta_invaders",
-            default_size: [920.0, 760.0],
-            show_in_taskbar: true,
-            show_in_window_menu: true,
-            title_kind: DesktopTitleKind::Static("Zeta Invaders"),
-        },
-        is_open: RobcoNativeApp::desktop_component_zeta_invaders_is_open,
-        set_open: RobcoNativeApp::desktop_component_zeta_invaders_set_open,
-        draw: RobcoNativeApp::desktop_component_zeta_invaders_draw,
-        on_open: None,
-        on_closed: None,
-    },
-    DesktopComponentBinding {
-        spec: DesktopComponentSpec {
-            window: DesktopWindow::RedMenace,
-            hosted_app: DesktopHostedApp::Utility,
-            id_salt: "native_red_menace",
-            default_size: [980.0, 820.0],
-            show_in_taskbar: true,
-            show_in_window_menu: true,
-            title_kind: DesktopTitleKind::Static("Red Menace"),
-        },
-        is_open: RobcoNativeApp::desktop_component_red_menace_is_open,
-        set_open: RobcoNativeApp::desktop_component_red_menace_set_open,
-        draw: RobcoNativeApp::desktop_component_red_menace_draw,
-        on_open: None,
-        on_closed: None,
-    },
-    DesktopComponentBinding {
-        spec: DesktopComponentSpec {
-            window: DesktopWindow::NukeCodes,
-            hosted_app: DesktopHostedApp::Utility,
-            id_salt: "native_nuke_codes",
-            default_size: [640.0, 420.0],
-            show_in_taskbar: true,
-            show_in_window_menu: true,
-            title_kind: DesktopTitleKind::Static("Nuke Codes"),
-        },
-        is_open: RobcoNativeApp::desktop_component_nuke_codes_is_open,
-        set_open: RobcoNativeApp::desktop_component_nuke_codes_set_open,
-        draw: RobcoNativeApp::desktop_component_nuke_codes_draw,
         on_open: None,
         on_closed: None,
     },
@@ -797,11 +749,10 @@ mod tests {
     fn desktop_component_registry_is_single_source_of_truth() {
         let components = desktop_components();
         assert_eq!(components[0].spec.window, DesktopWindow::FileManager);
-        assert_eq!(components[6].spec.window, DesktopWindow::NukeCodes);
-        assert_eq!(components[7].spec.window, DesktopWindow::Installer);
-        assert_eq!(components[8].spec.window, DesktopWindow::TerminalMode);
-        assert!(!components[8].spec.show_in_taskbar);
-        assert!(!components[7].spec.show_in_window_menu);
+        assert_eq!(components[4].spec.window, DesktopWindow::Installer);
+        assert_eq!(components[5].spec.window, DesktopWindow::TerminalMode);
+        assert!(!components[5].spec.show_in_taskbar);
+        assert!(!components[4].spec.show_in_window_menu);
         assert_eq!(
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"

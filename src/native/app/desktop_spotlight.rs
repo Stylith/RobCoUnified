@@ -8,7 +8,6 @@ use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::retro_ui::current_palette;
 use eframe::egui::{self, Color32, Context, Key, RichText, TextEdit};
 
-const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
 use super::RobcoNativeApp;
@@ -29,7 +28,6 @@ impl RobcoNativeApp {
             tab,
             active_username.as_deref(),
             BUILTIN_TEXT_EDITOR_APP,
-            BUILTIN_NUKE_CODES_APP,
         );
         let show_file_manager = self
             .spotlight_system_entry_enabled(&super::launch_registry::file_manager_launch_target());
@@ -39,11 +37,6 @@ impl RobcoNativeApp {
             self.spotlight_system_entry_enabled(&super::launch_registry::terminal_launch_target());
         let show_text_editor = self.settings.draft.builtin_menu_visibility.text_editor
             && self.spotlight_system_entry_enabled(&super::launch_registry::editor_launch_target());
-        let show_nuke_codes =
-            self.settings.draft.builtin_menu_visibility.nuke_codes
-                && self.spotlight_system_entry_enabled(
-                    &super::launch_registry::nuke_codes_launch_target(),
-                );
         self.spotlight_results
             .retain(|result| match result.category {
                 NativeSpotlightCategory::System => match result.name.as_str() {
@@ -51,7 +44,6 @@ impl RobcoNativeApp {
                     "Settings" => show_settings,
                     "Terminal" => show_terminal,
                     n if n == BUILTIN_TEXT_EDITOR_APP => show_text_editor,
-                    n if n == BUILTIN_NUKE_CODES_APP => show_nuke_codes,
                     _ => false,
                 },
                 _ => true,
@@ -343,16 +335,6 @@ impl RobcoNativeApp {
                 {
                     Some(DesktopShellAction::LaunchByTarget(
                         super::launch_registry::editor_launch_target(),
-                    ))
-                }
-                n if n == BUILTIN_NUKE_CODES_APP
-                    && self.settings.draft.builtin_menu_visibility.nuke_codes
-                    && self.spotlight_system_entry_enabled(
-                        &super::launch_registry::nuke_codes_launch_target(),
-                    ) =>
-                {
-                    Some(DesktopShellAction::LaunchByTarget(
-                        super::launch_registry::nuke_codes_launch_target(),
                     ))
                 }
                 _ => None,

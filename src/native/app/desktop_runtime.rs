@@ -236,28 +236,6 @@ impl RobcoNativeApp {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 
-    pub(crate) fn prepare_standalone_nuke_codes_window(
-        &mut self,
-        session_username: Option<String>,
-    ) {
-        self.prepare_standalone_window_shell(session_username, true);
-        self.prime_desktop_window_defaults(DesktopWindow::NukeCodes);
-        self.open_desktop_nuke_codes();
-        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::NukeCodes));
-    }
-
-    pub(crate) fn update_standalone_nuke_codes_window(&mut self, ctx: &Context) {
-        self.process_background_results(ctx);
-        self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
-        self.sync_native_display_effects();
-        self.draw_nuke_codes_window(ctx);
-        if !self.desktop_nuke_codes_open {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        ctx.request_repaint_after(Duration::from_millis(500));
-    }
-
     pub(crate) fn prepare_standalone_installer_window(&mut self, session_username: Option<String>) {
         self.prepare_standalone_window_shell(session_username, true);
         self.prime_desktop_window_defaults(DesktopWindow::Installer);

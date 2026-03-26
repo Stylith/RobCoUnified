@@ -24,8 +24,6 @@ mod installer_screen;
 mod installer_standalone;
 pub mod ipc;
 mod menu;
-mod nuke_codes_screen;
-mod nuke_codes_standalone;
 mod programs_screen;
 mod prompt;
 mod prompt_flow;
@@ -71,7 +69,6 @@ pub use applications_standalone::RobcoNativeApplicationsApp;
 pub use editor_standalone::RobcoNativeEditorApp;
 pub use file_manager_standalone::RobcoNativeFileManagerApp;
 pub use installer_standalone::RobcoNativeInstallerApp;
-pub use nuke_codes_standalone::RobcoNativeNukeCodesApp;
 pub use settings_standalone::{
     standalone_settings_panel_arg, standalone_settings_panel_from_arg, RobcoNativeSettingsApp,
 };

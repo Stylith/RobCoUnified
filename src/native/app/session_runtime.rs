@@ -9,7 +9,6 @@ use super::super::menu::{terminal_runtime_defaults, TerminalNavigationState, Ter
 use super::RobcoNativeApp;
 use super::SessionState;
 use crate::core::auth::UserRecord;
-use robcos_native_nuke_codes_app::NukeCodesView;
 use robcos_native_settings_app::desktop_settings_default_panel;
 
 impl RobcoNativeApp {
@@ -28,7 +27,6 @@ impl RobcoNativeApp {
         self.replace_settings_draft(settings);
         self.apply_status_update(clear_settings_status());
         self.settings.panel = desktop_settings_default_panel();
-        self.desktop_nuke_codes_open = false;
         self.desktop_installer = DesktopInstallerState::default();
         self.terminal_mode.status.clear();
         self.reset_shell_runtime_for_session(plan.launch_default_desktop);
@@ -48,10 +46,6 @@ impl RobcoNativeApp {
         self.start_open_leaf = None;
         self.desktop_mode_open = launch_default_desktop;
         self.apply_terminal_navigation_state(terminal_defaults);
-        self.terminal_nuke_codes = NukeCodesView::default();
-        self.desktop_zeta_invaders_wasm = None;
-        self.terminal_zeta_invaders_wasm = None;
-        self.reset_nuke_codes_wasm_runtime();
         if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
@@ -100,7 +94,6 @@ impl RobcoNativeApp {
         self.terminal_nav.screen = TerminalScreen::MainMenu;
         self.close_start_menu();
         self.desktop_mode_open = false;
-        self.desktop_nuke_codes_open = false;
         self.desktop_active_window = None;
         self.session_leader_until = None;
         self.queue_session_flash_plan(plan);
@@ -118,7 +111,6 @@ impl RobcoNativeApp {
         self.settings.open = false;
         self.settings.panel = desktop_settings_default_panel();
         self.applications.open = false;
-        self.desktop_nuke_codes_open = false;
         self.terminal_mode.open = false;
         self.reset_shell_runtime_for_logout();
         self.apply_status_update(clear_shell_status());

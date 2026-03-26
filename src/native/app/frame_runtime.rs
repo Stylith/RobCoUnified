@@ -250,9 +250,6 @@ impl RobcoNativeApp {
                 TerminalScreen::Network => self.draw_terminal_network(ctx),
                 TerminalScreen::Games => self.draw_terminal_games(ctx),
                 TerminalScreen::GamesRobcoFun => self.draw_terminal_robco_fun_games(ctx),
-                TerminalScreen::ZetaInvaders => self.draw_terminal_zeta_invaders(ctx),
-                TerminalScreen::RedMenace => self.draw_terminal_red_menace(ctx),
-                TerminalScreen::NukeCodes => self.draw_terminal_nuke_codes(ctx),
                 TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
                 TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
                 TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
@@ -365,14 +362,8 @@ impl RobcoNativeApp {
             && !self.editor.open
         {
             let is_browser = matches!(self.terminal_nav.screen, TerminalScreen::DocumentBrowser);
-            let is_terminal_game = matches!(
-                self.terminal_nav.screen,
-                TerminalScreen::ZetaInvaders | TerminalScreen::RedMenace
-            );
             let back = if is_browser {
                 ctx.input(|i| i.key_pressed(Key::Escape))
-            } else if is_terminal_game {
-                ctx.input(|i| i.key_pressed(Key::Tab))
             } else {
                 ctx.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Tab))
             };

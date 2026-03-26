@@ -7,8 +7,6 @@ use std::sync::mpsc;
 
 /// A completed background task result.
 pub enum BackgroundResult {
-    /// Nuke codes fetched from network.
-    NukeCodesFetched(robcos_native_nuke_codes_app::NukeCodesView),
     /// Settings persisted to disk.
     SettingsPersisted,
     /// Repository-backed addon install/update/reinstall completed.

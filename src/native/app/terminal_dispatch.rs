@@ -268,7 +268,6 @@ impl RobcoNativeApp {
                 .as_ref()
                 .map(|pty| pty.return_screen)
                 .unwrap_or(TerminalScreen::MainMenu),
-            nuke_codes_return_screen: self.terminal_nav.nuke_codes_return_screen,
             game_return_screen: self.terminal_nav.game_return_screen,
             browser_return_screen: self.terminal_nav.browser_return_screen,
         });

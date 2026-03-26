@@ -31,7 +31,6 @@ pub fn create_shortcut_from_start_action(
             resolve_catalog_command_line(name.as_str(), ProgramCatalog::Games),
             "game".to_string(),
         ),
-        NativeStartLeafAction::LaunchNukeCodes => (label.clone(), None, "nuke_codes".to_string()),
         NativeStartLeafAction::OpenTextEditor => (label.clone(), None, "editor".to_string()),
         _ => (label.clone(), None, "app".to_string()),
     };

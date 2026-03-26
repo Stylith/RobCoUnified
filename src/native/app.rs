@@ -9,11 +9,7 @@ use super::desktop_app::DesktopShellAction;
 use super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::desktop_connections_service::DiscoveredConnection;
 #[cfg(test)]
-use super::desktop_launcher_service::{
-    ProgramCatalog, BUILTIN_RED_MENACE_GAME, BUILTIN_ZETA_INVADERS_GAME,
-};
-#[cfg(not(test))]
-use super::desktop_launcher_service::{BUILTIN_RED_MENACE_GAME, BUILTIN_ZETA_INVADERS_GAME};
+use super::desktop_launcher_service::ProgramCatalog;
 #[cfg(test)]
 use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
@@ -40,7 +36,6 @@ use super::menu::{
     terminal_runtime_defaults, TerminalLoginState, TerminalNavigationState, TerminalScreen,
     TerminalShellSurface,
 };
-use super::nuke_codes_screen::{fetch_nuke_codes, NukeCodesView};
 #[cfg(test)]
 use super::prompt::{
     FlashAction, TerminalFlash, TerminalPrompt, TerminalPromptAction, TerminalPromptKind,
@@ -53,7 +48,6 @@ use super::retro_ui::{
     FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
-use super::wasm_addon_runtime::WasmHostedAddonState;
 use crate::config::SavedConnection;
 #[cfg(test)]
 use crate::config::{
@@ -76,14 +70,12 @@ use robcos_native_programs_app::{
 use robcos_native_programs_app::{
     build_desktop_applications_sections, DesktopApplicationsSections, DesktopProgramRequest,
 };
-use robcos_native_red_menace_app::{RedMenaceConfig, RedMenaceGame};
 use robcos_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_default_panel,
     desktop_settings_home_rows_with_visibility, desktop_settings_panel_enabled,
     DesktopSettingsVisibility, GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile,
     TerminalSettingsPanel, TerminalSettingsVisibility,
 };
-use robcos_native_zeta_invaders_app::{AtlasTextures, SpaceInvadersConfig, SpaceInvadersGame};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -180,42 +172,6 @@ struct TerminalModeWindow {
     status: String,
 }
 
-#[derive(Clone)]
-struct ZetaInvadersWindow {
-    open: bool,
-    game: SpaceInvadersGame,
-    atlas: Option<AtlasTextures>,
-    last_frame_at: Option<Instant>,
-}
-
-impl Default for ZetaInvadersWindow {
-    fn default() -> Self {
-        Self {
-            open: false,
-            game: SpaceInvadersGame::new(SpaceInvadersConfig::default()),
-            atlas: None,
-            last_frame_at: None,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct RedMenaceWindow {
-    open: bool,
-    game: RedMenaceGame,
-    last_frame_at: Option<Instant>,
-}
-
-impl Default for RedMenaceWindow {
-    fn default() -> Self {
-        Self {
-            open: false,
-            game: RedMenaceGame::new(RedMenaceConfig::default()),
-            last_frame_at: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeAppearanceKey {
     theme: String,
@@ -228,7 +184,6 @@ struct AssetCache {
     icon_terminal: TextureHandle,
     icon_applications: TextureHandle,
     icon_installer: TextureHandle,
-    icon_nuke_codes: TextureHandle,
     icon_editor: TextureHandle,
     icon_general: Option<TextureHandle>,
     icon_appearance: Option<TextureHandle>,
@@ -268,9 +223,10 @@ struct DesktopSurfaceEntriesCache {
 struct DesktopApplicationsSectionsCache {
     show_file_manager: bool,
     show_text_editor: bool,
-    show_nuke_codes: bool,
     sections: Arc<DesktopApplicationsSections>,
 }
+
+// Note: show_nuke_codes was removed — Nuke Codes is now a dynamic addon
 
 struct SettingsHomeRowsCache {
     visibility: DesktopSettingsVisibility,
@@ -356,7 +312,6 @@ pub(super) enum ContextMenuAction {
     OpenDesktopItemProperties(PathBuf),
 }
 
-pub(super) const BUILTIN_NUKE_CODES_APP: &str = "Nuke Codes";
 pub(super) const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
 const TERMINAL_SCREEN_COLS: usize = 92;
@@ -534,11 +489,6 @@ pub struct RobcoNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
-    zeta_invaders: ZetaInvadersWindow,
-    desktop_zeta_invaders_wasm: Option<WasmHostedAddonState>,
-    red_menace: RedMenaceWindow,
-    desktop_nuke_codes_open: bool,
-    desktop_nuke_codes_wasm: Option<WasmHostedAddonState>,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<WindowInstanceId, DesktopWindowState>,
@@ -560,9 +510,6 @@ pub struct RobcoNativeApp {
     desktop_mode_open: bool,
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
-    terminal_nuke_codes: NukeCodesView,
-    terminal_nuke_codes_wasm: Option<WasmHostedAddonState>,
-    terminal_zeta_invaders_wasm: Option<WasmHostedAddonState>,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
@@ -628,9 +575,6 @@ pub(super) struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     applications: ApplicationsWindow,
-    zeta_invaders: ZetaInvadersWindow,
-    red_menace: RedMenaceWindow,
-    desktop_nuke_codes_open: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<WindowInstanceId, DesktopWindowState>,
@@ -645,7 +589,6 @@ pub(super) struct ParkedSessionState {
     start_open_leaf: Option<StartLeaf>,
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
-    terminal_nuke_codes: NukeCodesView,
     terminal_pty: Option<NativePtyState>,
     terminal_pty_surface: Option<TerminalShellSurface>,
     terminal_installer: TerminalInstallerState,
@@ -728,11 +671,6 @@ impl Default for RobcoNativeApp {
                 user_delete_confirm: String::new(),
             },
             applications: ApplicationsWindow::default(),
-            zeta_invaders: ZetaInvadersWindow::default(),
-            desktop_zeta_invaders_wasm: None,
-            red_menace: RedMenaceWindow::default(),
-            desktop_nuke_codes_open: false,
-            desktop_nuke_codes_wasm: None,
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
             desktop_window_states: HashMap::new(),
@@ -751,9 +689,6 @@ impl Default for RobcoNativeApp {
             desktop_mode_open: false,
             terminal_nav: terminal_defaults,
             terminal_settings_panel: TerminalSettingsPanel::Home,
-            terminal_nuke_codes: NukeCodesView::default(),
-            terminal_nuke_codes_wasm: None,
-            terminal_zeta_invaders_wasm: None,
             terminal_pty: None,
             terminal_pty_surface: None,
             terminal_installer: TerminalInstallerState::default(),
@@ -822,28 +757,6 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
-    fn reset_zeta_invaders_runtime(&mut self, open: bool) {
-        self.zeta_invaders.game.reset();
-        self.zeta_invaders.last_frame_at = None;
-        self.desktop_zeta_invaders_wasm = None;
-        self.terminal_zeta_invaders_wasm = None;
-        self.zeta_invaders.open = open;
-    }
-
-    fn reset_red_menace_runtime(&mut self, open: bool) {
-        self.red_menace.game.reset();
-        self.red_menace.last_frame_at = None;
-        self.red_menace.open = open;
-    }
-
-    fn reset_game_for_screen(&mut self, screen: TerminalScreen) {
-        match screen {
-            TerminalScreen::ZetaInvaders => self.reset_zeta_invaders_runtime(false),
-            TerminalScreen::RedMenace => self.reset_red_menace_runtime(false),
-            _ => {}
-        }
-    }
-
     fn sync_native_display_effects(&self) {
         apply_native_display_effects_for_settings(&self.settings.draft);
     }
@@ -881,81 +794,6 @@ impl RobcoNativeApp {
 
     fn terminal_layout(&self) -> TerminalLayout {
         terminal_layout_for_scale(self.settings.draft.native_ui_scale)
-    }
-
-    fn nuke_codes_uses_wasm_addon(&self) -> bool {
-        super::installed_wasm_addon_module(&crate::platform::AddonId::from("tools.nuke-codes"))
-            .is_some()
-    }
-
-    fn zeta_invaders_uses_wasm_addon(&self) -> bool {
-        super::installed_wasm_addon_module(&crate::platform::AddonId::from("games.zeta-invaders"))
-            .is_some()
-    }
-
-    fn reset_nuke_codes_wasm_runtime(&mut self) {
-        self.desktop_nuke_codes_wasm = None;
-        self.terminal_nuke_codes_wasm = None;
-    }
-
-    fn open_desktop_nuke_codes(&mut self) {
-        if self.nuke_codes_uses_wasm_addon() {
-            self.desktop_nuke_codes_wasm = None;
-        } else if matches!(self.terminal_nuke_codes, NukeCodesView::Unloaded) {
-            let tx = self.background.sender();
-            std::thread::spawn(move || {
-                let view = fetch_nuke_codes();
-                let _ = tx.send(BackgroundResult::NukeCodesFetched(view));
-            });
-        }
-        self.open_desktop_window(DesktopWindow::NukeCodes);
-    }
-
-    fn builtin_game_window(name: &str) -> Option<DesktopWindow> {
-        match name {
-            BUILTIN_ZETA_INVADERS_GAME => Some(DesktopWindow::ZetaInvaders),
-            BUILTIN_RED_MENACE_GAME => Some(DesktopWindow::RedMenace),
-            _ => None,
-        }
-    }
-
-    fn builtin_game_terminal_screen(name: &str) -> Option<TerminalScreen> {
-        match name {
-            BUILTIN_ZETA_INVADERS_GAME => Some(TerminalScreen::ZetaInvaders),
-            BUILTIN_RED_MENACE_GAME => Some(TerminalScreen::RedMenace),
-            _ => None,
-        }
-    }
-
-    pub(super) fn open_hosted_robco_fun_game(&mut self, name: &str) -> bool {
-        let Some(window) = Self::builtin_game_window(name) else {
-            return false;
-        };
-        match window {
-            DesktopWindow::ZetaInvaders => self.reset_zeta_invaders_runtime(false),
-            DesktopWindow::RedMenace => self.reset_red_menace_runtime(false),
-            _ => {}
-        }
-        self.desktop_mode_open = true;
-        self.close_desktop_overlays();
-        self.open_desktop_window(window);
-        self.shell_status = format!("Opened {name}.");
-        true
-    }
-
-    pub(super) fn open_terminal_robco_fun_game(
-        &mut self,
-        name: &str,
-        return_screen: TerminalScreen,
-    ) -> bool {
-        let Some(screen) = Self::builtin_game_terminal_screen(name) else {
-            return false;
-        };
-        self.reset_game_for_screen(screen);
-        self.terminal_nav.game_return_screen = return_screen;
-        self.navigate_to_screen(screen);
-        self.apply_status_update(shell_status(format!("Opened {name}.")));
-        true
     }
 
     pub(super) fn next_embedded_game_dt(last_frame_at: &mut Option<Instant>) -> f32 {
@@ -1353,14 +1191,13 @@ mod tests {
         assert_eq!(app.shell_status, "Closed session 3.");
     }
 
-    fn terminal_submenu_screens() -> [TerminalScreen; 14] {
+    fn terminal_submenu_screens() -> [TerminalScreen; 13] {
         [
             TerminalScreen::Applications,
             TerminalScreen::Documents,
             TerminalScreen::Network,
             TerminalScreen::Games,
             TerminalScreen::GamesRobcoFun,
-            TerminalScreen::NukeCodes,
             TerminalScreen::ProgramInstaller,
             TerminalScreen::Logs,
             TerminalScreen::DocumentBrowser,
@@ -1420,56 +1257,6 @@ mod tests {
             assert_eq!(app.terminal_nav.screen, screen);
             assert_eq!(app.editor.text, format!("u1-{idx}"));
             assert_eq!(app.editor.ui.find_query, format!("find-u1-{idx}"));
-        }
-    }
-
-    #[test]
-    fn nuke_codes_screen_state_restores_across_session_switch() {
-        let _guard = session_test_guard();
-        let _users = install_test_users(&["u1", "u2"]);
-        session::clear_sessions();
-        session::take_switch_request();
-
-        let mut app = RobcoNativeApp::default();
-        let s1 = session::push_session("u1");
-        let s2 = session::push_session("u2");
-
-        session::set_active(s1);
-        assert!(app.sync_active_session_identity());
-        app.terminal_nav.screen = TerminalScreen::NukeCodes;
-        app.terminal_nav.nuke_codes_return_screen = TerminalScreen::Applications;
-        app.terminal_nuke_codes =
-            NukeCodesView::Data(robcos_native_nuke_codes_app::NukeCodesData {
-                alpha: "11111111".to_string(),
-                bravo: "22222222".to_string(),
-                charlie: "33333333".to_string(),
-                source: "Test Source".to_string(),
-                fetched_at: "2026-03-01 06:00 PM".to_string(),
-            });
-        app.park_active_session_runtime();
-
-        session::set_active(s2);
-        assert!(app.sync_active_session_identity());
-        app.terminal_nav.screen = TerminalScreen::MainMenu;
-        app.terminal_nav.nuke_codes_return_screen = TerminalScreen::MainMenu;
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-        app.park_active_session_runtime();
-
-        session::request_switch(s1);
-        app.apply_pending_session_switch();
-        assert_eq!(session::active_idx(), s1);
-        assert_eq!(app.terminal_nav.screen, TerminalScreen::NukeCodes);
-        assert_eq!(
-            app.terminal_nav.nuke_codes_return_screen,
-            TerminalScreen::Applications
-        );
-        match &app.terminal_nuke_codes {
-            NukeCodesView::Data(data) => {
-                assert_eq!(data.alpha, "11111111");
-                assert_eq!(data.bravo, "22222222");
-                assert_eq!(data.charlie, "33333333");
-            }
-            other => panic!("expected NukeCodes data, got {other:?}"),
         }
     }
 
@@ -2350,16 +2137,6 @@ mod tests {
     }
 
     #[test]
-    fn nuke_codes_launch_target_is_unavailable_until_installed() {
-        let mut app = RobcoNativeApp::default();
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-
-        app.launch_nuke_codes_via_registry();
-
-        assert!(!app.desktop_window_is_open(DesktopWindow::NukeCodes));
-    }
-
-    #[test]
     fn terminal_launch_target_opens_terminal_window() {
         let mut app = RobcoNativeApp::default();
 
@@ -2477,18 +2254,6 @@ mod tests {
     }
 
     #[test]
-    fn desktop_program_request_open_nuke_codes_requires_installed_addon() {
-        let mut app = RobcoNativeApp::default();
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-
-        app.apply_desktop_program_request(DesktopProgramRequest::OpenNukeCodes {
-            close_window: true,
-        });
-
-        assert!(!app.desktop_window_is_open(DesktopWindow::NukeCodes));
-    }
-
-    #[test]
     fn open_text_editor_action_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
 
@@ -2500,43 +2265,6 @@ mod tests {
         assert!(app.desktop_window_is_open(DesktopWindow::Editor));
     }
 
-    #[test]
-    fn open_nuke_codes_action_requires_installed_addon() {
-        let mut app = RobcoNativeApp::default();
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-
-        app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
-            launch_registry::nuke_codes_launch_target(),
-        ));
-
-        assert!(!app.desktop_window_is_open(DesktopWindow::NukeCodes));
-    }
-
-    #[test]
-    fn start_leaf_nuke_codes_requires_installed_addon() {
-        let mut app = RobcoNativeApp::default();
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-
-        app.run_start_leaf_action(NativeStartLeafAction::LaunchNukeCodes);
-
-        assert!(!app.desktop_window_is_open(DesktopWindow::NukeCodes));
-    }
-
-    #[test]
-    fn spotlight_nuke_codes_result_requires_installed_addon() {
-        let mut app = RobcoNativeApp::default();
-        app.terminal_nuke_codes = NukeCodesView::Error("offline".to_string());
-        app.spotlight_open = true;
-
-        app.spotlight_activate_result(&NativeSpotlightResult {
-            name: BUILTIN_NUKE_CODES_APP.to_string(),
-            category: NativeSpotlightCategory::System,
-            path: None,
-        });
-
-        assert!(!app.spotlight_open);
-        assert!(!app.desktop_window_is_open(DesktopWindow::NukeCodes));
-    }
 
     #[test]
     fn spotlight_terminal_result_uses_registry_launch() {
@@ -2837,7 +2565,6 @@ mod tests {
         app.desktop_applications_sections_cache = Some(DesktopApplicationsSectionsCache {
             show_file_manager: true,
             show_text_editor: true,
-            show_nuke_codes: true,
             sections: Arc::new(sections),
         });
 
@@ -3148,98 +2875,4 @@ mod tests {
         assert_eq!(app.file_manager.selected, Some(file_path));
     }
 
-    #[test]
-    fn robco_fun_game_launch_opens_hosted_desktop_window() {
-        let _guard = session_test_guard();
-
-        let mut app = RobcoNativeApp::default();
-
-        assert!(app.open_hosted_robco_fun_game(BUILTIN_ZETA_INVADERS_GAME));
-
-        assert!(app.desktop_mode_open);
-        assert!(app.zeta_invaders.open);
-        assert_eq!(
-            app.desktop_active_window,
-            Some(WindowInstanceId::primary(DesktopWindow::ZetaInvaders))
-        );
-    }
-
-    #[test]
-    fn terminal_game_request_routes_robco_fun_games_into_terminal_screen() {
-        let _guard = session_test_guard();
-
-        let mut app = RobcoNativeApp::default();
-        app.apply_terminal_program_request(
-            robcos_native_programs_app::TerminalProgramRequest::LaunchCatalog {
-                name: BUILTIN_RED_MENACE_GAME.to_string(),
-                catalog: ProgramCatalog::Games,
-            },
-            TerminalScreen::GamesRobcoFun,
-        );
-
-        assert!(!app.desktop_mode_open);
-        assert_eq!(app.terminal_nav.screen, TerminalScreen::RedMenace);
-        assert_eq!(
-            app.terminal_nav.game_return_screen,
-            TerminalScreen::GamesRobcoFun
-        );
-    }
-
-    #[test]
-    fn reopening_terminal_game_starts_from_a_fresh_runtime() {
-        let _guard = session_test_guard();
-
-        let mut app = RobcoNativeApp::default();
-        assert!(app.open_terminal_robco_fun_game(
-            BUILTIN_ZETA_INVADERS_GAME,
-            TerminalScreen::GamesRobcoFun
-        ));
-        app.zeta_invaders.game.update(
-            &robcos_native_zeta_invaders_app::GameInput {
-                start: true,
-                ..Default::default()
-            },
-            1.0 / 60.0,
-        );
-        assert_eq!(
-            app.zeta_invaders.game.phase(),
-            robcos_native_zeta_invaders_app::GamePhase::Ready
-        );
-
-        assert!(app.open_terminal_robco_fun_game(
-            BUILTIN_ZETA_INVADERS_GAME,
-            TerminalScreen::GamesRobcoFun
-        ));
-        assert_eq!(
-            app.zeta_invaders.game.phase(),
-            robcos_native_zeta_invaders_app::GamePhase::Title
-        );
-    }
-
-    #[test]
-    fn closing_hosted_game_window_resets_runtime() {
-        let _guard = session_test_guard();
-
-        let mut app = RobcoNativeApp::default();
-        assert!(app.open_hosted_robco_fun_game(BUILTIN_RED_MENACE_GAME));
-        app.red_menace.game.update(
-            &robcos_native_red_menace_app::GameInput {
-                start: true,
-                ..Default::default()
-            },
-            1.0 / 60.0,
-        );
-        assert_eq!(
-            app.red_menace.game.phase(),
-            robcos_native_red_menace_app::GamePhase::Intro
-        );
-
-        app.close_desktop_window(DesktopWindow::RedMenace);
-
-        assert!(!app.red_menace.open);
-        assert_eq!(
-            app.red_menace.game.phase(),
-            robcos_native_red_menace_app::GamePhase::Title
-        );
-    }
 }

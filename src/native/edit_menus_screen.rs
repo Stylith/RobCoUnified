@@ -10,7 +10,6 @@ pub fn draw_edit_menus_screen(
     ctx: &Context,
     state: &mut TerminalEditMenusState,
     entries: EditMenusEntries<'_>,
-    nuke_codes_visible: bool,
     text_editor_visible: bool,
     shell_status: &str,
     cols: usize,
@@ -24,8 +23,7 @@ pub fn draw_edit_menus_screen(
     status_row: usize,
     content_col: usize,
 ) -> TerminalEditMenusRequest {
-    let model =
-        build_edit_menus_view_model(state, entries, nuke_codes_visible, text_editor_visible);
+    let model = build_edit_menus_view_model(state, entries, text_editor_visible);
     let mut selected_idx = model.selected_idx;
     let activated = draw_terminal_menu_screen(
         ctx,
@@ -87,7 +85,6 @@ mod tests {
                 games: &[],
             },
             true,
-            true,
         );
         assert!(model.items.iter().any(|item| item == "Delete App"));
     }
@@ -103,7 +100,6 @@ mod tests {
                 network: &[],
                 games: &[],
             },
-            true,
             true,
         );
         assert!(model.items.iter().any(|item| item == "Edit Documents"));

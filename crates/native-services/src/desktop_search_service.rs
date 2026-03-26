@@ -11,7 +11,6 @@ fn word_processor_dir(username: &str) -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeStartLeafAction {
     None,
-    LaunchNukeCodes,
     OpenTextEditor,
     LaunchConfiguredApp(String),
     OpenDocumentCategory(PathBuf),
@@ -44,18 +43,10 @@ pub struct NativeSpotlightResult {
 
 fn start_application_entries_from_names(
     application_names: Vec<String>,
-    show_nuke_codes: bool,
     show_text_editor: bool,
     text_editor_name: &str,
-    nuke_codes_name: &str,
 ) -> Vec<NativeStartLeafEntry> {
     let mut items = Vec::new();
-    if show_nuke_codes {
-        items.push(NativeStartLeafEntry {
-            label: nuke_codes_name.to_string(),
-            action: NativeStartLeafAction::LaunchNukeCodes,
-        });
-    }
     if show_text_editor {
         items.push(NativeStartLeafEntry {
             label: text_editor_name.to_string(),
@@ -63,7 +54,7 @@ fn start_application_entries_from_names(
         });
     }
     for name in application_names {
-        if name == nuke_codes_name || name == text_editor_name {
+        if name == text_editor_name {
             continue;
         }
         items.push(NativeStartLeafEntry {
@@ -81,17 +72,13 @@ fn start_application_entries_from_names(
 }
 
 pub fn start_application_entries(
-    show_nuke_codes: bool,
     show_text_editor: bool,
     text_editor_name: &str,
-    nuke_codes_name: &str,
 ) -> Vec<NativeStartLeafEntry> {
     start_application_entries_from_names(
         catalog_names(ProgramCatalog::Applications),
-        show_nuke_codes,
         show_text_editor,
         text_editor_name,
-        nuke_codes_name,
     )
 }
 
@@ -168,14 +155,12 @@ pub fn gather_spotlight_results(
     tab: u8,
     active_username: Option<&str>,
     text_editor_name: &str,
-    nuke_codes_name: &str,
 ) -> Vec<NativeSpotlightResult> {
     gather_spotlight_results_with_names(
         query,
         tab,
         active_username,
         text_editor_name,
-        nuke_codes_name,
         catalog_names(ProgramCatalog::Applications),
         all_game_menu_names(),
         catalog_names(ProgramCatalog::Network),
@@ -187,7 +172,6 @@ fn gather_spotlight_results_with_names(
     tab: u8,
     active_username: Option<&str>,
     text_editor_name: &str,
-    nuke_codes_name: &str,
     application_names: Vec<String>,
     game_names: Vec<String>,
     network_names: Vec<String>,
@@ -203,7 +187,6 @@ fn gather_spotlight_results_with_names(
             "Settings",
             "Terminal",
             text_editor_name,
-            nuke_codes_name,
         ] {
             if matches_query(name) {
                 results.push(NativeSpotlightResult {
@@ -214,7 +197,7 @@ fn gather_spotlight_results_with_names(
             }
         }
         for name in application_names {
-            if name != nuke_codes_name && name != text_editor_name && matches_query(&name) {
+            if name != text_editor_name && matches_query(&name) {
                 results.push(NativeSpotlightResult {
                     name,
                     category: NativeSpotlightCategory::App,
@@ -303,14 +286,11 @@ mod tests {
         let items = start_application_entries_from_names(
             vec!["ROBCO Word Processor".to_string(), "Hex".to_string()],
             true,
-            true,
             "ROBCO Word Processor",
-            "Nuke Codes",
         );
 
-        assert_eq!(items[0].label, "Nuke Codes");
-        assert_eq!(items[1].label, "ROBCO Word Processor");
-        assert_eq!(items[2].label, "Hex");
+        assert_eq!(items[0].label, "ROBCO Word Processor");
+        assert_eq!(items[1].label, "Hex");
     }
 
     #[test]
@@ -320,7 +300,6 @@ mod tests {
             1,
             None,
             "ROBCO Word Processor",
-            "Nuke Codes",
             vec!["Helix".to_string()],
             vec!["Missile Command".to_string()],
             Vec::new(),

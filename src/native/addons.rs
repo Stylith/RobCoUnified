@@ -26,7 +26,6 @@ use zip::ZipArchive;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeDesktopRoute {
     OpenWindow(DesktopWindow),
-    OpenNukeCodes,
     OpenSettingsPanel(Option<NativeSettingsPanel>),
 }
 
@@ -36,7 +35,6 @@ pub(crate) enum NativeTerminalRoute {
     OpenEmbeddedTerminalShell,
     OpenDocumentBrowser,
     OpenEditor,
-    OpenNukeCodes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1368,7 +1366,7 @@ fn base_app_manifest(id: &str, display_name: &str, route: &str) -> AddonManifest
     )
 }
 
-const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 14] = [
+const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 11] = [
     FirstPartyAddonRuntime {
         addon_id: "shell.settings",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(None)),
@@ -1435,21 +1433,6 @@ const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 14] = [
             NativeSettingsPanel::About,
         ))),
         terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::About)),
-    },
-    FirstPartyAddonRuntime {
-        addon_id: "games.red-menace",
-        desktop_route: None,
-        terminal_route: None,
-    },
-    FirstPartyAddonRuntime {
-        addon_id: "games.zeta-invaders",
-        desktop_route: None,
-        terminal_route: None,
-    },
-    FirstPartyAddonRuntime {
-        addon_id: "tools.nuke-codes",
-        desktop_route: Some(NativeDesktopRoute::OpenNukeCodes),
-        terminal_route: Some(NativeTerminalRoute::OpenNukeCodes),
     },
 ];
 
@@ -1684,16 +1667,29 @@ mod tests {
 
     #[test]
     fn addon_state_disabled_reason_is_reported_separately_from_profile_policy() {
+        // Use shell.connections as the AddonState test case: it is essential
+        // (so we create a non-essential clone), mark it disabled via override,
+        // and confirm the disabled reason is AddonState on LinuxDesktop but
+        // InstallProfile on MacLauncher.
+        let connections = first_party_addon_registry()
+            .manifest(&AddonId::from("shell.connections"))
+            .cloned()
+            .expect("connections manifest");
+        // Build a non-essential version so the override actually takes effect.
+        let disableable = AddonManifest::new(
+            "shell.connections",
+            "Connections",
+            env!("CARGO_PKG_VERSION"),
+            AddonKind::App,
+            AddonEntrypoint::StaticRoute {
+                route: "connections".to_string(),
+            },
+        )
+        .with_scope(connections.scope)
+        .with_capability("connections-ui");
         let mut overrides = AddonStateOverrides::default();
-        overrides.set_enabled(AddonId::from("tools.nuke-codes"), Some(false));
-        let registry = AddonRegistry::from_manifests([
-            first_party_addon_registry()
-                .manifest(&AddonId::from("shell.connections"))
-                .cloned()
-                .expect("connections manifest"),
-            manifest("tools.nuke-codes", "Nuke Codes", AddonScope::User),
-        ])
-        .unwrap();
+        overrides.set_enabled(AddonId::from("shell.connections"), Some(false));
+        let registry = AddonRegistry::from_manifests([disableable]).unwrap();
         let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
             &registry,
             &overrides,
@@ -1702,7 +1698,7 @@ mod tests {
         assert_eq!(
             first_party_addon_disabled_reason_with_registry(
                 InstallProfile::LinuxDesktop,
-                &AddonId::from("tools.nuke-codes"),
+                &AddonId::from("shell.connections"),
                 &enabled_registry,
             ),
             Some(super::FirstPartyAddonDisabledReason::AddonState)
@@ -1773,6 +1769,10 @@ mod tests {
 
     #[test]
     fn hosted_game_names_only_include_installed_runtime_known_games() {
+        // After removing hardcoded game runtimes, only games with entries in
+        // FIRST_PARTY_ADDON_RUNTIMES appear.  Since the old hardcoded games
+        // (Red Menace, Zeta Invaders) were removed, a registry with those
+        // addon IDs produces no hosted game names.
         let registry = AddonRegistry::from_manifests([
             AddonManifest::new(
                 "games.red-menace",
@@ -1789,7 +1789,10 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(hosted_game_names_from_registry(&registry), vec!["Red Menace"]);
+        assert_eq!(
+            hosted_game_names_from_registry(&registry),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

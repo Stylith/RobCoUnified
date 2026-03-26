@@ -12,7 +12,6 @@ use crate::platform::{AddonId, CapabilityId, InstallProfile, LaunchTarget};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeDesktopLaunch {
     OpenWindow(DesktopWindow),
-    OpenNukeCodes,
     OpenSettingsPanel(Option<NativeSettingsPanel>),
 }
 
@@ -22,7 +21,6 @@ pub(super) enum NativeTerminalLaunch {
     OpenEmbeddedTerminalShell,
     OpenDocumentBrowser,
     OpenEditor,
-    OpenNukeCodes,
 }
 
 pub(super) fn file_manager_launch_target() -> LaunchTarget {
@@ -34,12 +32,6 @@ pub(super) fn file_manager_launch_target() -> LaunchTarget {
 pub(super) fn editor_launch_target() -> LaunchTarget {
     LaunchTarget::Capability {
         capability: CapabilityId::from("text-editor"),
-    }
-}
-
-pub(super) fn nuke_codes_launch_target() -> LaunchTarget {
-    LaunchTarget::Capability {
-        capability: CapabilityId::from("code-reference"),
     }
 }
 
@@ -215,7 +207,6 @@ fn resolve_target_addon_id(
 fn resolve_runtime_route(route: NativeDesktopRoute) -> NativeDesktopLaunch {
     match route {
         NativeDesktopRoute::OpenWindow(window) => NativeDesktopLaunch::OpenWindow(window),
-        NativeDesktopRoute::OpenNukeCodes => NativeDesktopLaunch::OpenNukeCodes,
         NativeDesktopRoute::OpenSettingsPanel(panel) => {
             NativeDesktopLaunch::OpenSettingsPanel(panel)
         }
@@ -230,7 +221,6 @@ fn resolve_terminal_runtime_route(route: NativeTerminalRoute) -> NativeTerminalL
         }
         NativeTerminalRoute::OpenDocumentBrowser => NativeTerminalLaunch::OpenDocumentBrowser,
         NativeTerminalRoute::OpenEditor => NativeTerminalLaunch::OpenEditor,
-        NativeTerminalRoute::OpenNukeCodes => NativeTerminalLaunch::OpenNukeCodes,
     }
 }
 
@@ -240,7 +230,7 @@ mod tests {
         about_launch_target, connections_launch_target, default_apps_launch_target,
         desktop_launch_target_available_for_profile, edit_menus_launch_target,
         editor_launch_target, file_manager_launch_target, installer_launch_target,
-        nuke_codes_launch_target, programs_launch_target, resolve_desktop_launch_target,
+        programs_launch_target, resolve_desktop_launch_target,
         resolve_desktop_launch_target_for_profile, resolve_terminal_launch_target,
         resolve_terminal_launch_target_for_profile, settings_launch_target, terminal_launch_target,
         terminal_launch_target_available_for_profile, unresolved_launch_target_status_for_profile,
@@ -266,11 +256,6 @@ mod tests {
             resolve_desktop_launch_target(&editor_launch_target()),
             Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Editor))
         );
-    }
-
-    #[test]
-    fn nuke_codes_capability_is_unavailable_until_installed() {
-        assert_eq!(resolve_desktop_launch_target(&nuke_codes_launch_target()), None);
     }
 
     #[test]

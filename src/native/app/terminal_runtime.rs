@@ -45,7 +45,6 @@ impl RobcoNativeApp {
     pub(super) fn navigate_to_screen(&mut self, screen: TerminalScreen) {
         let previous = self.terminal_nav.screen;
         if previous != screen {
-            self.reset_game_for_screen(previous);
             crate::sound::play_navigate();
         }
         self.terminal_nav.screen = screen;

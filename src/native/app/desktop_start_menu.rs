@@ -346,18 +346,12 @@ impl RobcoNativeApp {
         let profile = install_profile();
         match leaf {
             StartLeaf::Applications => start_application_entries(
-                self.settings.draft.builtin_menu_visibility.nuke_codes
-                    && super::launch_registry::desktop_launch_target_available_for_profile(
-                        &super::launch_registry::nuke_codes_launch_target(),
-                        profile,
-                    ),
                 self.settings.draft.builtin_menu_visibility.text_editor
                     && super::launch_registry::desktop_launch_target_available_for_profile(
                         &super::launch_registry::editor_launch_target(),
                         profile,
                     ),
                 EDITOR_APP_TITLE,
-                super::BUILTIN_NUKE_CODES_APP,
             ),
             StartLeaf::Documents => start_document_entries(
                 self.session
@@ -441,9 +435,6 @@ impl RobcoNativeApp {
     pub(super) fn run_start_leaf_action(&mut self, action: NativeStartLeafAction) {
         let action = match action {
             NativeStartLeafAction::None => return,
-            NativeStartLeafAction::LaunchNukeCodes => DesktopShellAction::LaunchByTarget(
-                super::launch_registry::nuke_codes_launch_target(),
-            ),
             NativeStartLeafAction::OpenTextEditor => {
                 DesktopShellAction::LaunchByTarget(super::launch_registry::editor_launch_target())
             }

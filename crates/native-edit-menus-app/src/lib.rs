@@ -96,7 +96,6 @@ pub struct EditMenusViewModel {
 pub enum TerminalEditMenusRequest {
     None,
     BackToSettings,
-    PersistToggleBuiltinNukeCodes,
     PersistToggleBuiltinTextEditor,
     OpenPromptAddProgramName {
         target: EditMenuTarget,
@@ -119,7 +118,6 @@ pub enum TerminalEditMenusRequest {
 pub fn build_edit_menus_view_model(
     state: &TerminalEditMenusState,
     entries: EditMenusEntries<'_>,
-    nuke_codes_visible: bool,
     text_editor_visible: bool,
 ) -> EditMenusViewModel {
     match state.view {
@@ -140,14 +138,6 @@ pub fn build_edit_menus_view_model(
             title: "Edit Applications",
             subtitle: None,
             items: vec![
-                format!(
-                    "Nuke Codes in Applications: {} [toggle]",
-                    if nuke_codes_visible {
-                        "VISIBLE"
-                    } else {
-                        "HIDDEN"
-                    }
-                ),
                 format!(
                     "ROBCO Word Processor in Applications: {} [toggle]",
                     if text_editor_visible {
@@ -254,9 +244,8 @@ pub fn apply_edit_menus_activation(
             _ => TerminalEditMenusRequest::BackToSettings,
         },
         EditMenusView::Applications => match idx {
-            0 => TerminalEditMenusRequest::PersistToggleBuiltinNukeCodes,
-            1 => TerminalEditMenusRequest::PersistToggleBuiltinTextEditor,
-            3 => TerminalEditMenusRequest::OpenPromptAddProgramName {
+            0 => TerminalEditMenusRequest::PersistToggleBuiltinTextEditor,
+            2 => TerminalEditMenusRequest::OpenPromptAddProgramName {
                 target: EditMenuTarget::Applications,
                 title: format!("Edit {}", EditMenuTarget::Applications.title()),
                 prompt: format!(
@@ -264,7 +253,7 @@ pub fn apply_edit_menus_activation(
                     EditMenuTarget::Applications.singular()
                 ),
             },
-            4 => {
+            3 => {
                 if entries.applications.is_empty() {
                     TerminalEditMenusRequest::Status("Error: App list is empty.".to_string())
                 } else {
@@ -445,7 +434,6 @@ mod tests {
                 network: &[],
                 games: &[],
             },
-            true,
             true,
         );
         assert!(model.items.iter().any(|item| item == "Edit Documents"));

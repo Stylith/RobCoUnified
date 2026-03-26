@@ -322,7 +322,6 @@ pub struct TerminalBackContext {
     pub installer_at_root: bool,
     pub has_embedded_pty: bool,
     pub pty_return_screen: TerminalScreen,
-    pub nuke_codes_return_screen: TerminalScreen,
     pub game_return_screen: TerminalScreen,
     pub browser_return_screen: TerminalScreen,
 }
@@ -354,7 +353,6 @@ pub struct TerminalNavigationState {
     pub network_idx: usize,
     pub games_idx: usize,
     pub robco_fun_games_idx: usize,
-    pub nuke_codes_return_screen: TerminalScreen,
     pub game_return_screen: TerminalScreen,
     pub settings_idx: usize,
     pub default_apps_idx: usize,
@@ -809,7 +807,6 @@ pub fn terminal_runtime_defaults() -> TerminalNavigationState {
         network_idx: 0,
         games_idx: 0,
         robco_fun_games_idx: 0,
-        nuke_codes_return_screen: TerminalScreen::Applications,
         game_return_screen: TerminalScreen::GamesRobcoFun,
         settings_idx: 0,
         default_apps_idx: 0,
@@ -973,10 +970,7 @@ pub fn terminal_screen_open_plan(
             reset_user_management_to_root: false,
             clear_status,
         },
-        TerminalScreen::NukeCodes
-        | TerminalScreen::ZetaInvaders
-        | TerminalScreen::RedMenace
-        | TerminalScreen::EditMenus
+        TerminalScreen::EditMenus
         | TerminalScreen::About
         | TerminalScreen::PtyApp => TerminalScreenOpenPlan {
             screen,
@@ -1064,13 +1058,6 @@ pub fn resolve_terminal_back_action(context: TerminalBackContext) -> TerminalBac
             clear_status: true,
             reset_installer: false,
         },
-        TerminalScreen::ZetaInvaders | TerminalScreen::RedMenace => {
-            TerminalBackAction::NavigateTo {
-                screen: context.game_return_screen,
-                clear_status: true,
-                reset_installer: false,
-            }
-        }
         TerminalScreen::Logs => TerminalBackAction::NavigateTo {
             screen: TerminalScreen::Documents,
             clear_status: true,
@@ -1099,11 +1086,6 @@ pub fn resolve_terminal_back_action(context: TerminalBackContext) -> TerminalBac
         | TerminalScreen::About
         | TerminalScreen::EditMenus => TerminalBackAction::NavigateTo {
             screen: TerminalScreen::Settings,
-            clear_status: true,
-            reset_installer: false,
-        },
-        TerminalScreen::NukeCodes => TerminalBackAction::NavigateTo {
-            screen: context.nuke_codes_return_screen,
             clear_status: true,
             reset_installer: false,
         },
@@ -1568,10 +1550,6 @@ mod tests {
     fn runtime_defaults_start_in_main_menu_and_root_user_management() {
         let defaults = terminal_runtime_defaults();
         assert_eq!(defaults.screen, TerminalScreen::MainMenu);
-        assert_eq!(
-            defaults.nuke_codes_return_screen,
-            TerminalScreen::Applications
-        );
         assert_eq!(defaults.game_return_screen, TerminalScreen::GamesRobcoFun);
         assert_eq!(defaults.browser_return_screen, TerminalScreen::Documents);
         assert_eq!(defaults.user_management_mode, UserManagementMode::Root);
@@ -1588,7 +1566,7 @@ mod tests {
             installer_at_root: true,
             has_embedded_pty: false,
             pty_return_screen: TerminalScreen::MainMenu,
-            nuke_codes_return_screen: TerminalScreen::Applications,
+
             game_return_screen: TerminalScreen::GamesRobcoFun,
             browser_return_screen: TerminalScreen::Documents,
         });
@@ -1605,7 +1583,7 @@ mod tests {
             installer_at_root: true,
             has_embedded_pty: false,
             pty_return_screen: TerminalScreen::MainMenu,
-            nuke_codes_return_screen: TerminalScreen::Applications,
+
             game_return_screen: TerminalScreen::GamesRobcoFun,
             browser_return_screen: TerminalScreen::Documents,
         });
@@ -1622,7 +1600,7 @@ mod tests {
             installer_at_root: true,
             has_embedded_pty: true,
             pty_return_screen: TerminalScreen::Network,
-            nuke_codes_return_screen: TerminalScreen::Applications,
+
             game_return_screen: TerminalScreen::GamesRobcoFun,
             browser_return_screen: TerminalScreen::Documents,
         });
@@ -1630,30 +1608,6 @@ mod tests {
             action,
             TerminalBackAction::ClosePtyAndReturn {
                 return_screen: TerminalScreen::Network
-            }
-        );
-    }
-
-    #[test]
-    fn back_action_returns_terminal_games_to_their_launch_menu() {
-        let action = resolve_terminal_back_action(TerminalBackContext {
-            screen: TerminalScreen::ZetaInvaders,
-            has_settings_choice: false,
-            has_default_app_slot: false,
-            connections_at_root: true,
-            installer_at_root: true,
-            has_embedded_pty: false,
-            pty_return_screen: TerminalScreen::MainMenu,
-            nuke_codes_return_screen: TerminalScreen::Applications,
-            game_return_screen: TerminalScreen::GamesRobcoFun,
-            browser_return_screen: TerminalScreen::Documents,
-        });
-        assert_eq!(
-            action,
-            TerminalBackAction::NavigateTo {
-                screen: TerminalScreen::GamesRobcoFun,
-                clear_status: true,
-                reset_installer: false,
             }
         );
     }
