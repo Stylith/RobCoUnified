@@ -3558,6 +3558,58 @@ This phase will cover:
 
 ---
 
+# Architecture constraints: Window Manager compatibility
+
+The following constraints protect future WM integration. All phases must respect them.
+
+### DO NOT:
+
+1. **Do not add new hardcoded panel/taskbar heights in workspace calculations.**
+   `desktop_workspace_rect()` (static version, line ~439 of `desktop_window_mgmt.rs`)
+   already hardcodes `TOP_BAR_H: 30.0` and `TASKBAR_H: 32.0`. This is legacy — the
+   `active_desktop_workspace_rect()` (instance method) correctly reads from
+   `desktop_active_layout`. Always use the instance method. Never add new static
+   workspace calculations.
+
+2. **Do not couple window content rendering to window chrome.**
+   Window content (what a hosted app draws) and window decoration (title bar, borders,
+   shadow, resize handles) must remain separable. Currently `draw_desktop_window_header()`
+   is called inside each window's `.show()` closure — this is acceptable for now, but do
+   not make it worse by mixing decoration logic with app content logic. If you add new
+   window rendering code, keep header/chrome in a clearly separated block at the top of
+   the closure.
+
+3. **Do not bypass `DesktopWindowState` for position/size tracking.**
+   All window rect tracking flows through `note_desktop_window_rect()` →
+   `DesktopWindowState.restore_pos/restore_size`. A future WM will replace egui's
+   built-in window dragging with its own rect management. Do not store window positions
+   in ad-hoc fields outside of `DesktopWindowState`.
+
+4. **Do not add new static window lists parallel to `DesktopComponentBinding`.**
+   There is already a static `DESKTOP_COMPONENT_BINDINGS` array and a dynamic
+   `secondary_windows` Vec. A future WM will unify these into a single window registry.
+   Do not create additional window tracking structures.
+
+5. **Do not add window decoration styles inline.**
+   `Self::desktop_window_frame()` is the single source for window frame styling. When
+   Phase 8 wires `ShellStyle` into rendering, it will modify this one function. Do not
+   create per-window frame variations — if a window needs different styling, it should
+   come from the active `ShellStyle`, not from a hardcoded override in the window's
+   draw function.
+
+### Current WM-adjacent infrastructure (do not remove):
+
+- `ManagedWindow` struct — exists in `desktop_app.rs`, currently dead code. Will become
+  the unified window record when the WM phase begins.
+- `WindowSource` enum — distinguishes window origins. Will expand to include external
+  windows (X11/Wayland surfaces) in the WM phase.
+- `WindowInstanceId` — composite key (kind + instance number) that supports multi-instance
+  windows. This is the right abstraction — do not flatten it.
+- `SlotRegistry` + `SlotRenderer` trait — runtime dispatch for shell components. The WM
+  will use this same pattern for dynamic window decorations.
+
+---
+
 # Rules for Codex
 
 1. **Do not invent abstractions.** Only create what is described in this spec.
