@@ -2481,15 +2481,1080 @@ Do not defer those items to Phase 5 or Phase 6. Those later phases are for new s
 
 ---
 
-# PHASE 5: Asset packs and shell style
+# PHASE 5: Terminal header branding slot
 
-### DEFERRED — Spec will be written after Phase 4 is implemented
+### Goal
+The "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM / COPYRIGHT 2075-2077 / -SERVER 1-" header
+that appears on every terminal screen becomes theme-controlled. By default (Classic theme)
+it is **hidden** — the Nucleon project is not RobCo. A future "RobCo" theme pack can
+re-enable it. When hidden, terminal screen rows shift up to reclaim the space.
+
+### Background
+
+The header is rendered in 9 places in `src/native/` via this pattern:
+```rust
+for (idx, line) in HEADER_LINES.iter().enumerate() {
+    screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
+}
+```
+
+Files that render the header directly:
+- `src/native/shell_screen.rs` (2 call sites: lines 70, 206)
+- `src/native/about_screen.rs` (line 41)
+- `src/native/menu.rs` (line 98)
+- `src/native/document_browser.rs` (line 103)
+- `src/native/prompt.rs` (2 call sites: lines 201, 231)
+- `src/native/settings_screen.rs` (line 95)
+- `src/native/app/tweaks_presenter.rs` (line 2026)
+
+There is also a TUI path in `crates/shared/src/ui.rs:323` (`render_header()`) called by
+6 functions in `ui.rs` plus 3 sites in `src/legacy/`. The TUI path is out of scope for
+this phase — it will be addressed when the legacy TUI is retired.
+
+The header occupies rows 0-2 (3 rows). When hidden, every row index after it shifts
+up by 3, gaining 3 extra rows of usable content space.
+
+### Step 1: Add header configuration to ThemePack
+
+In `crates/shared/src/theme.rs`, add a new struct and field:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalBranding {
+    pub header_lines: Vec<String>,
+}
+
+impl TerminalBranding {
+    pub fn none() -> Self {
+        TerminalBranding {
+            header_lines: vec![],
+        }
+    }
+
+    pub fn robco() -> Self {
+        TerminalBranding {
+            header_lines: vec![
+                "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM".to_string(),
+                "COPYRIGHT 2075-2077 ROBCO INDUSTRIES".to_string(),
+                "-SERVER 1-".to_string(),
+            ],
+        }
+    }
+}
+```
+
+Add to `ThemePack`:
+```rust
+pub struct ThemePack {
+    // ... existing fields ...
+    pub terminal_branding: TerminalBranding,
+}
+```
+
+Update `ThemePack::classic()` to use `TerminalBranding::none()`. The Classic theme has
+no RobCo branding — it is Nucleon's default identity.
+
+### Step 2: Store active branding in RobcoNativeApp
+
+In `src/native/app.rs`, add a field:
+```rust
+pub(super) terminal_branding: TerminalBranding,
+```
+
+Initialize it from the active theme pack in the constructor (default: `TerminalBranding::none()`).
+
+When a theme pack is applied (in tweaks or via `apply_theme_pack()`), copy the pack's
+`terminal_branding` into this field.
+
+### Step 3: Compute terminal layout with dynamic header
+
+The current `TerminalLayout` struct in `src/native/app.rs` (line 338) has hardcoded row
+positions. The header occupies rows 0-2 (3 rows), with `separator_top_row: 3`.
+
+Add a function that computes layout based on header line count:
+
+```rust
+fn terminal_layout_with_branding(branding: &TerminalBranding) -> TerminalLayout {
+    let header_lines = branding.header_lines.len();
+    // When header is empty, rows shift up by 3 (the old header size)
+    // When header has N lines, separator starts at row N
+    let header_start_row = 0;
+    let separator_top_row = if header_lines == 0 { 0 } else { header_lines };
+    let title_row = separator_top_row + 1;
+    let separator_bottom_row = title_row + 1;
+    let subtitle_row = separator_bottom_row + 2;
+    let menu_start_row = subtitle_row + 2;
+    // Keep status_row pinned to bottom
+    let status_row = TERMINAL_SCREEN_ROWS - 4;
+    let status_row_alt = TERMINAL_SCREEN_ROWS - 2;
+    TerminalLayout {
+        cols: TERMINAL_SCREEN_COLS,
+        rows: TERMINAL_SCREEN_ROWS,
+        content_col: TERMINAL_CONTENT_COL,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        status_row_alt,
+    }
+}
+```
+
+Replace the call to `terminal_layout_for_scale()` in `RobcoNativeApp::terminal_layout()`
+so it calls `terminal_layout_with_branding(&self.terminal_branding)` instead.
+
+**Important:** `terminal_layout_for_scale()` is currently called in one place. Find it
+by searching for `terminal_layout_for_scale` — it should be in a method like
+`fn terminal_layout(&self) -> TerminalLayout`. Replace that call.
+
+### Step 4: Replace direct HEADER_LINES rendering with branding-aware rendering
+
+Add a helper method to `RobcoNativeApp`:
+
+```rust
+pub(super) fn active_terminal_header_lines(&self) -> &[String] {
+    &self.terminal_branding.header_lines
+}
+```
+
+**However**, the 9 rendering call sites are NOT methods on `RobcoNativeApp` — they are
+standalone functions that receive `header_start_row` as a parameter. They do NOT have
+access to `self`. The header lines need to be passed as a parameter.
+
+The cleanest approach: change `header_start_row: usize` parameter to a new type that
+carries both the start row and the lines:
+
+**Do NOT do that.** Too many call sites. Instead, use a simpler approach:
+
+Add a new parameter `header_lines: &[&str]` to each rendering function that currently
+uses `HEADER_LINES`. This is mechanical — each site already receives `header_start_row`.
+
+For each of the 9 call sites listed above, change:
+```rust
+// BEFORE:
+for (idx, line) in HEADER_LINES.iter().enumerate() {
+    screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
+}
+
+// AFTER:
+for (idx, line) in header_lines.iter().enumerate() {
+    screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
+}
+```
+
+At each **call site** (where the function is invoked), pass the header lines from the app:
+```rust
+// In src/native/app/terminal_screens.rs and frame_runtime.rs where these are called:
+let header_lines: Vec<&str> = self.terminal_branding.header_lines
+    .iter().map(|s| s.as_str()).collect();
+// Pass &header_lines to the function
+```
+
+**Function signature changes** (add `header_lines: &[&str]` parameter):
+
+1. `src/native/shell_screen.rs` — `draw_login_screen()` and `draw_shell_screen()`
+   (or whatever the function names are — read the file to find them)
+2. `src/native/about_screen.rs` — `draw_about_screen()`
+3. `src/native/menu.rs` — the generic menu draw function
+4. `src/native/document_browser.rs` — `draw_document_browser()`
+5. `src/native/prompt.rs` — `draw_yes_no_prompt()` and `draw_prompt_with_input()`
+6. `src/native/settings_screen.rs` — `draw_settings_screen()`
+
+**For `src/native/app/tweaks_presenter.rs`** (the terminal tweaks screen), this is already
+an `impl RobcoNativeApp` method, so it has `self` — replace `crate::config::HEADER_LINES`
+with `self.terminal_branding.header_lines` directly.
+
+### Step 5: Update call sites in frame_runtime.rs and terminal_screens.rs
+
+These are the files that call the standalone rendering functions. Search for every
+invocation of the functions modified in Step 4. At each call site:
+
+1. Build the header lines slice:
+   ```rust
+   let header_lines: Vec<&str> = self.terminal_branding.header_lines
+       .iter().map(|s| s.as_str()).collect();
+   ```
+2. Pass `&header_lines` as the new parameter.
+
+**Critical:** There are many call sites in `terminal_screens.rs` (at least 15+) and
+`frame_runtime.rs` (at least 3). To avoid repeating the `Vec<&str>` construction, build
+it once at the top of the calling method and reuse it.
+
+Alternatively, if multiple methods need it, you can add a helper:
+```rust
+fn header_line_refs(branding: &TerminalBranding) -> Vec<&str> {
+    branding.header_lines.iter().map(|s| s.as_str()).collect()
+}
+```
+
+### Step 6: Update installer_screen.rs
+
+`src/native/installer_screen.rs` has many functions that receive `header_start_row` and
+render the header. These use a different pattern — they call helper functions defined
+locally that take `header_start_row`. Search for `HEADER_LINES` in installer_screen.rs.
+
+If installer_screen.rs does NOT directly reference `HEADER_LINES`, it may delegate to one
+of the functions already modified in Step 4. Read the file to confirm. If it has its own
+header rendering, apply the same `header_lines: &[&str]` parameter change.
+
+### Step 7: Remove HEADER_LINES import from modified files
+
+After all sites use the passed-in `header_lines` parameter, remove `use crate::config::HEADER_LINES`
+from the files that no longer reference the constant directly.
+
+Do NOT remove the `HEADER_LINES` constant from `crates/shared/src/config.rs` — the TUI
+path in `crates/shared/src/ui.rs` still uses it, and `TerminalBranding::robco()` is the
+new canonical source for the same strings.
+
+### Step 8: Wire theme pack application to branding
+
+When a theme pack is selected in the tweaks UI (both desktop egui and terminal retro
+presenters), copy `theme.terminal_branding` to `self.terminal_branding`.
+
+In `src/native/app/tweaks_presenter.rs`, find where `self.desktop_active_layout` is
+updated from a theme pack (around line 2421). In the same block, add:
+```rust
+self.terminal_branding = theme.terminal_branding.clone();
+```
+
+Do the same in the terminal tweaks step handler if theme packs are applied there.
+
+Also update `persist_surface_theme_state_to_settings()` (or wherever theme state is
+persisted) to save/restore the branding. Add to `Settings` in `crates/shared/src/config.rs`:
+```rust
+pub terminal_branding: Option<TerminalBranding>,
+```
+
+Default to `None`. When `None`, use `TerminalBranding::none()`.
+
+### Verification
+
+- `cargo check -p robcos`
+- `cargo check -p robcos-native-shell`
+- Run app with Classic theme:
+  - Terminal screens should have NO "ROBCO INDUSTRIES" header
+  - All screens (login, main menu, settings, about, installer, etc.) should render correctly
+  - Row content should start higher on screen (3 rows reclaimed)
+  - The title and separator rows should still display correctly
+- Verify no visual breakage in desktop mode
+- If you manually set `TerminalBranding::robco()` as the branding, the header should reappear
+  in the old position with the old text
 
 ---
 
-# PHASE 6: nucleon-core-themes repo and packaging
+# PHASE 6: Tweaks UI restructure
 
-### DEFERRED — Spec will be written after Phase 4 is implemented
+### Goal
+Restructure the nucleon-tweaks app UI (both desktop egui and terminal retro-screen versions)
+to fix the issues identified in the current implementation. The new structure is cleaner,
+flatter, and follows correct UX conventions for theme/appearance management.
+
+### Current problems to fix
+
+1. **"Manual" should be "Custom"** — "Manual" appears as a selectable option in the ThemePack
+   dropdown. It should be called "Custom" and should NOT be selectable. It is a state indicator
+   that appears only when the user has overridden individual settings from a theme pack.
+
+2. **Layout should not be a separate tab** — Selecting a ThemePack sets the layout. Layout
+   overrides belong in an advanced section, not a top-level tab.
+
+3. **CRT effects are only under Desktop > Display** — CRT is a global rendering concern
+   (the WGSL shader processes the entire framebuffer). It should be accessible as a
+   top-level section, not nested under Desktop.
+
+4. **Three-level tab hierarchy is confusing** — Surface > Sub-tab > Section is too deep.
+
+### New UI structure
+
+```
+TWEAKS
+├─ Appearance  ← new unified section (replaces Colors tab + Layout tab)
+│  ├─ Theme Pack: [Classic | Nucleon Dark | Nucleon Light]
+│  │   (no "Custom" in dropdown — "Custom" only shown as read-only label when overridden)
+│  ├─ Color Mode: [Monochrome | Full Color]
+│  │   └─ Monochrome: preset picker + custom RGB sliders
+│  │   └─ Full Color: theme picker (Nucleon Dark / Nucleon Light)
+│  │       └─ [Customize...] ← opens per-token color overrides (collapsible)
+│  │       └─ [Export Theme...] ← saves customized theme as .ndpkg-ready JSON
+│  └─ [+] Layout Overrides (collapsible, collapsed by default)
+│     ├─ Top panel: [Panel | Hidden]
+│     ├─ Bottom panel: [Taskbar | Hidden]
+│     ├─ Left panel: [Dock | Hidden]
+│     └─ Right panel: [Dock | Hidden]
+├─ Desktop
+│  ├─ Background: wallpaper path + size mode
+│  └─ Icons: style picker, builtin icon toggles, cursor settings
+├─ Display
+│  ├─ Window Mode: windowed/maximized/fullscreen
+│  └─ CRT Effects: enable toggle, preset, all sliders
+└─ Terminal
+   ├─ Theme Pack: [Classic | ...] (independent of desktop theme)
+   ├─ Color Mode: same as Appearance but for terminal surface
+   ├─ Layout: terminal layout profile
+   └─ PTY: styled rendering toggle, color mode, border glyphs
+```
+
+### Step 1: Rename "Manual" to "Custom" and make it non-selectable
+
+In `src/native/app/tweaks_presenter.rs`:
+
+1. Find the function `selected_theme_pack_name()` (around line 100). Change `"Manual"` to
+   `"Custom"`.
+
+2. In `terminal_tweaks_dropdown_options()` for `DesktopThemePack` and `TerminalThemePack`
+   (around line 573-576): Remove the `std::iter::once("Manual".to_string())` prefix. The
+   dropdown should only list actual theme packs:
+   ```rust
+   TerminalTweaksDropdown::DesktopThemePack
+   | TerminalTweaksDropdown::TerminalThemePack => theme_packs
+       .iter()
+       .map(|theme| theme.name.clone())
+       .collect(),
+   ```
+
+3. In `terminal_tweaks_dropdown_selected_index()` for `DesktopThemePack` (around line 649-654):
+   Remove the `+ 1` offset since "Manual" is no longer in the list:
+   ```rust
+   TerminalTweaksDropdown::DesktopThemePack => self
+       .desktop_active_theme_pack_id
+       .as_deref()
+       .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
+       .unwrap_or(0),
+   ```
+   Do the same for `TerminalThemePack`.
+
+4. In the desktop egui `draw_tweaks()` method: Find the "Manual" button in the
+   `DesktopThemePack` ComboBox (around line 2394-2404). Remove the "Manual" / `retro_choice_button`
+   entry entirely. The ComboBox `selected_text` already shows "Custom" via
+   `selected_theme_pack_name()` when no pack matches — that is sufficient.
+
+5. Do the same for the Terminal ThemePack ComboBox (around line 2840-2850).
+
+6. In the terminal retro-screen dropdown handler `apply_terminal_tweaks_step()`, find where
+   dropdown option index 0 maps to "Manual" for theme pack dropdowns. Since "Manual" is
+   removed, index 0 now maps to the first real theme pack. Update the index-to-action mapping
+   accordingly.
+
+### Step 2: Restructure desktop egui tweaks tabs
+
+In `draw_tweaks()`, the desktop surface currently has tabs:
+`["Background", "Display", "Colors", "Icons", "Layout"]`
+
+Change to a flat top-level tab structure (remove the Surface selector):
+`["Appearance", "Desktop", "Display", "Terminal"]`
+
+**Appearance tab** (new, index 0):
+- Theme Pack combo (from old Colors tab, but without "Custom" option)
+- Color Mode selector (Monochrome / Full Color) — from old Colors tab
+- Monochrome or Full Color sub-controls — from old Colors tab
+- Collapsible "Layout Overrides" section:
+  - Only shown when user clicks an "Advanced" expander
+  - Contains panel position controls as described in the new structure
+  - When any override is changed, set `desktop_active_theme_pack_id = None` (triggers "Custom")
+
+**Desktop tab** (index 1):
+- Background section (wallpaper path, size mode) — from old Background tab
+- Icons section (icon style, builtin toggles, cursor) — from old Icons tab
+
+**Display tab** (index 2):
+- Window Mode — from old Display tab
+- CRT Effects section — from old Display tab (exactly as-is)
+
+**Terminal tab** (index 3):
+- Terminal Theme Pack combo
+- Terminal Color Mode + controls
+- Terminal Layout profile
+- PTY section (styled rendering, color mode, border glyphs)
+
+Remove the `tweaks_surface_tab` field from `RobcoNativeApp`. Replace with a single
+`tweaks_tab: u8` (0=Appearance, 1=Desktop, 2=Display, 3=Terminal).
+
+Remove `desktop_tweaks_tab` and `terminal_tweaks_tab` fields — they're no longer needed
+since the old sub-tabs are gone.
+
+Add `tweaks_layout_overrides_open: bool` field (default false) to track the collapsible state.
+
+### Step 3: Restructure terminal retro-screen tweaks
+
+The terminal retro-screen tweaks currently uses a Surface dropdown (Desktop/Terminal) with
+collapsible DesktopMenu/TerminalMenu accordion sections.
+
+Change to match the new structure. The top-level sections become:
+
+```
+[Appearance]
+  Theme Pack: Classic
+  Color Mode: Monochrome
+  Monochrome Theme: Green (Default)
+[Desktop]
+  Wallpaper File: None [browse]
+  Wallpaper Mode: Default Size
+  Icon Style: Win95
+  ...
+[Display]
+  Window Mode: Windowed
+  CRT Effects: ON
+  CRT Preset: RobCo Standard
+  ...
+[Terminal]
+  Theme Pack: Classic
+  Color Mode: Monochrome
+  Terminal Layout: Classic Terminal
+  Styled PTY Rendering: ON
+  ...
+```
+
+Replace the `DesktopMenu(u8)` / `TerminalMenu(u8)` accordion pattern with top-level
+section headers that are always expanded:
+
+- Remove `TerminalTweaksRow::Surface`, `SurfaceOption`, `DesktopMenu`, `TerminalMenu`
+- Remove `terminal_tweaks_surface_dropdown_open`, `terminal_tweaks_desktop_expanded_menu`,
+  `terminal_tweaks_terminal_expanded_menu` fields
+- Add `TerminalTweaksRow::SectionHeader(u8)` (0=Appearance, 1=Desktop, 2=Display, 3=Terminal)
+  as non-selectable headers
+- Under each header, list the relevant rows flat (no collapsing)
+
+### Step 4: Add built-in ThemePacks for Nucleon Dark and Nucleon Light
+
+In `crates/shared/src/theme.rs`, add:
+
+```rust
+impl ThemePack {
+    pub fn nucleon_dark() -> Self {
+        ThemePack {
+            id: "nucleon-dark".to_string(),
+            name: "Nucleon Dark".to_string(),
+            description: "Dark background with teal accents".to_string(),
+            version: "1.0.0".to_string(),
+            shell_style: ShellStyle {
+                id: "nucleon-dark".to_string(),
+                name: "Nucleon Dark".to_string(),
+                border_radius: 4.0,
+                title_bar_height: 28.0,
+                separator_thickness: 1.0,
+                window_shadow: true,
+            },
+            layout_profile: LayoutProfile::classic(),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-dark".to_string(),
+            },
+            asset_pack: None,
+            terminal_branding: TerminalBranding::none(),
+        }
+    }
+
+    pub fn nucleon_light() -> Self {
+        ThemePack {
+            id: "nucleon-light".to_string(),
+            name: "Nucleon Light".to_string(),
+            description: "Light background with slate blue accents".to_string(),
+            version: "1.0.0".to_string(),
+            shell_style: ShellStyle {
+                id: "nucleon-light".to_string(),
+                name: "Nucleon Light".to_string(),
+                border_radius: 4.0,
+                title_bar_height: 28.0,
+                separator_thickness: 1.0,
+                window_shadow: true,
+            },
+            layout_profile: LayoutProfile::classic(),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-light".to_string(),
+            },
+            asset_pack: None,
+            terminal_branding: TerminalBranding::none(),
+        }
+    }
+
+    pub fn builtin_theme_packs() -> Vec<ThemePack> {
+        vec![Self::classic(), Self::nucleon_dark(), Self::nucleon_light()]
+    }
+}
+```
+
+Update `installed_theme_packs()` in `src/native/addons.rs` to use
+`ThemePack::builtin_theme_packs()` instead of `vec![ThemePack::classic()]` as the
+starting list.
+
+### Step 5: Layout override controls in Appearance tab
+
+In the desktop egui Appearance tab, add a collapsible section after the color controls:
+
+```rust
+// Layout Overrides
+ui.add_space(10.0);
+let override_label = if self.tweaks_layout_overrides_open {
+    "[-] Layout Overrides"
+} else {
+    "[+] Layout Overrides"
+};
+if ui.button(override_label).clicked() {
+    self.tweaks_layout_overrides_open = !self.tweaks_layout_overrides_open;
+}
+if self.tweaks_layout_overrides_open {
+    // Panel position
+    ui.horizontal(|ui| {
+        ui.label("Top panel:");
+        // ComboBox with PanelPosition options
+    });
+    ui.horizontal(|ui| {
+        ui.label("Bottom panel:");
+        // ComboBox: Taskbar / Hidden
+    });
+    ui.horizontal(|ui| {
+        ui.label("Left panel:");
+        // ComboBox: Dock / Hidden
+    });
+    ui.horizontal(|ui| {
+        ui.label("Right panel:");
+        // ComboBox: Dock / Hidden
+    });
+}
+```
+
+Use the existing `PanelPosition`, `DockPosition` enums from `theme.rs`. When any override
+is changed, set `self.desktop_active_theme_pack_id = None` to trigger "Custom" display.
+
+The exact control mapping:
+- "Top panel" controls `desktop_active_layout.panel_position` (Top/Hidden) and what renders
+  there (the Panel slot — menu bar)
+- "Bottom panel" controls `desktop_active_layout.dock_position` (Bottom/Hidden) and what
+  renders there (the Dock slot — taskbar)
+- "Left panel" controls `desktop_active_layout.dock_position` (Left/Hidden) — this is a
+  secondary dock position. If the dock is already at Bottom, setting Left moves it.
+- "Right panel" — same as Left but Right.
+
+**Simplification for now:** The controls are:
+- Top: Panel (menu bar) / Hidden
+- Bottom: Taskbar / Hidden
+- Dock position: Bottom / Left / Right / Hidden (single control, not per-side)
+
+### Step 6: Full Color theme customization (Customize button)
+
+When the user is in Full Color mode and has a theme selected (e.g., Nucleon Dark), show a
+"Customize..." button below the theme picker. Clicking it expands a collapsible section
+that shows every `ColorToken` as a labeled color swatch + editor.
+
+**Data model changes:**
+
+In `src/native/app.rs`, add:
+```rust
+pub(super) desktop_color_overrides: Option<std::collections::HashMap<ColorToken, [u8; 4]>>,
+pub(super) terminal_color_overrides: Option<std::collections::HashMap<ColorToken, [u8; 4]>>,
+pub(super) tweaks_customize_colors_open: bool,  // collapsible state
+```
+
+Initialize both to `None` and `false`.
+
+**How overrides work:**
+- When `desktop_color_overrides` is `Some`, the overrides are merged on top of the base
+  `FullColorTheme` tokens before building the palette.
+- Any override causes `desktop_active_theme_pack_id` to become `None` (shows "Custom").
+- Selecting a different theme or theme pack clears the overrides back to `None`.
+
+**Palette resolution with overrides** — in `retro_ui.rs`, modify `palette_for_color_style()`
+or add a new function:
+```rust
+pub fn palette_for_color_style_with_overrides(
+    style: &ColorStyle,
+    overrides: Option<&std::collections::HashMap<ColorToken, [u8; 4]>>,
+) -> RetroPalette {
+    match style {
+        ColorStyle::FullColor { theme_id } => {
+            let mut theme = FullColorTheme::builtin_by_id(theme_id)
+                .unwrap_or_else(FullColorTheme::nucleon_dark);
+            if let Some(overrides) = overrides {
+                for (token, color) in overrides {
+                    theme.tokens.insert(*token, *color);
+                }
+            }
+            palette_from_full_color_theme(&theme)
+        }
+        // Monochrome path unchanged
+        ColorStyle::Monochrome { preset, custom_rgb } => {
+            let color = monochrome_preset_to_color(*preset, *custom_rgb);
+            palette_for_theme_color(color)
+        }
+    }
+}
+```
+
+Wire this into the active color style dispatch (`set_active_color_style` and
+`current_palette` paths) so overrides are applied at render time.
+
+**UI in the desktop egui Appearance tab** (after the Full Color theme picker):
+
+```rust
+if !desktop_is_monochrome {
+    ui.add_space(6.0);
+    let customize_label = if self.tweaks_customize_colors_open {
+        "[-] Customize Colors"
+    } else {
+        "[+] Customize Colors"
+    };
+    if ui.button(customize_label).clicked() {
+        self.tweaks_customize_colors_open = !self.tweaks_customize_colors_open;
+    }
+    if self.tweaks_customize_colors_open {
+        // Get base theme tokens
+        let base_theme_id = full_color_theme_id_for_color_style(
+            &self.desktop_active_color_style,
+        );
+        let base_theme = FullColorTheme::builtin_by_id(base_theme_id)
+            .unwrap_or_else(FullColorTheme::nucleon_dark);
+        let overrides = self.desktop_color_overrides
+            .get_or_insert_with(|| base_theme.tokens.clone());
+
+        // Display each token as a labeled row with RGB sliders
+        for token in ColorToken::all() {
+            let entry = overrides.entry(token).or_insert([128, 128, 128, 255]);
+            ui.horizontal(|ui| {
+                ui.label(format!("{:?}", token));
+                // Color preview swatch
+                let [r, g, b, a] = *entry;
+                let preview = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(20.0, 20.0), egui::Sense::hover()
+                );
+                ui.painter().rect_filled(rect, 2.0, preview);
+                // RGB sliders (compact)
+                let mut changed = false;
+                changed |= ui.add(egui::DragValue::new(&mut entry[0])
+                    .range(0..=255).prefix("R:")).changed();
+                changed |= ui.add(egui::DragValue::new(&mut entry[1])
+                    .range(0..=255).prefix("G:")).changed();
+                changed |= ui.add(egui::DragValue::new(&mut entry[2])
+                    .range(0..=255).prefix("B:")).changed();
+                if changed {
+                    self.desktop_active_theme_pack_id = None;
+                    appearance_changed = true;
+                }
+            });
+        }
+    }
+}
+```
+
+Add a `ColorToken::all()` helper in `crates/shared/src/theme.rs`:
+```rust
+impl ColorToken {
+    pub fn all() -> &'static [ColorToken] {
+        &[
+            ColorToken::BgPrimary, ColorToken::BgSecondary,
+            ColorToken::FgPrimary, ColorToken::FgSecondary, ColorToken::FgDim,
+            ColorToken::Accent, ColorToken::AccentHover, ColorToken::AccentActive,
+            ColorToken::PanelBg, ColorToken::PanelBorder,
+            ColorToken::WindowChrome, ColorToken::WindowChromeFocused,
+            ColorToken::Selection, ColorToken::SelectionFg,
+            ColorToken::Border, ColorToken::Separator,
+            ColorToken::StatusBar,
+            ColorToken::Error, ColorToken::Warning, ColorToken::Success,
+        ]
+    }
+}
+```
+
+### Step 7: Export Theme button
+
+Below the Customize section (visible whenever customize is open or the user is in
+Full Color mode with overrides), show an "Export Theme..." button.
+
+**What Export does:**
+
+1. Builds a `FullColorTheme` from the current base theme + overrides.
+2. Serializes it to pretty-printed JSON.
+3. Writes to `<nucleon_data_dir>/exported_themes/<theme_name>.json`.
+4. Shows a status message: "Theme exported to <path>".
+
+**Implementation:**
+
+```rust
+if self.desktop_color_overrides.is_some() {
+    ui.add_space(8.0);
+    if ui.button("Export Theme...").clicked() {
+        let base_id = full_color_theme_id_for_color_style(
+            &self.desktop_active_color_style,
+        );
+        let mut theme = FullColorTheme::builtin_by_id(base_id)
+            .unwrap_or_else(FullColorTheme::nucleon_dark);
+        if let Some(overrides) = &self.desktop_color_overrides {
+            for (token, color) in overrides {
+                theme.tokens.insert(*token, *color);
+            }
+        }
+        theme.id = format!("{}-custom", base_id);
+        theme.name = format!("{} (Custom)", theme.name);
+        let export_dir = crate::config::nucleon_data_dir().join("exported_themes");
+        let _ = std::fs::create_dir_all(&export_dir);
+        let path = export_dir.join(format!("{}.json", theme.id));
+        match serde_json::to_string_pretty(&theme) {
+            Ok(json) => {
+                let _ = std::fs::write(&path, json);
+                saved_settings_status(
+                    &format!("Theme exported to {}", path.display()),
+                );
+            }
+            Err(_) => {
+                saved_settings_status("Failed to export theme");
+            }
+        }
+    }
+}
+```
+
+The exported JSON file can later be placed inside a `.ndpkg` theme bundle's
+`color_theme.json` for distribution. The Phase 8 packaging spec will cover that workflow.
+
+**For the terminal retro-screen tweaks:** The customize section is too complex for the
+retro-screen grid UI (RGB sliders don't work well in character-grid rendering). Instead,
+show a read-only message: `"Use Desktop Tweaks window for color customization"`.
+The export button is also desktop-only.
+
+### Verification
+
+- `cargo check -p robcos`
+- `cargo check -p robcos-native-shell`
+- Run app:
+  - Tweaks window shows 4 tabs: Appearance, Desktop, Display, Terminal
+  - No "Manual" option in ThemePack dropdowns
+  - ThemePack dropdown shows: Classic, Nucleon Dark, Nucleon Light
+  - Selecting Nucleon Dark switches to Full Color mode automatically
+  - Overriding a setting shows "Custom" as the theme pack name (read-only, not selectable)
+  - CRT effects are under Display tab (accessible regardless of surface)
+  - Layout Overrides section is collapsed by default, expandable
+  - Terminal retro-screen tweaks shows flat sections instead of accordion menus
+  - In Full Color mode, "Customize Colors" expander shows all 20 tokens with RGB editors
+  - Changing any token value shows "Custom" as theme pack and updates colors live
+  - "Export Theme..." writes JSON to `exported_themes/` directory
+  - Selecting a different base theme clears overrides
+
+---
+
+# PHASE 7: Cursor and icon theming via AssetPack
+
+### Goal
+Theme packs can provide custom cursors and icon sets. The existing `AssetPackRef` on
+`ThemePack` is wired into the rendering pipeline. Icon packs include two variants:
+monochrome (white-channel, tinted at runtime) and full-color (RGBA, used as-is in
+Full Color mode). Cursor packs provide alternative sprite definitions. The Classic
+theme uses the existing built-in assets as defaults.
+
+### Background: Current asset pipeline
+
+**Cursors** (`src/native/app/software_cursor.rs`):
+- Software-rendered from ASCII sprite masks (9 cursor types)
+- Characters: `#` = fill, `O` = outline, `.` = highlight, space = transparent
+- Colors derived from active palette: `fg` for fill, `dim` for shadow, blended white
+  for highlight
+- Cursor is painted via `draw_software_cursor()` called from `frame_runtime.rs:453`
+- Cursor scale controlled by `settings.desktop_cursor_scale`
+
+**Icons** (`src/native/app/ui_helpers.rs`, `desktop_surface.rs`, `asset_helpers.rs`):
+- 96 SVG files in `src/Icons/` compiled via `include_bytes!()`
+- Loaded by `load_svg_icon()` → parsed by usvg → rasterized by resvg → white-channel
+  `ColorImage` → `TextureHandle`
+- Painted via `paint_tinted_texture()` which tints white-channel images with palette `fg`
+- File type icons selected by extension in `asset_helpers.rs`
+- Desktop icons selected by `DesktopIconStyle` (Dos/Win95/Minimal/NoIcons)
+- Built-in desktop icons defined in `desktop_surface_service.rs` (5 entries)
+
+**AssetPackRef** (defined in `theme.rs` but currently unused):
+```rust
+pub struct AssetPackRef {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+```
+
+### Step 1: Expand AssetPack data model
+
+In `crates/shared/src/theme.rs`, replace `AssetPackRef` with a richer model:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetPack {
+    pub id: String,
+    pub name: String,
+    /// Path to the asset pack root directory (relative to theme bundle).
+    /// Contains optional subdirectories: icons_mono/, icons_color/, cursors/
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorSprite {
+    pub width: usize,
+    pub height: usize,
+    pub hotspot_x: usize,
+    pub hotspot_y: usize,
+    /// ASCII sprite mask: '#' = fill, 'O' = outline, '.' = highlight, ' ' = transparent
+    pub mask: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPack {
+    pub arrow: Option<CursorSprite>,
+    pub ibeam: Option<CursorSprite>,
+    pub pointing_hand: Option<CursorSprite>,
+    pub resize_horizontal: Option<CursorSprite>,
+    pub resize_vertical: Option<CursorSprite>,
+    pub resize_nwse: Option<CursorSprite>,
+    pub resize_nesw: Option<CursorSprite>,
+    pub move_cursor: Option<CursorSprite>,
+    pub forbidden: Option<CursorSprite>,
+    pub wait: Option<CursorSprite>,
+}
+```
+
+Update `ThemePack`:
+```rust
+pub struct ThemePack {
+    // ... existing fields ...
+    pub asset_pack: Option<AssetPack>,    // was AssetPackRef
+    pub cursor_pack: Option<CursorPack>,
+}
+```
+
+`CursorPack` fields are all `Option` — if `None`, fall back to the built-in sprite for
+that cursor type. This allows a theme to override just the arrow cursor, for example.
+
+### Step 2: Icon pack directory convention
+
+A theme pack's asset directory has this structure:
+```
+assets/
+  icons_mono/         ← white-channel SVGs for monochrome mode (tinted at runtime)
+    pixel--folder-solid.svg
+    pixel--cog-solid.svg
+    ...
+  icons_color/        ← full-color SVGs for Full Color mode (rendered as-is)
+    pixel--folder-solid.svg
+    pixel--cog-solid.svg
+    ...
+  cursors/
+    cursors.json      ← CursorPack serialized as JSON
+```
+
+**Fallback rules:**
+1. If the active color mode is Monochrome, load from `icons_mono/`.
+2. If the active color mode is Full Color, load from `icons_color/`.
+3. If the needed directory is missing, fall back to the other one.
+4. If the other one is also missing, fall back to built-in icons.
+5. Individual missing icon files fall back to the built-in icon for that file type.
+
+The icon file names must match the existing naming convention (`pixel--*.svg`) so the
+lookup in `asset_helpers.rs` can resolve them by the same keys.
+
+### Step 3: Add active asset state to RobcoNativeApp
+
+In `src/native/app.rs`, add:
+```rust
+pub(super) active_asset_pack_path: Option<PathBuf>,
+pub(super) active_cursor_pack: Option<CursorPack>,
+```
+
+When a theme pack with an asset pack is applied:
+1. Resolve `asset_pack.path` relative to the theme bundle directory.
+2. Store the resolved absolute path in `active_asset_pack_path`.
+3. If `cursor_pack` is `Some`, store it in `active_cursor_pack`.
+4. If `cursor_pack` is `None` but `assets/cursors/cursors.json` exists, load and parse it.
+
+When the Classic theme is active (or any theme without an asset pack), both are `None`,
+and all rendering falls back to built-ins.
+
+### Step 4: Wire cursor pack into software_cursor.rs
+
+In `src/native/app/software_cursor.rs`:
+
+The current `sprite_for_cursor()` function returns a static `&CursorSpriteData` based on
+the egui `CursorIcon`. Modify `draw_software_cursor()` to accept an optional `&CursorPack`
+and check for theme overrides before falling back to built-ins.
+
+Add a conversion function:
+```rust
+fn themed_sprite_for_cursor(
+    icon: egui::CursorIcon,
+    pack: Option<&CursorPack>,
+) -> CursorSpriteData {
+    if let Some(pack) = pack {
+        let themed = match icon {
+            egui::CursorIcon::Default => &pack.arrow,
+            egui::CursorIcon::Text => &pack.ibeam,
+            egui::CursorIcon::PointingHand => &pack.pointing_hand,
+            egui::CursorIcon::ResizeHorizontal => &pack.resize_horizontal,
+            egui::CursorIcon::ResizeVertical => &pack.resize_vertical,
+            egui::CursorIcon::ResizeNwSe => &pack.resize_nwse,
+            egui::CursorIcon::ResizeNeSw => &pack.resize_nesw,
+            egui::CursorIcon::Move => &pack.move_cursor,
+            egui::CursorIcon::NotAllowed => &pack.forbidden,
+            egui::CursorIcon::Wait => &pack.wait,
+            _ => &None,
+        };
+        if let Some(sprite) = themed {
+            return CursorSpriteData {
+                width: sprite.width,
+                height: sprite.height,
+                hotspot: (sprite.hotspot_x, sprite.hotspot_y),
+                mask: &sprite.mask,
+            };
+        }
+    }
+    // Fall back to built-in
+    sprite_for_cursor(icon)
+}
+```
+
+**Note:** The `mask: &sprite.mask` borrow requires the CursorPack to outlive the sprite
+data. Since `draw_software_cursor` is called once per frame and the pack lives on
+`RobcoNativeApp`, this is fine — pass a reference from `self.active_cursor_pack`.
+
+Update the call chain: `draw_software_cursor()` in `frame_runtime.rs` should pass
+`self.active_cursor_pack.as_ref()` down.
+
+### Step 5: Wire icon pack into asset loading
+
+In `src/native/app/ui_helpers.rs` and `src/native/app/asset_helpers.rs`:
+
+Add a function that resolves an icon path with theme fallback:
+
+```rust
+fn resolve_themed_icon_bytes(
+    icon_name: &str,
+    asset_pack_path: Option<&Path>,
+    color_mode_is_full_color: bool,
+) -> Option<Vec<u8>> {
+    let pack_path = asset_pack_path?;
+    // Try the preferred directory first
+    let preferred_dir = if color_mode_is_full_color {
+        "icons_color"
+    } else {
+        "icons_mono"
+    };
+    let preferred = pack_path.join(preferred_dir).join(icon_name);
+    if preferred.exists() {
+        return std::fs::read(&preferred).ok();
+    }
+    // Fall back to the other directory
+    let fallback_dir = if color_mode_is_full_color {
+        "icons_mono"
+    } else {
+        "icons_color"
+    };
+    let fallback = pack_path.join(fallback_dir).join(icon_name);
+    if fallback.exists() {
+        return std::fs::read(&fallback).ok();
+    }
+    None // Fall back to built-in
+}
+```
+
+Modify `build_asset_cache()` in `desktop_surface.rs` to accept an optional asset pack
+path. When building the cache:
+1. Try `resolve_themed_icon_bytes()` for each icon.
+2. If `Some`, use those bytes instead of the `include_bytes!()` built-in.
+3. If `None`, use the built-in as before.
+
+**Important for Full Color icons:** When loading from `icons_color/`, the SVG should be
+loaded as a full-RGBA image, NOT converted to white-channel. Add a `load_svg_icon_color()`
+variant that preserves original colors. The `paint_tinted_texture()` call should be skipped
+for full-color icons — paint them with `Color32::WHITE` tint (no tinting = original colors).
+
+Add a flag to track whether each cached texture is monochrome or full-color:
+```rust
+pub struct CachedIcon {
+    pub texture: TextureHandle,
+    pub is_full_color: bool,
+}
+```
+
+When painting, check `is_full_color`:
+- If true: paint with `Color32::WHITE` (preserves original colors)
+- If false: paint with `palette.fg` (monochrome tinting, existing behavior)
+
+### Step 6: Invalidate icon cache on theme change
+
+When the active theme pack changes (or when color mode switches between Monochrome and
+Full Color), the icon cache must be rebuilt because:
+- Different icon set may be needed (mono vs color directory)
+- Full color icons use different rendering path than mono icons
+
+Add a `self.icon_cache_dirty: bool` flag. Set it to `true` when:
+- `desktop_active_color_style` changes
+- `active_asset_pack_path` changes
+- A theme pack is applied
+
+In the frame loop, when `icon_cache_dirty` is true, rebuild the asset cache and reset
+the flag.
+
+### Step 7: Update ThemePack constructors
+
+Update `ThemePack::classic()`:
+```rust
+cursor_pack: None,  // uses built-in cursors
+```
+
+Update `ThemePack::nucleon_dark()` and `ThemePack::nucleon_light()`:
+```rust
+cursor_pack: None,  // uses built-in cursors (for now)
+```
+
+### Architecture notes for future terminal UI theming
+
+The terminal retro-screen UI (character grid, RetroScreen, CentralPanel fill) is currently
+rendered with hardcoded layout constants and palette colors. Future terminal theming will
+want to customize:
+- Screen margins and padding
+- Grid cell dimensions (currently FIXED_PTY_CELL_W / FIXED_PTY_CELL_H)
+- Title decoration style (separator characters, text alignment)
+- Status bar format
+- Menu rendering style (selection highlighting, indentation)
+
+**To keep the architecture open for this:**
+- The `TerminalLayout` struct already receives values from the theme system (via
+  `terminal_layout_with_branding()` from Phase 5). Future terminal styling can extend
+  this struct with additional fields.
+- The `TerminalSlotRegistry` and `TerminalSlotRenderer` trait (from Phase 1b) already
+  support swappable screen/overlay/status-bar renderers. A future "retro terminal theme"
+  can provide custom implementations of these slots.
+- Do NOT hardcode new constants in this phase. Any new layout or style values should flow
+  through the existing theme/layout data structures.
+- Do NOT create a `TerminalStyle` type yet — wait until the actual customization
+  requirements are clear. The current `TerminalLayoutProfile` + `TerminalBranding` +
+  palette system is sufficient scaffolding.
+
+### Verification
+
+- `cargo check -p robcos`
+- `cargo check -p robcos-native-shell`
+- Run app with Classic theme:
+  - All icons render identically to before (built-in fallback)
+  - Cursor renders identically to before (built-in fallback)
+- If a test theme pack with `icons_mono/` directory is placed in addons:
+  - Icons from the pack appear in monochrome mode
+  - Switching to Full Color falls back to built-in if `icons_color/` is missing
+- If a test theme pack with a `CursorPack` is loaded:
+  - Overridden cursors use the theme sprite
+  - Non-overridden cursors fall back to built-in
+
+---
+
+# PHASE 8: ShellStyle consumption, packaging, and polish
+
+### DEFERRED — Spec will be written after Phase 7 is implemented
+
+This phase will cover:
+- **ShellStyle consumption** — `ShellStyle.border_radius`, `title_bar_height`,
+  `separator_thickness`, `window_shadow` are defined on ThemePack but nothing reads them.
+  There are 8+ hardcoded `Shadow::NONE` sites and window chrome rendering that need to be
+  parameterized. This phase wires ShellStyle values into actual rendering.
+- Creating the `nucleon-core-themes` repo structure
+- `.ndpkg` packaging for community themes
+- Import flow: dragging/selecting an exported `.json` theme into nucleon-tweaks
+- A sample "RobCo" theme pack that re-enables the ROBCO INDUSTRIES terminal header branding,
+  includes retro cursor sprites, and an icon set
 
 ---
 
