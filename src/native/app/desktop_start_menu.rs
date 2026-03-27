@@ -13,6 +13,7 @@ use crate::native::{
     installed_hosted_application_names, installed_hosted_game_names, is_installed_hosted_game,
 };
 use crate::platform::{InstallProfile, LaunchTarget};
+use crate::theme::{DockPosition, PanelPosition};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
 
 use super::RobcoNativeApp;
@@ -436,18 +437,30 @@ impl RobcoNativeApp {
         const LEAF_W: f32 = 270.0;
         const ROW_H: f32 = 24.0;
         const PANEL_PAD_H: f32 = 16.0;
-        const TASKBAR_H: f32 = 32.0;
         const ROOT_LEFT: f32 = 8.0;
         const EDGE_PAD: f32 = 8.0;
 
         let palette = current_palette();
         let screen = ctx.screen_rect();
-        let taskbar_top = screen.bottom() - TASKBAR_H;
         let root_x = self
             .desktop_start_button_rect
             .map(|rect| rect.left().max(screen.left() + ROOT_LEFT))
             .unwrap_or(screen.left() + ROOT_LEFT);
-        let root_y = (taskbar_top - self.start_root_panel_height).max(screen.top() + EDGE_PAD);
+        let dock_bottom_offset = match self.desktop_active_layout.dock_position {
+            DockPosition::Bottom => self.desktop_active_layout.dock_size,
+            DockPosition::Left | DockPosition::Right | DockPosition::Hidden => 0.0,
+        };
+        let panel_bottom_offset = match (
+            self.desktop_active_layout.dock_position,
+            self.desktop_active_layout.panel_position,
+        ) {
+            (DockPosition::Hidden, PanelPosition::Bottom) => {
+                self.desktop_active_layout.panel_height
+            }
+            _ => 0.0,
+        };
+        let root_bottom = screen.bottom() - dock_bottom_offset - panel_bottom_offset;
+        let root_y = (root_bottom - self.start_root_panel_height).max(screen.top() + EDGE_PAD);
         let mut branch_anchor_y = screen.top() + EDGE_PAD;
         let mut branch_x = root_x + ROOT_W - 2.0;
         let mut root_rect: Option<egui::Rect> = None;

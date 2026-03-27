@@ -34,7 +34,7 @@ use super::super::menu::{
 use super::super::programs_screen::{draw_programs_menu, ProgramMenuEvent};
 use super::super::prompt::{draw_terminal_prompt_overlay, FlashAction, TerminalPromptAction};
 use super::super::pty_screen::{draw_embedded_pty, PtyScreenEvent};
-use super::super::retro_ui::{current_palette, RetroScreen};
+use super::super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
@@ -42,8 +42,8 @@ use super::super::wasm_addon_runtime::{
     collect_hosted_keyboard_input, draw_hosted_addon_frame,
 };
 use super::launch_registry::{editor_launch_target, file_manager_launch_target};
-use super::retro_footer_height;
 use super::RobcoNativeApp;
+use crate::theme::TerminalStatusBarPosition;
 use super::BUILTIN_TEXT_EDITOR_APP;
 use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
 use chrono::{Local, Timelike};
@@ -62,7 +62,7 @@ impl RobcoNativeApp {
     where
         F: FnOnce(&mut egui::Ui),
     {
-        let palette = current_palette();
+        let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -908,6 +908,7 @@ impl RobcoNativeApp {
         let event = draw_embedded_pty(
             ctx,
             state,
+            ShellSurfaceKind::Terminal,
             &self.shell_status,
             layout.cols,
             layout.rows,
@@ -1227,12 +1228,23 @@ impl RobcoNativeApp {
         Duration::from_secs(u64::from((60 - now.second()).max(1)))
     }
 
-    pub(super) fn draw_terminal_status_bar(&self, ctx: &Context) {
+    pub(super) fn draw_terminal_status_bar(
+        &self,
+        ctx: &Context,
+        position: TerminalStatusBarPosition,
+        height: f32,
+    ) {
         ctx.request_repaint_after(Self::terminal_status_bar_repaint_interval(ctx));
-        let palette = current_palette();
-        TopBottomPanel::bottom("native_terminal_status_bar")
+        let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+        let panel = match position {
+            TerminalStatusBarPosition::Bottom => {
+                TopBottomPanel::bottom("native_terminal_status_bar")
+            }
+            TerminalStatusBarPosition::Hidden => return,
+        };
+        panel
             .resizable(false)
-            .exact_height(retro_footer_height())
+            .exact_height(height)
             .show_separator_line(false)
             .frame(
                 egui::Frame::none()

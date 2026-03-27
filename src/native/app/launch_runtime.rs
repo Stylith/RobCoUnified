@@ -23,6 +23,10 @@ use robcos_native_programs_app::{resolve_desktop_games_request, DesktopProgramRe
 use std::path::{Path, PathBuf};
 
 impl RobcoNativeApp {
+    pub(super) fn release_retained_wasm_addons(&mut self) {
+        self.retained_wasm_addons.clear();
+    }
+
     pub(super) fn launch_shell_command_in_desktop_surface(&mut self, title: &str, argv: &[String]) {
         self.open_desktop_pty(title, argv);
     }
@@ -50,13 +54,17 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn clear_terminal_wasm_addon(&mut self) {
-        self.terminal_wasm_addon = None;
+        if let Some(state) = self.terminal_wasm_addon.take() {
+            self.retained_wasm_addons.push(state);
+        }
         self.terminal_wasm_addon_return_screen = None;
         self.terminal_wasm_addon_last_frame_at = None;
     }
 
     pub(super) fn clear_desktop_wasm_addon(&mut self) {
-        self.desktop_wasm_addon = None;
+        if let Some(state) = self.desktop_wasm_addon.take() {
+            self.retained_wasm_addons.push(state);
+        }
         self.desktop_wasm_addon_last_frame_at = None;
     }
 
@@ -78,6 +86,7 @@ impl RobcoNativeApp {
         if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
+        self.clear_terminal_wasm_addon();
         self.terminal_wasm_addon = Some(state);
         self.terminal_wasm_addon_return_screen = Some(return_screen);
         self.terminal_wasm_addon_last_frame_at = None;
@@ -89,6 +98,7 @@ impl RobcoNativeApp {
     pub(super) fn launch_desktop_wasm_addon(&mut self, name: &str) -> Result<(), String> {
         let module = installed_wasm_addon_module_by_display_name(name)
             .ok_or_else(|| format!("Installed addon '{name}' is not a runnable WASM addon."))?;
+        let spawn_secondary_desktop_addon = self.desktop_component_pty_is_open();
         let state = WasmHostedAddonState::spawn(
             &module,
             HostedAddonSurface::Desktop,
@@ -97,12 +107,24 @@ impl RobcoNativeApp {
                 height: 600.0,
             },
         )?;
-        if let Some(mut pty) = self.take_primary_pty() {
-            pty.session.terminate();
+        if spawn_secondary_desktop_addon {
+            let id = self.spawn_secondary_window(
+                DesktopWindow::PtyApp,
+                SecondaryWindowApp::WasmAddon {
+                    state: Some(state),
+                    last_frame_at: None,
+                },
+            );
+            let window = self.desktop_window_state_mut(id);
+            window.maximized = false;
+        } else {
+            if let Some(mut pty) = self.take_primary_pty() {
+                pty.session.terminate();
+            }
+            self.desktop_wasm_addon = Some(state);
+            self.desktop_wasm_addon_last_frame_at = None;
+            self.open_desktop_window(DesktopWindow::PtyApp);
         }
-        self.desktop_wasm_addon = Some(state);
-        self.desktop_wasm_addon_last_frame_at = None;
-        self.open_desktop_window(DesktopWindow::PtyApp);
         self.shell_status = format!("Opened {name}.");
         Ok(())
     }
@@ -199,6 +221,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn open_desktop_settings_panel(&mut self, panel: NativeSettingsPanel) {
+        if panel == NativeSettingsPanel::Appearance {
+            self.open_tweaks_from_settings();
+            return;
+        }
         self.pending_settings_panel = Some(self.coerce_desktop_settings_panel(panel));
         self.open_desktop_window(DesktopWindow::Settings);
     }

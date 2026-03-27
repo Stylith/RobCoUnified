@@ -4,6 +4,7 @@ use super::super::desktop_app::{
 };
 use super::super::pty_screen::NativePtyState;
 use super::super::retro_ui::current_palette;
+use crate::theme::{DockPosition, PanelPosition};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
 
 use crate::native::editor_app::EditorWindow;
@@ -11,7 +12,7 @@ use crate::native::editor_app::EditorWindow;
 use super::{RobcoNativeApp, SecondaryWindow, SecondaryWindowApp};
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DesktopWindowState {
+pub(crate) struct DesktopWindowState {
     pub(super) minimized: bool,
     pub(super) maximized: bool,
     pub(super) restore_pos: Option<[f32; 2]>,
@@ -164,6 +165,21 @@ impl RobcoNativeApp {
         if id.kind == DesktopWindow::PtyApp && id.instance == 0 {
             if let Some(state) = self.desktop_wasm_addon.as_ref() {
                 return state.title().to_string();
+            }
+        }
+        if id.kind == DesktopWindow::PtyApp && id.instance > 0 {
+            if let Some(title) = self
+                .secondary_windows
+                .iter()
+                .find(|window| window.id == id)
+                .and_then(|window| match &window.app {
+                    SecondaryWindowApp::WasmAddon { state, .. } => {
+                        state.as_ref().map(|state| state.title().to_string())
+                    }
+                    _ => None,
+                })
+            {
+                return title;
             }
         }
         let pty_title = self.desktop_pty_state(id).map(|state| state.title.as_str());
@@ -326,7 +342,7 @@ impl RobcoNativeApp {
             .restore_size
             .map(|size| egui::vec2(size[0], size[1]))
             .unwrap_or_else(|| Self::desktop_default_window_size(id.kind));
-        let workspace = Self::desktop_workspace_rect(ctx);
+        let workspace = self.active_desktop_workspace_rect(ctx);
         let (pos, size) =
             Self::desktop_window_tiled_geometry(workspace, target, min_size, restore_size);
         let generation = self.next_desktop_window_generation();
@@ -432,6 +448,26 @@ impl RobcoNativeApp {
         )
     }
 
+    pub(super) fn active_desktop_workspace_rect(&self, ctx: &Context) -> egui::Rect {
+        let screen = ctx.screen_rect();
+        let top = match self.desktop_active_layout.panel_position {
+            PanelPosition::Top => screen.top() + self.desktop_active_layout.panel_height,
+            PanelPosition::Bottom | PanelPosition::Hidden => screen.top(),
+        };
+        let mut bottom = screen.bottom();
+        if self.desktop_active_layout.panel_position == PanelPosition::Bottom {
+            bottom -= self.desktop_active_layout.panel_height;
+        }
+        if self.desktop_active_layout.dock_position != DockPosition::Hidden {
+            bottom -= self.desktop_active_layout.dock_size;
+        }
+        let bottom = bottom.max(top + 120.0);
+        egui::Rect::from_min_max(
+            egui::pos2(screen.left(), top),
+            egui::pos2(screen.right(), bottom),
+        )
+    }
+
     pub(super) fn desktop_window_frame() -> egui::Frame {
         let palette = current_palette();
         egui::Frame::none()
@@ -474,6 +510,17 @@ impl RobcoNativeApp {
         egui::pos2(x, y)
     }
 
+    pub(super) fn active_desktop_default_window_pos(
+        &self,
+        ctx: &Context,
+        size: egui::Vec2,
+    ) -> egui::Pos2 {
+        let workspace = self.active_desktop_workspace_rect(ctx);
+        let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
+        let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
+        egui::pos2(x, y)
+    }
+
     pub(super) fn desktop_clamp_window_size(
         ctx: &Context,
         size: egui::Vec2,
@@ -486,12 +533,34 @@ impl RobcoNativeApp {
         )
     }
 
+    pub(super) fn active_desktop_clamp_window_size(
+        &self,
+        ctx: &Context,
+        size: egui::Vec2,
+        min_size: egui::Vec2,
+    ) -> egui::Vec2 {
+        Self::desktop_clamp_window_size_to_workspace(
+            self.active_desktop_workspace_rect(ctx),
+            size,
+            min_size,
+        )
+    }
+
     pub(super) fn desktop_clamp_window_pos(
         ctx: &Context,
         pos: egui::Pos2,
         size: egui::Vec2,
     ) -> egui::Pos2 {
         Self::desktop_clamp_window_pos_to_workspace(Self::desktop_workspace_rect(ctx), pos, size)
+    }
+
+    pub(super) fn active_desktop_clamp_window_pos(
+        &self,
+        ctx: &Context,
+        pos: egui::Pos2,
+        size: egui::Vec2,
+    ) -> egui::Pos2 {
+        Self::desktop_clamp_window_pos_to_workspace(self.active_desktop_workspace_rect(ctx), pos, size)
     }
 
     fn desktop_clamp_window_size_to_workspace(
@@ -527,6 +596,7 @@ impl RobcoNativeApp {
             DesktopWindow::FileManager => Self::desktop_file_manager_window_min_size(),
             DesktopWindow::Editor => egui::vec2(400.0, 300.0),
             DesktopWindow::Settings => Self::desktop_settings_window_min_size(),
+            DesktopWindow::Tweaks => Self::desktop_default_window_size(DesktopWindow::Tweaks),
             DesktopWindow::Applications => egui::vec2(320.0, 250.0),
             DesktopWindow::Installer => Self::desktop_installer_window_min_size(),
             DesktopWindow::PtyApp => self
@@ -654,7 +724,7 @@ impl RobcoNativeApp {
             window = window.default_pos(default_pos);
         }
         if maximized {
-            let rect = Self::desktop_workspace_rect(ctx);
+            let rect = self.active_desktop_workspace_rect(ctx);
             window = window
                 .movable(false)
                 .resizable(false)
@@ -662,8 +732,8 @@ impl RobcoNativeApp {
                 .fixed_size(rect.size());
         } else if let Some((mut pos, mut size)) = restore {
             if options.clamp_restore {
-                size = Self::desktop_clamp_window_size(ctx, size, options.min_size);
-                pos = Self::desktop_clamp_window_pos(ctx, pos, size);
+                size = self.active_desktop_clamp_window_size(ctx, size, options.min_size);
+                pos = self.active_desktop_clamp_window_pos(ctx, pos, size);
             }
             window = window.current_pos(pos).default_size(size);
         }
@@ -846,6 +916,7 @@ impl RobcoNativeApp {
                 SecondaryWindowApp::Editor(editor) => Some(editor),
                 SecondaryWindowApp::FileManager { .. } => None,
                 SecondaryWindowApp::Pty(_) => None,
+                SecondaryWindowApp::WasmAddon { .. } => None,
             })
     }
 
@@ -856,7 +927,9 @@ impl RobcoNativeApp {
                     DesktopWindow::FileManager => self.file_manager.open = false,
                     DesktopWindow::Editor => self.editor.open = false,
                     DesktopWindow::PtyApp => {
-                        if let Some(mut pty) = self.take_primary_pty() {
+                        if self.desktop_wasm_addon.is_some() {
+                            self.clear_desktop_wasm_addon();
+                        } else if let Some(mut pty) = self.take_primary_pty() {
                             pty.session.terminate();
                         }
                     }
@@ -873,6 +946,11 @@ impl RobcoNativeApp {
                     SecondaryWindowApp::Pty(state) => {
                         if let Some(mut pty) = state.take() {
                             pty.session.terminate();
+                        }
+                    }
+                    SecondaryWindowApp::WasmAddon { state, .. } => {
+                        if let Some(state) = state.take() {
+                            self.retained_wasm_addons.push(state);
                         }
                     }
                 }
@@ -1030,6 +1108,16 @@ impl RobcoNativeApp {
                 self.draw_desktop_pty_window(ctx);
                 std::mem::swap(&mut self.terminal_pty_surface, &mut swapped_surface);
                 std::mem::swap(&mut self.terminal_pty, state);
+            }
+            SecondaryWindowApp::WasmAddon {
+                state,
+                last_frame_at,
+            } => {
+                std::mem::swap(&mut self.desktop_wasm_addon, state);
+                std::mem::swap(&mut self.desktop_wasm_addon_last_frame_at, last_frame_at);
+                self.draw_desktop_wasm_addon_window(ctx);
+                std::mem::swap(&mut self.desktop_wasm_addon_last_frame_at, last_frame_at);
+                std::mem::swap(&mut self.desktop_wasm_addon, state);
             }
         }
         self.drawing_window_id = None;

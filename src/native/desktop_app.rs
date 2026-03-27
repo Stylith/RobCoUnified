@@ -1,4 +1,4 @@
-use super::app::RobcoNativeApp;
+use super::app::{DesktopWindowState, RobcoNativeApp};
 use super::editor_app::{
     build_editor_menu_section, EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
@@ -26,6 +26,7 @@ pub enum DesktopHostedApp {
     FileManager,
     Editor,
     Settings,
+    Tweaks,
     Applications,
     Terminal,
     Installer,
@@ -149,6 +150,18 @@ pub struct DesktopTaskbarEntry {
     pub inactive: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowSource {
+    NucleonApp(DesktopHostedApp),
+}
+
+pub struct ManagedWindow {
+    pub id: WindowInstanceId,
+    pub source: WindowSource,
+    pub title: String,
+    pub state: DesktopWindowState,
+}
+
 #[derive(Clone, Copy)]
 pub struct DesktopComponentBinding {
     pub spec: DesktopComponentSpec,
@@ -170,7 +183,7 @@ pub struct DesktopComponentSpec {
     title_kind: DesktopTitleKind,
 }
 
-const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 7] = [
+const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 8] = [
     DesktopComponentBinding {
         spec: DesktopComponentSpec {
             window: DesktopWindow::FileManager,
@@ -217,6 +230,22 @@ const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 7] = [
         set_open: RobcoNativeApp::desktop_component_settings_set_open,
         draw: RobcoNativeApp::desktop_component_settings_draw,
         on_open: Some(RobcoNativeApp::desktop_component_settings_on_open),
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Tweaks,
+            hosted_app: DesktopHostedApp::Tweaks,
+            id_salt: "native_tweaks",
+            default_size: [820.0, 560.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static("Tweaks"),
+        },
+        is_open: RobcoNativeApp::desktop_component_tweaks_is_open,
+        set_open: RobcoNativeApp::desktop_component_tweaks_set_open,
+        draw: RobcoNativeApp::desktop_component_tweaks_draw,
+        on_open: None,
         on_closed: None,
     },
     DesktopComponentBinding {
@@ -611,8 +640,19 @@ pub fn build_active_desktop_menu_section(
 
 pub fn hosted_app_for_window(window: Option<WindowInstanceId>) -> DesktopHostedApp {
     window
-        .map(|id| desktop_component_spec(id.kind).hosted_app)
+        .map(|id| hosted_app_for_window_kind(id.kind))
         .unwrap_or(DesktopHostedApp::Desktop)
+}
+
+pub fn hosted_app_for_window_kind(window: DesktopWindow) -> DesktopHostedApp {
+    desktop_component_spec(window).hosted_app
+}
+
+impl WindowSource {
+    pub fn from_desktop_window(window: DesktopWindow) -> Self {
+        let hosted = hosted_app_for_window_kind(window);
+        WindowSource::NucleonApp(hosted)
+    }
 }
 
 #[cfg(test)]
@@ -748,10 +788,10 @@ mod tests {
     fn desktop_component_registry_is_single_source_of_truth() {
         let components = desktop_components();
         assert_eq!(components[0].spec.window, DesktopWindow::FileManager);
-        assert_eq!(components[4].spec.window, DesktopWindow::Installer);
-        assert_eq!(components[5].spec.window, DesktopWindow::TerminalMode);
-        assert!(!components[5].spec.show_in_taskbar);
-        assert!(!components[4].spec.show_in_window_menu);
+        assert_eq!(components[5].spec.window, DesktopWindow::Installer);
+        assert_eq!(components[6].spec.window, DesktopWindow::TerminalMode);
+        assert!(!components[6].spec.show_in_taskbar);
+        assert!(!components[5].spec.show_in_window_menu);
         assert_eq!(
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"

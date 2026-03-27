@@ -9,6 +9,7 @@ struct CrtUniforms {
     params2: vec4<f32>, // screen_width, screen_height, phosphor_softness, flicker
     params3: vec4<f32>, // bloom, burn_in, jitter, glow_line
     params4: vec4<f32>, // glow_line_speed, theme_r, theme_g, theme_b
+    params5: vec4<f32>, // monochrome_enabled, monochrome_r, monochrome_g, monochrome_b
 };
 
 struct FragmentOutput {
@@ -132,6 +133,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let glow_line = crt.params3.w;
     let glow_line_speed = max(crt.params4.x, 0.05);
     let theme_tint = clamp(crt.params4.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
+    let monochrome_enabled = crt.params5.x >= 0.5;
+    let monochrome_tint = clamp(crt.params5.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
     let phosphor_tint = max(theme_tint, vec3<f32>(0.001));
 
     let texel = vec2<f32>(1.0 / screen_width, 1.0 / screen_height);
@@ -272,6 +275,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     color = (color - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
     color *= brightness;
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    if (monochrome_enabled) {
+        let lum = dot(color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+        color = monochrome_tint * lum;
+    }
 
     let history_seed = max(
         source_bright * (0.4 + burn_in * 0.35),

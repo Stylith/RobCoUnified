@@ -1,5 +1,5 @@
 use super::edit_menus_screen::EditMenuTarget;
-use super::retro_ui::{current_palette, RetroScreen};
+use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
 pub use super::shared_types::FlashAction;
 use crate::config::ConnectionKind;
 use crate::config::HEADER_LINES;
@@ -132,7 +132,7 @@ pub fn draw_terminal_prompt_overlay(
     screen: &RetroScreen,
     prompt: &TerminalPrompt,
 ) {
-    let palette = current_palette();
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
     let painter = ui.painter_at(screen.rect);
     screen.boxed_panel(&painter, &palette, 16, 10, 60, 10);
     screen.text(&painter, 19, 11, &prompt.title, palette.fg);
@@ -190,11 +190,11 @@ pub fn draw_terminal_flash(
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
-                .fill(current_palette().bg)
+                .fill(current_palette_for_surface(ShellSurfaceKind::Terminal).bg)
                 .inner_margin(0.0),
         )
         .show(ctx, |ui| {
-            let palette = current_palette();
+            let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);
@@ -220,11 +220,11 @@ pub fn draw_terminal_flash_boxed(
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
-                .fill(current_palette().bg)
+                .fill(current_palette_for_surface(ShellSurfaceKind::Terminal).bg)
                 .inner_margin(0.0),
         )
         .show(ctx, |ui| {
-            let palette = current_palette();
+            let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);

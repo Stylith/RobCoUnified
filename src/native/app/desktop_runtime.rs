@@ -107,7 +107,8 @@ impl RobcoNativeApp {
     pub(crate) fn update_standalone_settings_window(&mut self, ctx: &Context) {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
         self.sync_native_display_effects();
         self.dispatch_context_menu_action(ctx);
         if self.terminal_prompt.is_some() {
@@ -125,6 +126,26 @@ impl RobcoNativeApp {
         }
         self.draw_terminal_prompt_overlay_global(ctx);
         if !self.settings.open && !self.file_manager.open && self.terminal_prompt.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    pub(crate) fn prepare_standalone_tweaks_window(&mut self, session_username: Option<String>) {
+        self.prepare_standalone_window_shell(session_username, true);
+        self.prime_desktop_window_defaults(DesktopWindow::Tweaks);
+        self.tweaks_open = true;
+        self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Tweaks));
+    }
+
+    pub(crate) fn update_standalone_tweaks_window(&mut self, ctx: &Context) {
+        self.process_background_results(ctx);
+        self.maybe_sync_settings_from_disk(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
+        self.sync_native_display_effects();
+        self.draw_tweaks(ctx);
+        if !self.tweaks_open {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(500));
@@ -154,7 +175,8 @@ impl RobcoNativeApp {
     pub(crate) fn update_standalone_editor_window(&mut self, ctx: &Context) {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
         self.sync_native_display_effects();
         if self.terminal_prompt.is_some() {
             self.handle_terminal_prompt_input(ctx);
@@ -237,7 +259,8 @@ impl RobcoNativeApp {
     pub(crate) fn update_standalone_applications_window(&mut self, ctx: &Context) {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
         self.sync_native_display_effects();
         self.draw_applications(ctx);
         if !self.applications.open {
@@ -257,7 +280,8 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
         self.sync_native_display_effects();
         self.sync_native_cursor_mode();
         let pty_last = self.active_window_kind() == Some(DesktopWindow::PtyApp)

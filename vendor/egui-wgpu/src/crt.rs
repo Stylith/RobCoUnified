@@ -22,6 +22,8 @@ pub struct CrtEffects {
     pub contrast: f32,
     pub phosphor_softness: f32,
     pub theme_tint: [f32; 3],
+    pub monochrome_enabled: u32,
+    pub monochrome_tint: [f32; 3],
 }
 
 fn crt_effects_lock() -> &'static RwLock<Option<CrtEffects>> {
@@ -47,6 +49,7 @@ struct CrtUniforms {
     params2: [f32; 4],
     params3: [f32; 4],
     params4: [f32; 4],
+    params5: [f32; 4],
 }
 
 pub(crate) struct CrtPipeline {
@@ -542,6 +545,12 @@ impl CrtPipeline {
                 effects.theme_tint[0],
                 effects.theme_tint[1],
                 effects.theme_tint[2],
+            ],
+            params5: [
+                effects.monochrome_enabled as f32,
+                effects.monochrome_tint[0],
+                effects.monochrome_tint[1],
+                effects.monochrome_tint[2],
             ],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));

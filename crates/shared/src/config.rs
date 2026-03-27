@@ -1452,6 +1452,8 @@ pub struct Settings {
     #[serde(default = "default_custom_theme_rgb")]
     pub custom_theme_rgb: [u8; 3],
     #[serde(default)]
+    pub active_theme_pack_id: Option<String>,
+    #[serde(default)]
     pub cli_styled_render: bool,
     #[serde(default)]
     pub cli_color_mode: CliColorMode,
@@ -1552,6 +1554,7 @@ impl Default for Settings {
             bootup: true,
             theme: "Green (Default)".into(),
             custom_theme_rgb: default_custom_theme_rgb(),
+            active_theme_pack_id: None,
             cli_styled_render: false,
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,

@@ -9,4 +9,5 @@ pub mod pty;
 pub mod session;
 pub mod sound;
 pub mod status;
+pub mod theme;
 pub mod ui;

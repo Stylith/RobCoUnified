@@ -42,8 +42,9 @@ use super::prompt::{
 use super::prompt::{TerminalFlash, TerminalPrompt};
 use super::pty_screen::NativePtyState;
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_settings, current_palette, palette_for_settings,
-    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_color_style, current_palette,
+    current_palette_for_surface, palette_for_color_style, set_active_color_style, RetroPalette,
+    ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
 use crate::config::SavedConnection;
@@ -55,6 +56,10 @@ use crate::config::{
 use crate::config::{DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, Settings};
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
+use crate::theme::{
+    ColorStyle, DockPosition, LayoutProfile, MonochromePreset, PanelPosition,
+    TerminalLayoutProfile,
+};
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
     RichText, TextEdit, TextStyle, TextureHandle,
@@ -99,6 +104,12 @@ mod edit_menu_runtime;
 mod editor_runtime;
 mod launch_registry;
 mod launch_runtime;
+mod presenter_applications;
+mod presenter_editor;
+mod presenter_file_manager;
+mod presenter_pty;
+mod presenter_settings;
+mod presenter_terminal_mode;
 mod prompt_runtime;
 mod runtime_state;
 mod session_management;
@@ -107,14 +118,15 @@ mod software_cursor;
 mod terminal_dispatch;
 mod terminal_runtime;
 mod terminal_screens;
+mod tweaks_presenter;
 mod ui_helpers;
-use desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowState};
+use desktop_window_mgmt::DesktopHeaderAction;
 #[cfg(test)]
 use launch_registry::{resolve_terminal_launch_target, NativeTerminalLaunch};
-mod desktop_window_presenters;
 mod file_manager_desktop_presenter;
 mod frame_runtime;
 mod settings_panels;
+pub(crate) use desktop_window_mgmt::DesktopWindowState;
 #[cfg(test)]
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
@@ -171,9 +183,8 @@ struct TerminalModeWindow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct NativeAppearanceKey {
-    theme: String,
-    custom_theme_rgb: [u8; 3],
+struct DesktopAppearanceKey {
+    color_style: ColorStyle,
 }
 
 struct AssetCache {
@@ -360,6 +371,39 @@ fn retro_footer_height() -> f32 {
     31.0
 }
 
+fn color_style_from_settings(settings: &Settings) -> ColorStyle {
+    match settings.theme.as_str() {
+        "Green (Default)" => ColorStyle::Monochrome {
+            preset: MonochromePreset::Green,
+            custom_rgb: None,
+        },
+        "White" => ColorStyle::Monochrome {
+            preset: MonochromePreset::White,
+            custom_rgb: None,
+        },
+        "Amber" => ColorStyle::Monochrome {
+            preset: MonochromePreset::Amber,
+            custom_rgb: None,
+        },
+        "Blue" => ColorStyle::Monochrome {
+            preset: MonochromePreset::Blue,
+            custom_rgb: None,
+        },
+        "Light Blue" => ColorStyle::Monochrome {
+            preset: MonochromePreset::LightBlue,
+            custom_rgb: None,
+        },
+        crate::config::CUSTOM_THEME_NAME => ColorStyle::Monochrome {
+            preset: MonochromePreset::Custom,
+            custom_rgb: Some(settings.custom_theme_rgb),
+        },
+        _ => ColorStyle::Monochrome {
+            preset: MonochromePreset::Green,
+            custom_rgb: None,
+        },
+    }
+}
+
 const RETRO_FONT_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/FixedsysExcelsior301-Regular.ttf");
 
@@ -393,7 +437,9 @@ fn try_load_font_bytes() -> Option<Vec<u8>> {
 pub fn configure_native_context(ctx: &Context) {
     configure_native_fonts(ctx);
     apply_native_appearance(ctx);
-    apply_native_display_effects_for_settings(&crate::config::get_settings());
+    let settings = crate::config::get_settings();
+    let color_style = color_style_from_settings(&settings);
+    apply_native_display_effects_for_settings(&settings, &color_style);
 }
 
 fn configure_native_fonts(ctx: &Context) {
@@ -421,43 +467,108 @@ pub fn apply_native_appearance(ctx: &Context) {
     apply_native_text_style(ctx);
 }
 
-fn apply_native_appearance_for_settings(ctx: &Context, settings: &Settings) {
-    configure_visuals_for_settings(ctx, settings);
+fn apply_native_appearance_for_color_style(ctx: &Context, style: &ColorStyle) {
+    configure_visuals_for_color_style(ctx, style);
     apply_native_text_style(ctx);
 }
 
-fn crt_theme_tint(settings: &Settings) -> [f32; 3] {
-    let [r, g, b, _] = palette_for_settings(settings).fg.to_array();
+fn crt_theme_tint_for_color_style(style: &ColorStyle) -> [f32; 3] {
+    let [r, g, b, _] = palette_for_color_style(style).fg.to_array();
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
 }
 
-fn apply_native_display_effects_for_settings(settings: &Settings) {
+fn apply_native_display_effects_for_settings(settings: &Settings, color_style: &ColorStyle) {
     let display_effects = &settings.display_effects;
-    if !display_effects.enabled {
+    let monochrome_tint = crt_theme_tint_for_color_style(color_style);
+    let monochrome_enabled = 1u32;
+    if !display_effects.enabled && monochrome_enabled == 0 {
         egui_wgpu::set_crt_effects(None);
         egui_winit::set_crt_pointer_curve(None);
         return;
     }
-    let theme_tint = crt_theme_tint(settings);
+    let theme_tint = if display_effects.enabled {
+        monochrome_tint
+    } else {
+        [0.0, 0.0, 0.0]
+    };
     egui_winit::set_crt_pointer_curve(
-        (display_effects.curvature > 0.0).then_some(display_effects.curvature),
+        (display_effects.enabled && display_effects.curvature > 0.0)
+            .then_some(display_effects.curvature),
     );
     egui_wgpu::set_crt_effects(Some(CrtEffects {
-        curvature: display_effects.curvature,
-        scanlines: display_effects.scanlines,
-        glow: display_effects.glow,
-        bloom: display_effects.bloom,
-        vignette: display_effects.vignette,
-        noise: display_effects.noise,
-        flicker: display_effects.flicker,
-        jitter: display_effects.jitter,
-        burn_in: display_effects.burn_in,
-        glow_line: display_effects.glow_line,
-        glow_line_speed: display_effects.glow_line_speed,
-        brightness: display_effects.brightness,
-        contrast: display_effects.contrast,
-        phosphor_softness: display_effects.phosphor_softness,
+        curvature: if display_effects.enabled {
+            display_effects.curvature
+        } else {
+            0.0
+        },
+        scanlines: if display_effects.enabled {
+            display_effects.scanlines
+        } else {
+            0.0
+        },
+        glow: if display_effects.enabled {
+            display_effects.glow
+        } else {
+            0.0
+        },
+        bloom: if display_effects.enabled {
+            display_effects.bloom
+        } else {
+            0.0
+        },
+        vignette: if display_effects.enabled {
+            display_effects.vignette
+        } else {
+            0.0
+        },
+        noise: if display_effects.enabled {
+            display_effects.noise
+        } else {
+            0.0
+        },
+        flicker: if display_effects.enabled {
+            display_effects.flicker
+        } else {
+            0.0
+        },
+        jitter: if display_effects.enabled {
+            display_effects.jitter
+        } else {
+            0.0
+        },
+        burn_in: if display_effects.enabled {
+            display_effects.burn_in
+        } else {
+            0.0
+        },
+        glow_line: if display_effects.enabled {
+            display_effects.glow_line
+        } else {
+            0.0
+        },
+        glow_line_speed: if display_effects.enabled {
+            display_effects.glow_line_speed
+        } else {
+            0.2
+        },
+        brightness: if display_effects.enabled {
+            display_effects.brightness
+        } else {
+            1.0
+        },
+        contrast: if display_effects.enabled {
+            display_effects.contrast
+        } else {
+            1.0
+        },
+        phosphor_softness: if display_effects.enabled {
+            display_effects.phosphor_softness
+        } else {
+            0.0
+        },
         theme_tint,
+        monochrome_enabled,
+        monochrome_tint,
     }));
 }
 
@@ -480,12 +591,89 @@ fn apply_native_text_style(ctx: &Context) {
     ctx.set_style(style);
 }
 
+impl RobcoNativeApp {
+    pub(super) fn current_shell_surface_kind(&self) -> ShellSurfaceKind {
+        if self.desktop_mode_open {
+            ShellSurfaceKind::Desktop
+        } else {
+            ShellSurfaceKind::Terminal
+        }
+    }
+
+    pub(super) fn current_shell_palette(&self) -> RetroPalette {
+        current_palette_for_surface(self.current_shell_surface_kind())
+    }
+
+    pub(super) fn render_classic_panel_slot(&mut self, ctx: &Context, layout: &LayoutProfile) {
+        match layout.panel_position {
+            PanelPosition::Hidden => {}
+            _ => self.draw_top_bar(ctx, layout.panel_position, layout.panel_height),
+        }
+    }
+
+    pub(super) fn render_classic_dock_slot(&mut self, ctx: &Context, layout: &LayoutProfile) {
+        match layout.dock_position {
+            DockPosition::Hidden => {
+                self.desktop_start_button_rect = None;
+            }
+            _ => self.draw_desktop_taskbar(ctx, layout.dock_position, layout.dock_size),
+        }
+    }
+
+    pub(super) fn render_classic_launcher_slot(&mut self, ctx: &Context) {
+        self.draw_start_panel(ctx);
+    }
+
+    pub(super) fn render_classic_spotlight_slot(&mut self, ctx: &Context) {
+        self.draw_spotlight(ctx);
+    }
+
+    pub(super) fn render_classic_desktop_slot(&mut self, ctx: &Context) {
+        self.draw_desktop(ctx);
+    }
+
+    pub(super) fn render_classic_terminal_status_slot(
+        &mut self,
+        ctx: &Context,
+        layout: &TerminalLayoutProfile,
+    ) {
+        self.draw_terminal_status_bar(ctx, layout.status_bar_position, layout.status_bar_height);
+    }
+
+    pub(super) fn render_classic_terminal_screen_slot(&mut self, ctx: &Context) {
+        if !self.editor.open {
+            match self.terminal_nav.screen {
+                TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
+                TerminalScreen::Applications => self.draw_terminal_applications(ctx),
+                TerminalScreen::Documents => self.draw_terminal_documents(ctx),
+                TerminalScreen::Logs => self.draw_terminal_logs(ctx),
+                TerminalScreen::Network => self.draw_terminal_network(ctx),
+                TerminalScreen::Games => self.draw_terminal_games(ctx),
+                TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
+                TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
+                TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
+                TerminalScreen::Settings => self.draw_terminal_settings(ctx),
+                TerminalScreen::EditMenus => self.draw_terminal_edit_menus(ctx),
+                TerminalScreen::Connections => self.draw_terminal_connections(ctx),
+                TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
+                TerminalScreen::About => self.draw_terminal_about(ctx),
+                TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
+            }
+        }
+    }
+
+    pub(super) fn render_classic_terminal_overlay_slot(&mut self, ctx: &Context) {
+        self.draw_terminal_prompt_overlay_global(ctx);
+    }
+}
+
 pub struct RobcoNativeApp {
     login: TerminalLoginState,
     session: Option<SessionState>,
     file_manager: NativeFileManagerState,
     editor: EditorWindow,
     settings: SettingsWindow,
+    tweaks_open: bool,
     applications: ApplicationsWindow,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -506,6 +694,14 @@ pub struct RobcoNativeApp {
     start_open_submenu: Option<StartSubmenu>,
     start_open_leaf: Option<StartLeaf>,
     desktop_mode_open: bool,
+    slot_registry: super::shell_slots::SlotRegistry,
+    desktop_active_layout: LayoutProfile,
+    terminal_active_layout: TerminalLayoutProfile,
+    desktop_active_theme_pack_id: Option<String>,
+    terminal_active_theme_pack_id: Option<String>,
+    desktop_active_color_style: ColorStyle,
+    terminal_active_color_style: ColorStyle,
+    terminal_slot_registry: super::terminal_slots::TerminalSlotRegistry,
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
     terminal_pty: Option<NativePtyState>,
@@ -550,13 +746,15 @@ pub struct RobcoNativeApp {
     saved_bluetooth_connections_cache: Option<Arc<Vec<SavedConnection>>>,
     live_desktop_file_manager_settings: DesktopFileManagerSettings,
     live_hacking_difficulty: HackingDifficulty,
-    last_native_appearance: Option<NativeAppearanceKey>,
+    last_desktop_appearance: Option<DesktopAppearanceKey>,
     last_settings_sync_check: Instant,
     last_settings_file_mtime: Option<SystemTime>,
     startup_profile_session_logged: bool,
     startup_profile_desktop_logged: bool,
     repaint_trace_last_pass: u64,
-    appearance_tab: u8, // 0=Background, 1=Display, 2=Colors, 3=Icons, 4=Terminal
+    tweaks_surface_tab: u8,  // 0=Desktop, 1=Terminal
+    desktop_tweaks_tab: u8,  // 0=Background, 1=Display, 2=Colors, 3=Icons, 4=Layout
+    terminal_tweaks_tab: u8, // 0=Colors, 1=Layout, 2=Terminal
     // Spotlight search
     spotlight_open: bool,
     spotlight_query: String,
@@ -569,6 +767,7 @@ pub struct RobcoNativeApp {
     pub(super) background: BackgroundTasks,
     desktop_wasm_addon: Option<WasmHostedAddonState>,
     desktop_wasm_addon_last_frame_at: Option<Instant>,
+    retained_wasm_addons: Vec<WasmHostedAddonState>,
     // IPC receiver for messages from standalone apps
     ipc: super::ipc::IpcReceiver,
 }
@@ -577,6 +776,7 @@ pub(super) struct ParkedSessionState {
     file_manager: NativeFileManagerState,
     editor: EditorWindow,
     settings: SettingsWindow,
+    tweaks_open: bool,
     applications: ApplicationsWindow,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
@@ -618,6 +818,10 @@ pub(super) enum SecondaryWindowApp {
     },
     Editor(EditorWindow),
     Pty(Option<NativePtyState>),
+    WasmAddon {
+        state: Option<WasmHostedAddonState>,
+        last_frame_at: Option<Instant>,
+    },
 }
 
 /// A secondary window instance — a second (or third, etc.) copy of an app.
@@ -632,6 +836,7 @@ impl SecondaryWindow {
             SecondaryWindowApp::FileManager { state, .. } => state.open,
             SecondaryWindowApp::Editor(editor) => editor.open,
             SecondaryWindowApp::Pty(state) => state.is_some(),
+            SecondaryWindowApp::WasmAddon { state, .. } => state.is_some(),
         }
     }
 }
@@ -646,6 +851,8 @@ impl Default for RobcoNativeApp {
         let live_hacking_difficulty = settings_draft.hacking_difficulty;
         let settings_ui_defaults = build_desktop_settings_ui_defaults(&settings_draft, None);
         let terminal_defaults = terminal_runtime_defaults();
+        let initial_color_style = color_style_from_settings(&settings_draft);
+        let initial_theme_pack_id = settings_draft.active_theme_pack_id.clone();
         let mut app = Self {
             login: TerminalLoginState::default(),
             session: None,
@@ -676,6 +883,7 @@ impl Default for RobcoNativeApp {
                 user_edit_password_confirm: String::new(),
                 user_delete_confirm: String::new(),
             },
+            tweaks_open: false,
             applications: ApplicationsWindow::default(),
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
@@ -693,6 +901,14 @@ impl Default for RobcoNativeApp {
             start_open_submenu: None,
             start_open_leaf: None,
             desktop_mode_open: false,
+            slot_registry: super::shell_slots::SlotRegistry::classic(),
+            desktop_active_layout: crate::theme::ThemePack::classic().layout_profile,
+            terminal_active_layout: crate::theme::TerminalLayoutProfile::classic(),
+            desktop_active_theme_pack_id: initial_theme_pack_id.clone(),
+            terminal_active_theme_pack_id: initial_theme_pack_id,
+            desktop_active_color_style: initial_color_style.clone(),
+            terminal_active_color_style: initial_color_style,
+            terminal_slot_registry: super::terminal_slots::TerminalSlotRegistry::classic(),
             terminal_nav: terminal_defaults,
             terminal_settings_panel: TerminalSettingsPanel::Home,
             terminal_pty: None,
@@ -742,13 +958,15 @@ impl Default for RobcoNativeApp {
             saved_bluetooth_connections_cache: None,
             live_desktop_file_manager_settings,
             live_hacking_difficulty,
-            last_native_appearance: None,
+            last_desktop_appearance: None,
             last_settings_sync_check: Instant::now(),
             last_settings_file_mtime: Self::current_settings_file_mtime(),
             startup_profile_session_logged: false,
             startup_profile_desktop_logged: false,
             repaint_trace_last_pass: 0,
-            appearance_tab: 0,
+            tweaks_surface_tab: 0,
+            desktop_tweaks_tab: 0,
+            terminal_tweaks_tab: 0,
             spotlight_open: false,
             spotlight_query: String::new(),
             spotlight_tab: 0,
@@ -759,6 +977,7 @@ impl Default for RobcoNativeApp {
             background: BackgroundTasks::new(),
             desktop_wasm_addon: None,
             desktop_wasm_addon_last_frame_at: None,
+            retained_wasm_addons: Vec::new(),
             ipc: super::ipc::start_listener(),
         };
         crate::config::spawn_addon_repository_index_refresh();
@@ -769,7 +988,12 @@ impl Default for RobcoNativeApp {
 
 impl RobcoNativeApp {
     fn sync_native_display_effects(&self) {
-        apply_native_display_effects_for_settings(&self.settings.draft);
+        let active_color_style = if self.desktop_mode_open {
+            &self.desktop_active_color_style
+        } else {
+            &self.terminal_active_color_style
+        };
+        apply_native_display_effects_for_settings(&self.settings.draft, active_color_style);
     }
 
     fn sync_native_cursor_mode(&self) {
@@ -781,16 +1005,26 @@ impl RobcoNativeApp {
         egui_winit::set_app_cursor_mode(cursor_mode);
     }
 
-    fn sync_native_appearance(&mut self, ctx: &Context) {
-        let key = NativeAppearanceKey {
-            theme: self.settings.draft.theme.clone(),
-            custom_theme_rgb: self.settings.draft.custom_theme_rgb,
+    fn sync_desktop_appearance(&mut self, ctx: &Context) {
+        let key = DesktopAppearanceKey {
+            color_style: self.desktop_active_color_style.clone(),
         };
-        if self.last_native_appearance.as_ref() == Some(&key) {
+        set_active_color_style(
+            ShellSurfaceKind::Desktop,
+            self.desktop_active_color_style.clone(),
+        );
+        if self.last_desktop_appearance.as_ref() == Some(&key) {
             return;
         }
-        apply_native_appearance_for_settings(ctx, &self.settings.draft);
-        self.last_native_appearance = Some(key);
+        apply_native_appearance_for_color_style(ctx, &self.desktop_active_color_style);
+        self.last_desktop_appearance = Some(key);
+    }
+
+    fn sync_terminal_appearance(&mut self) {
+        set_active_color_style(
+            ShellSurfaceKind::Terminal,
+            self.terminal_active_color_style.clone(),
+        );
     }
 
     fn native_pty_window_min_size(state: &NativePtyState) -> egui::Vec2 {

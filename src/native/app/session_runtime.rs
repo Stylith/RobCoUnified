@@ -49,11 +49,8 @@ impl RobcoNativeApp {
         if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
-        self.terminal_wasm_addon = None;
-        self.terminal_wasm_addon_return_screen = None;
-        self.terminal_wasm_addon_last_frame_at = None;
-        self.desktop_wasm_addon = None;
-        self.desktop_wasm_addon_last_frame_at = None;
+        self.clear_terminal_wasm_addon();
+        self.clear_desktop_wasm_addon();
         Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
         self.secondary_windows.clear();
         self.terminal_installer.reset();

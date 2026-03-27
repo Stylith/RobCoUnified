@@ -49,6 +49,7 @@ impl RobcoNativeApp {
             file_manager: self.file_manager.clone(),
             editor: self.editor.clone(),
             settings: self.settings.clone(),
+            tweaks_open: self.tweaks_open,
             applications: self.applications.clone(),
             desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
@@ -116,6 +117,7 @@ impl RobcoNativeApp {
         self.file_manager = parked.file_manager;
         self.editor = parked.editor;
         self.settings = parked.settings;
+        self.tweaks_open = parked.tweaks_open;
         self.applications = parked.applications;
         self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;
@@ -201,6 +203,8 @@ impl RobcoNativeApp {
         if let Some(mut pty) = self.take_primary_pty() {
             pty.session.terminate();
         }
+        self.clear_terminal_wasm_addon();
+        self.clear_desktop_wasm_addon();
         Self::terminate_secondary_window_ptys(&mut self.secondary_windows);
         for parked in self.session_runtime.values_mut() {
             if let Some(mut pty) = parked.terminal_pty.take() {

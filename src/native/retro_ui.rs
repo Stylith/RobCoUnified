@@ -1,4 +1,5 @@
 use crate::config::{current_theme_color, get_settings, theme_color_for_settings, Settings};
+use crate::theme::{ColorStyle, MonochromePreset};
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
@@ -21,13 +22,30 @@ pub struct RetroPalette {
     pub selection_bg: Color32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShellSurfaceKind {
+    Desktop,
+    Terminal,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PaletteCache {
     color: Color,
     palette: RetroPalette,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ActiveColorStyleStore {
+    desktop: Option<ColorStyle>,
+    terminal: Option<ColorStyle>,
+}
+
 static PALETTE_CACHE: Mutex<Option<PaletteCache>> = Mutex::new(None);
+static ACTIVE_COLOR_STYLES: Mutex<ActiveColorStyleStore> =
+    Mutex::new(ActiveColorStyleStore {
+        desktop: None,
+        terminal: None,
+    });
 
 fn color32_from_theme(color: Color) -> Color32 {
     match color {
@@ -77,6 +95,30 @@ fn palette_for_theme_color(color: Color) -> RetroPalette {
     }
 }
 
+pub fn palette_for_color_style(style: &ColorStyle) -> RetroPalette {
+    match style {
+        ColorStyle::Monochrome { preset, custom_rgb } => {
+            let color = monochrome_preset_to_color(*preset, *custom_rgb);
+            palette_for_theme_color(color)
+        }
+        ColorStyle::FullColor { theme_id: _ } => palette_for_theme_color(Color::Rgb(111, 255, 84)),
+    }
+}
+
+fn monochrome_preset_to_color(preset: MonochromePreset, custom_rgb: Option<[u8; 3]>) -> Color {
+    match preset {
+        MonochromePreset::Green => Color::Rgb(111, 255, 84),
+        MonochromePreset::White => Color::Rgb(240, 240, 240),
+        MonochromePreset::Amber => Color::Rgb(255, 191, 74),
+        MonochromePreset::Blue => Color::Rgb(105, 180, 255),
+        MonochromePreset::LightBlue => Color::Rgb(110, 235, 255),
+        MonochromePreset::Custom => {
+            let [r, g, b] = custom_rgb.unwrap_or([111, 255, 84]);
+            Color::Rgb(r, g, b)
+        }
+    }
+}
+
 pub fn current_palette() -> RetroPalette {
     let color = current_theme_color();
     if let Ok(mut guard) = PALETTE_CACHE.lock() {
@@ -90,6 +132,28 @@ pub fn current_palette() -> RetroPalette {
         return palette;
     }
     palette_for_theme_color(color)
+}
+
+pub fn current_palette_for_surface(surface: ShellSurfaceKind) -> RetroPalette {
+    if let Ok(guard) = ACTIVE_COLOR_STYLES.lock() {
+        let style = match surface {
+            ShellSurfaceKind::Desktop => guard.desktop.as_ref(),
+            ShellSurfaceKind::Terminal => guard.terminal.as_ref(),
+        };
+        if let Some(style) = style {
+            return palette_for_color_style(style);
+        }
+    }
+    current_palette()
+}
+
+pub fn set_active_color_style(surface: ShellSurfaceKind, style: ColorStyle) {
+    if let Ok(mut guard) = ACTIVE_COLOR_STYLES.lock() {
+        match surface {
+            ShellSurfaceKind::Desktop => guard.desktop = Some(style),
+            ShellSurfaceKind::Terminal => guard.terminal = Some(style),
+        }
+    }
 }
 
 pub fn palette_for_settings(settings: &Settings) -> RetroPalette {
@@ -435,4 +499,8 @@ pub fn configure_visuals(ctx: &Context) {
 
 pub fn configure_visuals_for_settings(ctx: &Context, settings: &Settings) {
     apply_visuals_with_palette(ctx, palette_for_settings(settings));
+}
+
+pub fn configure_visuals_for_color_style(ctx: &Context, style: &ColorStyle) {
+    apply_visuals_with_palette(ctx, palette_for_color_style(style));
 }

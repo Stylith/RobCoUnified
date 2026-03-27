@@ -3,6 +3,7 @@ use super::super::desktop_app::{
     build_taskbar_entries, DesktopMenuAction, DesktopTaskbarEntry, WindowInstanceId,
 };
 use super::super::retro_ui::current_palette;
+use crate::theme::DockPosition;
 use eframe::egui::{self, Color32, Context, RichText, TopBottomPanel};
 
 use super::RobcoNativeApp;
@@ -47,10 +48,22 @@ fn group_taskbar_entries(entries: Vec<DesktopTaskbarEntry>) -> Vec<TaskbarGroup>
 }
 
 impl RobcoNativeApp {
-    pub(super) fn draw_desktop_taskbar(&mut self, ctx: &Context) {
+    pub(super) fn draw_desktop_taskbar(
+        &mut self,
+        ctx: &Context,
+        position: DockPosition,
+        size: f32,
+    ) {
         self.sync_desktop_active_window();
-        TopBottomPanel::bottom("native_desktop_taskbar")
-            .exact_height(32.0)
+        let panel = match position {
+            DockPosition::Bottom => TopBottomPanel::bottom("native_desktop_taskbar"),
+            DockPosition::Left | DockPosition::Right => {
+                TopBottomPanel::bottom("native_desktop_taskbar")
+            }
+            DockPosition::Hidden => return,
+        };
+        panel
+            .exact_height(size)
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let palette = current_palette();

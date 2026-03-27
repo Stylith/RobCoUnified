@@ -6,6 +6,7 @@ use super::super::desktop_app::{
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
 use super::super::retro_ui::{current_palette, RetroPalette};
+use crate::theme::PanelPosition;
 use chrono::Local;
 use eframe::egui::{self, Color32, Context, Layout, RichText, TopBottomPanel};
 
@@ -282,15 +283,20 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn draw_top_bar(&mut self, ctx: &Context) {
+    pub(super) fn draw_top_bar(&mut self, ctx: &Context, position: PanelPosition, height: f32) {
         let palette = current_palette();
         Self::apply_global_retro_menu_chrome(ctx, &palette);
         let app_menu_name = desktop_app_menu_name(self.desktop_active_window, |id| {
             self.desktop_window_title_for_instance(id)
         });
         let active_app = self.active_desktop_app();
-        TopBottomPanel::top("native_top_bar")
-            .exact_height(30.0)
+        let panel = match position {
+            PanelPosition::Top => TopBottomPanel::top("native_top_bar"),
+            PanelPosition::Bottom => TopBottomPanel::bottom("native_top_bar"),
+            PanelPosition::Hidden => return,
+        };
+        panel
+            .exact_height(height)
             .show_separator_line(false)
             .show(ctx, |ui| {
                 ui.painter()

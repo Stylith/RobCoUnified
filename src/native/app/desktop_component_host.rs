@@ -55,6 +55,18 @@ impl RobcoNativeApp {
         self.prime_desktop_window_defaults(DesktopWindow::Settings);
     }
 
+    pub(crate) fn desktop_component_tweaks_is_open(&self) -> bool {
+        self.tweaks_open
+    }
+
+    pub(crate) fn desktop_component_tweaks_set_open(&mut self, open: bool) {
+        self.tweaks_open = open;
+    }
+
+    pub(crate) fn desktop_component_tweaks_draw(&mut self, ctx: &Context) {
+        self.draw_tweaks(ctx);
+    }
+
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
         self.applications.open
     }

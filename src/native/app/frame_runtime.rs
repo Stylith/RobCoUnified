@@ -8,6 +8,8 @@ use super::super::menu::{
     resolve_terminal_flash_action, TerminalHackingUiEvent, TerminalLoginScreenMode, TerminalScreen,
 };
 use super::super::prompt::{draw_terminal_flash, draw_terminal_flash_boxed, FlashAction};
+use super::super::shell_slots::ShellSlot;
+use super::super::terminal_slots::TerminalSlot;
 use super::RobcoNativeApp;
 use eframe::egui::{self, Align2, Color32, Context, Id, Key, RichText};
 use std::io::Write;
@@ -247,7 +249,6 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_runtime(&mut self, ctx: &Context) {
-        self.draw_terminal_status_bar(ctx);
         if self.terminal_nav.suppress_next_menu_submit {
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, Key::Enter);
@@ -256,25 +257,15 @@ impl RobcoNativeApp {
             self.terminal_nav.suppress_next_menu_submit = false;
         }
 
-        if !self.editor.open {
-            match self.terminal_nav.screen {
-                TerminalScreen::MainMenu => self.draw_terminal_main_menu(ctx),
-                TerminalScreen::Applications => self.draw_terminal_applications(ctx),
-                TerminalScreen::Documents => self.draw_terminal_documents(ctx),
-                TerminalScreen::Logs => self.draw_terminal_logs(ctx),
-                TerminalScreen::Network => self.draw_terminal_network(ctx),
-                TerminalScreen::Games => self.draw_terminal_games(ctx),
-                TerminalScreen::PtyApp => self.draw_terminal_pty(ctx),
-                TerminalScreen::ProgramInstaller => self.draw_terminal_program_installer(ctx),
-                TerminalScreen::DocumentBrowser => self.draw_terminal_document_browser(ctx),
-                TerminalScreen::Settings => self.draw_terminal_settings(ctx),
-                TerminalScreen::EditMenus => self.draw_terminal_edit_menus(ctx),
-                TerminalScreen::Connections => self.draw_terminal_connections(ctx),
-                TerminalScreen::DefaultApps => self.draw_terminal_default_apps(ctx),
-                TerminalScreen::About => self.draw_terminal_about(ctx),
-                TerminalScreen::UserManagement => self.draw_terminal_user_management(ctx),
-            }
-        }
+        let terminal_layout = self.terminal_active_layout.clone();
+        let registry = std::mem::replace(
+            &mut self.terminal_slot_registry,
+            super::super::terminal_slots::TerminalSlotRegistry::classic(),
+        );
+        registry.render_slot(TerminalSlot::StatusBar, self, ctx, &terminal_layout);
+        registry.render_slot(TerminalSlot::Screen, self, ctx, &terminal_layout);
+        registry.render_slot(TerminalSlot::Overlay, self, ctx, &terminal_layout);
+        self.terminal_slot_registry = registry;
 
         self.draw_file_manager(ctx);
         self.draw_editor(ctx);
@@ -284,12 +275,14 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn update_native_shell_frame(&mut self, ctx: &Context) {
+        self.release_retained_wasm_addons();
         self.process_background_results(ctx);
         self.process_ipc_messages(ctx);
 
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
-        self.sync_native_appearance(ctx);
+        self.sync_desktop_appearance(ctx);
+        self.sync_terminal_appearance();
         self.sync_native_display_effects();
         self.sync_native_cursor_mode();
 
@@ -318,7 +311,11 @@ impl RobcoNativeApp {
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
                 let layout = self.terminal_layout();
-                self.draw_terminal_status_bar(ctx);
+                self.draw_terminal_status_bar(
+                    ctx,
+                    self.terminal_active_layout.status_bar_position,
+                    self.terminal_active_layout.status_bar_height,
+                );
                 let show_hacking_wait = self.session.is_none()
                     && matches!(self.login.mode, TerminalLoginScreenMode::Hacking)
                     && matches!(&flash.action, FlashAction::FinishLogin { .. });
@@ -357,7 +354,11 @@ impl RobcoNativeApp {
         self.maybe_trace_repaint_causes(ctx);
 
         if self.session.is_none() {
-            self.draw_terminal_status_bar(ctx);
+            self.draw_terminal_status_bar(
+                ctx,
+                self.terminal_active_layout.status_bar_position,
+                self.terminal_active_layout.status_bar_height,
+            );
             self.draw_login(ctx);
             return;
         }
@@ -401,22 +402,42 @@ impl RobcoNativeApp {
             self.handle_desktop_window_tiling_shortcuts(ctx);
             self.handle_start_menu_keyboard(ctx);
             self.handle_desktop_file_manager_shortcuts(ctx);
-            self.draw_top_bar(ctx);
-            self.draw_desktop_taskbar(ctx);
-            self.draw_desktop(ctx);
+            let layout = self.desktop_active_layout.clone();
+            let registry = std::mem::replace(
+                &mut self.slot_registry,
+                super::super::shell_slots::SlotRegistry::classic(),
+            );
+            registry.render_slot(ShellSlot::Panel, self, ctx, &layout);
+            registry.render_slot(ShellSlot::Dock, self, ctx, &layout);
+            registry.render_slot(ShellSlot::Desktop, self, ctx, &layout);
+            self.slot_registry = registry;
         } else {
             self.draw_terminal_runtime(ctx);
         }
         if self.desktop_mode_open {
             self.draw_desktop_windows(ctx);
-            self.draw_start_panel(ctx);
+            let layout = self.desktop_active_layout.clone();
+            let registry = std::mem::replace(
+                &mut self.slot_registry,
+                super::super::shell_slots::SlotRegistry::classic(),
+            );
+            registry.render_slot(ShellSlot::Launcher, self, ctx, &layout);
+            self.slot_registry = registry;
             self.draw_start_menu_rename_window(ctx);
-            self.draw_spotlight(ctx);
+            let layout = self.desktop_active_layout.clone();
+            let registry = std::mem::replace(
+                &mut self.slot_registry,
+                super::super::shell_slots::SlotRegistry::classic(),
+            );
+            registry.render_slot(ShellSlot::Spotlight, self, ctx, &layout);
+            self.slot_registry = registry;
         }
         self.draw_shortcut_properties_window(ctx);
         self.draw_desktop_item_properties_window(ctx);
         self.draw_editor_save_as_window(ctx);
-        self.draw_terminal_prompt_overlay_global(ctx);
+        if self.desktop_mode_open {
+            self.draw_terminal_prompt_overlay_global(ctx);
+        }
 
         self.maybe_intercept_viewport_close_for_unsaved_editor(ctx);
 

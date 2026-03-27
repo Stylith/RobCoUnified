@@ -11,6 +11,7 @@ use crate::platform::{
     AddonStateOverrides, DiscoveredAddonManifest, FileAssociation, HostedAddonProtocol,
     InstallProfile,
 };
+use crate::theme::{ColorStyle, MonochromePreset, ThemePack};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -252,6 +253,43 @@ pub fn installed_hosted_application_names() -> Vec<String> {
     hosted_application_names_from_registry(&installed_enabled_addon_manifest_registry())
 }
 
+pub fn installed_theme_packs() -> Vec<ThemePack> {
+    let mut themes = vec![ThemePack::classic()];
+    for record in installed_addon_inventory() {
+        if record.manifest.kind != AddonKind::Theme {
+            continue;
+        }
+        let Some(manifest_path) = record.manifest_path.as_ref() else {
+            continue;
+        };
+        let Some(bundle_dir) = manifest_path.parent() else {
+            continue;
+        };
+        let theme_path = bundle_dir.join("theme.json");
+        let Ok(raw) = fs::read_to_string(&theme_path) else {
+            continue;
+        };
+        let Ok(theme) = serde_json::from_str::<ThemePack>(&raw) else {
+            continue;
+        };
+        themes.push(theme);
+    }
+    themes
+}
+
+pub fn apply_theme_pack(theme: &ThemePack) {
+    config::update_settings(|settings| {
+        settings.active_theme_pack_id = Some(theme.id.clone());
+        if let ColorStyle::Monochrome { preset, custom_rgb } = &theme.color_style {
+            settings.theme = legacy_theme_name_for_preset(*preset).to_string();
+            if let Some(custom_rgb) = custom_rgb {
+                settings.custom_theme_rgb = *custom_rgb;
+            }
+        }
+    });
+    config::persist_settings();
+}
+
 pub fn is_installed_hosted_game(name: &str) -> bool {
     installed_hosted_game_names()
         .iter()
@@ -279,6 +317,17 @@ fn hosted_application_names_from_registry(registry: &AddonRegistry) -> Vec<Strin
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn legacy_theme_name_for_preset(preset: MonochromePreset) -> &'static str {
+    match preset {
+        MonochromePreset::Green => "Green (Default)",
+        MonochromePreset::White => "White",
+        MonochromePreset::Amber => "Amber",
+        MonochromePreset::Blue => "Blue",
+        MonochromePreset::LightBlue => "Light Blue",
+        MonochromePreset::Custom => config::CUSTOM_THEME_NAME,
+    }
 }
 
 fn is_hosted_addon_entrypoint(entrypoint: &AddonEntrypoint) -> bool {

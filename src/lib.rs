@@ -1,6 +1,6 @@
 pub use robcos_shared::{
     config, connections, core, default_apps, diag, launcher, platform, pty, session, sound, status,
-    ui,
+    theme, ui,
 };
 
 pub mod legacy;

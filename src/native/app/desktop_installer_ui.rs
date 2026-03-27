@@ -52,8 +52,8 @@ impl RobcoNativeApp {
         let egui_id = self.desktop_window_egui_id(wid);
         let default_size = Self::desktop_default_window_size(DesktopWindow::Installer);
         let min_size = Self::desktop_installer_window_min_size();
-        let default_pos = Self::desktop_default_window_pos(ctx, default_size);
-        let workspace_rect = Self::desktop_workspace_rect(ctx);
+        let default_pos = self.active_desktop_default_window_pos(ctx, default_size);
+        let workspace_rect = self.active_desktop_workspace_rect(ctx);
         let restore = self.take_desktop_window_restore_dims(DesktopWindow::Installer);
         let mut window = egui::Window::new("Program Installer")
             .id(egui_id)
@@ -73,7 +73,7 @@ impl RobcoNativeApp {
                 .fixed_pos(workspace_rect.min)
                 .fixed_size(workspace_rect.size());
         } else if let Some((pos, _size)) = restore {
-            let pos = Self::desktop_clamp_window_pos(ctx, pos, default_size);
+            let pos = self.active_desktop_clamp_window_pos(ctx, pos, default_size);
             window = window.current_pos(pos).fixed_size(default_size);
         } else {
             window = window.fixed_size(default_size);

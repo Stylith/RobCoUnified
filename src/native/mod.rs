@@ -31,9 +31,12 @@ mod pty_screen;
 mod retro_ui;
 mod settings_screen;
 mod settings_standalone;
+mod shell_slots;
 mod shell_screen;
 mod standalone_launcher;
 mod terminal_open_with_picker;
+mod terminal_slots;
+mod tweaks_standalone;
 mod wasm_addon_runtime;
 
 pub use robcos_native_services::{
@@ -51,6 +54,7 @@ pub use addons::{
     install_user_addon, installed_addon_bundle_dir, installed_addon_bundle_path,
     installed_addon_inventory, installed_hosted_addon_process, installed_hosted_application_names,
     installed_hosted_game_names,
+    installed_theme_packs, apply_theme_pack,
     installed_wasm_addon_module, installed_wasm_addon_module_by_display_name,
     installed_addon_inventory_sections,
     installed_addon_manifest_registry, installed_enabled_addon_manifest_registry,
@@ -77,3 +81,4 @@ pub use standalone_launcher::{
     LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV, LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV,
     NUCLEON_NATIVE_IPC_SOCKET_ENV, NUCLEON_NATIVE_STANDALONE_USER_ENV, standalone_env_value,
 };
+pub use tweaks_standalone::RobcoNativeTweaksApp;

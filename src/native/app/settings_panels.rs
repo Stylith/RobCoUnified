@@ -18,7 +18,6 @@ use super::super::desktop_user_service::{
 };
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
-use super::super::retro_ui::current_palette;
 use super::RobcoNativeApp;
 use crate::config::Settings;
 use crate::config::{ConnectionKind, CrtPreset};
@@ -34,7 +33,7 @@ use robcos_native_settings_app::{
 impl RobcoNativeApp {
     pub(super) fn draw_settings_display_effects_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let palette = current_palette();
+        let palette = self.current_shell_palette();
         Self::settings_two_columns(ui, |left, right| {
             Self::settings_section(left, "CRT Effects", |left| {
                 if Self::retro_checkbox_row(
@@ -190,6 +189,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_settings_default_apps_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        let palette = self.current_shell_palette();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for slot in [DefaultAppSlot::TextCode, DefaultAppSlot::Ebook] {
                 let current_label = binding_label_for_slot(&self.settings.draft, slot);
@@ -218,8 +218,7 @@ impl RobcoNativeApp {
                                     "native_default_app_slot_{slot:?}"
                                 ))
                                 .selected_text(
-                                    RichText::new(current_label.clone())
-                                        .color(current_palette().fg),
+                                    RichText::new(current_label.clone()).color(palette.fg),
                                 )
                                 .show_ui(ui, |ui| {
                                     Self::apply_settings_control_style(ui);
@@ -405,6 +404,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_settings_cli_profiles_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        let palette = self.current_shell_palette();
         let custom_profile_count = self.settings.draft.desktop_cli_profiles.custom.len();
         let profile = gui_cli_profile_mut(
             &mut self.settings.draft.desktop_cli_profiles,
@@ -421,7 +421,7 @@ impl RobcoNativeApp {
                             RichText::new(gui_cli_profile_slot_label(
                                 self.settings.cli_profile_slot,
                             ))
-                            .color(current_palette().fg),
+                            .color(palette.fg),
                         )
                         .show_ui(ui, |ui| {
                             Self::apply_settings_control_style(ui);
@@ -540,11 +540,12 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_settings_edit_menus_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        let palette = self.current_shell_palette();
         ui.horizontal(|ui| {
             ui.label("Menu");
             egui::ComboBox::from_id_salt("native_settings_edit_target")
                 .selected_text(
-                    RichText::new(self.settings.edit_target.title()).color(current_palette().fg),
+                    RichText::new(self.settings.edit_target.title()).color(palette.fg),
                 )
                 .show_ui(ui, |ui| {
                     Self::apply_settings_control_style(ui);
@@ -664,6 +665,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_settings_user_create_panel(&mut self, ui: &mut egui::Ui) {
         let users = self.sorted_usernames_cached();
+        let palette = self.current_shell_palette();
         ui.group(|ui| {
             Self::settings_two_columns(ui, |left, right| {
                 let field_width = Self::responsive_input_width(left, 0.85, 180.0, 420.0);
@@ -678,7 +680,7 @@ impl RobcoNativeApp {
                     egui::ComboBox::from_id_salt("native_settings_user_create_auth")
                         .selected_text(
                             RichText::new(user_auth_method_label(&self.settings.user_create_auth))
-                                .color(current_palette().fg),
+                                .color(palette.fg),
                         )
                         .show_ui(left, |ui| {
                             Self::apply_settings_control_style(ui);
@@ -793,6 +795,7 @@ impl RobcoNativeApp {
         let current_username = self.session.as_ref().map(|s| s.username.clone());
         let users = self.sorted_user_records_cached();
         let names: Vec<String> = users.iter().map(|(name, _)| name.clone()).collect();
+        let palette = self.current_shell_palette();
         if names.is_empty() {
             ui.small("No users found.");
             return;
@@ -835,7 +838,7 @@ impl RobcoNativeApp {
                             egui::ComboBox::from_id_salt("native_settings_user_selected")
                                 .selected_text(
                                     RichText::new(self.settings.user_selected.clone())
-                                        .color(current_palette().fg),
+                                        .color(palette.fg),
                                 )
                                 .show_ui(left, |ui| {
                                     Self::apply_settings_control_style(ui);
@@ -870,7 +873,7 @@ impl RobcoNativeApp {
                                 RichText::new(user_auth_method_label(
                                     &self.settings.user_edit_auth,
                                 ))
-                                .color(current_palette().fg),
+                                .color(palette.fg),
                             )
                             .show_ui(left, |ui| {
                                 Self::apply_settings_control_style(ui);

@@ -1,4 +1,4 @@
-use super::retro_ui::{current_palette, RetroScreen};
+use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
 use crate::config::HEADER_LINES;
 use eframe::egui::{self, Context};
 pub use robcos_native_terminal_app::{
@@ -87,11 +87,11 @@ pub fn draw_terminal_menu_screen(
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
-                .fill(current_palette().bg)
+                .fill(current_palette_for_surface(ShellSurfaceKind::Terminal).bg)
                 .inner_margin(0.0),
         )
         .show(ctx, |ui| {
-            let palette = current_palette();
+            let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_bg(&painter, palette.bg);

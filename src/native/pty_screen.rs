@@ -1,7 +1,8 @@
 use super::data::home_dir_fallback;
 use super::menu::TerminalScreen;
 use super::retro_ui::{
-    current_palette, RetroPalette, RetroScreen, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    current_palette_for_surface, RetroPalette, RetroScreen, ShellSurfaceKind,
+    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
@@ -188,6 +189,7 @@ pub fn spawn_embedded_pty_with_options(
 pub fn draw_embedded_pty(
     ctx: &Context,
     state: &mut NativePtyState,
+    surface: ShellSurfaceKind,
     _shell_status: &str,
     cols: usize,
     rows: usize,
@@ -204,11 +206,11 @@ pub fn draw_embedded_pty(
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
-                .fill(current_palette().bg)
+                .fill(current_palette_for_surface(surface).bg)
                 .inner_margin(0.0),
         )
         .show(ctx, |ui| {
-            event = draw_embedded_pty_in_ui(ui, ctx, state, cols, rows);
+            event = draw_embedded_pty_in_ui(ui, ctx, state, cols, rows, surface);
         });
     event
 }
@@ -219,9 +221,10 @@ pub fn draw_embedded_pty_in_ui(
     state: &mut NativePtyState,
     cols: usize,
     rows: usize,
+    surface: ShellSurfaceKind,
 ) -> PtyScreenEvent {
     let desired = ui.available_size();
-    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, true)
+    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, true, surface)
 }
 
 /// Like `draw_embedded_pty_in_ui` but only processes keyboard input
@@ -234,9 +237,10 @@ pub fn draw_embedded_pty_in_ui_focused(
     cols: usize,
     rows: usize,
     focused: bool,
+    surface: ShellSurfaceKind,
 ) -> PtyScreenEvent {
     let desired = ui.available_size();
-    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, focused)
+    draw_embedded_pty_in_ui_sized(ui, ctx, state, cols, rows, desired, focused, surface)
 }
 
 pub fn draw_embedded_pty_in_ui_sized(
@@ -247,6 +251,7 @@ pub fn draw_embedded_pty_in_ui_sized(
     rows: usize,
     desired: egui::Vec2,
     focused: bool,
+    surface: ShellSurfaceKind,
 ) -> PtyScreenEvent {
     if focused && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q)) {
         return PtyScreenEvent::CloseRequested;
@@ -325,7 +330,7 @@ pub fn draw_embedded_pty_in_ui_sized(
     };
 
     let draw_started = Instant::now();
-    let palette = current_palette();
+    let palette = current_palette_for_surface(surface);
     ui.painter().rect_filled(ui.max_rect(), 0.0, palette.bg);
     let render_rows = pty_rows as usize + usize::from(show_top_bar);
     let (screen, response) = if state.desktop_cols_floor.is_some() {
@@ -426,7 +431,7 @@ pub fn draw_embedded_pty_in_ui_sized(
             .take(render_rows_count)
         {
             row_requires_cell_draw[row_idx] = row.iter().take(render_cols).any(|cell| {
-                let (fg, _bg) = resolve_cell_colors(*cell);
+                let (fg, _bg) = resolve_cell_colors(*cell, surface);
                 cell.ch != ' ' && (fg != palette.fg || cell.bold || cell.italic || cell.underline)
             });
         }
@@ -462,7 +467,7 @@ pub fn draw_embedded_pty_in_ui_sized(
             .take(render_rows_count)
         {
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
-                let (_fg, bg) = resolve_cell_colors(*cell);
+                let (_fg, bg) = resolve_cell_colors(*cell, surface);
                 if bg == palette.bg {
                     continue;
                 }
@@ -507,7 +512,7 @@ pub fn draw_embedded_pty_in_ui_sized(
         {
             let force_row_cells = row_requires_cell_draw[row_idx];
             for (col_idx, cell) in row.iter().enumerate().take(render_cols) {
-                let (fg, _bg) = resolve_cell_colors(*cell);
+                let (fg, _bg) = resolve_cell_colors(*cell, surface);
                 if cell.ch == ' ' {
                     continue;
                 }
@@ -604,10 +609,11 @@ pub fn draw_embedded_pty_in_ui_sized(
                     &content_painter,
                     col_idx,
                     row_idx + row_offset,
-                    &cell_to_draw,
-                    border_conn,
-                );
-            }
+                        &cell_to_draw,
+                        surface,
+                        border_conn,
+                    );
+                }
         }
 
         if !snapshot.cursor_hidden {
@@ -628,7 +634,7 @@ pub fn draw_embedded_pty_in_ui_sized(
                     underline: false,
                     reversed: false,
                 });
-            let (cursor_fg, cursor_bg) = resolve_cell_colors(cell);
+            let (cursor_fg, cursor_bg) = resolve_cell_colors(cell, surface);
             let fill = cursor_fg;
             let text_color = cursor_bg;
             content_painter.rect_filled(cursor_rect, 0.0, fill);
@@ -671,10 +677,11 @@ fn draw_cell(
     col: usize,
     row: usize,
     cell: &PtyStyledCell,
+    surface: ShellSurfaceKind,
     border_conn: Option<LineConnections>,
 ) {
     let rect = screen.row_rect(col, row, 1);
-    let (fg, bg) = resolve_cell_colors(*cell);
+    let (fg, bg) = resolve_cell_colors(*cell, surface);
     if bg != Color32::BLACK {
         painter.rect_filled(rect, 0.0, bg);
     }
@@ -888,8 +895,12 @@ fn luma01(color: Color32) -> f32 {
     (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
 }
 
-fn theme_shade_from_source(source: Color32, is_background: bool) -> Color32 {
-    let palette = current_palette();
+fn theme_shade_from_source(
+    source: Color32,
+    is_background: bool,
+    surface: ShellSurfaceKind,
+) -> Color32 {
+    let palette = current_palette_for_surface(surface);
     let base = palette.fg;
     let luma = luma01(source);
 
@@ -957,8 +968,8 @@ mod tests {
             reversed: true,
             ..normal
         };
-        let (nfg, nbg) = resolve_cell_colors(normal);
-        let (rfg, rbg) = resolve_cell_colors(reversed);
+        let (nfg, nbg) = resolve_cell_colors(normal, ShellSurfaceKind::Desktop);
+        let (rfg, rbg) = resolve_cell_colors(reversed, ShellSurfaceKind::Desktop);
         assert_eq!(nfg, rbg);
         assert_eq!(nbg, rfg);
     }
@@ -1177,9 +1188,9 @@ fn key_to_char(key: Key, shift: bool) -> Option<char> {
     }
 }
 
-fn resolve_cell_colors(cell: PtyStyledCell) -> (Color32, Color32) {
-    let mut fg = theme_shade_from_source(color32_from_tui(cell.fg), false);
-    let mut bg = theme_shade_from_source(color32_from_tui(cell.bg), true);
+fn resolve_cell_colors(cell: PtyStyledCell, surface: ShellSurfaceKind) -> (Color32, Color32) {
+    let mut fg = theme_shade_from_source(color32_from_tui(cell.fg), false, surface);
+    let mut bg = theme_shade_from_source(color32_from_tui(cell.bg), true, surface);
     if cell.reversed {
         std::mem::swap(&mut fg, &mut bg);
     }

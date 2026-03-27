@@ -730,7 +730,7 @@ impl RobcoNativeApp {
         let palette = current_palette();
         let style = self.settings.draft.desktop_icon_style;
         let snap = self.settings.draft.desktop_snap_to_grid;
-        let workspace = Self::desktop_workspace_rect(ui.ctx());
+        let workspace = self.active_desktop_workspace_rect(ui.ctx());
         let (icon_size, label_height, item_height, column_width): (f32, f32, f32, f32) = match style
         {
             DesktopIconStyle::Minimal => (34.0, 0.0, 46.0, 48.0),

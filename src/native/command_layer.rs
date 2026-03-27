@@ -2,7 +2,7 @@ use super::desktop_app::{
     build_active_desktop_menu_section, build_shared_desktop_menu_section, DesktopHostedApp,
     DesktopMenuAction, DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection,
 };
-use super::retro_ui::current_palette;
+use super::retro_ui::{current_palette_for_surface, ShellSurfaceKind};
 use eframe::egui::{self, Context, Id, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +236,7 @@ fn render_menu_panel(
     let mut hovered_index = None;
     let mut activated_action = None;
     let mut submenu_anchor = None;
-    let palette = current_palette();
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
     let panel_width = panel_width_for_items(items);
 
     egui::Area::new(Id::new(panel_id))
@@ -296,7 +296,7 @@ fn render_menu_panel(
 }
 
 fn render_menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let palette = current_palette();
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
     let active = selected || response.hovered();
@@ -318,7 +318,7 @@ fn render_menu_row(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
 }
 
 fn render_disabled_row(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let palette = current_palette();
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
     ui.painter().text(
@@ -421,7 +421,7 @@ pub fn draw_command_layer(
         }
     }
 
-    let palette = current_palette();
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
     egui::Area::new(Id::new("command_layer_blocker"))
         .order(egui::Order::Foreground)
         .fixed_pos(block_rect.min)

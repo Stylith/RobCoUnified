@@ -1,4 +1,4 @@
-use super::retro_ui::{current_palette, RetroScreen};
+use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
 use eframe::egui::{self, Context, Id};
 use robcos_native_file_manager_app::known_apps_for_extension;
 use std::collections::HashSet;
@@ -118,7 +118,7 @@ pub fn draw_open_with_picker(
             ui.set_min_size(viewport.size());
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            let palette = current_palette();
+            let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
 
             let max_visible = 12usize.min(entry_count);
             let box_h = max_visible + 4;
