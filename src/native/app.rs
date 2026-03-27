@@ -13,7 +13,6 @@ use super::desktop_search_service::NativeSpotlightCategory;
 use super::desktop_search_service::{NativeSpotlightResult, NativeStartLeafAction};
 use super::desktop_session_service::restore_current_user_from_last_session;
 use super::desktop_settings_service::load_settings_snapshot;
-use super::wasm_addon_runtime::WasmHostedAddonState;
 use super::desktop_surface_service::{DesktopIconGridLayout, DesktopSurfaceEntry};
 use super::edit_menus_screen::{EditMenuTarget, TerminalEditMenusState};
 #[cfg(test)]
@@ -47,6 +46,7 @@ use super::retro_ui::{
     ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
+use super::wasm_addon_runtime::WasmHostedAddonState;
 use crate::config::SavedConnection;
 #[cfg(test)]
 use crate::config::{
@@ -57,8 +57,7 @@ use crate::config::{DesktopFileManagerSettings, DesktopIconSortMode, HackingDiff
 use crate::core::auth::{AuthMethod, UserRecord};
 use crate::session;
 use crate::theme::{
-    ColorStyle, DockPosition, LayoutProfile, MonochromePreset, PanelPosition,
-    TerminalLayoutProfile,
+    ColorStyle, DockPosition, LayoutProfile, MonochromePreset, PanelPosition, TerminalLayoutProfile,
 };
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
@@ -126,7 +125,6 @@ use launch_registry::{resolve_terminal_launch_target, NativeTerminalLaunch};
 mod file_manager_desktop_presenter;
 mod frame_runtime;
 mod settings_panels;
-pub(crate) use desktop_window_mgmt::DesktopWindowState;
 #[cfg(test)]
 use super::editor_app::EditorTextAlign;
 #[cfg(test)]
@@ -136,6 +134,7 @@ use desktop_start_menu::START_ROOT_ITEMS;
 use desktop_start_menu::{StartLeaf, StartSubmenu};
 #[cfg(test)]
 use desktop_window_mgmt::DesktopWindowRectTracking;
+pub(crate) use desktop_window_mgmt::DesktopWindowState;
 
 #[derive(Debug, Clone)]
 pub(super) struct SessionState {
@@ -404,6 +403,48 @@ fn color_style_from_settings(settings: &Settings) -> ColorStyle {
     }
 }
 
+fn desktop_color_style_from_settings(settings: &Settings) -> ColorStyle {
+    settings
+        .desktop_color_style
+        .clone()
+        .unwrap_or_else(|| color_style_from_settings(settings))
+}
+
+fn terminal_color_style_from_settings(settings: &Settings) -> ColorStyle {
+    settings
+        .terminal_color_style
+        .clone()
+        .unwrap_or_else(|| color_style_from_settings(settings))
+}
+
+fn desktop_layout_from_settings(settings: &Settings) -> LayoutProfile {
+    settings
+        .desktop_layout_profile
+        .clone()
+        .unwrap_or_else(|| crate::theme::ThemePack::classic().layout_profile)
+}
+
+fn terminal_layout_from_settings(settings: &Settings) -> TerminalLayoutProfile {
+    settings
+        .terminal_layout_profile
+        .clone()
+        .unwrap_or_else(crate::theme::TerminalLayoutProfile::classic)
+}
+
+fn desktop_theme_pack_id_from_settings(settings: &Settings) -> Option<String> {
+    settings
+        .desktop_theme_pack_id
+        .clone()
+        .or_else(|| settings.active_theme_pack_id.clone())
+}
+
+fn terminal_theme_pack_id_from_settings(settings: &Settings) -> Option<String> {
+    settings
+        .terminal_theme_pack_id
+        .clone()
+        .or_else(|| settings.active_theme_pack_id.clone())
+}
+
 const RETRO_FONT_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/FixedsysExcelsior301-Regular.ttf");
 
@@ -438,7 +479,7 @@ pub fn configure_native_context(ctx: &Context) {
     configure_native_fonts(ctx);
     apply_native_appearance(ctx);
     let settings = crate::config::get_settings();
-    let color_style = color_style_from_settings(&settings);
+    let color_style = desktop_color_style_from_settings(&settings);
     apply_native_display_effects_for_settings(&settings, &color_style);
 }
 
@@ -479,14 +520,16 @@ fn crt_theme_tint_for_color_style(style: &ColorStyle) -> [f32; 3] {
 
 fn apply_native_display_effects_for_settings(settings: &Settings, color_style: &ColorStyle) {
     let display_effects = &settings.display_effects;
-    let monochrome_tint = crt_theme_tint_for_color_style(color_style);
-    let monochrome_enabled = 1u32;
+    let (monochrome_enabled, monochrome_tint) = match color_style {
+        ColorStyle::Monochrome { .. } => (1u32, crt_theme_tint_for_color_style(color_style)),
+        ColorStyle::FullColor { .. } => (0u32, [0.0, 0.0, 0.0]),
+    };
     if !display_effects.enabled && monochrome_enabled == 0 {
         egui_wgpu::set_crt_effects(None);
         egui_winit::set_crt_pointer_curve(None);
         return;
     }
-    let theme_tint = if display_effects.enabled {
+    let theme_tint = if display_effects.enabled && monochrome_enabled != 0 {
         monochrome_tint
     } else {
         [0.0, 0.0, 0.0]
@@ -755,6 +798,10 @@ pub struct RobcoNativeApp {
     tweaks_surface_tab: u8,  // 0=Desktop, 1=Terminal
     desktop_tweaks_tab: u8,  // 0=Background, 1=Display, 2=Colors, 3=Icons, 4=Layout
     terminal_tweaks_tab: u8, // 0=Colors, 1=Layout, 2=Terminal
+    terminal_tweaks_surface_dropdown_open: bool,
+    terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
+    terminal_tweaks_desktop_expanded_menu: Option<u8>,
+    terminal_tweaks_terminal_expanded_menu: Option<u8>,
     // Spotlight search
     spotlight_open: bool,
     spotlight_query: String,
@@ -808,6 +855,10 @@ pub(super) struct ParkedSessionState {
     start_menu_rename: Option<StartMenuRenameState>,
     secondary_windows: Vec<SecondaryWindow>,
     desktop_wasm_addon: Option<WasmHostedAddonState>,
+    terminal_tweaks_surface_dropdown_open: bool,
+    terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
+    terminal_tweaks_desktop_expanded_menu: Option<u8>,
+    terminal_tweaks_terminal_expanded_menu: Option<u8>,
 }
 
 /// App-specific state for a secondary (non-primary) window instance.
@@ -851,8 +902,12 @@ impl Default for RobcoNativeApp {
         let live_hacking_difficulty = settings_draft.hacking_difficulty;
         let settings_ui_defaults = build_desktop_settings_ui_defaults(&settings_draft, None);
         let terminal_defaults = terminal_runtime_defaults();
-        let initial_color_style = color_style_from_settings(&settings_draft);
-        let initial_theme_pack_id = settings_draft.active_theme_pack_id.clone();
+        let initial_desktop_color_style = desktop_color_style_from_settings(&settings_draft);
+        let initial_terminal_color_style = terminal_color_style_from_settings(&settings_draft);
+        let initial_desktop_theme_pack_id = desktop_theme_pack_id_from_settings(&settings_draft);
+        let initial_terminal_theme_pack_id = terminal_theme_pack_id_from_settings(&settings_draft);
+        let initial_desktop_layout = desktop_layout_from_settings(&settings_draft);
+        let initial_terminal_layout = terminal_layout_from_settings(&settings_draft);
         let mut app = Self {
             login: TerminalLoginState::default(),
             session: None,
@@ -902,12 +957,12 @@ impl Default for RobcoNativeApp {
             start_open_leaf: None,
             desktop_mode_open: false,
             slot_registry: super::shell_slots::SlotRegistry::classic(),
-            desktop_active_layout: crate::theme::ThemePack::classic().layout_profile,
-            terminal_active_layout: crate::theme::TerminalLayoutProfile::classic(),
-            desktop_active_theme_pack_id: initial_theme_pack_id.clone(),
-            terminal_active_theme_pack_id: initial_theme_pack_id,
-            desktop_active_color_style: initial_color_style.clone(),
-            terminal_active_color_style: initial_color_style,
+            desktop_active_layout: initial_desktop_layout,
+            terminal_active_layout: initial_terminal_layout,
+            desktop_active_theme_pack_id: initial_desktop_theme_pack_id,
+            terminal_active_theme_pack_id: initial_terminal_theme_pack_id,
+            desktop_active_color_style: initial_desktop_color_style,
+            terminal_active_color_style: initial_terminal_color_style,
             terminal_slot_registry: super::terminal_slots::TerminalSlotRegistry::classic(),
             terminal_nav: terminal_defaults,
             terminal_settings_panel: TerminalSettingsPanel::Home,
@@ -967,6 +1022,10 @@ impl Default for RobcoNativeApp {
             tweaks_surface_tab: 0,
             desktop_tweaks_tab: 0,
             terminal_tweaks_tab: 0,
+            terminal_tweaks_surface_dropdown_open: false,
+            terminal_tweaks_open_dropdown: None,
+            terminal_tweaks_desktop_expanded_menu: Some(0),
+            terminal_tweaks_terminal_expanded_menu: Some(0),
             spotlight_open: false,
             spotlight_query: String::new(),
             spotlight_tab: 0,
@@ -987,6 +1046,43 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn apply_surface_theme_state_from_settings(&mut self) {
+        self.desktop_active_theme_pack_id =
+            desktop_theme_pack_id_from_settings(&self.settings.draft);
+        self.terminal_active_theme_pack_id =
+            terminal_theme_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_color_style = desktop_color_style_from_settings(&self.settings.draft);
+        self.terminal_active_color_style = terminal_color_style_from_settings(&self.settings.draft);
+        self.desktop_active_layout = desktop_layout_from_settings(&self.settings.draft);
+        self.terminal_active_layout = terminal_layout_from_settings(&self.settings.draft);
+        self.last_desktop_appearance = None;
+    }
+
+    fn persist_surface_theme_state_to_settings(&mut self) {
+        self.settings.draft.desktop_theme_pack_id = self.desktop_active_theme_pack_id.clone();
+        self.settings.draft.terminal_theme_pack_id = self.terminal_active_theme_pack_id.clone();
+        self.settings.draft.desktop_color_style = Some(self.desktop_active_color_style.clone());
+        self.settings.draft.terminal_color_style = Some(self.terminal_active_color_style.clone());
+        self.settings.draft.desktop_layout_profile = Some(self.desktop_active_layout.clone());
+        self.settings.draft.terminal_layout_profile = Some(self.terminal_active_layout.clone());
+        self.settings.draft.active_theme_pack_id = self.desktop_active_theme_pack_id.clone();
+
+        if let ColorStyle::Monochrome { preset, custom_rgb } = &self.desktop_active_color_style {
+            self.settings.draft.theme = match preset {
+                MonochromePreset::Green => "Green (Default)",
+                MonochromePreset::White => "White",
+                MonochromePreset::Amber => "Amber",
+                MonochromePreset::Blue => "Blue",
+                MonochromePreset::LightBlue => "Light Blue",
+                MonochromePreset::Custom => crate::config::CUSTOM_THEME_NAME,
+            }
+            .to_string();
+            if let Some(custom_rgb) = custom_rgb {
+                self.settings.draft.custom_theme_rgb = *custom_rgb;
+            }
+        }
+    }
+
     fn sync_native_display_effects(&self) {
         let active_color_style = if self.desktop_mode_open {
             &self.desktop_active_color_style
@@ -2509,7 +2605,6 @@ mod tests {
         assert!(app.desktop_window_is_open(DesktopWindow::Editor));
     }
 
-
     #[test]
     fn spotlight_terminal_result_uses_registry_launch() {
         let mut app = RobcoNativeApp::default();
@@ -3118,5 +3213,4 @@ mod tests {
         assert_eq!(app.file_manager.cwd, temp.path);
         assert_eq!(app.file_manager.selected, Some(file_path));
     }
-
 }

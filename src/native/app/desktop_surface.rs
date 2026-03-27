@@ -94,11 +94,12 @@ impl RobcoNativeApp {
             .clone()
     }
 
-    pub(super) fn load_tinted_image_texture(
+    pub(super) fn load_image_texture(
         ctx: &Context,
         texture_id: impl Into<String>,
         path: &Path,
         max_side_px: Option<u32>,
+        monochrome: bool,
     ) -> Option<TextureHandle> {
         let bytes = std::fs::read(path).ok()?;
         let mut image = image::load_from_memory(&bytes).ok()?.into_rgba8();
@@ -111,20 +112,40 @@ impl RobcoNativeApp {
         let (width, height) = image.dimensions();
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for pixel in image.pixels() {
-            let luma =
-                ((pixel[0] as u16 * 77 + pixel[1] as u16 * 150 + pixel[2] as u16 * 29) / 256) as u8;
-            rgba.extend_from_slice(&[luma, luma, luma, pixel[3]]);
+            if monochrome {
+                let luma = ((pixel[0] as u16 * 77 + pixel[1] as u16 * 150 + pixel[2] as u16 * 29)
+                    / 256) as u8;
+                rgba.extend_from_slice(&[luma, luma, luma, pixel[3]]);
+            } else {
+                rgba.extend_from_slice(&pixel.0);
+            }
         }
         let color_image =
             egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
         Some(ctx.load_texture(texture_id.into(), color_image, egui::TextureOptions::LINEAR))
     }
 
-    pub(super) fn load_wallpaper_texture(ctx: &Context, path: &str) -> Option<TextureHandle> {
+    fn wallpaper_cache_key(path: &str, monochrome: bool) -> String {
+        format!(
+            "{}#{}",
+            path,
+            if monochrome {
+                "monochrome"
+            } else {
+                "full-color"
+            }
+        )
+    }
+
+    pub(super) fn load_wallpaper_texture(
+        ctx: &Context,
+        path: &str,
+        monochrome: bool,
+    ) -> Option<TextureHandle> {
         if path.trim().is_empty() {
             return None;
         }
-        Self::load_tinted_image_texture(ctx, "desktop_wallpaper", Path::new(path), None)
+        Self::load_image_texture(ctx, "desktop_wallpaper", Path::new(path), None, monochrome)
     }
 
     pub(super) fn build_asset_cache(ctx: &Context) -> AssetCache {
@@ -198,11 +219,17 @@ impl RobcoNativeApp {
 
     pub(super) fn sync_wallpaper(&mut self, ctx: &Context) {
         let wallpaper_path = self.settings.draft.desktop_wallpaper.as_str();
+        let monochrome_wallpaper = matches!(
+            self.desktop_active_color_style,
+            crate::theme::ColorStyle::Monochrome { .. }
+        );
+        let cache_key = Self::wallpaper_cache_key(wallpaper_path, monochrome_wallpaper);
         if let Some(cache) = &mut self.asset_cache {
-            if cache.wallpaper_loaded_for != wallpaper_path {
-                cache.wallpaper = Self::load_wallpaper_texture(ctx, wallpaper_path);
+            if cache.wallpaper_loaded_for != cache_key {
+                cache.wallpaper =
+                    Self::load_wallpaper_texture(ctx, wallpaper_path, monochrome_wallpaper);
                 cache.wallpaper_loaded_for.clear();
-                cache.wallpaper_loaded_for.push_str(wallpaper_path);
+                cache.wallpaper_loaded_for.push_str(&cache_key);
             }
         }
     }
@@ -222,7 +249,14 @@ impl RobcoNativeApp {
 
         let image_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        let tint = palette.fg;
+        let tint = if matches!(
+            self.desktop_active_color_style,
+            crate::theme::ColorStyle::Monochrome { .. }
+        ) {
+            palette.fg
+        } else {
+            Color32::WHITE
+        };
         match self.settings.draft.desktop_wallpaper_size_mode {
             WallpaperSizeMode::FitToScreen | WallpaperSizeMode::Stretch => {
                 painter.image(texture.id(), screen, uv, tint);
@@ -634,7 +668,7 @@ impl RobcoNativeApp {
 
     pub(super) fn desktop_icon_foreground(palette: RetroPalette, selected: bool) -> Color32 {
         if selected {
-            palette.bg
+            palette.selected_fg
         } else {
             palette.fg
         }
@@ -673,10 +707,10 @@ impl RobcoNativeApp {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            visuals.bg_fill = palette.fg;
-            visuals.weak_bg_fill = palette.fg;
+            visuals.bg_fill = palette.selected_bg;
+            visuals.weak_bg_fill = palette.selected_bg;
             visuals.bg_stroke = egui::Stroke::NONE;
-            visuals.fg_stroke.color = Color32::BLACK;
+            visuals.fg_stroke.color = palette.selected_fg;
             visuals.rounding = egui::Rounding::ZERO;
             visuals.expansion = 0.0;
         }

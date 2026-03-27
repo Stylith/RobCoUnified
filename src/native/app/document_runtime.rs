@@ -397,6 +397,12 @@ impl RobcoNativeApp {
         self.launch_editor_path_on_active_surface(path, TerminalScreen::DocumentBrowser);
     }
 
+    pub(super) fn file_manager_picker_active(&self) -> bool {
+        self.editor.save_as_input.is_some()
+            || self.picking_icon_for_shortcut.is_some()
+            || self.picking_wallpaper
+    }
+
     pub(super) fn file_manager_activate_or_pick(&mut self) {
         let pick_mode = if self.editor.save_as_input.is_some() {
             FileManagerPickMode::SaveAs
@@ -482,6 +488,9 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn apply_file_manager_picker_commit(&mut self, commit: FileManagerPickerCommit) {
+        let should_return_to_terminal_caller = !self.desktop_mode_open
+            && matches!(self.terminal_nav.screen, TerminalScreen::DocumentBrowser);
+        let return_screen = self.terminal_nav.browser_return_screen;
         match commit {
             FileManagerPickerCommit::SetShortcutIcon { shortcut_idx, path } => {
                 if let Some(path_str) =
@@ -504,6 +513,9 @@ impl RobcoNativeApp {
                 self.file_manager.open = false;
                 self.persist_native_settings();
             }
+        }
+        if should_return_to_terminal_caller {
+            self.navigate_to_screen(return_screen);
         }
     }
 

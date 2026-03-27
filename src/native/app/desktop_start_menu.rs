@@ -14,7 +14,7 @@ use crate::native::{
 };
 use crate::platform::{InstallProfile, LaunchTarget};
 use crate::theme::{DockPosition, PanelPosition};
-use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, Id, Key, RichText};
+use eframe::egui::{self, Align2, Context, FontFamily, FontId, Id, Key, RichText};
 
 use super::RobcoNativeApp;
 
@@ -344,14 +344,10 @@ impl RobcoNativeApp {
                 }
                 game_names.sort();
                 let mut items = Vec::new();
-                items.extend(
-                    game_names
-                        .into_iter()
-                        .map(|label| NativeStartLeafEntry {
-                            action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
-                            label,
-                        }),
-                );
+                items.extend(game_names.into_iter().map(|label| NativeStartLeafEntry {
+                    action: NativeStartLeafAction::LaunchGameProgram(label.clone()),
+                    label,
+                }));
                 if items.is_empty() {
                     items.push(NativeStartLeafEntry {
                         label: "(No games installed)".to_string(),
@@ -543,12 +539,8 @@ impl RobcoNativeApp {
                             ui.set_max_width(LEAF_W);
                             for (idx, item) in items.iter().enumerate() {
                                 let selected = self.start_leaf_selected == idx;
-                                let response = Self::start_menu_row(
-                                    ui,
-                                    &item.label,
-                                    selected,
-                                    LEAF_W - 16.0,
-                                );
+                                let response =
+                                    Self::start_menu_row(ui, &item.label, selected, LEAF_W - 16.0);
                                 if response.hovered() {
                                     self.start_leaf_selected = idx;
                                 }
@@ -728,7 +720,7 @@ impl RobcoNativeApp {
         style.visuals.menu_rounding = egui::Rounding::ZERO;
         style.visuals.window_shadow = egui::epaint::Shadow::NONE;
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.selection.bg_fill = palette.fg;
+        style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.widgets.noninteractive.bg_fill = palette.panel;
         style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
@@ -742,22 +734,22 @@ impl RobcoNativeApp {
         style.visuals.widgets.inactive.fg_stroke = stroke;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.inactive.expansion = 0.0;
-        style.visuals.widgets.hovered.bg_fill = palette.fg;
-        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
+        style.visuals.widgets.hovered.bg_fill = palette.selected_bg;
+        style.visuals.widgets.hovered.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.hovered.bg_stroke = stroke;
-        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.hovered.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.hovered.expansion = 0.0;
-        style.visuals.widgets.active.bg_fill = palette.fg;
-        style.visuals.widgets.active.weak_bg_fill = palette.fg;
+        style.visuals.widgets.active.bg_fill = palette.selected_bg;
+        style.visuals.widgets.active.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.active.bg_stroke = stroke;
-        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.active.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.active.expansion = 0.0;
-        style.visuals.widgets.open.bg_fill = palette.fg;
-        style.visuals.widgets.open.weak_bg_fill = palette.fg;
+        style.visuals.widgets.open.bg_fill = palette.selected_bg;
+        style.visuals.widgets.open.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.open.bg_stroke = stroke;
-        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.open.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.open.expansion = 0.0;
         ui.set_style(style);
@@ -773,8 +765,16 @@ impl RobcoNativeApp {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click());
         let active = selected || response.hovered();
-        let fill = if active { palette.fg } else { palette.panel };
-        let text_color = if active { Color32::BLACK } else { palette.fg };
+        let fill = if active {
+            palette.selected_bg
+        } else {
+            palette.panel
+        };
+        let text_color = if active {
+            palette.selected_fg
+        } else {
+            palette.fg
+        };
         ui.painter().rect_filled(rect, 0.0, fill);
         ui.painter().text(
             egui::pos2(rect.left() + 8.0, rect.center().y),

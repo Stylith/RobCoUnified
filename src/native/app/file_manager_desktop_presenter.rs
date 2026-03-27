@@ -213,12 +213,12 @@ impl RobcoNativeApp {
         let hovered = response.hovered();
         let highlighted = active || hovered;
         let fill = if highlighted {
-            palette.fg
+            palette.selected_bg
         } else {
             Color32::TRANSPARENT
         };
         let text_color = if highlighted {
-            Color32::BLACK
+            palette.selected_fg
         } else {
             palette.fg
         };
@@ -259,12 +259,12 @@ impl RobcoNativeApp {
         let hovered = response.hovered();
         let highlighted = active || hovered;
         let fill = if highlighted {
-            palette.fg
+            palette.selected_bg
         } else {
             Color32::TRANSPARENT
         };
         let text_color = if highlighted {
-            Color32::BLACK
+            palette.selected_fg
         } else {
             palette.fg
         };
@@ -1013,9 +1013,25 @@ impl RobcoNativeApp {
         let preview_texture = selected_row
             .as_ref()
             .and_then(|row| self.file_manager_preview_texture(ctx, row));
+        let monochrome_preview = matches!(
+            self.desktop_active_color_style,
+            crate::theme::ColorStyle::Monochrome { .. }
+        );
+        let preview_tint = if monochrome_preview {
+            palette.fg
+        } else {
+            egui::Color32::WHITE
+        };
 
         ui.label(RichText::new("Preview").strong().color(palette.fg));
-        ui.small(RichText::new("Theme-tinted wallpaper preview").color(palette.dim));
+        ui.small(
+            RichText::new(if monochrome_preview {
+                "Theme-tinted wallpaper preview"
+            } else {
+                "Full-color wallpaper preview"
+            })
+            .color(palette.dim),
+        );
         ui.add_space(8.0);
 
         egui::Frame::none()
@@ -1034,7 +1050,7 @@ impl RobcoNativeApp {
 
                 if let Some(texture) = preview_texture.as_ref() {
                     let image_rect = Self::fit_texture_rect(texture, rect.shrink(10.0));
-                    Self::paint_tinted_texture(&painter, texture, image_rect, palette.fg);
+                    Self::paint_tinted_texture(&painter, texture, image_rect, preview_tint);
                 } else {
                     let message = match selected_row.as_ref() {
                         Some(row) if row.is_dir || row.is_parent_dir() => {

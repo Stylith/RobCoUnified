@@ -1,23 +1,39 @@
 use super::super::background::BackgroundResult;
 use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
-use super::super::installed_theme_packs;
 use super::super::desktop_settings_service::persist_settings_draft;
-use super::super::desktop_status_service::saved_settings_status;
+use super::super::desktop_status_service::{clear_shell_status, saved_settings_status};
 use super::super::desktop_surface_service::{
     desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
 };
-use super::super::retro_ui::current_palette;
+use super::super::installed_theme_packs;
+use super::super::menu::TerminalScreen;
+use super::super::retro_ui::{
+    current_palette, current_palette_for_surface, set_active_color_style, RetroScreen,
+    ShellSurfaceKind,
+};
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
 use super::RobcoNativeApp;
 use crate::config::{
-    CliAcsMode, CliColorMode, DesktopIconStyle, NativeStartupWindowMode, WallpaperSizeMode,
-    CUSTOM_THEME_NAME, THEMES,
+    CliAcsMode, CliColorMode, CrtPreset, DesktopIconStyle, NativeStartupWindowMode,
+    WallpaperSizeMode, CUSTOM_THEME_NAME,
 };
-use crate::theme::{ColorStyle, LayoutProfile, MonochromePreset, TerminalLayoutProfile, ThemePack};
-use eframe::egui::{self, Context, RichText, TextEdit};
+use crate::theme::{
+    ColorStyle, FullColorTheme, LayoutProfile, MonochromePreset, TerminalLayoutProfile, ThemePack,
+};
+use eframe::egui::{self, Context, Key, RichText, TextEdit};
+use std::path::Path;
 
-fn theme_name_for_color_style(style: &ColorStyle) -> &'static str {
+const MONOCHROME_THEME_NAMES: &[&str] = &[
+    "Green (Default)",
+    "White",
+    "Amber",
+    "Blue",
+    "Light Blue",
+    CUSTOM_THEME_NAME,
+];
+
+fn monochrome_theme_name_for_color_style(style: &ColorStyle) -> &'static str {
     match style {
         ColorStyle::Monochrome { preset, .. } => match preset {
             MonochromePreset::Green => "Green (Default)",
@@ -28,6 +44,13 @@ fn theme_name_for_color_style(style: &ColorStyle) -> &'static str {
             MonochromePreset::Custom => CUSTOM_THEME_NAME,
         },
         ColorStyle::FullColor { .. } => "Green (Default)",
+    }
+}
+
+fn full_color_theme_id_for_color_style(style: &ColorStyle) -> &str {
+    match style {
+        ColorStyle::FullColor { theme_id } => theme_id.as_str(),
+        ColorStyle::Monochrome { .. } => "nucleon-dark",
     }
 }
 
@@ -81,11 +104,2045 @@ fn selected_theme_pack_name(selected_id: Option<&str>, theme_packs: &[ThemePack]
         .unwrap_or_else(|| "Manual".to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalTweaksRow {
+    Surface,
+    SurfaceOption(u8),
+    DropdownOption(TerminalTweaksDropdown, usize),
+    WallpaperPicker,
+    WallpaperMode,
+    WindowMode,
+    CrtEnabled,
+    CrtPreset,
+    CrtCurvature,
+    CrtScanlines,
+    CrtGlow,
+    CrtBloom,
+    CrtVignette,
+    CrtNoise,
+    CrtFlicker,
+    CrtJitter,
+    CrtBurnIn,
+    CrtGlowLine,
+    CrtGlowLineSpeed,
+    CrtPhosphorSoftness,
+    CrtBrightness,
+    CrtContrast,
+    DesktopMenu(u8),
+    DesktopThemePack,
+    DesktopColorMode,
+    DesktopMonoTheme,
+    DesktopCustomRed,
+    DesktopCustomGreen,
+    DesktopCustomBlue,
+    DesktopFullColorTheme,
+    DesktopIconStyle,
+    DesktopBuiltinIcon(usize),
+    DesktopShowCursor,
+    DesktopCursorScale,
+    DesktopLayout,
+    TerminalMenu(u8),
+    TerminalThemePack,
+    TerminalColorMode,
+    TerminalMonoTheme,
+    TerminalCustomRed,
+    TerminalCustomGreen,
+    TerminalCustomBlue,
+    TerminalFullColorTheme,
+    TerminalLayout,
+    TerminalStyledPty,
+    TerminalPtyColorMode,
+    TerminalBorderGlyphs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TerminalTweaksDropdown {
+    WallpaperMode,
+    WindowMode,
+    CrtPreset,
+    DesktopThemePack,
+    DesktopColorMode,
+    DesktopMonoTheme,
+    DesktopFullColorTheme,
+    DesktopIconStyle,
+    DesktopLayout,
+    TerminalThemePack,
+    TerminalColorMode,
+    TerminalMonoTheme,
+    TerminalFullColorTheme,
+    TerminalLayout,
+    TerminalPtyColorMode,
+    TerminalBorderGlyphs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalTweaksStep {
+    Previous,
+    Next,
+    Activate,
+}
+
+impl TerminalTweaksStep {
+    fn delta(self) -> i32 {
+        match self {
+            Self::Previous => -1,
+            Self::Next | Self::Activate => 1,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct TerminalTweaksMutation {
+    persist_changed: bool,
+    appearance_changed: bool,
+    window_mode_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalTweaksEntry {
+    Header(&'static str),
+    Row(TerminalTweaksRow),
+}
+
+fn adjust_f32(value: &mut f32, delta: i32, min: f32, max: f32, step: f32) -> bool {
+    let next = (*value + delta as f32 * step).clamp(min, max);
+    let next = (next * 1000.0).round() / 1000.0;
+    if (*value - next).abs() < f32::EPSILON {
+        false
+    } else {
+        *value = next;
+        true
+    }
+}
+
+fn adjust_u8(value: &mut u8, delta: i32) -> bool {
+    let next = (*value as i32 + delta).clamp(0, 255) as u8;
+    if *value == next {
+        false
+    } else {
+        *value = next;
+        true
+    }
+}
+
+fn wallpaper_size_mode_label(mode: WallpaperSizeMode) -> &'static str {
+    match mode {
+        WallpaperSizeMode::DefaultSize => "Default Size",
+        WallpaperSizeMode::FitToScreen => "Fit To Screen",
+        WallpaperSizeMode::Centered => "Centered",
+        WallpaperSizeMode::Tile => "Tile",
+        WallpaperSizeMode::Stretch => "Stretch",
+    }
+}
+
+fn desktop_icon_style_label(style: DesktopIconStyle) -> &'static str {
+    match style {
+        DesktopIconStyle::Dos => "DOS",
+        DesktopIconStyle::Win95 => "Win95",
+        DesktopIconStyle::Minimal => "Minimal",
+        DesktopIconStyle::NoIcons => "No Icons",
+    }
+}
+
+fn cli_color_mode_label(mode: CliColorMode) -> &'static str {
+    match mode {
+        CliColorMode::ThemeLock => "Theme Lock",
+        CliColorMode::PaletteMap => "Palette-map",
+        CliColorMode::Color => "Color",
+        CliColorMode::Monochrome => "Monochrome",
+    }
+}
+
+fn cli_acs_mode_label(mode: CliAcsMode) -> &'static str {
+    match mode {
+        CliAcsMode::Ascii => "ASCII",
+        CliAcsMode::Unicode => "Unicode Smooth",
+    }
+}
+
+fn desktop_section_label(tab: u8) -> &'static str {
+    match tab {
+        0 => "Background",
+        1 => "Display",
+        2 => "Colors",
+        3 => "Icons",
+        _ => "Layout",
+    }
+}
+
+fn terminal_section_label(tab: u8) -> &'static str {
+    match tab {
+        0 => "Colors",
+        1 => "Layout",
+        _ => "Terminal",
+    }
+}
+
+fn full_color_theme_label(theme_id: &str) -> &'static str {
+    match theme_id {
+        "nucleon-dark" => "Nucleon Dark",
+        "nucleon-light" => "Nucleon Light",
+        _ => "Unknown",
+    }
+}
+
+fn wallpaper_display_name(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "None".to_string();
+    }
+    Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn terminal_tweaks_indent(row: TerminalTweaksRow) -> usize {
+    match row {
+        TerminalTweaksRow::Surface
+        | TerminalTweaksRow::DesktopMenu(_)
+        | TerminalTweaksRow::TerminalMenu(_) => 0,
+        TerminalTweaksRow::SurfaceOption(_) => 2,
+        TerminalTweaksRow::DropdownOption(_, _) => 4,
+        _ => 2,
+    }
+}
+
 impl RobcoNativeApp {
     pub(super) fn open_tweaks_from_settings(&mut self) {
         self.tweaks_open = true;
         self.prime_desktop_window_defaults(DesktopWindow::Tweaks);
         self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Tweaks));
+    }
+
+    fn terminal_tweaks_entries(&self, theme_packs: &[ThemePack]) -> Vec<TerminalTweaksEntry> {
+        let mut entries = vec![
+            TerminalTweaksEntry::Header("Surface"),
+            TerminalTweaksEntry::Row(TerminalTweaksRow::Surface),
+        ];
+        if self.terminal_tweaks_surface_dropdown_open {
+            entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::SurfaceOption(0)),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::SurfaceOption(1)),
+            ]);
+        }
+        if self.tweaks_surface_tab == 0 {
+            entries.push(TerminalTweaksEntry::Header("Desktop Menus"));
+            for tab in 0..5 {
+                entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopMenu(
+                    tab,
+                )));
+                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
+                    self.append_desktop_terminal_tweaks_entries(tab, &mut entries);
+                }
+            }
+        } else {
+            entries.push(TerminalTweaksEntry::Header("Terminal Menus"));
+            for tab in 0..3 {
+                entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalMenu(
+                    tab,
+                )));
+                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
+                    self.append_terminal_terminal_tweaks_entries(tab, &mut entries);
+                }
+            }
+        }
+        self.inflate_terminal_tweaks_dropdown_entries(entries, theme_packs)
+    }
+
+    fn append_desktop_terminal_tweaks_entries(
+        &self,
+        tab: u8,
+        entries: &mut Vec<TerminalTweaksEntry>,
+    ) {
+        match tab {
+            0 => entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperPicker),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperMode),
+            ]),
+            1 => entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::WindowMode),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtEnabled),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtPreset),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtCurvature),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtScanlines),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtGlow),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtBloom),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtVignette),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtNoise),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtFlicker),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtJitter),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtBurnIn),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtGlowLine),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtGlowLineSpeed),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtPhosphorSoftness),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtBrightness),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::CrtContrast),
+            ]),
+            2 => {
+                entries.extend([
+                    TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopThemePack),
+                    TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopColorMode),
+                ]);
+                if matches!(
+                    self.desktop_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::DesktopMonoTheme,
+                    ));
+                    if monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
+                        == CUSTOM_THEME_NAME
+                    {
+                        entries.extend([
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomRed),
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomGreen),
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomBlue),
+                        ]);
+                    }
+                } else {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::DesktopFullColorTheme,
+                    ));
+                }
+            }
+            3 => {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopIconStyle,
+                ));
+                for (index, _) in desktop_builtin_icons().iter().enumerate() {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::DesktopBuiltinIcon(index),
+                    ));
+                }
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopShowCursor,
+                ));
+                if self.settings.draft.desktop_show_cursor {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::DesktopCursorScale,
+                    ));
+                }
+            }
+            _ => entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopLayout)),
+        }
+    }
+
+    fn append_terminal_terminal_tweaks_entries(
+        &self,
+        tab: u8,
+        entries: &mut Vec<TerminalTweaksEntry>,
+    ) {
+        match tab {
+            0 => {
+                entries.extend([
+                    TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalThemePack),
+                    TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalColorMode),
+                ]);
+                if matches!(
+                    self.terminal_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::TerminalMonoTheme,
+                    ));
+                    if monochrome_theme_name_for_color_style(&self.terminal_active_color_style)
+                        == CUSTOM_THEME_NAME
+                    {
+                        entries.extend([
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomRed),
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomGreen),
+                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomBlue),
+                        ]);
+                    }
+                } else {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::TerminalFullColorTheme,
+                    ));
+                }
+            }
+            1 => entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalLayout)),
+            _ => entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalStyledPty),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalPtyColorMode),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalBorderGlyphs),
+            ]),
+        }
+    }
+
+    fn terminal_tweaks_selectable_indices(entries: &[TerminalTweaksEntry]) -> Vec<usize> {
+        entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| match entry {
+                TerminalTweaksEntry::Header(_) => None,
+                TerminalTweaksEntry::Row(_) => Some(idx),
+            })
+            .collect()
+    }
+
+    fn terminal_tweaks_selected_row(
+        entries: &[TerminalTweaksEntry],
+        selected_idx: usize,
+    ) -> Option<TerminalTweaksRow> {
+        let selectable = Self::terminal_tweaks_selectable_indices(entries);
+        selectable
+            .get(selected_idx)
+            .and_then(|entry_idx| match entries.get(*entry_idx) {
+                Some(TerminalTweaksEntry::Row(row)) => Some(*row),
+                _ => None,
+            })
+    }
+
+    fn terminal_tweaks_viewport_start(
+        entries: &[TerminalTweaksEntry],
+        selectable_indices: &[usize],
+        selected_idx: usize,
+        visible_rows: usize,
+    ) -> usize {
+        if visible_rows == 0 || entries.len() <= visible_rows {
+            return 0;
+        }
+        let selected_entry_idx = selectable_indices.get(selected_idx).copied().unwrap_or(0);
+        let lead_rows = 3.min(visible_rows.saturating_sub(1));
+        selected_entry_idx
+            .saturating_sub(lead_rows)
+            .min(entries.len().saturating_sub(visible_rows))
+    }
+
+    fn terminal_tweaks_dropdown_for_row(row: TerminalTweaksRow) -> Option<TerminalTweaksDropdown> {
+        match row {
+            TerminalTweaksRow::WallpaperMode => Some(TerminalTweaksDropdown::WallpaperMode),
+            TerminalTweaksRow::WindowMode => Some(TerminalTweaksDropdown::WindowMode),
+            TerminalTweaksRow::CrtPreset => Some(TerminalTweaksDropdown::CrtPreset),
+            TerminalTweaksRow::DesktopThemePack => Some(TerminalTweaksDropdown::DesktopThemePack),
+            TerminalTweaksRow::DesktopColorMode => Some(TerminalTweaksDropdown::DesktopColorMode),
+            TerminalTweaksRow::DesktopMonoTheme => Some(TerminalTweaksDropdown::DesktopMonoTheme),
+            TerminalTweaksRow::DesktopFullColorTheme => {
+                Some(TerminalTweaksDropdown::DesktopFullColorTheme)
+            }
+            TerminalTweaksRow::DesktopIconStyle => Some(TerminalTweaksDropdown::DesktopIconStyle),
+            TerminalTweaksRow::DesktopLayout => Some(TerminalTweaksDropdown::DesktopLayout),
+            TerminalTweaksRow::TerminalThemePack => Some(TerminalTweaksDropdown::TerminalThemePack),
+            TerminalTweaksRow::TerminalColorMode => Some(TerminalTweaksDropdown::TerminalColorMode),
+            TerminalTweaksRow::TerminalMonoTheme => Some(TerminalTweaksDropdown::TerminalMonoTheme),
+            TerminalTweaksRow::TerminalFullColorTheme => {
+                Some(TerminalTweaksDropdown::TerminalFullColorTheme)
+            }
+            TerminalTweaksRow::TerminalLayout => Some(TerminalTweaksDropdown::TerminalLayout),
+            TerminalTweaksRow::TerminalPtyColorMode => {
+                Some(TerminalTweaksDropdown::TerminalPtyColorMode)
+            }
+            TerminalTweaksRow::TerminalBorderGlyphs => {
+                Some(TerminalTweaksDropdown::TerminalBorderGlyphs)
+            }
+            _ => None,
+        }
+    }
+
+    fn terminal_tweaks_dropdown_options(
+        &self,
+        dropdown: TerminalTweaksDropdown,
+        theme_packs: &[ThemePack],
+    ) -> Vec<String> {
+        match dropdown {
+            TerminalTweaksDropdown::WallpaperMode => vec![
+                wallpaper_size_mode_label(WallpaperSizeMode::DefaultSize).to_string(),
+                wallpaper_size_mode_label(WallpaperSizeMode::FitToScreen).to_string(),
+                wallpaper_size_mode_label(WallpaperSizeMode::Centered).to_string(),
+                wallpaper_size_mode_label(WallpaperSizeMode::Tile).to_string(),
+                wallpaper_size_mode_label(WallpaperSizeMode::Stretch).to_string(),
+            ],
+            TerminalTweaksDropdown::WindowMode => vec![
+                NativeStartupWindowMode::Windowed.label().to_string(),
+                NativeStartupWindowMode::Maximized.label().to_string(),
+                NativeStartupWindowMode::BorderlessFullscreen
+                    .label()
+                    .to_string(),
+                NativeStartupWindowMode::Fullscreen.label().to_string(),
+            ],
+            TerminalTweaksDropdown::CrtPreset => vec![
+                CrtPreset::Off.label().to_string(),
+                CrtPreset::Subtle.label().to_string(),
+                CrtPreset::RobCoStandard.label().to_string(),
+                CrtPreset::WornTerminal.label().to_string(),
+                CrtPreset::ExtremeRetro.label().to_string(),
+                CrtPreset::Custom.label().to_string(),
+            ],
+            TerminalTweaksDropdown::DesktopThemePack
+            | TerminalTweaksDropdown::TerminalThemePack => std::iter::once("Manual".to_string())
+                .chain(theme_packs.iter().map(|theme| theme.name.clone()))
+                .collect(),
+            TerminalTweaksDropdown::DesktopColorMode
+            | TerminalTweaksDropdown::TerminalColorMode => {
+                vec!["Monochrome".to_string(), "Full Color".to_string()]
+            }
+            TerminalTweaksDropdown::DesktopMonoTheme
+            | TerminalTweaksDropdown::TerminalMonoTheme => MONOCHROME_THEME_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            TerminalTweaksDropdown::DesktopFullColorTheme
+            | TerminalTweaksDropdown::TerminalFullColorTheme => FullColorTheme::builtin_themes()
+                .into_iter()
+                .map(|theme| theme.name)
+                .collect(),
+            TerminalTweaksDropdown::DesktopIconStyle => vec![
+                desktop_icon_style_label(DesktopIconStyle::Dos).to_string(),
+                desktop_icon_style_label(DesktopIconStyle::Win95).to_string(),
+                desktop_icon_style_label(DesktopIconStyle::Minimal).to_string(),
+                desktop_icon_style_label(DesktopIconStyle::NoIcons).to_string(),
+            ],
+            TerminalTweaksDropdown::DesktopLayout => LayoutProfile::builtin_layouts()
+                .into_iter()
+                .map(|profile| profile.name)
+                .collect(),
+            TerminalTweaksDropdown::TerminalLayout => TerminalLayoutProfile::builtin_layouts()
+                .into_iter()
+                .map(|profile| profile.name)
+                .collect(),
+            TerminalTweaksDropdown::TerminalPtyColorMode => vec![
+                cli_color_mode_label(CliColorMode::ThemeLock).to_string(),
+                cli_color_mode_label(CliColorMode::PaletteMap).to_string(),
+                cli_color_mode_label(CliColorMode::Color).to_string(),
+                cli_color_mode_label(CliColorMode::Monochrome).to_string(),
+            ],
+            TerminalTweaksDropdown::TerminalBorderGlyphs => vec![
+                cli_acs_mode_label(CliAcsMode::Ascii).to_string(),
+                cli_acs_mode_label(CliAcsMode::Unicode).to_string(),
+            ],
+        }
+    }
+
+    fn terminal_tweaks_dropdown_selected_index(
+        &self,
+        dropdown: TerminalTweaksDropdown,
+        theme_packs: &[ThemePack],
+    ) -> usize {
+        match dropdown {
+            TerminalTweaksDropdown::WallpaperMode => {
+                match self.settings.draft.desktop_wallpaper_size_mode {
+                    WallpaperSizeMode::DefaultSize => 0,
+                    WallpaperSizeMode::FitToScreen => 1,
+                    WallpaperSizeMode::Centered => 2,
+                    WallpaperSizeMode::Tile => 3,
+                    WallpaperSizeMode::Stretch => 4,
+                }
+            }
+            TerminalTweaksDropdown::WindowMode => {
+                match self.settings.draft.native_startup_window_mode {
+                    NativeStartupWindowMode::Windowed => 0,
+                    NativeStartupWindowMode::Maximized => 1,
+                    NativeStartupWindowMode::BorderlessFullscreen => 2,
+                    NativeStartupWindowMode::Fullscreen => 3,
+                }
+            }
+            TerminalTweaksDropdown::CrtPreset => match self.settings.draft.display_effects.preset {
+                CrtPreset::Off => 0,
+                CrtPreset::Subtle => 1,
+                CrtPreset::RobCoStandard => 2,
+                CrtPreset::WornTerminal => 3,
+                CrtPreset::ExtremeRetro => 4,
+                CrtPreset::Custom => 5,
+            },
+            TerminalTweaksDropdown::DesktopThemePack => self
+                .desktop_active_theme_pack_id
+                .as_deref()
+                .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
+                .map(|idx| idx + 1)
+                .unwrap_or(0),
+            TerminalTweaksDropdown::DesktopColorMode => {
+                if matches!(
+                    self.desktop_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    0
+                } else {
+                    1
+                }
+            }
+            TerminalTweaksDropdown::DesktopMonoTheme => MONOCHROME_THEME_NAMES
+                .iter()
+                .position(|name| {
+                    *name == monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
+                })
+                .unwrap_or(0),
+            TerminalTweaksDropdown::DesktopFullColorTheme => FullColorTheme::builtin_themes()
+                .iter()
+                .position(|theme| {
+                    theme.id
+                        == full_color_theme_id_for_color_style(&self.desktop_active_color_style)
+                })
+                .unwrap_or(0),
+            TerminalTweaksDropdown::DesktopIconStyle => {
+                match self.settings.draft.desktop_icon_style {
+                    DesktopIconStyle::Dos => 0,
+                    DesktopIconStyle::Win95 => 1,
+                    DesktopIconStyle::Minimal => 2,
+                    DesktopIconStyle::NoIcons => 3,
+                }
+            }
+            TerminalTweaksDropdown::DesktopLayout => LayoutProfile::builtin_layouts()
+                .iter()
+                .position(|profile| profile.id == self.desktop_active_layout.id)
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalThemePack => self
+                .terminal_active_theme_pack_id
+                .as_deref()
+                .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
+                .map(|idx| idx + 1)
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalColorMode => {
+                if matches!(
+                    self.terminal_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    0
+                } else {
+                    1
+                }
+            }
+            TerminalTweaksDropdown::TerminalMonoTheme => MONOCHROME_THEME_NAMES
+                .iter()
+                .position(|name| {
+                    *name
+                        == monochrome_theme_name_for_color_style(&self.terminal_active_color_style)
+                })
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalFullColorTheme => FullColorTheme::builtin_themes()
+                .iter()
+                .position(|theme| {
+                    theme.id
+                        == full_color_theme_id_for_color_style(&self.terminal_active_color_style)
+                })
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalLayout => TerminalLayoutProfile::builtin_layouts()
+                .iter()
+                .position(|profile| profile.id == self.terminal_active_layout.id)
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalPtyColorMode => {
+                match self.settings.draft.cli_color_mode {
+                    CliColorMode::ThemeLock => 0,
+                    CliColorMode::PaletteMap => 1,
+                    CliColorMode::Color => 2,
+                    CliColorMode::Monochrome => 3,
+                }
+            }
+            TerminalTweaksDropdown::TerminalBorderGlyphs => {
+                match self.settings.draft.cli_acs_mode {
+                    CliAcsMode::Ascii => 0,
+                    CliAcsMode::Unicode => 1,
+                }
+            }
+        }
+    }
+
+    fn append_terminal_tweaks_dropdown_options(
+        &self,
+        dropdown: TerminalTweaksDropdown,
+        entries: &mut Vec<TerminalTweaksEntry>,
+        theme_packs: &[ThemePack],
+    ) {
+        for index in 0..self
+            .terminal_tweaks_dropdown_options(dropdown, theme_packs)
+            .len()
+        {
+            entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DropdownOption(
+                dropdown, index,
+            )));
+        }
+    }
+
+    fn inflate_terminal_tweaks_dropdown_entries(
+        &self,
+        entries: Vec<TerminalTweaksEntry>,
+        theme_packs: &[ThemePack],
+    ) -> Vec<TerminalTweaksEntry> {
+        let mut expanded = Vec::with_capacity(entries.len());
+        for entry in entries {
+            expanded.push(entry);
+            if let TerminalTweaksEntry::Row(row) = entry {
+                if let Some(dropdown) = Self::terminal_tweaks_dropdown_for_row(row) {
+                    if self.terminal_tweaks_open_dropdown == Some(dropdown) {
+                        self.append_terminal_tweaks_dropdown_options(
+                            dropdown,
+                            &mut expanded,
+                            theme_packs,
+                        );
+                    }
+                }
+            }
+        }
+        expanded
+    }
+
+    fn terminal_tweaks_row_label(
+        &self,
+        row: TerminalTweaksRow,
+        theme_packs: &[ThemePack],
+    ) -> String {
+        match row {
+            TerminalTweaksRow::Surface => format!(
+                "Surface: {}",
+                if self.tweaks_surface_tab == 0 {
+                    "Desktop"
+                } else {
+                    "Terminal"
+                }
+            ),
+            TerminalTweaksRow::SurfaceOption(tab) => {
+                let label = if tab == 0 { "Desktop" } else { "Terminal" };
+                if self.tweaks_surface_tab == tab {
+                    format!("{label} (current)")
+                } else {
+                    label.to_string()
+                }
+            }
+            TerminalTweaksRow::DropdownOption(dropdown, index) => {
+                let options = self.terminal_tweaks_dropdown_options(dropdown, theme_packs);
+                let label = options
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| "Option".to_string());
+                if self.terminal_tweaks_dropdown_selected_index(dropdown, theme_packs) == index {
+                    format!("{label} (current)")
+                } else {
+                    label
+                }
+            }
+            TerminalTweaksRow::DesktopMenu(tab) => format!(
+                "{} {}",
+                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
+                    "[-]"
+                } else {
+                    "[+]"
+                },
+                desktop_section_label(tab)
+            ),
+            TerminalTweaksRow::WallpaperPicker => format!(
+                "Wallpaper File: {} [browse]",
+                wallpaper_display_name(&self.settings.draft.desktop_wallpaper)
+            ),
+            TerminalTweaksRow::WallpaperMode => format!(
+                "Wallpaper Mode: {}",
+                wallpaper_size_mode_label(self.settings.draft.desktop_wallpaper_size_mode)
+            ),
+            TerminalTweaksRow::WindowMode => format!(
+                "Window Mode: {}",
+                self.settings.draft.native_startup_window_mode.label()
+            ),
+            TerminalTweaksRow::CrtEnabled => format!(
+                "CRT Effects: {}",
+                if self.settings.draft.display_effects.enabled {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            ),
+            TerminalTweaksRow::CrtPreset => format!(
+                "CRT Preset: {}",
+                self.settings.draft.display_effects.preset.label()
+            ),
+            TerminalTweaksRow::CrtCurvature => {
+                format!(
+                    "Curvature: {:.2}",
+                    self.settings.draft.display_effects.curvature
+                )
+            }
+            TerminalTweaksRow::CrtScanlines => {
+                format!(
+                    "Scanlines: {:.2}",
+                    self.settings.draft.display_effects.scanlines
+                )
+            }
+            TerminalTweaksRow::CrtGlow => {
+                format!("Glow: {:.2}", self.settings.draft.display_effects.glow)
+            }
+            TerminalTweaksRow::CrtBloom => {
+                format!(
+                    "Text Bloom: {:.2}",
+                    self.settings.draft.display_effects.bloom
+                )
+            }
+            TerminalTweaksRow::CrtVignette => {
+                format!(
+                    "Vignette: {:.2}",
+                    self.settings.draft.display_effects.vignette
+                )
+            }
+            TerminalTweaksRow::CrtNoise => {
+                format!("Noise: {:.2}", self.settings.draft.display_effects.noise)
+            }
+            TerminalTweaksRow::CrtFlicker => {
+                format!(
+                    "Flicker: {:.2}",
+                    self.settings.draft.display_effects.flicker
+                )
+            }
+            TerminalTweaksRow::CrtJitter => {
+                format!("Jitter: {:.3}", self.settings.draft.display_effects.jitter)
+            }
+            TerminalTweaksRow::CrtBurnIn => {
+                format!(
+                    "Burn-In: {:.2}",
+                    self.settings.draft.display_effects.burn_in
+                )
+            }
+            TerminalTweaksRow::CrtGlowLine => {
+                format!(
+                    "Glow Line: {:.2}",
+                    self.settings.draft.display_effects.glow_line
+                )
+            }
+            TerminalTweaksRow::CrtGlowLineSpeed => format!(
+                "Glow Line Speed: {:.2}",
+                self.settings.draft.display_effects.glow_line_speed
+            ),
+            TerminalTweaksRow::CrtPhosphorSoftness => format!(
+                "Phosphor Softness: {:.2}",
+                self.settings.draft.display_effects.phosphor_softness
+            ),
+            TerminalTweaksRow::CrtBrightness => {
+                format!(
+                    "Brightness: {:.2}",
+                    self.settings.draft.display_effects.brightness
+                )
+            }
+            TerminalTweaksRow::CrtContrast => {
+                format!(
+                    "Contrast: {:.2}",
+                    self.settings.draft.display_effects.contrast
+                )
+            }
+            TerminalTweaksRow::DesktopThemePack => format!(
+                "Theme Pack: {}",
+                selected_theme_pack_name(self.desktop_active_theme_pack_id.as_deref(), theme_packs)
+            ),
+            TerminalTweaksRow::DesktopColorMode => format!(
+                "Color Mode: {}",
+                if matches!(
+                    self.desktop_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    "Monochrome"
+                } else {
+                    "Full Color"
+                }
+            ),
+            TerminalTweaksRow::DesktopMonoTheme => format!(
+                "Monochrome Theme: {}",
+                monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
+            ),
+            TerminalTweaksRow::DesktopCustomRed => format!(
+                "Custom Red: {}",
+                custom_rgb_for_color_style(&self.desktop_active_color_style)[0]
+            ),
+            TerminalTweaksRow::DesktopCustomGreen => format!(
+                "Custom Green: {}",
+                custom_rgb_for_color_style(&self.desktop_active_color_style)[1]
+            ),
+            TerminalTweaksRow::DesktopCustomBlue => format!(
+                "Custom Blue: {}",
+                custom_rgb_for_color_style(&self.desktop_active_color_style)[2]
+            ),
+            TerminalTweaksRow::DesktopFullColorTheme => format!(
+                "Full Color Theme: {}",
+                full_color_theme_label(full_color_theme_id_for_color_style(
+                    &self.desktop_active_color_style,
+                ))
+            ),
+            TerminalTweaksRow::DesktopIconStyle => format!(
+                "Icon Style: {}",
+                desktop_icon_style_label(self.settings.draft.desktop_icon_style)
+            ),
+            TerminalTweaksRow::DesktopBuiltinIcon(index) => desktop_builtin_icons()
+                .get(index)
+                .map(|entry| {
+                    format!(
+                        "Show {} Icon: {}",
+                        entry.label,
+                        if self
+                            .settings
+                            .draft
+                            .desktop_hidden_builtin_icons
+                            .contains(entry.key)
+                        {
+                            "OFF"
+                        } else {
+                            "ON"
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "Built-in Icon".to_string()),
+            TerminalTweaksRow::DesktopShowCursor => format!(
+                "Show Desktop Cursor: {}",
+                if self.settings.draft.desktop_show_cursor {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            ),
+            TerminalTweaksRow::DesktopCursorScale => format!(
+                "Cursor Size: {:.1}x",
+                self.settings.draft.desktop_cursor_scale
+            ),
+            TerminalTweaksRow::DesktopLayout => {
+                format!("Desktop Layout: {}", self.desktop_active_layout.name)
+            }
+            TerminalTweaksRow::TerminalMenu(tab) => format!(
+                "{} {}",
+                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
+                    "[-]"
+                } else {
+                    "[+]"
+                },
+                terminal_section_label(tab)
+            ),
+            TerminalTweaksRow::TerminalThemePack => format!(
+                "Theme Pack: {}",
+                selected_theme_pack_name(
+                    self.terminal_active_theme_pack_id.as_deref(),
+                    theme_packs
+                )
+            ),
+            TerminalTweaksRow::TerminalColorMode => format!(
+                "Color Mode: {}",
+                if matches!(
+                    self.terminal_active_color_style,
+                    ColorStyle::Monochrome { .. }
+                ) {
+                    "Monochrome"
+                } else {
+                    "Full Color"
+                }
+            ),
+            TerminalTweaksRow::TerminalMonoTheme => format!(
+                "Monochrome Theme: {}",
+                monochrome_theme_name_for_color_style(&self.terminal_active_color_style)
+            ),
+            TerminalTweaksRow::TerminalCustomRed => format!(
+                "Custom Red: {}",
+                custom_rgb_for_color_style(&self.terminal_active_color_style)[0]
+            ),
+            TerminalTweaksRow::TerminalCustomGreen => format!(
+                "Custom Green: {}",
+                custom_rgb_for_color_style(&self.terminal_active_color_style)[1]
+            ),
+            TerminalTweaksRow::TerminalCustomBlue => format!(
+                "Custom Blue: {}",
+                custom_rgb_for_color_style(&self.terminal_active_color_style)[2]
+            ),
+            TerminalTweaksRow::TerminalFullColorTheme => format!(
+                "Full Color Theme: {}",
+                full_color_theme_label(full_color_theme_id_for_color_style(
+                    &self.terminal_active_color_style,
+                ))
+            ),
+            TerminalTweaksRow::TerminalLayout => {
+                format!("Terminal Layout: {}", self.terminal_active_layout.name)
+            }
+            TerminalTweaksRow::TerminalStyledPty => format!(
+                "Styled PTY Rendering: {}",
+                if self.settings.draft.cli_styled_render {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            ),
+            TerminalTweaksRow::TerminalPtyColorMode => format!(
+                "PTY Color Mode: {}",
+                cli_color_mode_label(self.settings.draft.cli_color_mode)
+            ),
+            TerminalTweaksRow::TerminalBorderGlyphs => format!(
+                "Border Glyphs: {}",
+                cli_acs_mode_label(self.settings.draft.cli_acs_mode)
+            ),
+        }
+    }
+
+    fn terminal_tweaks_row_help(&self, row: TerminalTweaksRow) -> String {
+        match row {
+            TerminalTweaksRow::Surface => {
+                "Enter opens or closes the Desktop and Terminal picker.".to_string()
+            }
+            TerminalTweaksRow::SurfaceOption(tab) => {
+                if self.tweaks_surface_tab == tab {
+                    "This surface is already active.".to_string()
+                } else {
+                    "Switches the Tweaks tree to this surface and closes the picker.".to_string()
+                }
+            }
+            TerminalTweaksRow::DropdownOption(_, _) => {
+                "Applies this value and closes the option list.".to_string()
+            }
+            TerminalTweaksRow::DesktopMenu(tab) => {
+                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
+                    "This menu is expanded below. Press Enter again to collapse it.".to_string()
+                } else {
+                    "Opens this desktop menu inline so its settings appear beneath it.".to_string()
+                }
+            }
+            TerminalTweaksRow::TerminalMenu(tab) => {
+                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
+                    "This menu is expanded below. Press Enter again to collapse it.".to_string()
+                } else {
+                    "Opens this terminal menu inline so its settings appear beneath it.".to_string()
+                }
+            }
+            TerminalTweaksRow::WallpaperPicker => {
+                "Enter opens the terminal file browser and returns here after selection."
+                    .to_string()
+            }
+            TerminalTweaksRow::WindowMode => {
+                "Enter opens the window-mode list. The selected mode persists across launches."
+                    .to_string()
+            }
+            TerminalTweaksRow::CrtEnabled | TerminalTweaksRow::CrtPreset => {
+                if matches!(row, TerminalTweaksRow::CrtEnabled) {
+                    "CRT tweaks drive the same display-effects backend as desktop Tweaks."
+                        .to_string()
+                } else {
+                    "Enter opens the CRT preset list.".to_string()
+                }
+            }
+            TerminalTweaksRow::CrtCurvature
+            | TerminalTweaksRow::CrtScanlines
+            | TerminalTweaksRow::CrtGlow
+            | TerminalTweaksRow::CrtBloom
+            | TerminalTweaksRow::CrtVignette
+            | TerminalTweaksRow::CrtNoise
+            | TerminalTweaksRow::CrtFlicker
+            | TerminalTweaksRow::CrtJitter
+            | TerminalTweaksRow::CrtBurnIn
+            | TerminalTweaksRow::CrtGlowLine
+            | TerminalTweaksRow::CrtGlowLineSpeed
+            | TerminalTweaksRow::CrtPhosphorSoftness
+            | TerminalTweaksRow::CrtBrightness
+            | TerminalTweaksRow::CrtContrast => {
+                if self.settings.draft.display_effects.enabled {
+                    "Left/Right tunes the active CRT profile and marks it Custom.".to_string()
+                } else {
+                    "Enable CRT effects first to tune these values.".to_string()
+                }
+            }
+            TerminalTweaksRow::DesktopThemePack | TerminalTweaksRow::TerminalThemePack => {
+                "Enter opens the shared theme-pack list for this surface.".to_string()
+            }
+            TerminalTweaksRow::DesktopColorMode | TerminalTweaksRow::TerminalColorMode => {
+                "Enter opens the color-mode list for this surface.".to_string()
+            }
+            TerminalTweaksRow::DesktopMonoTheme
+            | TerminalTweaksRow::TerminalMonoTheme
+            | TerminalTweaksRow::DesktopFullColorTheme
+            | TerminalTweaksRow::TerminalFullColorTheme => {
+                "Enter opens the available theme variants.".to_string()
+            }
+            TerminalTweaksRow::DesktopCustomRed
+            | TerminalTweaksRow::DesktopCustomGreen
+            | TerminalTweaksRow::DesktopCustomBlue
+            | TerminalTweaksRow::TerminalCustomRed
+            | TerminalTweaksRow::TerminalCustomGreen
+            | TerminalTweaksRow::TerminalCustomBlue => {
+                "Adjust the custom monochrome tint channel.".to_string()
+            }
+            TerminalTweaksRow::DesktopIconStyle => {
+                "Enter opens the desktop icon-style list.".to_string()
+            }
+            TerminalTweaksRow::DesktopBuiltinIcon(_) => {
+                "Toggle individual built-in desktop icons.".to_string()
+            }
+            TerminalTweaksRow::DesktopShowCursor | TerminalTweaksRow::DesktopCursorScale => {
+                "Controls the software cursor on the desktop surface.".to_string()
+            }
+            TerminalTweaksRow::DesktopLayout | TerminalTweaksRow::TerminalLayout => {
+                "Enter opens the layout list for this surface.".to_string()
+            }
+            TerminalTweaksRow::TerminalStyledPty => {
+                "Styled PTY rendering keeps ANSI decorations in terminal output.".to_string()
+            }
+            TerminalTweaksRow::TerminalPtyColorMode => {
+                "Enter opens the PTY color-mode list.".to_string()
+            }
+            TerminalTweaksRow::TerminalBorderGlyphs => {
+                "Enter opens the border glyph list.".to_string()
+            }
+            TerminalTweaksRow::WallpaperMode => {
+                "Enter opens the wallpaper sizing list.".to_string()
+            }
+        }
+    }
+
+    fn apply_terminal_tweaks_dropdown_selection(
+        &mut self,
+        dropdown: TerminalTweaksDropdown,
+        index: usize,
+        theme_packs: &[ThemePack],
+    ) -> (TerminalTweaksMutation, bool) {
+        let mut mutation = TerminalTweaksMutation::default();
+        let mut changed = false;
+        match dropdown {
+            TerminalTweaksDropdown::WallpaperMode => {
+                let options = [
+                    WallpaperSizeMode::DefaultSize,
+                    WallpaperSizeMode::FitToScreen,
+                    WallpaperSizeMode::Centered,
+                    WallpaperSizeMode::Tile,
+                    WallpaperSizeMode::Stretch,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.desktop_wallpaper_size_mode {
+                        set_desktop_wallpaper_size_mode(&mut self.settings.draft, next);
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::WindowMode => {
+                let options = [
+                    NativeStartupWindowMode::Windowed,
+                    NativeStartupWindowMode::Maximized,
+                    NativeStartupWindowMode::BorderlessFullscreen,
+                    NativeStartupWindowMode::Fullscreen,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.native_startup_window_mode {
+                        self.settings.draft.native_startup_window_mode = next;
+                        mutation.persist_changed = true;
+                        mutation.window_mode_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::CrtPreset => {
+                let options = [
+                    CrtPreset::Off,
+                    CrtPreset::Subtle,
+                    CrtPreset::RobCoStandard,
+                    CrtPreset::WornTerminal,
+                    CrtPreset::ExtremeRetro,
+                    CrtPreset::Custom,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.display_effects.preset {
+                        if next == CrtPreset::Custom {
+                            self.settings.draft.display_effects.preset = next;
+                        } else {
+                            self.settings.draft.display_effects.apply_preset(next);
+                        }
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::DesktopThemePack => {
+                let next = if index == 0 {
+                    None
+                } else {
+                    theme_packs.get(index - 1).map(|theme| theme.id.clone())
+                };
+                let current = self.desktop_active_theme_pack_id.clone();
+                if next != current {
+                    self.desktop_active_theme_pack_id = next.clone();
+                    if let Some(id) = next {
+                        if let Some(theme) = theme_packs.iter().find(|theme| theme.id == id) {
+                            self.desktop_active_color_style = theme.color_style.clone();
+                            self.desktop_active_layout = theme.layout_profile.clone();
+                            set_active_color_style(
+                                ShellSurfaceKind::Desktop,
+                                self.desktop_active_color_style.clone(),
+                            );
+                        }
+                    }
+                    mutation.appearance_changed = true;
+                    changed = true;
+                }
+            }
+            TerminalTweaksDropdown::DesktopColorMode => {
+                let next = match index {
+                    0 => Some(ColorStyle::Monochrome {
+                        preset: MonochromePreset::Green,
+                        custom_rgb: None,
+                    }),
+                    1 => Some(ColorStyle::FullColor {
+                        theme_id: "nucleon-dark".to_string(),
+                    }),
+                    _ => None,
+                };
+                if let Some(next_style) = next {
+                    if next_style != self.desktop_active_color_style {
+                        self.desktop_active_color_style = next_style;
+                        self.desktop_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Desktop,
+                            self.desktop_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::DesktopMonoTheme => {
+                if let Some(next) = MONOCHROME_THEME_NAMES.get(index).copied() {
+                    let next_style = color_style_from_theme_name(
+                        next,
+                        custom_rgb_for_color_style(&self.desktop_active_color_style),
+                    );
+                    if next_style != self.desktop_active_color_style {
+                        self.desktop_active_color_style = next_style;
+                        self.desktop_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Desktop,
+                            self.desktop_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::DesktopFullColorTheme => {
+                if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
+                    let next_style = ColorStyle::FullColor {
+                        theme_id: theme.id.clone(),
+                    };
+                    if next_style != self.desktop_active_color_style {
+                        self.desktop_active_color_style = next_style;
+                        self.desktop_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Desktop,
+                            self.desktop_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::DesktopIconStyle => {
+                let options = [
+                    DesktopIconStyle::Dos,
+                    DesktopIconStyle::Win95,
+                    DesktopIconStyle::Minimal,
+                    DesktopIconStyle::NoIcons,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.desktop_icon_style {
+                        set_desktop_icon_style(&mut self.settings.draft, next);
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::DesktopLayout => {
+                if let Some(profile) = LayoutProfile::builtin_layouts().get(index) {
+                    if profile.id != self.desktop_active_layout.id {
+                        self.desktop_active_layout = profile.clone();
+                        self.desktop_active_theme_pack_id = None;
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalThemePack => {
+                let next = if index == 0 {
+                    None
+                } else {
+                    theme_packs.get(index - 1).map(|theme| theme.id.clone())
+                };
+                let current = self.terminal_active_theme_pack_id.clone();
+                if next != current {
+                    self.terminal_active_theme_pack_id = next.clone();
+                    if let Some(id) = next {
+                        if let Some(theme) = theme_packs.iter().find(|theme| theme.id == id) {
+                            self.terminal_active_color_style = theme.color_style.clone();
+                            set_active_color_style(
+                                ShellSurfaceKind::Terminal,
+                                self.terminal_active_color_style.clone(),
+                            );
+                        }
+                    }
+                    mutation.appearance_changed = true;
+                    changed = true;
+                }
+            }
+            TerminalTweaksDropdown::TerminalColorMode => {
+                let next = match index {
+                    0 => Some(ColorStyle::Monochrome {
+                        preset: MonochromePreset::Green,
+                        custom_rgb: None,
+                    }),
+                    1 => Some(ColorStyle::FullColor {
+                        theme_id: "nucleon-dark".to_string(),
+                    }),
+                    _ => None,
+                };
+                if let Some(next_style) = next {
+                    if next_style != self.terminal_active_color_style {
+                        self.terminal_active_color_style = next_style;
+                        self.terminal_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Terminal,
+                            self.terminal_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalMonoTheme => {
+                if let Some(next) = MONOCHROME_THEME_NAMES.get(index).copied() {
+                    let next_style = color_style_from_theme_name(
+                        next,
+                        custom_rgb_for_color_style(&self.terminal_active_color_style),
+                    );
+                    if next_style != self.terminal_active_color_style {
+                        self.terminal_active_color_style = next_style;
+                        self.terminal_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Terminal,
+                            self.terminal_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalFullColorTheme => {
+                if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
+                    let next_style = ColorStyle::FullColor {
+                        theme_id: theme.id.clone(),
+                    };
+                    if next_style != self.terminal_active_color_style {
+                        self.terminal_active_color_style = next_style;
+                        self.terminal_active_theme_pack_id = None;
+                        set_active_color_style(
+                            ShellSurfaceKind::Terminal,
+                            self.terminal_active_color_style.clone(),
+                        );
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalLayout => {
+                if let Some(profile) = TerminalLayoutProfile::builtin_layouts().get(index) {
+                    if profile.id != self.terminal_active_layout.id {
+                        self.terminal_active_layout = profile.clone();
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalPtyColorMode => {
+                let options = [
+                    CliColorMode::ThemeLock,
+                    CliColorMode::PaletteMap,
+                    CliColorMode::Color,
+                    CliColorMode::Monochrome,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.cli_color_mode {
+                        self.settings.draft.cli_color_mode = next;
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalBorderGlyphs => {
+                let options = [CliAcsMode::Ascii, CliAcsMode::Unicode];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.cli_acs_mode {
+                        self.settings.draft.cli_acs_mode = next;
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        let action_taken = changed || self.terminal_tweaks_open_dropdown.is_some();
+        self.terminal_tweaks_open_dropdown = None;
+        (mutation, action_taken)
+    }
+
+    fn apply_terminal_tweaks_step(
+        &mut self,
+        row: TerminalTweaksRow,
+        step: TerminalTweaksStep,
+        theme_packs: &[ThemePack],
+    ) -> (TerminalTweaksMutation, bool) {
+        let mut mutation = TerminalTweaksMutation::default();
+        let mut action_taken = false;
+        if !matches!(
+            row,
+            TerminalTweaksRow::Surface
+                | TerminalTweaksRow::SurfaceOption(_)
+                | TerminalTweaksRow::DropdownOption(_, _)
+        ) {
+            self.terminal_tweaks_surface_dropdown_open = false;
+            self.terminal_tweaks_open_dropdown = None;
+        }
+        match row {
+            TerminalTweaksRow::Surface => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_surface_dropdown_open =
+                        !self.terminal_tweaks_surface_dropdown_open;
+                    self.terminal_tweaks_open_dropdown = None;
+                    self.terminal_nav.settings_idx = 0;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::SurfaceOption(tab) => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.tweaks_surface_tab = tab;
+                    self.terminal_tweaks_surface_dropdown_open = false;
+                    self.terminal_tweaks_open_dropdown = None;
+                    self.terminal_nav.settings_idx = 0;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DropdownOption(dropdown, index) => {
+                return self.apply_terminal_tweaks_dropdown_selection(dropdown, index, theme_packs);
+            }
+            TerminalTweaksRow::DesktopMenu(tab) => {
+                self.terminal_tweaks_open_dropdown = None;
+                self.desktop_tweaks_tab = tab;
+                let next = if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
+                    None
+                } else {
+                    Some(tab)
+                };
+                if self.terminal_tweaks_desktop_expanded_menu != next {
+                    self.terminal_tweaks_desktop_expanded_menu = next;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::WallpaperPicker => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    let start = wallpaper_browser_start_dir(&self.settings.draft.desktop_wallpaper);
+                    self.picking_wallpaper = true;
+                    self.open_document_browser_at(start, TerminalScreen::Settings);
+                    self.apply_status_update(clear_shell_status());
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::WallpaperMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::WallpaperMode)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::WallpaperMode)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::WindowMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::WindowMode)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::WindowMode)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::CrtEnabled => {
+                self.settings.draft.display_effects.enabled =
+                    !self.settings.draft.display_effects.enabled;
+                if self.settings.draft.display_effects.enabled
+                    && self.settings.draft.display_effects.preset == CrtPreset::Off
+                {
+                    self.settings
+                        .draft
+                        .display_effects
+                        .apply_preset(CrtPreset::RobCoStandard);
+                }
+                mutation.persist_changed = true;
+                action_taken = true;
+            }
+            TerminalTweaksRow::CrtPreset => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::CrtPreset)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::CrtPreset)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::CrtCurvature
+            | TerminalTweaksRow::CrtScanlines
+            | TerminalTweaksRow::CrtGlow
+            | TerminalTweaksRow::CrtBloom
+            | TerminalTweaksRow::CrtVignette
+            | TerminalTweaksRow::CrtNoise
+            | TerminalTweaksRow::CrtFlicker
+            | TerminalTweaksRow::CrtJitter
+            | TerminalTweaksRow::CrtBurnIn
+            | TerminalTweaksRow::CrtGlowLine
+            | TerminalTweaksRow::CrtGlowLineSpeed
+            | TerminalTweaksRow::CrtPhosphorSoftness
+            | TerminalTweaksRow::CrtBrightness
+            | TerminalTweaksRow::CrtContrast => {
+                if !self.settings.draft.display_effects.enabled {
+                    return (mutation, false);
+                }
+                let changed = match row {
+                    TerminalTweaksRow::CrtCurvature => adjust_f32(
+                        &mut self.settings.draft.display_effects.curvature,
+                        step.delta(),
+                        0.0,
+                        0.2,
+                        0.01,
+                    ),
+                    TerminalTweaksRow::CrtScanlines => adjust_f32(
+                        &mut self.settings.draft.display_effects.scanlines,
+                        step.delta(),
+                        0.0,
+                        1.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtGlow => adjust_f32(
+                        &mut self.settings.draft.display_effects.glow,
+                        step.delta(),
+                        0.0,
+                        1.5,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtBloom => adjust_f32(
+                        &mut self.settings.draft.display_effects.bloom,
+                        step.delta(),
+                        0.0,
+                        1.5,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtVignette => adjust_f32(
+                        &mut self.settings.draft.display_effects.vignette,
+                        step.delta(),
+                        0.0,
+                        1.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtNoise => adjust_f32(
+                        &mut self.settings.draft.display_effects.noise,
+                        step.delta(),
+                        0.0,
+                        0.35,
+                        0.01,
+                    ),
+                    TerminalTweaksRow::CrtFlicker => adjust_f32(
+                        &mut self.settings.draft.display_effects.flicker,
+                        step.delta(),
+                        0.0,
+                        0.3,
+                        0.01,
+                    ),
+                    TerminalTweaksRow::CrtJitter => adjust_f32(
+                        &mut self.settings.draft.display_effects.jitter,
+                        step.delta(),
+                        0.0,
+                        0.12,
+                        0.005,
+                    ),
+                    TerminalTweaksRow::CrtBurnIn => adjust_f32(
+                        &mut self.settings.draft.display_effects.burn_in,
+                        step.delta(),
+                        0.0,
+                        1.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtGlowLine => adjust_f32(
+                        &mut self.settings.draft.display_effects.glow_line,
+                        step.delta(),
+                        0.0,
+                        1.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtGlowLineSpeed => adjust_f32(
+                        &mut self.settings.draft.display_effects.glow_line_speed,
+                        step.delta(),
+                        0.2,
+                        2.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtPhosphorSoftness => adjust_f32(
+                        &mut self.settings.draft.display_effects.phosphor_softness,
+                        step.delta(),
+                        0.0,
+                        1.0,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtBrightness => adjust_f32(
+                        &mut self.settings.draft.display_effects.brightness,
+                        step.delta(),
+                        0.7,
+                        1.4,
+                        0.05,
+                    ),
+                    TerminalTweaksRow::CrtContrast => adjust_f32(
+                        &mut self.settings.draft.display_effects.contrast,
+                        step.delta(),
+                        0.8,
+                        1.5,
+                        0.05,
+                    ),
+                    _ => false,
+                };
+                if changed {
+                    self.settings.draft.display_effects.mark_custom();
+                    mutation.persist_changed = true;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopThemePack => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopThemePack)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopThemePack)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopColorMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopColorMode)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopColorMode)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopMonoTheme => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopMonoTheme)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopMonoTheme)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopCustomRed
+            | TerminalTweaksRow::DesktopCustomGreen
+            | TerminalTweaksRow::DesktopCustomBlue => {
+                let mut rgb = custom_rgb_for_color_style(&self.desktop_active_color_style);
+                let changed = match row {
+                    TerminalTweaksRow::DesktopCustomRed => adjust_u8(&mut rgb[0], step.delta()),
+                    TerminalTweaksRow::DesktopCustomGreen => adjust_u8(&mut rgb[1], step.delta()),
+                    TerminalTweaksRow::DesktopCustomBlue => adjust_u8(&mut rgb[2], step.delta()),
+                    _ => false,
+                };
+                if changed {
+                    self.desktop_active_color_style = ColorStyle::Monochrome {
+                        preset: MonochromePreset::Custom,
+                        custom_rgb: Some(rgb),
+                    };
+                    self.desktop_active_theme_pack_id = None;
+                    set_active_color_style(
+                        ShellSurfaceKind::Desktop,
+                        self.desktop_active_color_style.clone(),
+                    );
+                    mutation.appearance_changed = true;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopFullColorTheme => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopFullColorTheme)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopFullColorTheme)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopIconStyle => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopIconStyle)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopIconStyle)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopBuiltinIcon(index) => {
+                if let Some(entry) = desktop_builtin_icons().get(index) {
+                    let visible = self
+                        .settings
+                        .draft
+                        .desktop_hidden_builtin_icons
+                        .contains(entry.key);
+                    set_builtin_icon_visible(&mut self.settings.draft, entry.key, visible);
+                    mutation.persist_changed = true;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopShowCursor => {
+                self.settings.draft.desktop_show_cursor = !self.settings.draft.desktop_show_cursor;
+                mutation.persist_changed = true;
+                action_taken = true;
+            }
+            TerminalTweaksRow::DesktopCursorScale => {
+                if adjust_f32(
+                    &mut self.settings.draft.desktop_cursor_scale,
+                    step.delta(),
+                    0.5,
+                    2.5,
+                    0.1,
+                ) {
+                    mutation.persist_changed = true;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopLayout => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopLayout)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopLayout)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalMenu(tab) => {
+                self.terminal_tweaks_open_dropdown = None;
+                self.terminal_tweaks_tab = tab;
+                let next = if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
+                    None
+                } else {
+                    Some(tab)
+                };
+                if self.terminal_tweaks_terminal_expanded_menu != next {
+                    self.terminal_tweaks_terminal_expanded_menu = next;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalThemePack => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalThemePack)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalThemePack)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalColorMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalColorMode)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalColorMode)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalMonoTheme => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalMonoTheme)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalMonoTheme)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalCustomRed
+            | TerminalTweaksRow::TerminalCustomGreen
+            | TerminalTweaksRow::TerminalCustomBlue => {
+                let mut rgb = custom_rgb_for_color_style(&self.terminal_active_color_style);
+                let changed = match row {
+                    TerminalTweaksRow::TerminalCustomRed => adjust_u8(&mut rgb[0], step.delta()),
+                    TerminalTweaksRow::TerminalCustomGreen => adjust_u8(&mut rgb[1], step.delta()),
+                    TerminalTweaksRow::TerminalCustomBlue => adjust_u8(&mut rgb[2], step.delta()),
+                    _ => false,
+                };
+                if changed {
+                    self.terminal_active_color_style = ColorStyle::Monochrome {
+                        preset: MonochromePreset::Custom,
+                        custom_rgb: Some(rgb),
+                    };
+                    self.terminal_active_theme_pack_id = None;
+                    set_active_color_style(
+                        ShellSurfaceKind::Terminal,
+                        self.terminal_active_color_style.clone(),
+                    );
+                    mutation.appearance_changed = true;
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalFullColorTheme => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalFullColorTheme)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalFullColorTheme)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalLayout => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalLayout)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalLayout)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalStyledPty => {
+                self.settings.draft.cli_styled_render = !self.settings.draft.cli_styled_render;
+                mutation.persist_changed = true;
+                action_taken = true;
+            }
+            TerminalTweaksRow::TerminalPtyColorMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalPtyColorMode)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalPtyColorMode)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalBorderGlyphs => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalBorderGlyphs)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalBorderGlyphs)
+                    };
+                    action_taken = true;
+                }
+            }
+        }
+        (mutation, action_taken)
+    }
+
+    pub(super) fn draw_terminal_tweaks_screen(&mut self, ctx: &Context) {
+        let layout = self.terminal_layout();
+        let theme_packs = installed_theme_packs();
+        let mut entries = self.terminal_tweaks_entries(&theme_packs);
+        let mut selectable_indices = Self::terminal_tweaks_selectable_indices(&entries);
+        self.terminal_nav.settings_idx = self
+            .terminal_nav
+            .settings_idx
+            .min(selectable_indices.len().saturating_sub(1));
+        let mut mutation = TerminalTweaksMutation::default();
+
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            let previous = self.terminal_nav.settings_idx;
+            self.terminal_nav.settings_idx = self.terminal_nav.settings_idx.saturating_sub(1);
+            if self.terminal_nav.settings_idx != previous {
+                crate::sound::play_navigate();
+            }
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            let previous = self.terminal_nav.settings_idx;
+            self.terminal_nav.settings_idx = (self.terminal_nav.settings_idx + 1)
+                .min(selectable_indices.len().saturating_sub(1));
+            if self.terminal_nav.settings_idx != previous {
+                crate::sound::play_navigate();
+            }
+        }
+
+        let keyboard_step = if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
+            Some(TerminalTweaksStep::Previous)
+        } else if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
+            Some(TerminalTweaksStep::Next)
+        } else if ctx.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Space)) {
+            Some(TerminalTweaksStep::Activate)
+        } else {
+            None
+        };
+        if let Some(step) = keyboard_step {
+            if let Some(row) =
+                Self::terminal_tweaks_selected_row(&entries, self.terminal_nav.settings_idx)
+            {
+                let (step_mutation, action_taken) =
+                    self.apply_terminal_tweaks_step(row, step, &theme_packs);
+                if action_taken {
+                    crate::sound::play_navigate();
+                }
+                mutation.persist_changed |= step_mutation.persist_changed;
+                mutation.appearance_changed |= step_mutation.appearance_changed;
+                mutation.window_mode_changed |= step_mutation.window_mode_changed;
+                entries = self.terminal_tweaks_entries(&theme_packs);
+                selectable_indices = Self::terminal_tweaks_selectable_indices(&entries);
+                self.terminal_nav.settings_idx = self
+                    .terminal_nav
+                    .settings_idx
+                    .min(selectable_indices.len().saturating_sub(1));
+            }
+        }
+
+        let mut clicked_row = None;
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(current_palette_for_surface(ShellSurfaceKind::Terminal).bg)
+                    .inner_margin(0.0),
+            )
+            .show(ctx, |ui| {
+                let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+                let (screen, _) = RetroScreen::new(ui, layout.cols, layout.rows);
+                let painter = ui.painter_at(screen.rect);
+                screen.paint_bg(&painter, palette.bg);
+                for (idx, line) in crate::config::HEADER_LINES.iter().enumerate() {
+                    screen.centered_text(
+                        &painter,
+                        layout.header_start_row + idx,
+                        line,
+                        palette.fg,
+                        true,
+                    );
+                }
+                screen.separator(&painter, layout.separator_top_row, &palette);
+                screen.centered_text(&painter, layout.title_row, "Tweaks", palette.fg, true);
+                screen.separator(&painter, layout.separator_bottom_row, &palette);
+                screen.underlined_text(
+                    &painter,
+                    layout.content_col,
+                    layout.subtitle_row,
+                    "Surface dropdown with collapsible Desktop and Terminal menus",
+                    palette.fg,
+                );
+
+                let help_row = layout.status_row.saturating_sub(1);
+                let visible_rows = help_row.saturating_sub(layout.menu_start_row);
+                let viewport_start = Self::terminal_tweaks_viewport_start(
+                    &entries,
+                    &selectable_indices,
+                    self.terminal_nav.settings_idx,
+                    visible_rows,
+                );
+                let viewport_end = (viewport_start + visible_rows).min(entries.len());
+                let mut draw_row = layout.menu_start_row;
+                for entry_idx in viewport_start..viewport_end {
+                    match entries[entry_idx] {
+                        TerminalTweaksEntry::Header(label) => {
+                            screen.text(&painter, layout.content_col, draw_row, label, palette.dim);
+                        }
+                        TerminalTweaksEntry::Row(row) => {
+                            let selected = selectable_indices
+                                .get(self.terminal_nav.settings_idx)
+                                .copied()
+                                == Some(entry_idx);
+                            let indent = " ".repeat(terminal_tweaks_indent(row));
+                            let text = if selected {
+                                format!(
+                                    "  > {}{}",
+                                    indent,
+                                    self.terminal_tweaks_row_label(row, &theme_packs)
+                                )
+                            } else {
+                                format!(
+                                    "    {}{}",
+                                    indent,
+                                    self.terminal_tweaks_row_label(row, &theme_packs)
+                                )
+                            };
+                            let response = screen.selectable_row(
+                                ui,
+                                &painter,
+                                &palette,
+                                layout.content_col,
+                                draw_row,
+                                &text,
+                                selected,
+                            );
+                            if response.clicked() {
+                                if let Some(selectable_idx) = selectable_indices
+                                    .iter()
+                                    .position(|candidate| *candidate == entry_idx)
+                                {
+                                    self.terminal_nav.settings_idx = selectable_idx;
+                                }
+                                clicked_row = Some(row);
+                            }
+                        }
+                    }
+                    draw_row += 1;
+                }
+
+                if let Some(selected_row) =
+                    Self::terminal_tweaks_selected_row(&entries, self.terminal_nav.settings_idx)
+                {
+                    screen.text(
+                        &painter,
+                        layout.content_col,
+                        help_row,
+                        &self.terminal_tweaks_row_help(selected_row),
+                        palette.dim,
+                    );
+                }
+                if !self.shell_status.is_empty() {
+                    screen.text(
+                        &painter,
+                        layout.content_col,
+                        layout.status_row,
+                        &self.shell_status,
+                        palette.dim,
+                    );
+                }
+            });
+
+        if let Some(row) = clicked_row {
+            let (step_mutation, action_taken) =
+                self.apply_terminal_tweaks_step(row, TerminalTweaksStep::Activate, &theme_packs);
+            if action_taken {
+                crate::sound::play_navigate();
+            }
+            mutation.persist_changed |= step_mutation.persist_changed;
+            mutation.appearance_changed |= step_mutation.appearance_changed;
+            mutation.window_mode_changed |= step_mutation.window_mode_changed;
+        }
+
+        if mutation.appearance_changed {
+            self.persist_surface_theme_state_to_settings();
+            mutation.persist_changed = true;
+        }
+        if mutation.persist_changed {
+            self.persist_native_settings();
+            if mutation.window_mode_changed {
+                self.apply_native_window_mode(ctx);
+            }
+        }
     }
 
     pub(super) fn draw_tweaks(&mut self, ctx: &Context) {
@@ -124,6 +2181,7 @@ impl RobcoNativeApp {
             let mut persist_changed = false;
             let mut window_mode_changed = false;
             let mut desktop_runtime_changed = false;
+            let mut appearance_changed = false;
             let palette = current_palette();
             let theme_packs = installed_theme_packs();
 
@@ -139,14 +2197,22 @@ impl RobcoNativeApp {
                     ui.horizontal(|ui| {
                         for (i, label) in ["Desktop", "Terminal"].iter().enumerate() {
                             let active = self.tweaks_surface_tab == i as u8;
-                            let color = if active { palette.fg } else { palette.dim };
+                            let color = if active {
+                                palette.selected_fg
+                            } else {
+                                palette.fg
+                            };
                             let btn = ui.add(
                                 egui::Button::new(RichText::new(*label).color(color).strong())
                                 .stroke(egui::Stroke::new(
                                     if active { 2.0 } else { 1.0 },
-                                    color,
+                                    palette.fg,
                                 ))
-                                .fill(if active { palette.panel } else { palette.bg }),
+                                .fill(if active {
+                                    palette.selected_bg
+                                } else {
+                                    palette.panel
+                                }),
                             );
                             if btn.clicked() {
                                 self.tweaks_surface_tab = i as u8;
@@ -165,16 +2231,24 @@ impl RobcoNativeApp {
                                         .enumerate()
                                 {
                                     let active = self.desktop_tweaks_tab == i as u8;
-                                    let color = if active { palette.fg } else { palette.dim };
+                                    let color = if active {
+                                        palette.selected_fg
+                                    } else {
+                                        palette.fg
+                                    };
                                     let btn = ui.add(
                                         egui::Button::new(
                                             RichText::new(*label).color(color).strong(),
                                         )
                                         .stroke(egui::Stroke::new(
                                             if active { 2.0 } else { 1.0 },
-                                            color,
+                                            palette.fg,
                                         ))
-                                        .fill(if active { palette.panel } else { palette.bg }),
+                                        .fill(if active {
+                                            palette.selected_bg
+                                        } else {
+                                            palette.panel
+                                        }),
                                     );
                                     if btn.clicked() {
                                         self.desktop_tweaks_tab = i as u8;
@@ -325,6 +2399,7 @@ impl RobcoNativeApp {
                                             .clicked()
                                             {
                                                 self.desktop_active_theme_pack_id = None;
+                                                appearance_changed = true;
                                                 ui.close_menu();
                                             }
                                             for theme in &theme_packs {
@@ -346,97 +2421,238 @@ impl RobcoNativeApp {
                                                     self.desktop_active_layout =
                                                         theme.layout_profile.clone();
                                                     desktop_runtime_changed = true;
+                                                    appearance_changed = true;
                                                     ui.close_menu();
                                                 }
                                             }
                                         });
                                     });
                                     ui.add_space(10.0);
-                                    Self::settings_section(ui, "Desktop Theme Color", |ui| {
+                                    Self::settings_section(ui, "Color Mode", |ui| {
+                                        let desktop_is_monochrome = matches!(
+                                            self.desktop_active_color_style,
+                                            ColorStyle::Monochrome { .. }
+                                        );
                                         ui.horizontal(|ui| {
-                                            ui.label("Theme");
-                                            let mut current_idx = THEMES
-                                                .iter()
-                                                .position(|(name, _)| {
-                                                    *name
-                                                        == theme_name_for_color_style(
-                                                            &self.desktop_active_color_style,
-                                                        )
-                                                })
-                                                .unwrap_or(0);
-                                            egui::ComboBox::from_id_salt("native_desktop_theme")
-                                                .selected_text(
-                                                    RichText::new(THEMES[current_idx].0)
-                                                        .color(palette.fg),
-                                                )
-                                                .show_ui(ui, |ui| {
-                                                    Self::apply_settings_control_style(ui);
-                                                    for (idx, (name, _)) in
-                                                        THEMES.iter().enumerate()
-                                                    {
-                                                        if Self::retro_choice_button(
-                                                            ui,
-                                                            *name,
-                                                            current_idx == idx,
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            current_idx = idx;
-                                                            self.desktop_active_color_style =
-                                                                color_style_from_theme_name(
-                                                                    name,
-                                                                    custom_rgb_for_color_style(
-                                                                        &self.desktop_active_color_style,
-                                                                    ),
-                                                                );
-                                                            self.desktop_active_theme_pack_id =
-                                                                None;
-                                                            desktop_runtime_changed = true;
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                });
-                                        });
-                                        if theme_name_for_color_style(&self.desktop_active_color_style)
-                                            == CUSTOM_THEME_NAME
-                                        {
-                                            let mut rgb = custom_rgb_for_color_style(
-                                                &self.desktop_active_color_style,
-                                            );
-                                            let preview_color =
-                                                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                            ui.visuals_mut().selection.bg_fill = preview_color;
-                                            ui.visuals_mut().widgets.inactive.bg_fill = palette.dim;
-                                            let mut changed_rgb = false;
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[0], 0..=255)
-                                                        .text("Red"),
-                                                )
-                                                .changed();
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[1], 0..=255)
-                                                        .text("Green"),
-                                                )
-                                                .changed();
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[2], 0..=255)
-                                                        .text("Blue"),
-                                                )
-                                                .changed();
-                                            if changed_rgb {
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Monochrome",
+                                                desktop_is_monochrome,
+                                            )
+                                            .clicked()
+                                                && !desktop_is_monochrome
+                                            {
                                                 self.desktop_active_color_style =
                                                     ColorStyle::Monochrome {
-                                                        preset: MonochromePreset::Custom,
-                                                        custom_rgb: Some(rgb),
+                                                        preset: MonochromePreset::Green,
+                                                        custom_rgb: None,
                                                     };
                                                 self.desktop_active_theme_pack_id = None;
                                                 desktop_runtime_changed = true;
+                                                appearance_changed = true;
+                                                set_active_color_style(
+                                                    ShellSurfaceKind::Desktop,
+                                                    self.desktop_active_color_style.clone(),
+                                                );
                                             }
-                                        }
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Full Color",
+                                                !desktop_is_monochrome,
+                                            )
+                                            .clicked()
+                                                && desktop_is_monochrome
+                                            {
+                                                self.desktop_active_color_style =
+                                                    ColorStyle::FullColor {
+                                                        theme_id: "nucleon-dark".to_string(),
+                                                    };
+                                                self.desktop_active_theme_pack_id = None;
+                                                desktop_runtime_changed = true;
+                                                appearance_changed = true;
+                                                set_active_color_style(
+                                                    ShellSurfaceKind::Desktop,
+                                                    self.desktop_active_color_style.clone(),
+                                                );
+                                            }
+                                        });
                                     });
+                                    ui.add_space(10.0);
+                                    if matches!(
+                                        self.desktop_active_color_style,
+                                        ColorStyle::Monochrome { .. }
+                                    ) {
+                                        Self::settings_section(
+                                            ui,
+                                            "Desktop Monochrome Theme",
+                                            |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label("Theme");
+                                                    let mut current_idx =
+                                                        MONOCHROME_THEME_NAMES
+                                                            .iter()
+                                                            .position(|name| {
+                                                                *name
+                                                                    == monochrome_theme_name_for_color_style(
+                                                                        &self.desktop_active_color_style,
+                                                                    )
+                                                            })
+                                                            .unwrap_or(0);
+                                                    egui::ComboBox::from_id_salt(
+                                                        "native_desktop_theme",
+                                                    )
+                                                    .selected_text(
+                                                        RichText::new(
+                                                            MONOCHROME_THEME_NAMES[current_idx],
+                                                        )
+                                                        .color(palette.fg),
+                                                    )
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (idx, name) in
+                                                            MONOCHROME_THEME_NAMES
+                                                                .iter()
+                                                                .enumerate()
+                                                        {
+                                                            if Self::retro_choice_button(
+                                                                ui,
+                                                                *name,
+                                                                current_idx == idx,
+                                                            )
+                                                            .clicked()
+                                                            {
+                                                                current_idx = idx;
+                                                                self.desktop_active_color_style =
+                                                                    color_style_from_theme_name(
+                                                                        name,
+                                                                        custom_rgb_for_color_style(
+                                                                            &self.desktop_active_color_style,
+                                                                        ),
+                                                                    );
+                                                                self.desktop_active_theme_pack_id =
+                                                                    None;
+                                                                desktop_runtime_changed = true;
+                                                                appearance_changed = true;
+                                                                set_active_color_style(
+                                                                    ShellSurfaceKind::Desktop,
+                                                                    self.desktop_active_color_style
+                                                                        .clone(),
+                                                                );
+                                                                ui.close_menu();
+                                                            }
+                                                        }
+                                                    });
+                                                });
+                                                if monochrome_theme_name_for_color_style(
+                                                    &self.desktop_active_color_style,
+                                                ) == CUSTOM_THEME_NAME
+                                                {
+                                                    let mut rgb = custom_rgb_for_color_style(
+                                                        &self.desktop_active_color_style,
+                                                    );
+                                                    let preview_color =
+                                                        egui::Color32::from_rgb(
+                                                            rgb[0], rgb[1], rgb[2],
+                                                        );
+                                                    ui.visuals_mut().selection.bg_fill =
+                                                        preview_color;
+                                                    ui.visuals_mut()
+                                                        .widgets
+                                                        .inactive
+                                                        .bg_fill = palette.dim;
+                                                    let mut changed_rgb = false;
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[0],
+                                                                0..=255,
+                                                            )
+                                                            .text("Red"),
+                                                        )
+                                                        .changed();
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[1],
+                                                                0..=255,
+                                                            )
+                                                            .text("Green"),
+                                                        )
+                                                        .changed();
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[2],
+                                                                0..=255,
+                                                            )
+                                                            .text("Blue"),
+                                                        )
+                                                        .changed();
+                                                    if changed_rgb {
+                                                        self.desktop_active_color_style =
+                                                            ColorStyle::Monochrome {
+                                                                preset:
+                                                                    MonochromePreset::Custom,
+                                                                custom_rgb: Some(rgb),
+                                                            };
+                                                        self.desktop_active_theme_pack_id = None;
+                                                        desktop_runtime_changed = true;
+                                                        appearance_changed = true;
+                                                        set_active_color_style(
+                                                            ShellSurfaceKind::Desktop,
+                                                            self.desktop_active_color_style
+                                                                .clone(),
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    } else {
+                                        Self::settings_section(
+                                            ui,
+                                            "Desktop Full Color Theme",
+                                            |ui| {
+                                                let selected_theme_id =
+                                                    full_color_theme_id_for_color_style(
+                                                        &self.desktop_active_color_style,
+                                                    )
+                                                    .to_string();
+                                                for theme in FullColorTheme::builtin_themes() {
+                                                    let selected =
+                                                        selected_theme_id == theme.id.as_str();
+                                                    let label = match theme.id.as_str() {
+                                                        "nucleon-dark" => {
+                                                            "Nucleon Dark - Dark background, teal accents"
+                                                        }
+                                                        "nucleon-light" => {
+                                                            "Nucleon Light - Light background, slate blue accents"
+                                                        }
+                                                        _ => theme.name.as_str(),
+                                                    };
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        label,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.desktop_active_color_style =
+                                                            ColorStyle::FullColor {
+                                                                theme_id: theme.id.clone(),
+                                                            };
+                                                        self.desktop_active_theme_pack_id = None;
+                                                        desktop_runtime_changed = true;
+                                                        appearance_changed = true;
+                                                        set_active_color_style(
+                                                            ShellSurfaceKind::Desktop,
+                                                            self.desktop_active_color_style
+                                                                .clone(),
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    }
                                 }
                                 3 => {
                                     Self::settings_section(ui, "Desktop Icons", |ui| {
@@ -565,6 +2781,7 @@ impl RobcoNativeApp {
                                                 self.desktop_active_layout = profile;
                                                 self.desktop_active_theme_pack_id = None;
                                                 desktop_runtime_changed = true;
+                                                appearance_changed = true;
                                             }
                                         }
                                     });
@@ -578,16 +2795,24 @@ impl RobcoNativeApp {
                                     .enumerate()
                                 {
                                     let active = self.terminal_tweaks_tab == i as u8;
-                                    let color = if active { palette.fg } else { palette.dim };
+                                    let color = if active {
+                                        palette.selected_fg
+                                    } else {
+                                        palette.fg
+                                    };
                                     let btn = ui.add(
                                         egui::Button::new(
                                             RichText::new(*label).color(color).strong(),
                                         )
                                         .stroke(egui::Stroke::new(
                                             if active { 2.0 } else { 1.0 },
-                                            color,
+                                            palette.fg,
                                         ))
-                                        .fill(if active { palette.panel } else { palette.bg }),
+                                        .fill(if active {
+                                            palette.selected_bg
+                                        } else {
+                                            palette.panel
+                                        }),
                                     );
                                     if btn.clicked() {
                                         self.terminal_tweaks_tab = i as u8;
@@ -620,6 +2845,7 @@ impl RobcoNativeApp {
                                             .clicked()
                                             {
                                                 self.terminal_active_theme_pack_id = None;
+                                                appearance_changed = true;
                                                 ui.close_menu();
                                             }
                                             for theme in &theme_packs {
@@ -638,96 +2864,233 @@ impl RobcoNativeApp {
                                                         Some(theme.id.clone());
                                                     self.terminal_active_color_style =
                                                         theme.color_style.clone();
+                                                    appearance_changed = true;
                                                     ui.close_menu();
                                                 }
                                             }
                                         });
                                     });
                                     ui.add_space(10.0);
-                                    Self::settings_section(ui, "Terminal Theme Color", |ui| {
+                                    Self::settings_section(ui, "Color Mode", |ui| {
+                                        let terminal_is_monochrome = matches!(
+                                            self.terminal_active_color_style,
+                                            ColorStyle::Monochrome { .. }
+                                        );
                                         ui.horizontal(|ui| {
-                                            ui.label("Theme");
-                                            let mut current_idx = THEMES
-                                                .iter()
-                                                .position(|(name, _)| {
-                                                    *name
-                                                        == theme_name_for_color_style(
-                                                            &self.terminal_active_color_style,
-                                                        )
-                                                })
-                                                .unwrap_or(0);
-                                            egui::ComboBox::from_id_salt("native_terminal_theme")
-                                                .selected_text(
-                                                    RichText::new(THEMES[current_idx].0)
-                                                        .color(palette.fg),
-                                                )
-                                                .show_ui(ui, |ui| {
-                                                    Self::apply_settings_control_style(ui);
-                                                    for (idx, (name, _)) in
-                                                        THEMES.iter().enumerate()
-                                                    {
-                                                        if Self::retro_choice_button(
-                                                            ui,
-                                                            *name,
-                                                            current_idx == idx,
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            current_idx = idx;
-                                                            self.terminal_active_color_style =
-                                                                color_style_from_theme_name(
-                                                                    name,
-                                                                    custom_rgb_for_color_style(
-                                                                        &self.terminal_active_color_style,
-                                                                    ),
-                                                                );
-                                                            self.terminal_active_theme_pack_id =
-                                                                None;
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                });
-                                        });
-                                        if theme_name_for_color_style(
-                                            &self.terminal_active_color_style,
-                                        ) == CUSTOM_THEME_NAME
-                                        {
-                                            let mut rgb = custom_rgb_for_color_style(
-                                                &self.terminal_active_color_style,
-                                            );
-                                            let preview_color =
-                                                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                            ui.visuals_mut().selection.bg_fill = preview_color;
-                                            ui.visuals_mut().widgets.inactive.bg_fill = palette.dim;
-                                            let mut changed_rgb = false;
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[0], 0..=255)
-                                                        .text("Red"),
-                                                )
-                                                .changed();
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[1], 0..=255)
-                                                        .text("Green"),
-                                                )
-                                                .changed();
-                                            changed_rgb |= ui
-                                                .add(
-                                                    egui::Slider::new(&mut rgb[2], 0..=255)
-                                                        .text("Blue"),
-                                                )
-                                                .changed();
-                                            if changed_rgb {
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Monochrome",
+                                                terminal_is_monochrome,
+                                            )
+                                            .clicked()
+                                                && !terminal_is_monochrome
+                                            {
                                                 self.terminal_active_color_style =
                                                     ColorStyle::Monochrome {
-                                                        preset: MonochromePreset::Custom,
-                                                        custom_rgb: Some(rgb),
+                                                        preset: MonochromePreset::Green,
+                                                        custom_rgb: None,
                                                     };
                                                 self.terminal_active_theme_pack_id = None;
+                                                appearance_changed = true;
+                                                set_active_color_style(
+                                                    ShellSurfaceKind::Terminal,
+                                                    self.terminal_active_color_style.clone(),
+                                                );
                                             }
-                                        }
+                                            if Self::retro_choice_button(
+                                                ui,
+                                                "Full Color",
+                                                !terminal_is_monochrome,
+                                            )
+                                            .clicked()
+                                                && terminal_is_monochrome
+                                            {
+                                                self.terminal_active_color_style =
+                                                    ColorStyle::FullColor {
+                                                        theme_id: "nucleon-dark".to_string(),
+                                                    };
+                                                self.terminal_active_theme_pack_id = None;
+                                                appearance_changed = true;
+                                                set_active_color_style(
+                                                    ShellSurfaceKind::Terminal,
+                                                    self.terminal_active_color_style.clone(),
+                                                );
+                                            }
+                                        });
                                     });
+                                    ui.add_space(10.0);
+                                    if matches!(
+                                        self.terminal_active_color_style,
+                                        ColorStyle::Monochrome { .. }
+                                    ) {
+                                        Self::settings_section(
+                                            ui,
+                                            "Terminal Monochrome Theme",
+                                            |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label("Theme");
+                                                    let mut current_idx =
+                                                        MONOCHROME_THEME_NAMES
+                                                            .iter()
+                                                            .position(|name| {
+                                                                *name
+                                                                    == monochrome_theme_name_for_color_style(
+                                                                        &self.terminal_active_color_style,
+                                                                    )
+                                                            })
+                                                            .unwrap_or(0);
+                                                    egui::ComboBox::from_id_salt(
+                                                        "native_terminal_theme",
+                                                    )
+                                                    .selected_text(
+                                                        RichText::new(
+                                                            MONOCHROME_THEME_NAMES[current_idx],
+                                                        )
+                                                        .color(palette.fg),
+                                                    )
+                                                    .show_ui(ui, |ui| {
+                                                        Self::apply_settings_control_style(ui);
+                                                        for (idx, name) in
+                                                            MONOCHROME_THEME_NAMES
+                                                                .iter()
+                                                                .enumerate()
+                                                        {
+                                                            if Self::retro_choice_button(
+                                                                ui,
+                                                                *name,
+                                                                current_idx == idx,
+                                                            )
+                                                            .clicked()
+                                                            {
+                                                                current_idx = idx;
+                                                                self.terminal_active_color_style =
+                                                                    color_style_from_theme_name(
+                                                                        name,
+                                                                        custom_rgb_for_color_style(
+                                                                            &self.terminal_active_color_style,
+                                                                        ),
+                                                                    );
+                                                                self.terminal_active_theme_pack_id =
+                                                                    None;
+                                                                appearance_changed = true;
+                                                                set_active_color_style(
+                                                                    ShellSurfaceKind::Terminal,
+                                                                    self.terminal_active_color_style
+                                                                        .clone(),
+                                                                );
+                                                                ui.close_menu();
+                                                            }
+                                                        }
+                                                    });
+                                                });
+                                                if monochrome_theme_name_for_color_style(
+                                                    &self.terminal_active_color_style,
+                                                ) == CUSTOM_THEME_NAME
+                                                {
+                                                    let mut rgb = custom_rgb_for_color_style(
+                                                        &self.terminal_active_color_style,
+                                                    );
+                                                    let preview_color =
+                                                        egui::Color32::from_rgb(
+                                                            rgb[0], rgb[1], rgb[2],
+                                                        );
+                                                    ui.visuals_mut().selection.bg_fill =
+                                                        preview_color;
+                                                    ui.visuals_mut()
+                                                        .widgets
+                                                        .inactive
+                                                        .bg_fill = palette.dim;
+                                                    let mut changed_rgb = false;
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[0],
+                                                                0..=255,
+                                                            )
+                                                            .text("Red"),
+                                                        )
+                                                        .changed();
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[1],
+                                                                0..=255,
+                                                            )
+                                                            .text("Green"),
+                                                        )
+                                                        .changed();
+                                                    changed_rgb |= ui
+                                                        .add(
+                                                            egui::Slider::new(
+                                                                &mut rgb[2],
+                                                                0..=255,
+                                                            )
+                                                            .text("Blue"),
+                                                        )
+                                                        .changed();
+                                                    if changed_rgb {
+                                                        self.terminal_active_color_style =
+                                                            ColorStyle::Monochrome {
+                                                                preset:
+                                                                    MonochromePreset::Custom,
+                                                                custom_rgb: Some(rgb),
+                                                            };
+                                                        self.terminal_active_theme_pack_id = None;
+                                                        appearance_changed = true;
+                                                        set_active_color_style(
+                                                            ShellSurfaceKind::Terminal,
+                                                            self.terminal_active_color_style
+                                                                .clone(),
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    } else {
+                                        Self::settings_section(
+                                            ui,
+                                            "Terminal Full Color Theme",
+                                            |ui| {
+                                                let selected_theme_id =
+                                                    full_color_theme_id_for_color_style(
+                                                        &self.terminal_active_color_style,
+                                                    )
+                                                    .to_string();
+                                                for theme in FullColorTheme::builtin_themes() {
+                                                    let selected =
+                                                        selected_theme_id == theme.id.as_str();
+                                                    let label = match theme.id.as_str() {
+                                                        "nucleon-dark" => {
+                                                            "Nucleon Dark - Dark background, teal accents"
+                                                        }
+                                                        "nucleon-light" => {
+                                                            "Nucleon Light - Light background, slate blue accents"
+                                                        }
+                                                        _ => theme.name.as_str(),
+                                                    };
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        label,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.terminal_active_color_style =
+                                                            ColorStyle::FullColor {
+                                                                theme_id: theme.id.clone(),
+                                                            };
+                                                        self.terminal_active_theme_pack_id = None;
+                                                        appearance_changed = true;
+                                                        set_active_color_style(
+                                                            ShellSurfaceKind::Terminal,
+                                                            self.terminal_active_color_style
+                                                                .clone(),
+                                                        );
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    }
                                 }
                                 1 => {
                                     Self::settings_section(ui, "Terminal Layout", |ui| {
@@ -751,6 +3114,7 @@ impl RobcoNativeApp {
                                             .clicked()
                                             {
                                                 self.terminal_active_layout = profile;
+                                                appearance_changed = true;
                                             }
                                         }
                                     });
@@ -832,6 +3196,10 @@ impl RobcoNativeApp {
                     }
                 });
 
+            if appearance_changed {
+                self.persist_surface_theme_state_to_settings();
+                persist_changed = true;
+            }
             ui.separator();
             if persist_changed {
                 {

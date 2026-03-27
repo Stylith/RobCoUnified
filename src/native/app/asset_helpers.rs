@@ -288,13 +288,26 @@ impl RobcoNativeApp {
             let key = format!("{}#preview", row.path.to_string_lossy());
             return self.load_cached_shortcut_icon(ctx, &key, &row.path, 192);
         }
-        let loaded_for = row.path.to_string_lossy().to_string();
+        let monochrome_preview = matches!(
+            self.desktop_active_color_style,
+            crate::theme::ColorStyle::Monochrome { .. }
+        );
+        let loaded_for = format!(
+            "{}#{}",
+            row.path.to_string_lossy(),
+            if monochrome_preview {
+                "monochrome"
+            } else {
+                "full-color"
+            }
+        );
         if self.file_manager_preview_loaded_for != loaded_for {
-            self.file_manager_preview_texture = Self::load_tinted_image_texture(
+            self.file_manager_preview_texture = Self::load_image_texture(
                 ctx,
                 format!("file_manager_preview::{loaded_for}"),
                 &row.path,
                 Some(192),
+                monochrome_preview,
             );
             self.file_manager_preview_loaded_for.clear();
             self.file_manager_preview_loaded_for.push_str(&loaded_for);

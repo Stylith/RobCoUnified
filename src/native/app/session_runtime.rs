@@ -59,6 +59,10 @@ impl RobcoNativeApp {
         self.terminal_prompt = None;
         self.terminal_flash = None;
         self.session_leader_until = None;
+        self.terminal_tweaks_surface_dropdown_open = false;
+        self.terminal_tweaks_open_dropdown = None;
+        self.terminal_tweaks_desktop_expanded_menu = Some(0);
+        self.terminal_tweaks_terminal_expanded_menu = Some(0);
     }
 
     pub(super) fn current_terminal_navigation_state(&self) -> TerminalNavigationState {

@@ -85,6 +85,7 @@ impl RobcoNativeApp {
 
     pub(super) fn replace_settings_draft(&mut self, draft: Settings) {
         self.settings.draft = draft;
+        self.apply_surface_theme_state_from_settings();
         self.sync_runtime_settings_cache();
         self.invalidate_desktop_icon_layout_cache();
         self.invalidate_program_catalog_cache();

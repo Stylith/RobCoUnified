@@ -38,14 +38,12 @@ use super::super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurf
 use super::super::settings_screen::{run_terminal_settings_screen, TerminalSettingsEvent};
 use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
-use super::super::wasm_addon_runtime::{
-    collect_hosted_keyboard_input, draw_hosted_addon_frame,
-};
+use super::super::wasm_addon_runtime::{collect_hosted_keyboard_input, draw_hosted_addon_frame};
 use super::launch_registry::{editor_launch_target, file_manager_launch_target};
 use super::RobcoNativeApp;
-use crate::theme::TerminalStatusBarPosition;
 use super::BUILTIN_TEXT_EDITOR_APP;
 use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
+use crate::theme::TerminalStatusBarPosition;
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
 use robcos_native_programs_app::{
@@ -448,7 +446,11 @@ impl RobcoNativeApp {
                     TerminalDocumentBrowserRequest::OpenFile(path) => {
                         crate::sound::play_navigate();
                         self.file_manager.select(Some(path));
-                        self.activate_file_manager_selection();
+                        if self.file_manager_picker_active() {
+                            self.file_manager_activate_or_pick();
+                        } else {
+                            self.activate_file_manager_selection();
+                        }
                     }
                 }
             }
@@ -496,6 +498,13 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn draw_terminal_settings(&mut self, ctx: &Context) {
+        if matches!(
+            self.terminal_settings_panel,
+            TerminalSettingsPanel::Appearance
+        ) {
+            self.draw_terminal_tweaks_screen(ctx);
+            return;
+        }
         let layout = self.terminal_layout();
         let previous_window_mode = self.settings.draft.native_startup_window_mode;
         let visibility = self.terminal_settings_visibility();
@@ -529,6 +538,15 @@ impl RobcoNativeApp {
             }
             TerminalSettingsEvent::OpenPanel(panel) => {
                 self.terminal_settings_panel = panel;
+                if matches!(panel, TerminalSettingsPanel::Appearance) {
+                    self.tweaks_surface_tab = 1;
+                    self.terminal_tweaks_surface_dropdown_open = false;
+                    self.terminal_tweaks_open_dropdown = None;
+                    if self.terminal_tweaks_terminal_expanded_menu.is_none() {
+                        self.terminal_tweaks_terminal_expanded_menu =
+                            Some(self.terminal_tweaks_tab);
+                    }
+                }
                 self.terminal_nav.settings_idx = 0;
                 self.terminal_nav.settings_choice = None;
                 self.apply_status_update(clear_shell_status());
@@ -1053,7 +1071,11 @@ impl RobcoNativeApp {
                     "Reinstall" => crate::native::RepositoryAddonAction::Reinstall,
                     _ => crate::native::RepositoryAddonAction::Install,
                 };
-                self.start_repository_addon_install(crate::platform::AddonId::from(addon_id), action, false);
+                self.start_repository_addon_install(
+                    crate::platform::AddonId::from(addon_id),
+                    action,
+                    false,
+                );
             }
             InstallerEvent::LaunchCommand {
                 argv,

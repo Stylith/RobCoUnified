@@ -122,48 +122,48 @@ impl RobcoNativeApp {
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.override_text_color = None;
-        style.visuals.window_fill = Color32::BLACK;
-        style.visuals.panel_fill = Color32::BLACK;
-        style.visuals.faint_bg_color = Color32::BLACK;
-        style.visuals.extreme_bg_color = Color32::BLACK;
-        style.visuals.code_bg_color = Color32::BLACK;
+        style.visuals.window_fill = palette.bg;
+        style.visuals.panel_fill = palette.bg;
+        style.visuals.faint_bg_color = palette.bg;
+        style.visuals.extreme_bg_color = palette.bg;
+        style.visuals.code_bg_color = palette.bg;
         style.visuals.window_stroke = stroke;
         style.visuals.window_rounding = egui::Rounding::ZERO;
         style.visuals.menu_rounding = egui::Rounding::ZERO;
         style.visuals.window_shadow = egui::epaint::Shadow::NONE;
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.selection.bg_fill = palette.fg;
+        style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.hyperlink_color = palette.fg;
         style.visuals.text_cursor.stroke = stroke;
-        style.visuals.widgets.noninteractive.bg_fill = Color32::BLACK;
-        style.visuals.widgets.noninteractive.weak_bg_fill = Color32::BLACK;
+        style.visuals.widgets.noninteractive.bg_fill = palette.bg;
+        style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.bg_stroke = stroke;
         style.visuals.widgets.noninteractive.fg_stroke = stroke;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = Color32::BLACK;
-        style.visuals.widgets.inactive.weak_bg_fill = Color32::BLACK;
+        style.visuals.widgets.inactive.bg_fill = palette.bg;
+        style.visuals.widgets.inactive.weak_bg_fill = palette.bg;
         style.visuals.widgets.inactive.bg_stroke = stroke;
         style.visuals.widgets.inactive.fg_stroke = stroke;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.inactive.expansion = 0.0;
-        style.visuals.widgets.hovered.bg_fill = palette.fg;
-        style.visuals.widgets.hovered.weak_bg_fill = palette.fg;
+        style.visuals.widgets.hovered.bg_fill = palette.selected_bg;
+        style.visuals.widgets.hovered.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.hovered.bg_stroke = stroke;
-        style.visuals.widgets.hovered.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.hovered.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.hovered.expansion = 0.0;
-        style.visuals.widgets.active.bg_fill = palette.fg;
-        style.visuals.widgets.active.weak_bg_fill = palette.fg;
+        style.visuals.widgets.active.bg_fill = palette.selected_bg;
+        style.visuals.widgets.active.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.active.bg_stroke = stroke;
-        style.visuals.widgets.active.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.active.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.active.expansion = 0.0;
-        style.visuals.widgets.open.bg_fill = palette.fg;
-        style.visuals.widgets.open.weak_bg_fill = palette.fg;
+        style.visuals.widgets.open.bg_fill = palette.selected_bg;
+        style.visuals.widgets.open.weak_bg_fill = palette.selected_bg;
         style.visuals.widgets.open.bg_stroke = stroke;
-        style.visuals.widgets.open.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.open.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.open.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.open.expansion = 0.0;
         ui.set_style(style);
@@ -178,7 +178,7 @@ impl RobcoNativeApp {
         let label = label.into();
         let button = if selected {
             egui::Button::new(label.clone())
-                .fill(palette.fg)
+                .fill(palette.selected_bg)
                 .stroke(egui::Stroke::new(2.0, palette.fg))
         } else {
             egui::Button::new(label.clone()).stroke(egui::Stroke::new(2.0, palette.fg))
@@ -191,7 +191,7 @@ impl RobcoNativeApp {
                 Align2::CENTER_CENTER,
                 label,
                 font,
-                Color32::BLACK,
+                palette.selected_fg,
             );
         }
         response
@@ -232,9 +232,13 @@ impl RobcoNativeApp {
         let (rect, response) = ui.allocate_exact_size(desired, sense);
         let hovered = enabled && response.hovered();
         if hovered {
-            ui.painter().rect_filled(rect, 0.0, palette.fg);
+            ui.painter().rect_filled(rect, 0.0, palette.selected_bg);
         }
-        let text_color = if hovered { Color32::BLACK } else { palette.fg };
+        let text_color = if hovered {
+            palette.selected_fg
+        } else {
+            palette.fg
+        };
         if let Some(texture) = texture {
             let icon_side = (desired.y * 0.34).clamp(24.0, 40.0);
             let icon_rect = egui::Rect::from_center_size(
@@ -300,7 +304,7 @@ impl RobcoNativeApp {
     ) -> R {
         let palette = current_palette();
         egui::Frame::none()
-            .fill(Color32::BLACK)
+            .fill(palette.panel)
             .stroke(egui::Stroke::new(2.0, palette.fg))
             .inner_margin(egui::Margin::same(10.0))
             .show(ui, |ui| {

@@ -4,7 +4,7 @@ use super::super::desktop_app::{
 };
 use super::super::retro_ui::current_palette;
 use crate::theme::DockPosition;
-use eframe::egui::{self, Color32, Context, RichText, TopBottomPanel};
+use eframe::egui::{self, Context, RichText, TopBottomPanel};
 
 use super::RobcoNativeApp;
 
@@ -78,7 +78,7 @@ impl RobcoNativeApp {
                             RichText::new("[Start]")
                                 .strong()
                                 .monospace()
-                                .color(Color32::BLACK),
+                                .color(palette.selected_fg),
                         )
                         .sense(egui::Sense::click()),
                     );
@@ -90,7 +90,7 @@ impl RobcoNativeApp {
                             self.open_start_menu();
                         }
                     }
-                    ui.label(RichText::new("|").monospace().color(Color32::BLACK));
+                    ui.label(RichText::new("|").monospace().color(palette.selected_fg));
                     ui.add_space(8.0);
                     let open_windows = self.all_open_window_instances();
                     let entries =
@@ -219,7 +219,7 @@ impl RobcoNativeApp {
         let label = label.into();
         let fill = if active { palette.fg } else { palette.panel };
         let text = if active {
-            RichText::new(label.clone()).color(Color32::BLACK)
+            RichText::new(label.clone()).color(palette.selected_fg)
         } else {
             RichText::new(label.clone()).color(palette.fg)
         };
@@ -241,7 +241,7 @@ impl RobcoNativeApp {
                 egui::Align2::CENTER_CENTER,
                 text.text(),
                 font,
-                Color32::BLACK,
+                palette.selected_fg,
             );
         }
         response

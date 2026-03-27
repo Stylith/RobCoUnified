@@ -1,5 +1,5 @@
 use crate::config::{current_theme_color, get_settings, theme_color_for_settings, Settings};
-use crate::theme::{ColorStyle, MonochromePreset};
+use crate::theme::{ColorStyle, ColorToken, FullColorTheme, MonochromePreset};
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
@@ -41,11 +41,10 @@ struct ActiveColorStyleStore {
 }
 
 static PALETTE_CACHE: Mutex<Option<PaletteCache>> = Mutex::new(None);
-static ACTIVE_COLOR_STYLES: Mutex<ActiveColorStyleStore> =
-    Mutex::new(ActiveColorStyleStore {
-        desktop: None,
-        terminal: None,
-    });
+static ACTIVE_COLOR_STYLES: Mutex<ActiveColorStyleStore> = Mutex::new(ActiveColorStyleStore {
+    desktop: None,
+    terminal: None,
+});
 
 fn color32_from_theme(color: Color) -> Color32 {
     match color {
@@ -95,13 +94,44 @@ fn palette_for_theme_color(color: Color) -> RetroPalette {
     }
 }
 
+fn color32_from_token(theme: &FullColorTheme, token: ColorToken, fallback: Color32) -> Color32 {
+    theme
+        .tokens
+        .get(&token)
+        .map(|&[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a))
+        .unwrap_or(fallback)
+}
+
+fn palette_from_full_color_theme(theme: &FullColorTheme) -> RetroPalette {
+    let fg = color32_from_token(
+        theme,
+        ColorToken::FgPrimary,
+        Color32::from_rgb(220, 220, 220),
+    );
+    let bg = color32_from_token(theme, ColorToken::BgPrimary, Color32::from_rgb(18, 18, 18));
+    RetroPalette {
+        fg,
+        dim: color32_from_token(theme, ColorToken::FgDim, scale(fg, 0.52)),
+        bg,
+        panel: color32_from_token(theme, ColorToken::PanelBg, scale(fg, 0.06)),
+        selected_bg: color32_from_token(theme, ColorToken::Selection, fg),
+        selected_fg: color32_from_token(theme, ColorToken::SelectionFg, bg),
+        hovered_bg: color32_from_token(theme, ColorToken::AccentHover, scale(fg, 0.18)),
+        active_bg: color32_from_token(theme, ColorToken::AccentActive, scale(fg, 0.26)),
+        selection_bg: color32_from_token(theme, ColorToken::Selection, scale(fg, 0.26)),
+    }
+}
+
 pub fn palette_for_color_style(style: &ColorStyle) -> RetroPalette {
     match style {
         ColorStyle::Monochrome { preset, custom_rgb } => {
             let color = monochrome_preset_to_color(*preset, *custom_rgb);
             palette_for_theme_color(color)
         }
-        ColorStyle::FullColor { theme_id: _ } => palette_for_theme_color(Color::Rgb(111, 255, 84)),
+        ColorStyle::FullColor { theme_id } => match FullColorTheme::builtin_by_id(theme_id) {
+            Some(theme) => palette_from_full_color_theme(&theme),
+            None => palette_for_theme_color(Color::Rgb(111, 255, 84)),
+        },
     }
 }
 
@@ -120,6 +150,11 @@ fn monochrome_preset_to_color(preset: MonochromePreset, custom_rgb: Option<[u8; 
 }
 
 pub fn current_palette() -> RetroPalette {
+    if let Ok(guard) = ACTIVE_COLOR_STYLES.lock() {
+        if let Some(style) = guard.desktop.as_ref() {
+            return palette_for_color_style(style);
+        }
+    }
     let color = current_theme_color();
     if let Ok(mut guard) = PALETTE_CACHE.lock() {
         if let Some(cache) = *guard {
@@ -153,6 +188,9 @@ pub fn set_active_color_style(surface: ShellSurfaceKind, style: ColorStyle) {
             ShellSurfaceKind::Desktop => guard.desktop = Some(style),
             ShellSurfaceKind::Terminal => guard.terminal = Some(style),
         }
+    }
+    if let Ok(mut guard) = PALETTE_CACHE.lock() {
+        *guard = None;
     }
 }
 

@@ -8,7 +8,8 @@ This is the current handoff for `nucleon-core` on branch `WIP`.
 - Remote: `origin https://github.com/Stylith/nucleon-core.git`
 - Branch: `WIP`
 - Product direction: neutral core platform plus shell/theme composition with desktop and terminal treated as distinct shell surfaces
-- Current checkpoint: Phase 0 through Phase 3b of the theme system are implemented in code
+- Current checkpoint: Phase 0 through Phase 4 of the theme system are implemented in code
+- Current focus: Phase 4 manual validation and polish, not a new feature phase yet
 
 ## Source Of Truth
 
@@ -43,9 +44,10 @@ Important: Phase 0c is still scaffold only. Actual window storage was not migrat
 - theme-pack discovery hooks were added on top of the addon pipeline
 - `ThemePack::classic()` is the baseline
 
-Known limitation from Phase 2:
-- theme-pack persistence in shared settings is still a single legacy field:
+Historical limitation from early Phase 2:
+- theme-pack persistence originally existed only as the single legacy field:
   - `Settings.active_theme_pack_id`
+- this is now superseded by the later per-surface persistence work described under Phase 4 and Persistence status below
 
 ### Phase 3
 
@@ -78,6 +80,33 @@ Implemented behavior:
 - terminal PTY rendering is surface-scoped:
   - embedded terminal PTY uses terminal palette
   - desktop PTY windows use desktop palette
+
+### Phase 4
+
+This phase is now implemented in code.
+
+Implemented behavior:
+
+- built-in full-color themes exist:
+  - `Nucleon Dark`
+  - `Nucleon Light`
+- Desktop and Terminal can each choose `Monochrome` or `Full Color` independently
+- Full Color is palette-driven through `ColorStyle::FullColor`
+- monochrome CRT tint is disabled when the active surface is in `Full Color`
+- desktop Tweaks exposes Desktop and Terminal full-color/theme/layout controls
+- terminal `Settings -> Appearance` now routes into a terminal-native Tweaks UI instead of the old legacy appearance rows
+- per-surface durable settings are now serialized in shared config for:
+  - theme-pack ID
+  - color style
+  - layout profile
+- built-in light-theme contrast fixes were landed for:
+  - top bar
+  - taskbar
+  - start menu
+  - spotlight
+  - file manager selection
+  - window chrome
+  - Tweaks tabs and controls
 
 ## Key Files
 
@@ -166,6 +195,8 @@ Current Tweaks behavior:
   - `Colors`
   - `Layout`
   - `Terminal`
+- desktop mode uses the desktop Tweaks window
+- terminal mode uses a terminal-native Tweaks screen via `Settings -> Appearance`
 
 Theme-pack rule currently implemented in Tweaks:
 
@@ -179,7 +210,7 @@ Theme-pack rule currently implemented in Tweaks:
 
 Desktop and Terminal may point at different theme packs at the same time.
 
-That split is currently runtime-only inside `RobcoNativeApp`.
+That split now exists both at runtime and in persisted settings.
 
 ### Persistence status
 
@@ -189,14 +220,20 @@ This is critical:
 - Desktop/Terminal independent theme-pack selection is implemented at runtime
 - Desktop/Terminal independent color styles are implemented at runtime
 - Desktop/Terminal independent layouts are implemented at runtime
+- Desktop/Terminal independent theme-pack selection is also serialized to disk
+- Desktop/Terminal independent color styles are also serialized to disk
+- Desktop/Terminal independent layouts are also serialized to disk
 
-But persistence is not fully split yet.
+Current per-surface durable settings fields are:
 
-Current persisted settings still only have the legacy global field:
+- `Settings.desktop_theme_pack_id`
+- `Settings.terminal_theme_pack_id`
+- `Settings.desktop_color_style`
+- `Settings.terminal_color_style`
+- `Settings.desktop_layout_profile`
+- `Settings.terminal_layout_profile`
 
-- `Settings.active_theme_pack_id`
-
-So if you continue this work later, do not assume per-surface selection is already serialized to disk. The runtime architecture is split; the durable config model is not fully split yet.
+The old global `Settings.active_theme_pack_id` is legacy compatibility state now, not the source of truth for the split runtime model.
 
 ### Terminal slot scope
 
@@ -248,6 +285,28 @@ Current warnings are expected and known:
 
 No GUI/manual validation was run in this handoff step.
 
+## Phase 4 Polish Boundary
+
+Use this section to decide whether a rough edge belongs to the current phase or a later one.
+
+These are still Phase 4 work and should be fixed now, not deferred:
+
+- built-in `Nucleon Dark` / `Nucleon Light` readability issues
+- CRT interaction bugs with full-color themes
+- black or low-contrast selection/highlight states
+- Desktop vs Terminal surface leakage bugs
+- Tweaks routing problems
+- desktop Tweaks vs terminal Tweaks behavior mismatches
+- per-surface persistence bugs for theme-pack/color-style/layout state
+- manual polish gaps in built-in menus, windows, taskbar, start menu, spotlight, PTY chrome, and Tweaks
+
+These are not Phase 4 and should not be silently mixed into this work:
+
+- sound-theme / sound-pack work
+- asset-pack / shell-style system design beyond the current built-in themes
+- packaging / external theme repo work
+- future external-window / external-process window-manager integration
+
 ## What Must Be Tested Manually Next
 
 On the next machine, test these exact flows first:
@@ -260,17 +319,23 @@ On the next machine, test these exact flows first:
 6. In terminal mode, verify recoloring for:
    - main menu
    - login
-   - settings
+   - settings home
+   - terminal Tweaks opened from `Settings -> Appearance`
    - document browser
    - about
    - embedded PTY
 7. In desktop mode, verify recoloring/layout for:
    - top bar
+   - top-bar dropdown menus and submenus
    - taskbar
    - desktop surface
    - start menu
+   - spotlight
+   - file manager selection states
    - desktop PTY window
 8. Verify Desktop and Terminal can point at different theme packs simultaneously
+9. Verify per-surface choices survive full app restart
+10. Verify wallpaper picker launched from terminal Tweaks returns to terminal Tweaks after selection
 
 If something regresses, inspect these files first:
 
@@ -282,12 +347,12 @@ If something regresses, inspect these files first:
 
 ## What Is Not Done Yet
 
-- per-surface durable settings serialization
-- per-surface persisted theme-pack IDs in shared config
-- per-surface persisted color-style/layout state in shared config
+- manual GUI validation of Phase 4 across Desktop and Terminal surfaces
+- remaining Phase 4 polish bugs in built-in full-color themes and Tweaks UX
 - sound-theme/sound-pack system
+- asset-pack / shell-style phase spec
+- `nucleon-core-themes` packaging phase spec
 - future external-window / external-process WM integration beyond the current seam types
-- later spec phases after 3b
 
 ## Resume Guidance
 
@@ -297,6 +362,7 @@ If resuming on another machine:
 2. Read this handoff second.
 3. Start by running the two cargo checks.
 4. Then do the manual Desktop vs Terminal surface-independence tests above.
-5. Only after validation should you continue into persistence or later theme phases.
+5. Fix anything that still fails the Phase 4 polish boundary above.
+6. Only after validation and polish should you continue into Phase 5 or later deferred work.
 
-Do not revert the runtime surface split in order to “simplify” persistence work. Persistence should be brought up to the runtime model, not the other way around.
+Do not revert the runtime surface split in order to “simplify” polish work. Any remaining Full Color, Tweaks, or persistence issues should be brought up to the current split runtime model, not the other way around.

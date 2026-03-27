@@ -477,8 +477,9 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+        let palette = current_palette();
         ui.add(
-            egui::Button::new(RichText::new(label).color(Color32::BLACK).monospace())
+            egui::Button::new(RichText::new(label).color(palette.selected_fg).monospace())
                 .frame(false)
                 .fill(Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
@@ -560,7 +561,11 @@ impl RobcoNativeApp {
         pos: egui::Pos2,
         size: egui::Vec2,
     ) -> egui::Pos2 {
-        Self::desktop_clamp_window_pos_to_workspace(self.active_desktop_workspace_rect(ctx), pos, size)
+        Self::desktop_clamp_window_pos_to_workspace(
+            self.active_desktop_workspace_rect(ctx),
+            pos,
+            size,
+        )
     }
 
     fn desktop_clamp_window_size_to_workspace(
@@ -1135,7 +1140,7 @@ impl RobcoNativeApp {
         // egui::Frame handles background fill + margin in a single allocation.
         // No manual allocate_exact_size/child_ui, so no "double use of widget".
         egui::Frame::none()
-            .fill(palette.fg)
+            .fill(palette.selected_bg)
             .inner_margin(egui::Margin::symmetric(8.0, 4.0))
             .show(ui, |ui| {
                 ui.set_min_height(20.0);

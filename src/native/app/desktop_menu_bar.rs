@@ -34,8 +34,11 @@ impl RobcoNativeApp {
         ctx: &Context,
         app_menu_name: &str,
     ) {
+        let palette = current_palette();
         let menu = ui.menu_button(
-            RichText::new(app_menu_name).strong().color(Color32::BLACK),
+            RichText::new(app_menu_name)
+                .strong()
+                .color(palette.selected_fg),
             |ui| {
                 Self::apply_top_dropdown_menu_style(ui);
                 let items = build_app_control_menu(self.desktop_active_window.is_some());
@@ -312,14 +315,14 @@ impl RobcoNativeApp {
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let batt = crate::status::battery_status_string();
                         if !batt.is_empty() {
-                            ui.label(RichText::new(batt).color(Color32::BLACK));
+                            ui.label(RichText::new(batt).color(palette.selected_fg));
                             ui.add_space(10.0);
                         }
                         let now = Local::now().format("%a %d %b %H:%M").to_string();
-                        ui.label(RichText::new(now).color(Color32::BLACK));
+                        ui.label(RichText::new(now).color(palette.selected_fg));
                         ui.add_space(10.0);
                         if ui
-                            .button(RichText::new("Search").color(Color32::BLACK))
+                            .button(RichText::new("Search").color(palette.selected_fg))
                             .clicked()
                             || ctx.input(|i| {
                                 i.key_pressed(eframe::egui::Key::Space) && i.modifiers.command
@@ -350,17 +353,17 @@ impl RobcoNativeApp {
         style.visuals.window_shadow = egui::epaint::Shadow::NONE;
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         style.visuals.button_frame = false;
-        style.visuals.override_text_color = Some(Color32::BLACK);
+        style.visuals.override_text_color = Some(palette.selected_fg);
         style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.noninteractive.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.noninteractive.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.noninteractive.expansion = 0.0;
         style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.inactive.fg_stroke.color = Color32::BLACK;
+        style.visuals.widgets.inactive.fg_stroke.color = palette.selected_fg;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.inactive.expansion = 0.0;
         for visuals in [
@@ -371,7 +374,7 @@ impl RobcoNativeApp {
             visuals.bg_fill = palette.selected_bg;
             visuals.weak_bg_fill = palette.selected_bg;
             visuals.bg_stroke = egui::Stroke::NONE;
-            visuals.fg_stroke.color = Color32::BLACK;
+            visuals.fg_stroke.color = palette.selected_fg;
             visuals.rounding = egui::Rounding::ZERO;
             visuals.expansion = 0.0;
         }
@@ -393,6 +396,8 @@ impl RobcoNativeApp {
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         style.visuals.override_text_color = None;
         style.spacing.item_spacing.y = 0.0;
+        style.visuals.selection.bg_fill = palette.selected_bg;
+        style.visuals.selection.stroke.color = palette.selected_fg;
         style.visuals.widgets.noninteractive.bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
@@ -410,10 +415,10 @@ impl RobcoNativeApp {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            visuals.bg_fill = palette.fg;
-            visuals.weak_bg_fill = palette.fg;
+            visuals.bg_fill = palette.selected_bg;
+            visuals.weak_bg_fill = palette.selected_bg;
             visuals.bg_stroke = egui::Stroke::NONE;
-            visuals.fg_stroke.color = Color32::BLACK;
+            visuals.fg_stroke.color = palette.selected_fg;
             visuals.rounding = egui::Rounding::ZERO;
             visuals.expansion = 0.0;
         }

@@ -2469,6 +2469,16 @@ for different reasons (e.g., true black backgrounds) and those should stay.
   - Light background, dark text, blue accents
 - Switch back to Monochrome — CRT tint re-enables, single-hue look returns
 
+Anything still wrong in these areas remains Phase 4 work and should be fixed before starting a new phase:
+
+- built-in `Nucleon Dark` / `Nucleon Light` token balance and readability
+- CRT/full-color interaction bugs
+- menu, taskbar, start-menu, spotlight, window chrome, PTY, or Tweaks contrast issues
+- terminal `Settings -> Appearance` routing and terminal-native Tweaks behavior
+- per-surface persistence for theme-pack/color-style/layout state
+
+Do not defer those items to Phase 5 or Phase 6. Those later phases are for new systems, not cleanup of the built-in Full Color implementation.
+
 ---
 
 # PHASE 5: Asset packs and shell style

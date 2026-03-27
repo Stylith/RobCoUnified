@@ -81,6 +81,10 @@ impl RobcoNativeApp {
             start_menu_rename: self.start_menu_rename.take(),
             secondary_windows: std::mem::take(&mut self.secondary_windows),
             desktop_wasm_addon: self.desktop_wasm_addon.take(),
+            terminal_tweaks_surface_dropdown_open: self.terminal_tweaks_surface_dropdown_open,
+            terminal_tweaks_open_dropdown: self.terminal_tweaks_open_dropdown,
+            terminal_tweaks_desktop_expanded_menu: self.terminal_tweaks_desktop_expanded_menu,
+            terminal_tweaks_terminal_expanded_menu: self.terminal_tweaks_terminal_expanded_menu,
         };
         self.session_runtime.insert(idx, parked);
     }
@@ -152,6 +156,10 @@ impl RobcoNativeApp {
         self.secondary_windows = parked.secondary_windows;
         self.desktop_wasm_addon = parked.desktop_wasm_addon;
         self.desktop_wasm_addon_last_frame_at = None;
+        self.terminal_tweaks_surface_dropdown_open = parked.terminal_tweaks_surface_dropdown_open;
+        self.terminal_tweaks_open_dropdown = parked.terminal_tweaks_open_dropdown;
+        self.terminal_tweaks_desktop_expanded_menu = parked.terminal_tweaks_desktop_expanded_menu;
+        self.terminal_tweaks_terminal_expanded_menu = parked.terminal_tweaks_terminal_expanded_menu;
         true
     }
 

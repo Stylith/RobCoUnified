@@ -2,6 +2,7 @@ use crate::platform::{
     AddonRepositoryIndex, AddonStateOverrides, InstallProfile, PlatformPaths,
     ResolvedPlatformPaths, RuntimeEnvironment, StatePathLayout,
 };
+use crate::theme::{ColorStyle, LayoutProfile, TerminalLayoutProfile};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -124,8 +125,9 @@ pub fn load_addon_repository_index() -> Result<Option<(AddonRepositoryIndex, Pat
         if !path.exists() {
             continue;
         }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read addon repository index '{}'", path.display()))?;
+        let raw = std::fs::read_to_string(&path).with_context(|| {
+            format!("failed to read addon repository index '{}'", path.display())
+        })?;
         let index = serde_json::from_str(&raw).with_context(|| {
             format!(
                 "failed to parse addon repository index '{}'",
@@ -163,8 +165,8 @@ pub fn base_dir() -> PathBuf {
 }
 
 fn detect_base_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("NUCLEON_BASE_DIR")
-        .or_else(|| std::env::var_os("ROBCOS_BASE_DIR"))
+    if let Some(path) =
+        std::env::var_os("NUCLEON_BASE_DIR").or_else(|| std::env::var_os("ROBCOS_BASE_DIR"))
     {
         let dir = PathBuf::from(path);
         let _ = std::fs::create_dir_all(&dir);
@@ -1191,9 +1193,7 @@ pub fn cycle_hacking_difficulty(current: HackingDifficulty, forward: bool) -> Ha
 
 impl Default for BuiltinMenuVisibilitySettings {
     fn default() -> Self {
-        Self {
-            text_editor: true,
-        }
+        Self { text_editor: true }
     }
 }
 
@@ -1454,6 +1454,18 @@ pub struct Settings {
     #[serde(default)]
     pub active_theme_pack_id: Option<String>,
     #[serde(default)]
+    pub desktop_theme_pack_id: Option<String>,
+    #[serde(default)]
+    pub terminal_theme_pack_id: Option<String>,
+    #[serde(default)]
+    pub desktop_color_style: Option<ColorStyle>,
+    #[serde(default)]
+    pub terminal_color_style: Option<ColorStyle>,
+    #[serde(default)]
+    pub desktop_layout_profile: Option<LayoutProfile>,
+    #[serde(default)]
+    pub terminal_layout_profile: Option<TerminalLayoutProfile>,
+    #[serde(default)]
     pub cli_styled_render: bool,
     #[serde(default)]
     pub cli_color_mode: CliColorMode,
@@ -1555,6 +1567,12 @@ impl Default for Settings {
             theme: "Green (Default)".into(),
             custom_theme_rgb: default_custom_theme_rgb(),
             active_theme_pack_id: None,
+            desktop_theme_pack_id: None,
+            terminal_theme_pack_id: None,
+            desktop_color_style: None,
+            terminal_color_style: None,
+            desktop_layout_profile: None,
+            terminal_layout_profile: None,
             cli_styled_render: false,
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,

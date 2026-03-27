@@ -24,10 +24,9 @@ impl RobcoNativeApp {
         self.spotlight_last_query = query.clone();
         self.spotlight_last_tab = tab;
         let active_username = active_native_session_username();
-        let mut application_names =
-            super::super::desktop_launcher_service::catalog_names(
-                super::super::desktop_launcher_service::ProgramCatalog::Applications,
-            );
+        let mut application_names = super::super::desktop_launcher_service::catalog_names(
+            super::super::desktop_launcher_service::ProgramCatalog::Applications,
+        );
         for name in installed_hosted_application_names() {
             if !application_names.iter().any(|existing| existing == &name) {
                 application_names.push(name);
@@ -170,7 +169,7 @@ impl RobcoNativeApp {
                 let v = ui.visuals_mut();
                 v.override_text_color = Some(palette.fg);
                 v.extreme_bg_color = palette.bg;
-                v.selection.bg_fill = palette.fg;
+                v.selection.bg_fill = palette.selected_bg;
                 v.selection.stroke = egui::Stroke::new(1.0, palette.fg);
                 // noninteractive (labels, frames)
                 v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
@@ -189,9 +188,9 @@ impl RobcoNativeApp {
                 v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, palette.fg);
                 v.widgets.hovered.expansion = 0.0;
                 // active (pressed)
-                v.widgets.active.fg_stroke = egui::Stroke::new(1.0, Color32::BLACK);
-                v.widgets.active.bg_fill = palette.fg;
-                v.widgets.active.weak_bg_fill = palette.fg;
+                v.widgets.active.fg_stroke = egui::Stroke::new(1.0, palette.selected_fg);
+                v.widgets.active.bg_fill = palette.selected_bg;
+                v.widgets.active.weak_bg_fill = palette.selected_bg;
                 v.widgets.active.bg_stroke = egui::Stroke::new(1.0, palette.fg);
 
                 // Search input
@@ -214,13 +213,13 @@ impl RobcoNativeApp {
                     for (i, label) in tabs.iter().enumerate() {
                         let selected = self.spotlight_tab == i as u8;
                         let text = if selected {
-                            RichText::new(*label).color(Color32::BLACK).strong()
+                            RichText::new(*label).color(palette.selected_fg).strong()
                         } else {
                             RichText::new(*label).color(palette.fg)
                         };
                         let btn = egui::Button::new(text);
                         let btn = if selected {
-                            btn.fill(palette.fg)
+                            btn.fill(palette.selected_bg)
                         } else {
                             btn.fill(palette.panel)
                         };
@@ -249,7 +248,11 @@ impl RobcoNativeApp {
                                 let selected = i == self.spotlight_selected;
                                 let cat_label = spotlight_category_tag(&result.category);
                                 let display = format!("[{cat_label}]  {}", result.name);
-                                let text_color = if selected { Color32::BLACK } else { palette.fg };
+                                let text_color = if selected {
+                                    palette.selected_fg
+                                } else {
+                                    palette.fg
+                                };
                                 let resp = ui.add(egui::SelectableLabel::new(
                                     selected,
                                     RichText::new(display).color(text_color),
