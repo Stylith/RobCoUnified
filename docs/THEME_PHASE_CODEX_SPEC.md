@@ -3213,6 +3213,210 @@ retro-screen grid UI (RGB sliders don't work well in character-grid rendering). 
 show a read-only message: `"Use Desktop Tweaks window for color customization"`.
 The export button is also desktop-only.
 
+### Step 8: Terminal screen decoration theming
+
+Every terminal screen (login, main menu, settings, about, installer, tweaks, etc.) renders
+the same decoration pattern around its content:
+
+```
+[header lines]           ← already themed via TerminalBranding (Phase 5)
+==================       ← separator (top)
+     Screen Title        ← title (centered, bold)
+==================       ← separator (bottom)
+  subtitle text          ← subtitle (left-aligned, sometimes underlined)
+  menu content...        ← content area
+  status text            ← status row (bottom)
+```
+
+Currently the separator character (`=`), text alignment (centered), title style (bold),
+and subtitle style (underlined) are hardcoded in every screen function. This step makes
+them theme-configurable.
+
+**Data model** — in `crates/shared/src/theme.rs`, add:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalDecoration {
+    /// Character(s) used for separator lines. Default: "="
+    pub separator_char: String,
+    /// Alignment of the separator. Default: Center
+    pub separator_alignment: TextAlignment,
+    /// Alignment of screen titles. Default: Center
+    pub title_alignment: TextAlignment,
+    /// Whether titles render bold (faux-bold). Default: true
+    pub title_bold: bool,
+    /// Alignment of subtitles. Default: Left
+    pub subtitle_alignment: TextAlignment,
+    /// Whether subtitles render underlined. Default: true
+    pub subtitle_underlined: bool,
+    /// Whether to show separators at all. Default: true
+    pub show_separators: bool,
+}
+
+impl Default for TerminalDecoration {
+    fn default() -> Self {
+        TerminalDecoration {
+            separator_char: "=".to_string(),
+            separator_alignment: TextAlignment::Center,
+            title_alignment: TextAlignment::Center,
+            title_bold: true,
+            subtitle_alignment: TextAlignment::Left,
+            subtitle_underlined: true,
+            show_separators: true,
+        }
+    }
+}
+```
+
+Add to `ThemePack`:
+```rust
+pub struct ThemePack {
+    // ... existing fields ...
+    pub terminal_decoration: TerminalDecoration,
+}
+```
+
+Update all `ThemePack` constructors (`classic()`, `nucleon_dark()`, `nucleon_light()`) to
+include `terminal_decoration: TerminalDecoration::default()`.
+
+**Store active decoration in RobcoNativeApp** — in `src/native/app.rs`, add:
+```rust
+pub(super) terminal_decoration: TerminalDecoration,
+```
+
+Initialize from active theme pack. When a theme pack is applied, copy its
+`terminal_decoration`.
+
+**Add decoration-aware rendering helpers** — in `src/native/retro_ui.rs`, add methods to
+`RetroScreen`:
+
+```rust
+pub fn themed_separator(
+    &self,
+    painter: &Painter,
+    row: usize,
+    palette: &RetroPalette,
+    decoration: &TerminalDecoration,
+) {
+    if !decoration.show_separators {
+        return;
+    }
+    let char_count = self.cols.saturating_sub(6).max(1);
+    let text = decoration.separator_char.repeat(
+        char_count / decoration.separator_char.len().max(1)
+    );
+    match decoration.separator_alignment {
+        TextAlignment::Center => self.centered_text(painter, row, &text, palette.dim, false),
+        TextAlignment::Left => self.text(painter, 3, row, &text, palette.dim),
+        TextAlignment::Right => {
+            // Right-align: compute start column
+            let start_col = self.cols.saturating_sub(text.len() + 3);
+            self.text(painter, start_col, row, &text, palette.dim);
+        }
+    }
+}
+
+pub fn themed_title(
+    &self,
+    painter: &Painter,
+    row: usize,
+    title: &str,
+    palette: &RetroPalette,
+    decoration: &TerminalDecoration,
+) {
+    match decoration.title_alignment {
+        TextAlignment::Center => {
+            self.centered_text(painter, row, title, palette.fg, decoration.title_bold)
+        }
+        TextAlignment::Left => {
+            self.text(painter, 3, row, title, palette.fg);
+            // Faux-bold for left-aligned not directly supported by text(),
+            // use centered_text with left-anchor if bold needed
+        }
+        TextAlignment::Right => {
+            let start_col = self.cols.saturating_sub(title.len() + 3);
+            self.text(painter, start_col, row, title, palette.fg);
+        }
+    }
+}
+
+pub fn themed_subtitle(
+    &self,
+    painter: &Painter,
+    col: usize,
+    row: usize,
+    subtitle: &str,
+    palette: &RetroPalette,
+    decoration: &TerminalDecoration,
+) {
+    let (target_col, text) = match decoration.subtitle_alignment {
+        TextAlignment::Left => (col, subtitle),
+        TextAlignment::Center | TextAlignment::Right => (col, subtitle),
+    };
+    if decoration.subtitle_underlined {
+        self.underlined_text(painter, target_col, row, text, palette.fg);
+    } else {
+        self.text(painter, target_col, row, text, palette.fg);
+    }
+}
+```
+
+**Update terminal screen rendering functions** — this is the mechanical part. In every
+file that renders the decoration pattern, replace the hardcoded calls:
+
+```rust
+// BEFORE:
+screen.separator(&painter, separator_top_row, &palette);
+screen.centered_text(&painter, title_row, "About", palette.fg, true);
+screen.separator(&painter, separator_bottom_row, &palette);
+screen.underlined_text(&painter, content_col, subtitle_row, "...", palette.fg);
+
+// AFTER:
+screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+screen.themed_title(&painter, title_row, "About", &palette, &decoration);
+screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
+screen.themed_subtitle(&painter, content_col, subtitle_row, "...", &palette, &decoration);
+```
+
+This requires passing `decoration: &TerminalDecoration` into each rendering function.
+The approach is identical to how `header_lines` was added in Phase 5:
+
+1. Add `decoration: &TerminalDecoration` parameter to each standalone screen function
+   (`draw_terminal_menu_screen`, `draw_login_screen`, `draw_about_screen`, etc.)
+2. At each call site in `terminal_screens.rs` and `frame_runtime.rs`, pass
+   `&self.terminal_decoration`.
+3. For the tweaks presenter (which is an `impl RobcoNativeApp` method), use
+   `&self.terminal_decoration` directly.
+
+**Files to modify** (same list as Phase 5 header changes, plus `retro_ui.rs`):
+- `src/native/retro_ui.rs` — add the three `themed_*` methods
+- `src/native/menu.rs` — `draw_terminal_menu_screen()`
+- `src/native/shell_screen.rs` — both draw functions
+- `src/native/about_screen.rs`
+- `src/native/document_browser.rs`
+- `src/native/prompt.rs` — both prompt draw functions
+- `src/native/settings_screen.rs`
+- `src/native/installer_screen.rs`
+- `src/native/app/tweaks_presenter.rs` — terminal tweaks screen
+- `src/native/app/terminal_screens.rs` — all call sites
+- `src/native/app/frame_runtime.rs` — all call sites
+- `src/native/connections_screen.rs`
+- `src/native/default_apps_screen.rs`
+- `src/native/edit_menus_screen.rs`
+- `src/native/programs_screen.rs`
+
+**Important:** The existing `separator()` method on `RetroScreen` should NOT be removed
+or modified — it's the fallback. The new `themed_separator()` is the themed version.
+Code that doesn't have access to a `TerminalDecoration` (e.g., non-terminal screens) can
+continue using `separator()`.
+
 ### Verification
 
 - `cargo check -p robcos`
@@ -3230,6 +3434,10 @@ The export button is also desktop-only.
   - Changing any token value shows "Custom" as theme pack and updates colors live
   - "Export Theme..." writes JSON to `exported_themes/` directory
   - Selecting a different base theme clears overrides
+  - All terminal screens render decorations identically to before (default TerminalDecoration
+    matches the hardcoded values)
+  - If you manually set `title_alignment: TextAlignment::Left` or
+    `separator_char: "-"`, the change is visible across all terminal screens
 
 ---
 
