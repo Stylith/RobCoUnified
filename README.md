@@ -19,7 +19,7 @@ RobCoOS is an application-layer shell experience, not a standalone operating sys
 | **Sessions** | Up to 9 concurrent sessions with instant hot-key switching |
 | **Users** | Multi-user login, per-user settings, per-user menus and documents |
 | **Desktop** | Draggable windows, taskbar, Start menu, spotlight search, file manager |
-| **Apps** | Text editor, file manager, document browser, installer, nuke codes viewer |
+| **Apps** | Text editor, file manager, document browser, installer, and external addon support |
 | **Auth** | Password, No Password, or Hacking Minigame login per user |
 | **Theming** | Green, White, Amber, Blue, Light Blue, or custom RGB |
 
