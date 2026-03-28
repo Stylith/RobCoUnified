@@ -41,23 +41,30 @@ use super::prompt::{
 use super::prompt::{TerminalFlash, TerminalPrompt};
 use super::pty_screen::NativePtyState;
 use super::retro_ui::{
-    configure_visuals, configure_visuals_for_color_style, current_palette,
-    current_palette_for_surface, palette_for_color_style, set_active_color_style, RetroPalette,
-    ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    configure_visuals, configure_visuals_for_palette, current_palette, current_palette_for_surface,
+    palette_for_color_style, palette_for_color_style_with_overrides, set_active_color_style,
+    set_active_terminal_decoration, set_active_terminal_wallpaper, RetroPalette, ShellSurfaceKind,
+    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
 use super::wasm_addon_runtime::WasmHostedAddonState;
 use crate::config::SavedConnection;
 #[cfg(test)]
 use crate::config::{
-    DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, OpenMode, Settings,
+    DesktopCursorThemeSelection, DesktopFileManagerSettings, DesktopIconSortMode,
+    HackingDifficulty, OpenMode, Settings,
 };
 #[cfg(not(test))]
-use crate::config::{DesktopFileManagerSettings, DesktopIconSortMode, HackingDifficulty, Settings};
+use crate::config::{
+    DesktopCursorThemeSelection, DesktopFileManagerSettings, DesktopIconSortMode,
+    HackingDifficulty, Settings,
+};
 use crate::core::auth::{AuthMethod, UserRecord};
+use crate::platform::AddonKind;
 use crate::session;
 use crate::theme::{
-    ColorStyle, DockPosition, LayoutProfile, MonochromePreset, PanelPosition, TerminalLayoutProfile,
+    ColorStyle, ColorToken, CursorPack, LayoutProfile, MonochromePreset, PanelType,
+    TerminalBranding, TerminalDecoration, TerminalLayoutProfile,
 };
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
@@ -79,7 +86,7 @@ use robcos_native_settings_app::{
     TerminalSettingsPanel, TerminalSettingsVisibility,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
@@ -184,34 +191,41 @@ struct TerminalModeWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DesktopAppearanceKey {
     color_style: ColorStyle,
+    overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+}
+
+#[derive(Clone)]
+struct CachedIcon {
+    texture: TextureHandle,
+    is_full_color: bool,
 }
 
 struct AssetCache {
-    icon_settings: TextureHandle,
-    icon_file_manager: TextureHandle,
-    icon_terminal: TextureHandle,
-    icon_applications: TextureHandle,
-    icon_installer: TextureHandle,
-    icon_editor: TextureHandle,
-    icon_general: Option<TextureHandle>,
-    icon_appearance: Option<TextureHandle>,
-    icon_default_apps: Option<TextureHandle>,
-    icon_connections: TextureHandle,
-    icon_cli_profiles: Option<TextureHandle>,
-    icon_edit_menus: Option<TextureHandle>,
-    icon_user_management: Option<TextureHandle>,
-    icon_about: Option<TextureHandle>,
-    icon_folder: Option<TextureHandle>,
-    icon_folder_open: Option<TextureHandle>,
-    icon_file: Option<TextureHandle>,
-    icon_text: Option<TextureHandle>,
-    icon_image: Option<TextureHandle>,
-    icon_audio: Option<TextureHandle>,
-    icon_video: Option<TextureHandle>,
-    icon_archive: Option<TextureHandle>,
-    icon_app: Option<TextureHandle>,
-    icon_shortcut_badge: Option<TextureHandle>,
-    icon_gaming: Option<TextureHandle>,
+    icon_settings: CachedIcon,
+    icon_file_manager: CachedIcon,
+    icon_terminal: CachedIcon,
+    icon_applications: CachedIcon,
+    icon_installer: CachedIcon,
+    icon_editor: CachedIcon,
+    icon_general: Option<CachedIcon>,
+    icon_appearance: Option<CachedIcon>,
+    icon_default_apps: Option<CachedIcon>,
+    icon_connections: CachedIcon,
+    icon_cli_profiles: Option<CachedIcon>,
+    icon_edit_menus: Option<CachedIcon>,
+    icon_user_management: Option<CachedIcon>,
+    icon_about: Option<CachedIcon>,
+    icon_folder: Option<CachedIcon>,
+    icon_folder_open: Option<CachedIcon>,
+    icon_file: Option<CachedIcon>,
+    icon_text: Option<CachedIcon>,
+    icon_image: Option<CachedIcon>,
+    icon_audio: Option<CachedIcon>,
+    icon_video: Option<CachedIcon>,
+    icon_archive: Option<CachedIcon>,
+    icon_app: Option<CachedIcon>,
+    icon_shortcut_badge: Option<CachedIcon>,
+    icon_gaming: Option<CachedIcon>,
     wallpaper: Option<TextureHandle>,
     wallpaper_loaded_for: String,
 }
@@ -325,12 +339,6 @@ pub(super) const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 const TERMINAL_SCREEN_COLS: usize = 92;
 const TERMINAL_SCREEN_ROWS: usize = 28;
 const TERMINAL_CONTENT_COL: usize = 3;
-const TERMINAL_HEADER_START_ROW: usize = 0;
-const TERMINAL_SEPARATOR_TOP_ROW: usize = 3;
-const TERMINAL_TITLE_ROW: usize = 4;
-const TERMINAL_SEPARATOR_BOTTOM_ROW: usize = 5;
-const TERMINAL_SUBTITLE_ROW: usize = 7;
-const TERMINAL_MENU_START_ROW: usize = 9;
 const TERMINAL_STATUS_ROW: usize = 24;
 const TERMINAL_STATUS_ROW_ALT: usize = 26;
 pub(super) const SESSION_LEADER_WINDOW: Duration = Duration::from_millis(1200);
@@ -350,17 +358,129 @@ struct TerminalLayout {
     status_row_alt: usize,
 }
 
-fn terminal_layout_for_scale(_scale: f32) -> TerminalLayout {
+fn terminal_branding_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<TerminalBranding> {
+    let theme_pack_id = theme_pack_id?;
+    super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+        .map(|theme| theme.terminal_branding)
+}
+
+fn terminal_branding_from_settings(settings: &Settings) -> TerminalBranding {
+    if let Some(branding) = settings.terminal_branding.clone() {
+        return branding;
+    }
+    let theme_pack_id = terminal_theme_pack_id_from_settings(settings);
+    terminal_branding_from_theme_pack_id(theme_pack_id.as_deref())
+        .unwrap_or_else(TerminalBranding::none)
+}
+
+fn terminal_branding_setting_value(branding: &TerminalBranding) -> Option<TerminalBranding> {
+    (!branding.header_lines.is_empty()).then(|| branding.clone())
+}
+
+fn theme_bundle_dir_from_pack_id(theme_pack_id: &str) -> Option<PathBuf> {
+    super::installed_addon_inventory()
+        .into_iter()
+        .find(|record| {
+            record.manifest.kind == AddonKind::Theme && record.manifest.id.as_str() == theme_pack_id
+        })
+        .and_then(|record| record.manifest_path)
+        .and_then(|manifest_path| manifest_path.parent().map(Path::to_path_buf))
+}
+
+fn resolve_asset_pack_root(theme_pack_id: &str, relative_path: &str) -> Option<PathBuf> {
+    let asset_path = PathBuf::from(relative_path);
+    if asset_path.is_absolute() {
+        return Some(asset_path);
+    }
+    theme_bundle_dir_from_pack_id(theme_pack_id).map(|bundle_dir| bundle_dir.join(asset_path))
+}
+
+fn load_cursor_pack_from_asset_root(asset_root: &Path) -> Option<CursorPack> {
+    let cursor_path = asset_root.join("cursors").join("cursors.json");
+    let raw = std::fs::read_to_string(cursor_path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn desktop_asset_pack_path_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<PathBuf> {
+    let Some(theme_pack_id) = theme_pack_id else {
+        return None;
+    };
+    let Some(theme) = super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+    else {
+        return None;
+    };
+    let Some(asset_pack) = theme.asset_pack.as_ref() else {
+        return None;
+    };
+    resolve_asset_pack_root(theme_pack_id, &asset_pack.path)
+}
+
+fn desktop_cursor_pack_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<CursorPack> {
+    let Some(theme_pack_id) = theme_pack_id else {
+        return None;
+    };
+    let Some(theme) = super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+    else {
+        return None;
+    };
+    let asset_pack_path = theme
+        .asset_pack
+        .as_ref()
+        .and_then(|asset_pack| resolve_asset_pack_root(theme_pack_id, &asset_pack.path));
+    theme
+        .cursor_pack
+        .clone()
+        .or_else(|| asset_pack_path.as_deref().and_then(load_cursor_pack_from_asset_root))
+}
+
+#[cfg(test)]
+fn desktop_asset_state_from_theme_pack_id(
+    theme_pack_id: Option<&str>,
+) -> (Option<PathBuf>, Option<CursorPack>) {
+    (
+        desktop_asset_pack_path_from_theme_pack_id(theme_pack_id),
+        desktop_cursor_pack_from_theme_pack_id(theme_pack_id),
+    )
+}
+
+fn terminal_decoration_from_theme_pack_id(
+    theme_pack_id: Option<&str>,
+) -> Option<TerminalDecoration> {
+    let theme_pack_id = theme_pack_id?;
+    super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+        .map(|theme| theme.terminal_decoration)
+}
+
+fn terminal_decoration_from_settings(settings: &Settings) -> TerminalDecoration {
+    let theme_pack_id = terminal_theme_pack_id_from_settings(settings);
+    terminal_decoration_from_theme_pack_id(theme_pack_id.as_deref()).unwrap_or_default()
+}
+
+fn terminal_layout_with_branding(branding: &TerminalBranding) -> TerminalLayout {
+    let header_lines = branding.header_lines.len();
+    let separator_top_row = if header_lines == 0 { 0 } else { header_lines };
+    let title_row = separator_top_row + 1;
+    let separator_bottom_row = title_row + 1;
+    let subtitle_row = separator_bottom_row + 2;
+    let menu_start_row = subtitle_row + 2;
     TerminalLayout {
         cols: TERMINAL_SCREEN_COLS,
         rows: TERMINAL_SCREEN_ROWS,
         content_col: TERMINAL_CONTENT_COL,
-        header_start_row: TERMINAL_HEADER_START_ROW,
-        separator_top_row: TERMINAL_SEPARATOR_TOP_ROW,
-        title_row: TERMINAL_TITLE_ROW,
-        separator_bottom_row: TERMINAL_SEPARATOR_BOTTOM_ROW,
-        subtitle_row: TERMINAL_SUBTITLE_ROW,
-        menu_start_row: TERMINAL_MENU_START_ROW,
+        header_start_row: 0,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
         status_row: TERMINAL_STATUS_ROW,
         status_row_alt: TERMINAL_STATUS_ROW_ALT,
     }
@@ -431,18 +551,60 @@ fn terminal_layout_from_settings(settings: &Settings) -> TerminalLayoutProfile {
         .unwrap_or_else(crate::theme::TerminalLayoutProfile::classic)
 }
 
+fn canonical_theme_pack_id(theme_pack_id: Option<String>) -> Option<String> {
+    match theme_pack_id.as_deref() {
+        Some("nucleon-dark") | Some("nucleon-light") => Some("nucleon".to_string()),
+        _ => theme_pack_id,
+    }
+}
+
 fn desktop_theme_pack_id_from_settings(settings: &Settings) -> Option<String> {
-    settings
-        .desktop_theme_pack_id
-        .clone()
-        .or_else(|| settings.active_theme_pack_id.clone())
+    canonical_theme_pack_id(
+        settings
+            .desktop_theme_pack_id
+            .clone()
+            .or_else(|| settings.active_theme_pack_id.clone()),
+    )
+}
+
+fn canonical_desktop_cursor_theme_selection(
+    selection: DesktopCursorThemeSelection,
+) -> DesktopCursorThemeSelection {
+    match selection {
+        DesktopCursorThemeSelection::ThemePack { theme_pack_id } => {
+            DesktopCursorThemeSelection::ThemePack {
+                theme_pack_id: canonical_theme_pack_id(Some(theme_pack_id))
+                    .unwrap_or_else(|| "nucleon".to_string()),
+            }
+        }
+        other => other,
+    }
+}
+
+fn desktop_cursor_theme_selection_from_settings(
+    settings: &Settings,
+) -> DesktopCursorThemeSelection {
+    canonical_desktop_cursor_theme_selection(settings.desktop_cursor_theme_selection.clone())
+}
+
+fn desktop_cursor_theme_pack_id_for_selection<'a>(
+    desktop_theme_pack_id: Option<&'a str>,
+    selection: &'a DesktopCursorThemeSelection,
+) -> Option<&'a str> {
+    match selection {
+        DesktopCursorThemeSelection::FollowTheme => desktop_theme_pack_id,
+        DesktopCursorThemeSelection::Builtin => None,
+        DesktopCursorThemeSelection::ThemePack { theme_pack_id } => Some(theme_pack_id.as_str()),
+    }
 }
 
 fn terminal_theme_pack_id_from_settings(settings: &Settings) -> Option<String> {
-    settings
-        .terminal_theme_pack_id
-        .clone()
-        .or_else(|| settings.active_theme_pack_id.clone())
+    canonical_theme_pack_id(
+        settings
+            .terminal_theme_pack_id
+            .clone()
+            .or_else(|| settings.active_theme_pack_id.clone()),
+    )
 }
 
 const RETRO_FONT_BYTES: &[u8] =
@@ -508,8 +670,15 @@ pub fn apply_native_appearance(ctx: &Context) {
     apply_native_text_style(ctx);
 }
 
-fn apply_native_appearance_for_color_style(ctx: &Context, style: &ColorStyle) {
-    configure_visuals_for_color_style(ctx, style);
+fn apply_native_appearance_for_color_style(
+    ctx: &Context,
+    style: &ColorStyle,
+    overrides: Option<&HashMap<ColorToken, [u8; 4]>>,
+) {
+    configure_visuals_for_palette(
+        ctx,
+        palette_for_color_style_with_overrides(style, overrides),
+    );
     apply_native_text_style(ctx);
 }
 
@@ -648,18 +817,20 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn render_classic_panel_slot(&mut self, ctx: &Context, layout: &LayoutProfile) {
-        match layout.panel_position {
-            PanelPosition::Hidden => {}
-            _ => self.draw_top_bar(ctx, layout.panel_position, layout.panel_height),
+        match layout.top_panel {
+            PanelType::MenuBar => self.draw_top_bar(ctx, true, layout.top_panel_height),
+            PanelType::Taskbar => self.draw_desktop_taskbar(ctx, true, layout.top_panel_height),
+            PanelType::Disabled => {}
         }
     }
 
     pub(super) fn render_classic_dock_slot(&mut self, ctx: &Context, layout: &LayoutProfile) {
-        match layout.dock_position {
-            DockPosition::Hidden => {
+        match layout.bottom_panel {
+            PanelType::MenuBar => self.draw_top_bar(ctx, false, layout.bottom_panel_height),
+            PanelType::Taskbar => self.draw_desktop_taskbar(ctx, false, layout.bottom_panel_height),
+            PanelType::Disabled => {
                 self.desktop_start_button_rect = None;
             }
-            _ => self.draw_desktop_taskbar(ctx, layout.dock_position, layout.dock_size),
         }
     }
 
@@ -741,9 +912,16 @@ pub struct RobcoNativeApp {
     desktop_active_layout: LayoutProfile,
     terminal_active_layout: TerminalLayoutProfile,
     desktop_active_theme_pack_id: Option<String>,
+    desktop_active_cursor_theme_selection: DesktopCursorThemeSelection,
     terminal_active_theme_pack_id: Option<String>,
     desktop_active_color_style: ColorStyle,
     terminal_active_color_style: ColorStyle,
+    pub(super) active_asset_pack_path: Option<PathBuf>,
+    pub(super) active_cursor_pack: Option<CursorPack>,
+    pub(super) desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+    pub(super) terminal_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+    pub(super) terminal_branding: TerminalBranding,
+    pub(super) terminal_decoration: TerminalDecoration,
     terminal_slot_registry: super::terminal_slots::TerminalSlotRegistry,
     terminal_nav: TerminalNavigationState,
     terminal_settings_panel: TerminalSettingsPanel,
@@ -764,6 +942,7 @@ pub struct RobcoNativeApp {
     desktop_window_generation_seed: u64,
     file_manager_runtime: FileManagerEditRuntime,
     asset_cache: Option<AssetCache>,
+    icon_cache_dirty: bool,
     context_menu_action: Option<ContextMenuAction>,
     shell_status: String,
     desktop_selected_icon: Option<DesktopIconSelection>,
@@ -772,8 +951,11 @@ pub struct RobcoNativeApp {
     start_menu_rename: Option<StartMenuRenameState>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
+    picking_terminal_wallpaper: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     shortcut_icon_missing: HashSet<String>,
+    terminal_wallpaper_texture: Option<egui::TextureHandle>,
+    terminal_wallpaper_loaded_for: String,
     file_manager_preview_texture: Option<egui::TextureHandle>,
     file_manager_preview_loaded_for: String,
     desktop_icon_layout_cache: Option<DesktopIconLayoutCache>,
@@ -795,13 +977,14 @@ pub struct RobcoNativeApp {
     startup_profile_session_logged: bool,
     startup_profile_desktop_logged: bool,
     repaint_trace_last_pass: u64,
-    tweaks_surface_tab: u8,  // 0=Desktop, 1=Terminal
-    desktop_tweaks_tab: u8,  // 0=Background, 1=Display, 2=Colors, 3=Icons, 4=Layout
-    terminal_tweaks_tab: u8, // 0=Colors, 1=Layout, 2=Terminal
-    terminal_tweaks_surface_dropdown_open: bool,
+    tweaks_tab: u8,               // 0=Wallpaper, 1=Theme, 2=Effects, 3=Display
+    tweaks_wallpaper_surface: u8, // 0=Desktop, 1=Terminal
+    tweaks_theme_surface: u8,     // 0=Desktop, 1=Terminal
+    tweaks_layout_overrides_open: bool,
+    tweaks_customize_colors_open: bool,
+    tweaks_editing_color_token: Option<usize>, // index into ColorToken::all()
+    terminal_tweaks_active_section: u8, // 0=Wallpaper, 1=Theme, 2=Effects, 3=Display
     terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
-    terminal_tweaks_desktop_expanded_menu: Option<u8>,
-    terminal_tweaks_terminal_expanded_menu: Option<u8>,
     // Spotlight search
     spotlight_open: bool,
     spotlight_query: String,
@@ -855,10 +1038,18 @@ pub(super) struct ParkedSessionState {
     start_menu_rename: Option<StartMenuRenameState>,
     secondary_windows: Vec<SecondaryWindow>,
     desktop_wasm_addon: Option<WasmHostedAddonState>,
-    terminal_tweaks_surface_dropdown_open: bool,
+    tweaks_tab: u8,
+    tweaks_wallpaper_surface: u8,
+    tweaks_theme_surface: u8,
+    tweaks_layout_overrides_open: bool,
+    tweaks_customize_colors_open: bool,
+    tweaks_editing_color_token: Option<usize>,
+    terminal_tweaks_active_section: u8,
     terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
-    terminal_tweaks_desktop_expanded_menu: Option<u8>,
-    terminal_tweaks_terminal_expanded_menu: Option<u8>,
+    desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+    terminal_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+    terminal_decoration: TerminalDecoration,
+    picking_terminal_wallpaper: bool,
 }
 
 /// App-specific state for a secondary (non-primary) window instance.
@@ -905,9 +1096,13 @@ impl Default for RobcoNativeApp {
         let initial_desktop_color_style = desktop_color_style_from_settings(&settings_draft);
         let initial_terminal_color_style = terminal_color_style_from_settings(&settings_draft);
         let initial_desktop_theme_pack_id = desktop_theme_pack_id_from_settings(&settings_draft);
+        let initial_desktop_cursor_theme_selection =
+            desktop_cursor_theme_selection_from_settings(&settings_draft);
         let initial_terminal_theme_pack_id = terminal_theme_pack_id_from_settings(&settings_draft);
         let initial_desktop_layout = desktop_layout_from_settings(&settings_draft);
         let initial_terminal_layout = terminal_layout_from_settings(&settings_draft);
+        let initial_terminal_branding = terminal_branding_from_settings(&settings_draft);
+        let initial_terminal_decoration = terminal_decoration_from_settings(&settings_draft);
         let mut app = Self {
             login: TerminalLoginState::default(),
             session: None,
@@ -960,9 +1155,16 @@ impl Default for RobcoNativeApp {
             desktop_active_layout: initial_desktop_layout,
             terminal_active_layout: initial_terminal_layout,
             desktop_active_theme_pack_id: initial_desktop_theme_pack_id,
+            desktop_active_cursor_theme_selection: initial_desktop_cursor_theme_selection,
             terminal_active_theme_pack_id: initial_terminal_theme_pack_id,
             desktop_active_color_style: initial_desktop_color_style,
             terminal_active_color_style: initial_terminal_color_style,
+            active_asset_pack_path: None,
+            active_cursor_pack: None,
+            desktop_color_overrides: None,
+            terminal_color_overrides: None,
+            terminal_branding: initial_terminal_branding,
+            terminal_decoration: initial_terminal_decoration,
             terminal_slot_registry: super::terminal_slots::TerminalSlotRegistry::classic(),
             terminal_nav: terminal_defaults,
             terminal_settings_panel: TerminalSettingsPanel::Home,
@@ -983,6 +1185,7 @@ impl Default for RobcoNativeApp {
             desktop_window_generation_seed: 1,
             file_manager_runtime: FileManagerEditRuntime::default(),
             asset_cache: None,
+            icon_cache_dirty: true,
             context_menu_action: None,
             shell_status: String::new(),
             desktop_selected_icon: None,
@@ -991,8 +1194,11 @@ impl Default for RobcoNativeApp {
             start_menu_rename: None,
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
+            picking_terminal_wallpaper: false,
             shortcut_icon_cache: HashMap::new(),
             shortcut_icon_missing: HashSet::new(),
+            terminal_wallpaper_texture: None,
+            terminal_wallpaper_loaded_for: String::new(),
             file_manager_preview_texture: None,
             file_manager_preview_loaded_for: String::new(),
             desktop_icon_layout_cache: None,
@@ -1019,13 +1225,14 @@ impl Default for RobcoNativeApp {
             startup_profile_session_logged: false,
             startup_profile_desktop_logged: false,
             repaint_trace_last_pass: 0,
-            tweaks_surface_tab: 0,
-            desktop_tweaks_tab: 0,
-            terminal_tweaks_tab: 0,
-            terminal_tweaks_surface_dropdown_open: false,
+            tweaks_tab: 0,
+            tweaks_wallpaper_surface: 0,
+            tweaks_theme_surface: 0,
+            tweaks_layout_overrides_open: false,
+            tweaks_customize_colors_open: false,
+            tweaks_editing_color_token: None,
+            terminal_tweaks_active_section: 1,
             terminal_tweaks_open_dropdown: None,
-            terminal_tweaks_desktop_expanded_menu: Some(0),
-            terminal_tweaks_terminal_expanded_menu: Some(0),
             spotlight_open: false,
             spotlight_query: String::new(),
             spotlight_tab: 0,
@@ -1039,6 +1246,7 @@ impl Default for RobcoNativeApp {
             retained_wasm_addons: Vec::new(),
             ipc: super::ipc::start_listener(),
         };
+        app.sync_active_desktop_asset_pack();
         crate::config::spawn_addon_repository_index_refresh();
         app.maybe_apply_profile_autologin();
         app
@@ -1046,25 +1254,61 @@ impl Default for RobcoNativeApp {
 }
 
 impl RobcoNativeApp {
+    fn sync_active_desktop_asset_pack(&mut self) -> bool {
+        let next_asset_pack_path =
+            desktop_asset_pack_path_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
+        let next_cursor_pack = desktop_cursor_pack_from_theme_pack_id(
+            desktop_cursor_theme_pack_id_for_selection(
+                self.desktop_active_theme_pack_id.as_deref(),
+                &self.desktop_active_cursor_theme_selection,
+            ),
+        );
+        let changed = self.active_asset_pack_path != next_asset_pack_path
+            || self.active_cursor_pack != next_cursor_pack;
+        self.active_asset_pack_path = next_asset_pack_path;
+        self.active_cursor_pack = next_cursor_pack;
+        changed
+    }
+
     fn apply_surface_theme_state_from_settings(&mut self) {
+        let previous_desktop_theme_pack_id = self.desktop_active_theme_pack_id.clone();
+        let previous_desktop_color_style = self.desktop_active_color_style.clone();
         self.desktop_active_theme_pack_id =
             desktop_theme_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_cursor_theme_selection =
+            desktop_cursor_theme_selection_from_settings(&self.settings.draft);
         self.terminal_active_theme_pack_id =
             terminal_theme_pack_id_from_settings(&self.settings.draft);
         self.desktop_active_color_style = desktop_color_style_from_settings(&self.settings.draft);
         self.terminal_active_color_style = terminal_color_style_from_settings(&self.settings.draft);
         self.desktop_active_layout = desktop_layout_from_settings(&self.settings.draft);
         self.terminal_active_layout = terminal_layout_from_settings(&self.settings.draft);
+        self.terminal_branding = terminal_branding_from_settings(&self.settings.draft);
+        self.terminal_decoration = terminal_decoration_from_settings(&self.settings.draft);
+        self.desktop_color_overrides = None;
+        self.terminal_color_overrides = None;
+        self.tweaks_customize_colors_open = false;
         self.last_desktop_appearance = None;
+        let asset_state_changed = self.sync_active_desktop_asset_pack();
+        if previous_desktop_theme_pack_id != self.desktop_active_theme_pack_id
+            || previous_desktop_color_style != self.desktop_active_color_style
+            || asset_state_changed
+        {
+            self.icon_cache_dirty = true;
+        }
     }
 
     fn persist_surface_theme_state_to_settings(&mut self) {
         self.settings.draft.desktop_theme_pack_id = self.desktop_active_theme_pack_id.clone();
+        self.settings.draft.desktop_cursor_theme_selection =
+            self.desktop_active_cursor_theme_selection.clone();
         self.settings.draft.terminal_theme_pack_id = self.terminal_active_theme_pack_id.clone();
         self.settings.draft.desktop_color_style = Some(self.desktop_active_color_style.clone());
         self.settings.draft.terminal_color_style = Some(self.terminal_active_color_style.clone());
         self.settings.draft.desktop_layout_profile = Some(self.desktop_active_layout.clone());
         self.settings.draft.terminal_layout_profile = Some(self.terminal_active_layout.clone());
+        self.settings.draft.terminal_branding =
+            terminal_branding_setting_value(&self.terminal_branding);
         self.settings.draft.active_theme_pack_id = self.desktop_active_theme_pack_id.clone();
 
         if let ColorStyle::Monochrome { preset, custom_rgb } = &self.desktop_active_color_style {
@@ -1104,23 +1348,59 @@ impl RobcoNativeApp {
     fn sync_desktop_appearance(&mut self, ctx: &Context) {
         let key = DesktopAppearanceKey {
             color_style: self.desktop_active_color_style.clone(),
+            overrides: self.desktop_color_overrides.clone(),
         };
         set_active_color_style(
             ShellSurfaceKind::Desktop,
             self.desktop_active_color_style.clone(),
+            self.desktop_color_overrides.clone(),
         );
         if self.last_desktop_appearance.as_ref() == Some(&key) {
             return;
         }
-        apply_native_appearance_for_color_style(ctx, &self.desktop_active_color_style);
+        apply_native_appearance_for_color_style(
+            ctx,
+            &self.desktop_active_color_style,
+            self.desktop_color_overrides.as_ref(),
+        );
         self.last_desktop_appearance = Some(key);
     }
 
-    fn sync_terminal_appearance(&mut self) {
+    fn sync_terminal_wallpaper(&mut self, ctx: &Context) {
+        let wallpaper_path = self.settings.draft.terminal_wallpaper.as_str();
+        let monochrome_wallpaper = matches!(
+            self.terminal_active_color_style,
+            crate::theme::ColorStyle::Monochrome { .. }
+        );
+        let cache_key = format!(
+            "{}#{}",
+            wallpaper_path,
+            if monochrome_wallpaper {
+                "monochrome"
+            } else {
+                "full-color"
+            }
+        );
+        if self.terminal_wallpaper_loaded_for != cache_key {
+            self.terminal_wallpaper_texture =
+                Self::load_wallpaper_texture(ctx, wallpaper_path, monochrome_wallpaper);
+            self.terminal_wallpaper_loaded_for = cache_key;
+        }
+        set_active_terminal_wallpaper(
+            self.terminal_wallpaper_texture.as_ref(),
+            self.settings.draft.terminal_wallpaper_size_mode,
+            monochrome_wallpaper,
+        );
+    }
+
+    fn sync_terminal_appearance(&mut self, ctx: &Context) {
         set_active_color_style(
             ShellSurfaceKind::Terminal,
             self.terminal_active_color_style.clone(),
+            self.terminal_color_overrides.clone(),
         );
+        set_active_terminal_decoration(self.terminal_decoration.clone());
+        self.sync_terminal_wallpaper(ctx);
     }
 
     fn native_pty_window_min_size(state: &NativePtyState) -> egui::Vec2 {
@@ -1134,7 +1414,11 @@ impl RobcoNativeApp {
     }
 
     fn terminal_layout(&self) -> TerminalLayout {
-        terminal_layout_for_scale(self.settings.draft.native_ui_scale)
+        terminal_layout_with_branding(&self.terminal_branding)
+    }
+
+    pub(super) fn active_terminal_header_lines(&self) -> &[String] {
+        &self.terminal_branding.header_lines
     }
 
     pub(super) fn next_embedded_game_dt(last_frame_at: &mut Option<Instant>) -> f32 {
@@ -3212,5 +3496,107 @@ mod tests {
         assert!(app.file_manager.open);
         assert_eq!(app.file_manager.cwd, temp.path);
         assert_eq!(app.file_manager.selected, Some(file_path));
+    }
+
+    #[test]
+    fn phase_7_builtin_themes_keep_asset_state_empty() {
+        let _guard = session_test_guard();
+
+        let (classic_path, classic_cursor_pack) =
+            desktop_asset_state_from_theme_pack_id(Some("classic"));
+        let (nucleon_path, nucleon_cursor_pack) =
+            desktop_asset_state_from_theme_pack_id(Some("nucleon"));
+
+        assert!(classic_path.is_none());
+        assert!(classic_cursor_pack.is_none());
+        assert!(nucleon_path.is_none());
+        assert!(nucleon_cursor_pack.is_none());
+    }
+
+    #[test]
+    fn phase_7_cursor_pack_json_loads_from_asset_root() {
+        let temp = TempDirGuard::new("cursor_pack_json");
+        let cursors_dir = temp.path.join("cursors");
+        std::fs::create_dir_all(&cursors_dir).expect("create cursors dir");
+        std::fs::write(
+            cursors_dir.join("cursors.json"),
+            r##"{
+                "arrow": {
+                    "width": 2,
+                    "height": 2,
+                    "hotspot_x": 1,
+                    "hotspot_y": 0,
+                    "mask": "#.\nO "
+                },
+                "ibeam": null,
+                "pointing_hand": null,
+                "resize_horizontal": null,
+                "resize_vertical": null,
+                "resize_nwse": null,
+                "resize_nesw": null,
+                "move_cursor": null,
+                "forbidden": null,
+                "wait": null
+            }"##,
+        )
+        .expect("write cursor json");
+
+        let cursor_pack = load_cursor_pack_from_asset_root(temp.path.as_path())
+            .expect("cursor pack from asset root");
+        let arrow = cursor_pack.arrow.expect("arrow override");
+
+        assert_eq!(arrow.width, 2);
+        assert_eq!(arrow.height, 2);
+        assert_eq!(arrow.hotspot_x, 1);
+        assert_eq!(arrow.hotspot_y, 0);
+        assert_eq!(arrow.mask, "#.\nO ");
+    }
+
+    #[test]
+    fn phase_7_cursor_theme_selection_resolves_theme_pack_id() {
+        assert_eq!(
+            desktop_cursor_theme_pack_id_for_selection(
+                Some("signal-forge"),
+                &DesktopCursorThemeSelection::FollowTheme,
+            ),
+            Some("signal-forge")
+        );
+        assert_eq!(
+            desktop_cursor_theme_pack_id_for_selection(
+                Some("signal-forge"),
+                &DesktopCursorThemeSelection::Builtin,
+            ),
+            None
+        );
+        assert_eq!(
+            desktop_cursor_theme_pack_id_for_selection(
+                Some("signal-forge"),
+                &DesktopCursorThemeSelection::ThemePack {
+                    theme_pack_id: "cursor-only".to_string(),
+                },
+            ),
+            Some("cursor-only")
+        );
+    }
+
+    #[test]
+    fn phase_7_sample_theme_bundle_parses() {
+        let bundle_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/phase7-sample-theme");
+        let manifest_raw =
+            std::fs::read_to_string(bundle_root.join("manifest.json")).expect("read sample manifest");
+        let theme_raw =
+            std::fs::read_to_string(bundle_root.join("theme.json")).expect("read sample theme");
+
+        let manifest: crate::platform::AddonManifest =
+            serde_json::from_str(&manifest_raw).expect("parse sample manifest");
+        let theme: crate::theme::ThemePack =
+            serde_json::from_str(&theme_raw).expect("parse sample theme");
+
+        assert_eq!(manifest.kind, crate::platform::AddonKind::Theme);
+        assert_eq!(manifest.id.as_str(), "themes.phase7-signal-forge");
+        assert_eq!(theme.id, "phase7-signal-forge");
+        assert_eq!(theme.asset_pack.as_ref().map(|pack| pack.path.as_str()), Some("assets"));
+        assert!(theme.cursor_pack.is_none());
+        assert!(bundle_root.join("assets/cursors/cursors.json").exists());
     }
 }

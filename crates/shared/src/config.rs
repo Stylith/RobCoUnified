@@ -2,7 +2,7 @@ use crate::platform::{
     AddonRepositoryIndex, AddonStateOverrides, InstallProfile, PlatformPaths,
     ResolvedPlatformPaths, RuntimeEnvironment, StatePathLayout,
 };
-use crate::theme::{ColorStyle, LayoutProfile, TerminalLayoutProfile};
+use crate::theme::{ColorStyle, LayoutProfile, TerminalBranding, TerminalLayoutProfile};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +31,10 @@ pub fn state_root_dir() -> PathBuf {
     let dir = runtime_environment().state_layout().root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+pub fn nucleon_data_dir() -> PathBuf {
+    state_root_dir()
 }
 
 pub fn core_root_dir() -> PathBuf {
@@ -905,6 +909,15 @@ pub enum DesktopIconStyle {
     NoIcons,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopCursorThemeSelection {
+    #[default]
+    FollowTheme,
+    Builtin,
+    ThemePack { theme_pack_id: String },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FileManagerViewMode {
@@ -1466,6 +1479,8 @@ pub struct Settings {
     #[serde(default)]
     pub terminal_layout_profile: Option<TerminalLayoutProfile>,
     #[serde(default)]
+    pub terminal_branding: Option<TerminalBranding>,
+    #[serde(default)]
     pub cli_styled_render: bool,
     #[serde(default)]
     pub cli_color_mode: CliColorMode,
@@ -1494,14 +1509,20 @@ pub struct Settings {
     pub pty_shell_preferred: BTreeMap<String, bool>,
     #[serde(default = "default_desktop_wallpaper")]
     pub desktop_wallpaper: String,
+    #[serde(default)]
+    pub terminal_wallpaper: String,
     #[serde(default = "default_desktop_show_cursor")]
     pub desktop_show_cursor: bool,
     #[serde(default = "default_desktop_cursor_scale")]
     pub desktop_cursor_scale: f32,
     #[serde(default)]
+    pub desktop_cursor_theme_selection: DesktopCursorThemeSelection,
+    #[serde(default)]
     pub desktop_icon_style: DesktopIconStyle,
     #[serde(default)]
     pub desktop_wallpaper_size_mode: WallpaperSizeMode,
+    #[serde(default)]
+    pub terminal_wallpaper_size_mode: WallpaperSizeMode,
     #[serde(default)]
     pub desktop_file_manager: DesktopFileManagerSettings,
     #[serde(default)]
@@ -1573,6 +1594,7 @@ impl Default for Settings {
             terminal_color_style: None,
             desktop_layout_profile: None,
             terminal_layout_profile: None,
+            terminal_branding: None,
             cli_styled_render: false,
             cli_color_mode: CliColorMode::ThemeLock,
             cli_acs_mode: CliAcsMode::Unicode,
@@ -1587,10 +1609,13 @@ impl Default for Settings {
             desktop_cli_profiles: DesktopCliProfiles::default(),
             pty_shell_preferred: BTreeMap::new(),
             desktop_wallpaper: default_desktop_wallpaper(),
+            terminal_wallpaper: String::new(),
             desktop_show_cursor: default_desktop_show_cursor(),
             desktop_cursor_scale: default_desktop_cursor_scale(),
+            desktop_cursor_theme_selection: DesktopCursorThemeSelection::default(),
             desktop_icon_style: DesktopIconStyle::Win95,
             desktop_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
+            terminal_wallpaper_size_mode: WallpaperSizeMode::FitToScreen,
             desktop_file_manager: DesktopFileManagerSettings::default(),
             desktop_session: DesktopSessionSettings::default(),
             display_effects: DisplayEffectsSettings::default(),

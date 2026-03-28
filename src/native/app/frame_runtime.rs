@@ -158,6 +158,7 @@ impl RobcoNativeApp {
 
     fn draw_login(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         match self.login.mode {
             TerminalLoginScreenMode::SelectUser => {
                 let rows = login_menu_rows_from_users(self.login_usernames());
@@ -180,6 +181,7 @@ impl RobcoNativeApp {
                     layout.menu_start_row,
                     layout.status_row,
                     layout.content_col,
+                    &header_lines,
                 );
                 if activated {
                     let usernames = self.login_usernames();
@@ -282,7 +284,7 @@ impl RobcoNativeApp {
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         self.sync_native_cursor_mode();
 
@@ -311,6 +313,7 @@ impl RobcoNativeApp {
             } else {
                 ctx.request_repaint_after(flash.until.saturating_duration_since(Instant::now()));
                 let layout = self.terminal_layout();
+                let header_lines = self.active_terminal_header_lines().to_vec();
                 self.draw_terminal_status_bar(
                     ctx,
                     self.terminal_active_layout.status_bar_position,
@@ -332,6 +335,7 @@ impl RobcoNativeApp {
                         layout.header_start_row,
                         layout.separator_top_row,
                         layout.separator_bottom_row,
+                        &header_lines,
                     );
                 } else {
                     draw_terminal_flash(
@@ -344,6 +348,7 @@ impl RobcoNativeApp {
                         layout.separator_bottom_row,
                         layout.status_row,
                         layout.content_col,
+                        &header_lines,
                     );
                 }
                 return;
@@ -393,6 +398,10 @@ impl RobcoNativeApp {
         }
 
         if self.desktop_mode_open {
+            if self.icon_cache_dirty {
+                self.asset_cache = Some(self.build_asset_cache(ctx));
+                self.icon_cache_dirty = false;
+            }
             if ctx.input(|i| i.key_pressed(Key::Escape)) {
                 let had_overlay = self.start_open || self.spotlight_open;
                 if had_overlay {
@@ -450,7 +459,11 @@ impl RobcoNativeApp {
         }
 
         if self.desktop_mode_open && self.settings.draft.desktop_show_cursor {
-            draw_software_cursor(ctx, self.settings.draft.desktop_cursor_scale);
+            draw_software_cursor(
+                ctx,
+                self.settings.draft.desktop_cursor_scale,
+                self.active_cursor_pack.as_ref(),
+            );
         }
 
         let idle_repaint = if self.settings.draft.display_effects.needs_animation() {

@@ -12,10 +12,8 @@ use super::super::{
     repository_sync_action_for_manifest, set_addon_enabled_override, InstalledAddonRecord,
     RepositoryAddonAction, RepositoryAddonRecord,
 };
-use super::DesktopHeaderAction;
-use eframe::egui::{self, Color32, Context, Id, Key, RichText, TextureHandle};
-
-use super::RobcoNativeApp;
+use super::{CachedIcon, DesktopHeaderAction, RobcoNativeApp};
+use eframe::egui::{self, Color32, Context, Id, Key, RichText};
 
 enum AddonRowAction {
     None,
@@ -33,7 +31,9 @@ impl RobcoNativeApp {
         {
             return;
         }
-        if self.desktop_installer.search_in_flight() || self.desktop_installer.addon_install_in_flight() {
+        if self.desktop_installer.search_in_flight()
+            || self.desktop_installer.addon_install_in_flight()
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let _ = self.desktop_installer.poll_search();
@@ -93,7 +93,10 @@ impl RobcoNativeApp {
         let mut deferred_open_add_to_menu: Option<String> = None;
         let mut deferred_open_runtime_tools = false;
         let mut deferred_open_addons = false;
-        let mut deferred_repository_action: Option<(crate::platform::AddonId, RepositoryAddonAction)> = None;
+        let mut deferred_repository_action: Option<(
+            crate::platform::AddonId,
+            RepositoryAddonAction,
+        )> = None;
 
         let view = self.desktop_installer.view.clone();
         let status = self.desktop_installer.status.clone();
@@ -499,7 +502,7 @@ impl RobcoNativeApp {
         deferred_load_installed: &mut bool,
         deferred_open_runtime_tools: &mut bool,
         deferred_open_addons: &mut bool,
-        icons: [&Option<TextureHandle>; 4], // [apps, tools, network, games]
+        icons: [&Option<CachedIcon>; 4], // [apps, tools, network, games]
     ) {
         ui.vertical_centered(|ui| {
             ui.add_space(12.0);
@@ -571,7 +574,7 @@ impl RobcoNativeApp {
                             rect.center() - egui::vec2(0.0, 14.0),
                             egui::vec2(icon_size, icon_size),
                         );
-                        Self::paint_tinted_texture(&painter, tex, icon_rect, palette.fg);
+                        Self::paint_cached_icon(&painter, tex, icon_rect, palette.fg);
                     }
                     // Label
                     painter.text(
@@ -1065,7 +1068,11 @@ impl RobcoNativeApp {
             .frame(egui::Frame::none())
             .exact_height(
                 FOOTER_H
-                    + if sections.issues.is_empty() { 0.0 } else { 56.0 }
+                    + if sections.issues.is_empty() {
+                        0.0
+                    } else {
+                        56.0
+                    }
                     + if sections.repository_issue.is_some() {
                         40.0
                     } else {
@@ -1095,10 +1102,7 @@ impl RobcoNativeApp {
                         ))
                         .color(Color32::from_rgb(255, 210, 120)),
                     );
-                    ui.label(
-                        RichText::new(&issue.detail)
-                            .color(Color32::from_rgb(255, 210, 120)),
-                    );
+                    ui.label(RichText::new(&issue.detail).color(Color32::from_rgb(255, 210, 120)));
                 }
                 if let Some(issue) = sections.repository_issue.as_ref() {
                     ui.add_space(8.0);
@@ -1196,15 +1200,15 @@ impl RobcoNativeApp {
                             ui.separator();
                             ui.add_space(12.0);
                         }
-                        ui.label(RichText::new("Repository Addons").color(palette.dim).strong());
+                        ui.label(
+                            RichText::new("Repository Addons")
+                                .color(palette.dim)
+                                .strong(),
+                        );
                         ui.add_space(6.0);
                         for record in &sections.repository_available {
                             if let Some(action) = Self::draw_installer_repository_addon_row(
-                                ui,
-                                palette,
-                                row_width,
-                                row_height,
-                                record,
+                                ui, palette, row_width, row_height, record,
                             ) {
                                 *deferred_repository_action =
                                     Some((record.manifest.id.clone(), action));
@@ -1271,7 +1275,9 @@ impl RobcoNativeApp {
                         {
                             action = AddonRowAction::Remove;
                         }
-                        if let Ok(Some(sync_action)) = repository_sync_action_for_manifest(&record.manifest) {
+                        if let Ok(Some(sync_action)) =
+                            repository_sync_action_for_manifest(&record.manifest)
+                        {
                             if ui
                                 .button(RichText::new(sync_action.label()).color(palette.fg))
                                 .clicked()

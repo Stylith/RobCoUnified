@@ -247,7 +247,7 @@ impl RobcoNativeApp {
     fn retro_file_manager_item(
         ui: &mut egui::Ui,
         palette: &RetroPalette,
-        texture: Option<&TextureHandle>,
+        texture: Option<&CachedIcon>,
         fallback_icon: &str,
         label: &str,
         desired: egui::Vec2,
@@ -287,7 +287,7 @@ impl RobcoNativeApp {
                 egui::vec2(24.0, 24.0),
             );
             if let Some(texture) = texture {
-                Self::paint_tinted_texture(&painter, texture, icon_rect, text_color);
+                Self::paint_cached_icon(&painter, texture, icon_rect, text_color);
             } else {
                 painter.text(
                     icon_rect.center(),
@@ -310,7 +310,7 @@ impl RobcoNativeApp {
                 egui::vec2(18.0, 18.0),
             );
             if let Some(texture) = texture {
-                Self::paint_tinted_texture(&painter, texture, icon_rect, text_color);
+                Self::paint_cached_icon(&painter, texture, icon_rect, text_color);
             } else {
                 painter.text(
                     icon_rect.center(),

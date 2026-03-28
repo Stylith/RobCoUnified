@@ -1,0 +1,17 @@
+{
+  "id": "themes.phase7-signal-forge",
+  "display_name": "Signal Forge",
+  "version": "0.1.0",
+  "kind": "theme",
+  "scope": "user",
+  "trust": "first-party",
+  "essential": false,
+  "enabled_by_default": true,
+  "capabilities": [],
+  "permissions": [],
+  "file_associations": [],
+  "entrypoint": {
+    "kind": "static-route",
+    "route": "theme-pack"
+  }
+}

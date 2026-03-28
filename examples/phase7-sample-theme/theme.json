@@ -1,0 +1,39 @@
+{
+  "id": "phase7-signal-forge",
+  "name": "Signal Forge",
+  "description": "Sample Phase 7 theme with custom icons and a themed arrow cursor.",
+  "version": "0.1.0",
+  "shell_style": {
+    "id": "signal-forge",
+    "name": "Signal Forge",
+    "border_radius": 4.0,
+    "title_bar_height": 28.0,
+    "separator_thickness": 1.0,
+    "window_shadow": true
+  },
+  "layout_profile": {
+    "id": "classic",
+    "name": "Classic",
+    "top_panel": "MenuBar",
+    "top_panel_height": 30.0,
+    "bottom_panel": "Taskbar",
+    "bottom_panel_height": 32.0,
+    "launcher_style": "StartMenu",
+    "window_header_style": "Standard"
+  },
+  "color_style": {
+    "FullColor": {
+      "theme_id": "nucleon-light"
+    }
+  },
+  "asset_pack": {
+    "id": "signal-forge-assets",
+    "name": "Signal Forge Assets",
+    "path": "assets"
+  },
+  "terminal_branding": {
+    "header_lines": [
+      "SIGNAL FORGE CONSOLE"
+    ]
+  }
+}

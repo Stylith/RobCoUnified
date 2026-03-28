@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MonochromePreset {
@@ -43,6 +43,33 @@ pub enum ColorToken {
     Error,
     Warning,
     Success,
+}
+
+impl ColorToken {
+    pub fn all() -> &'static [ColorToken] {
+        &[
+            ColorToken::BgPrimary,
+            ColorToken::BgSecondary,
+            ColorToken::FgPrimary,
+            ColorToken::FgSecondary,
+            ColorToken::FgDim,
+            ColorToken::Accent,
+            ColorToken::AccentHover,
+            ColorToken::AccentActive,
+            ColorToken::PanelBg,
+            ColorToken::PanelBorder,
+            ColorToken::WindowChrome,
+            ColorToken::WindowChromeFocused,
+            ColorToken::Selection,
+            ColorToken::SelectionFg,
+            ColorToken::Border,
+            ColorToken::Separator,
+            ColorToken::StatusBar,
+            ColorToken::Error,
+            ColorToken::Warning,
+            ColorToken::Success,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,18 +160,10 @@ pub struct ShellStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PanelPosition {
-    Top,
-    Bottom,
-    Hidden,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DockPosition {
-    Bottom,
-    Left,
-    Right,
-    Hidden,
+pub enum PanelType {
+    MenuBar,
+    Taskbar,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,14 +186,14 @@ pub enum WindowHeaderStyle {
     Hidden,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LayoutProfile {
     pub id: String,
     pub name: String,
-    pub panel_position: PanelPosition,
-    pub panel_height: f32,
-    pub dock_position: DockPosition,
-    pub dock_size: f32,
+    pub top_panel: PanelType,
+    pub top_panel_height: f32,
+    pub bottom_panel: PanelType,
+    pub bottom_panel_height: f32,
     pub launcher_style: LauncherStyle,
     pub window_header_style: WindowHeaderStyle,
 }
@@ -187,11 +206,98 @@ pub struct TerminalLayoutProfile {
     pub status_bar_height: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssetPackRef {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetPack {
     pub id: String,
     pub name: String,
+    /// Path to the asset pack root directory (relative to theme bundle).
+    /// Contains optional subdirectories: icons_mono/, icons_color/, cursors/
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CursorSprite {
+    pub width: usize,
+    pub height: usize,
+    pub hotspot_x: usize,
+    pub hotspot_y: usize,
+    /// ASCII sprite mask: '#' = fill, 'O' = outline, '.' = highlight, ' ' = transparent
+    pub mask: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CursorPack {
+    pub arrow: Option<CursorSprite>,
+    pub ibeam: Option<CursorSprite>,
+    pub pointing_hand: Option<CursorSprite>,
+    pub resize_horizontal: Option<CursorSprite>,
+    pub resize_vertical: Option<CursorSprite>,
+    pub resize_nwse: Option<CursorSprite>,
+    pub resize_nesw: Option<CursorSprite>,
+    pub move_cursor: Option<CursorSprite>,
+    pub forbidden: Option<CursorSprite>,
+    pub wait: Option<CursorSprite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalBranding {
+    pub header_lines: Vec<String>,
+}
+
+impl Default for TerminalBranding {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+impl TerminalBranding {
+    pub fn none() -> Self {
+        TerminalBranding {
+            header_lines: vec![],
+        }
+    }
+
+    pub fn robco() -> Self {
+        TerminalBranding {
+            header_lines: vec![
+                "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM".to_string(),
+                "COPYRIGHT 2075-2077 ROBCO INDUSTRIES".to_string(),
+                "-SERVER 1-".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalDecoration {
+    pub separator_char: String,
+    pub separator_alignment: TextAlignment,
+    pub title_alignment: TextAlignment,
+    pub title_bold: bool,
+    pub subtitle_alignment: TextAlignment,
+    pub subtitle_underlined: bool,
+    pub show_separators: bool,
+}
+
+impl Default for TerminalDecoration {
+    fn default() -> Self {
+        TerminalDecoration {
+            separator_char: "=".to_string(),
+            separator_alignment: TextAlignment::Center,
+            title_alignment: TextAlignment::Center,
+            title_bold: true,
+            subtitle_alignment: TextAlignment::Left,
+            subtitle_underlined: true,
+            show_separators: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +309,120 @@ pub struct ThemePack {
     pub shell_style: ShellStyle,
     pub layout_profile: LayoutProfile,
     pub color_style: ColorStyle,
-    pub asset_pack: Option<AssetPackRef>,
+    pub asset_pack: Option<AssetPack>,
+    pub cursor_pack: Option<CursorPack>,
+    #[serde(default)]
+    pub terminal_branding: TerminalBranding,
+    #[serde(default)]
+    pub terminal_decoration: TerminalDecoration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum LegacyPanelPosition {
+    Top,
+    Bottom,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum LegacyDockPosition {
+    Bottom,
+    Left,
+    Right,
+    Hidden,
+}
+
+#[derive(Deserialize)]
+struct LayoutProfileCompat {
+    id: String,
+    name: String,
+    #[serde(default)]
+    top_panel: Option<PanelType>,
+    #[serde(default)]
+    top_panel_height: Option<f32>,
+    #[serde(default)]
+    bottom_panel: Option<PanelType>,
+    #[serde(default)]
+    bottom_panel_height: Option<f32>,
+    #[serde(default)]
+    launcher_style: Option<LauncherStyle>,
+    #[serde(default)]
+    window_header_style: Option<WindowHeaderStyle>,
+    #[serde(default)]
+    panel_position: Option<LegacyPanelPosition>,
+    #[serde(default)]
+    panel_height: Option<f32>,
+    #[serde(default)]
+    dock_position: Option<LegacyDockPosition>,
+    #[serde(default)]
+    dock_size: Option<f32>,
+}
+
+impl<'de> Deserialize<'de> for LayoutProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let compat = LayoutProfileCompat::deserialize(deserializer)?;
+
+        if compat.top_panel.is_none() && compat.bottom_panel.is_none() {
+            match compat.id.as_str() {
+                "classic" => return Ok(LayoutProfile::classic()),
+                "minimal" => return Ok(LayoutProfile::minimal()),
+                _ => {}
+            }
+        }
+
+        let mut top_panel = compat.top_panel.unwrap_or(PanelType::Disabled);
+        let mut top_panel_height = compat.top_panel_height.unwrap_or(30.0);
+        let mut bottom_panel = compat.bottom_panel.unwrap_or(PanelType::Disabled);
+        let mut bottom_panel_height = compat.bottom_panel_height.unwrap_or(32.0);
+
+        if compat.top_panel.is_none() {
+            match compat.panel_position.unwrap_or(LegacyPanelPosition::Hidden) {
+                LegacyPanelPosition::Top => {
+                    top_panel = PanelType::MenuBar;
+                    top_panel_height = compat.panel_height.unwrap_or(30.0);
+                }
+                LegacyPanelPosition::Bottom => {
+                    bottom_panel = PanelType::MenuBar;
+                    bottom_panel_height = compat.panel_height.unwrap_or(30.0);
+                }
+                LegacyPanelPosition::Hidden => {}
+            }
+        }
+
+        if compat.bottom_panel.is_none() {
+            match compat.dock_position.unwrap_or(LegacyDockPosition::Hidden) {
+                LegacyDockPosition::Bottom => {
+                    if bottom_panel == PanelType::Disabled {
+                        bottom_panel = PanelType::Taskbar;
+                    }
+                    bottom_panel_height = compat.dock_size.unwrap_or(bottom_panel_height);
+                }
+                LegacyDockPosition::Left | LegacyDockPosition::Right => {
+                    if bottom_panel == PanelType::Disabled {
+                        bottom_panel = PanelType::Taskbar;
+                    }
+                    bottom_panel_height = compat.dock_size.unwrap_or(bottom_panel_height);
+                }
+                LegacyDockPosition::Hidden => {}
+            }
+        }
+
+        Ok(LayoutProfile {
+            id: compat.id,
+            name: compat.name,
+            top_panel,
+            top_panel_height,
+            bottom_panel,
+            bottom_panel_height,
+            launcher_style: compat.launcher_style.unwrap_or(LauncherStyle::StartMenu),
+            window_header_style: compat
+                .window_header_style
+                .unwrap_or(WindowHeaderStyle::Standard),
+        })
+    }
 }
 
 impl LayoutProfile {
@@ -211,10 +430,10 @@ impl LayoutProfile {
         LayoutProfile {
             id: "classic".to_string(),
             name: "Classic".to_string(),
-            panel_position: PanelPosition::Top,
-            panel_height: 30.0,
-            dock_position: DockPosition::Bottom,
-            dock_size: 32.0,
+            top_panel: PanelType::MenuBar,
+            top_panel_height: 30.0,
+            bottom_panel: PanelType::Taskbar,
+            bottom_panel_height: 32.0,
             launcher_style: LauncherStyle::StartMenu,
             window_header_style: WindowHeaderStyle::Standard,
         }
@@ -224,10 +443,10 @@ impl LayoutProfile {
         LayoutProfile {
             id: "minimal".to_string(),
             name: "Minimal".to_string(),
-            panel_position: PanelPosition::Bottom,
-            panel_height: 26.0,
-            dock_position: DockPosition::Hidden,
-            dock_size: 32.0,
+            top_panel: PanelType::Disabled,
+            top_panel_height: 30.0,
+            bottom_panel: PanelType::Taskbar,
+            bottom_panel_height: 26.0,
             launcher_style: LauncherStyle::StartMenu,
             window_header_style: WindowHeaderStyle::Standard,
         }
@@ -286,6 +505,38 @@ impl ThemePack {
                 custom_rgb: None,
             },
             asset_pack: None,
+            cursor_pack: None,
+            terminal_branding: TerminalBranding::none(),
+            terminal_decoration: TerminalDecoration::default(),
         }
+    }
+
+    pub fn nucleon() -> Self {
+        ThemePack {
+            id: "nucleon".to_string(),
+            name: "Nucleon".to_string(),
+            description: "Modern desktop shell with full-color theming".to_string(),
+            version: "1.0.0".to_string(),
+            shell_style: ShellStyle {
+                id: "nucleon".to_string(),
+                name: "Nucleon".to_string(),
+                border_radius: 4.0,
+                title_bar_height: 28.0,
+                separator_thickness: 1.0,
+                window_shadow: true,
+            },
+            layout_profile: LayoutProfile::classic(),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-light".to_string(),
+            },
+            asset_pack: None,
+            cursor_pack: None,
+            terminal_branding: TerminalBranding::none(),
+            terminal_decoration: TerminalDecoration::default(),
+        }
+    }
+
+    pub fn builtin_theme_packs() -> Vec<ThemePack> {
+        vec![Self::classic(), Self::nucleon()]
     }
 }

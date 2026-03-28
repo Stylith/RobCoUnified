@@ -148,54 +148,80 @@ impl RobcoNativeApp {
         Self::load_image_texture(ctx, "desktop_wallpaper", Path::new(path), None, monochrome)
     }
 
-    pub(super) fn build_asset_cache(ctx: &Context) -> AssetCache {
+    pub(super) fn build_asset_cache(&self, ctx: &Context) -> AssetCache {
         const ICON_SIZE: u32 = 64;
+        let asset_pack_path = self.active_asset_pack_path.as_deref();
+        let color_mode_is_full_color = matches!(
+            &self.desktop_active_color_style,
+            crate::theme::ColorStyle::FullColor { .. }
+        );
 
         AssetCache {
-            icon_settings: Self::load_svg_icon(
+            icon_settings: Self::load_themed_svg_icon(
                 ctx,
                 "icon_settings",
+                "pixel--cog-solid.svg",
                 include_bytes!("../../Icons/pixel--cog-solid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
-            icon_file_manager: Self::load_svg_icon(
+            icon_file_manager: Self::load_themed_svg_icon(
                 ctx,
                 "icon_file_manager",
+                "pixel--folder-solid.svg",
                 include_bytes!("../../Icons/pixel--folder-solid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
-            icon_terminal: Self::load_svg_icon(
+            icon_terminal: Self::load_themed_svg_icon(
                 ctx,
                 "icon_terminal",
+                "pixel--code-block-solid.svg",
                 include_bytes!("../../Icons/pixel--code-block-solid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
-            icon_applications: Self::load_svg_icon(
+            icon_applications: Self::load_themed_svg_icon(
                 ctx,
                 "icon_applications",
+                "pixel--grid.svg",
                 include_bytes!("../../Icons/pixel--grid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
-            icon_installer: Self::load_svg_icon(
+            icon_installer: Self::load_themed_svg_icon(
                 ctx,
                 "icon_installer",
+                "pixel--file-import-solid.svg",
                 include_bytes!("../../Icons/pixel--file-import-solid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
-            icon_editor: Self::load_svg_icon(
+            icon_editor: Self::load_themed_svg_icon(
                 ctx,
                 "icon_editor",
+                "pixel--pen-solid.svg",
                 include_bytes!("../../Icons/pixel--pen-solid.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
             icon_general: None,
             icon_appearance: None,
             icon_default_apps: None,
-            icon_connections: Self::load_svg_icon(
+            icon_connections: Self::load_themed_svg_icon(
                 ctx,
                 "icon_connections",
+                "pixel--globe.svg",
                 include_bytes!("../../Icons/pixel--globe.svg"),
                 Some(ICON_SIZE),
+                asset_pack_path,
+                color_mode_is_full_color,
             ),
             icon_cli_profiles: None,
             icon_edit_menus: None,
@@ -738,6 +764,12 @@ impl RobcoNativeApp {
                 cache.icon_connections.clone(),
             )
         };
+        let asset_pack_path = self.active_asset_pack_path.as_deref();
+        let color_mode_is_full_color =
+            matches!(
+                &self.desktop_active_color_style,
+                crate::theme::ColorStyle::FullColor { .. }
+            );
         let tex_shortcut_badge = Self::ensure_cached_svg_icon(
             &mut self
                 .asset_cache
@@ -746,8 +778,11 @@ impl RobcoNativeApp {
                 .icon_shortcut_badge,
             ui.ctx(),
             "icon_shortcut_badge",
+            "pixel--external-link-solid.svg",
             include_bytes!("../../Icons/pixel--external-link-solid.svg"),
             Some(16),
+            asset_pack_path,
+            color_mode_is_full_color,
         );
         let tex_app = Self::ensure_cached_svg_icon(
             &mut self
@@ -757,8 +792,11 @@ impl RobcoNativeApp {
                 .icon_app,
             ui.ctx(),
             "icon_app",
+            "pixel--programming.svg",
             include_bytes!("../../Icons/pixel--programming.svg"),
             Some(64),
+            asset_pack_path,
+            color_mode_is_full_color,
         );
 
         let palette = current_palette();
@@ -856,7 +894,7 @@ impl RobcoNativeApp {
                     );
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
-                    Self::paint_tinted_texture(ui.painter(), texture, icon_rect, icon_fg);
+                    Self::paint_cached_icon(ui.painter(), texture, icon_rect, icon_fg);
                 }
                 DesktopIconStyle::NoIcons => {}
             }
@@ -955,7 +993,7 @@ impl RobcoNativeApp {
                 }
                 DesktopIconStyle::Minimal | DesktopIconStyle::Win95 => {
                     if let Some(texture) = self.file_manager_texture_for_row(ui.ctx(), &row) {
-                        Self::paint_tinted_texture(ui.painter(), &texture, icon_rect, icon_fg);
+                        Self::paint_cached_icon(ui.painter(), &texture, icon_rect, icon_fg);
                     }
                 }
                 DesktopIconStyle::NoIcons => {}
@@ -1105,7 +1143,7 @@ impl RobcoNativeApp {
                             "editor" => &tex_editor,
                             _ => &tex_app,
                         };
-                        Self::paint_tinted_texture(ui.painter(), kind_tex, icon_rect, icon_fg);
+                        Self::paint_cached_icon(ui.painter(), kind_tex, icon_rect, icon_fg);
                     }
                     let badge_size = (icon_size * 0.35).max(10.0);
                     let badge_rect = egui::Rect::from_min_size(
@@ -1118,12 +1156,7 @@ impl RobcoNativeApp {
                         Color32::BLACK
                     };
                     ui.painter().rect_filled(badge_rect, 0.0, badge_bg);
-                    Self::paint_tinted_texture(
-                        ui.painter(),
-                        &tex_shortcut_badge,
-                        badge_rect,
-                        icon_fg,
-                    );
+                    Self::paint_cached_icon(ui.painter(), &tex_shortcut_badge, badge_rect, icon_fg);
                 }
                 DesktopIconStyle::NoIcons => {}
             }
@@ -1254,7 +1287,7 @@ impl RobcoNativeApp {
                         Self::paint_tinted_texture(ui.painter(), &tex, rect, palette.fg);
                     } else if let Some(cache) = &self.asset_cache {
                         let icon = cache.icon_applications.clone();
-                        Self::paint_tinted_texture(ui.painter(), &icon, rect, palette.fg);
+                        Self::paint_cached_icon(ui.painter(), &icon, rect, palette.fg);
                     }
                     ui.add_space(8.0);
                     ui.label(
@@ -1501,7 +1534,8 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_desktop(&mut self, ctx: &Context) {
         if self.asset_cache.is_none() {
-            self.asset_cache = Some(Self::build_asset_cache(ctx));
+            self.asset_cache = Some(self.build_asset_cache(ctx));
+            self.icon_cache_dirty = false;
         }
         self.sync_wallpaper(ctx);
         let palette = current_palette();

@@ -1,7 +1,9 @@
 use super::super::background::BackgroundResult;
 use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
 use super::super::desktop_settings_service::persist_settings_draft;
-use super::super::desktop_status_service::{clear_shell_status, saved_settings_status};
+use super::super::desktop_status_service::{
+    clear_shell_status, saved_settings_status, settings_status,
+};
 use super::super::desktop_surface_service::{
     desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
@@ -9,18 +11,20 @@ use super::super::desktop_surface_service::{
 use super::super::installed_theme_packs;
 use super::super::menu::TerminalScreen;
 use super::super::retro_ui::{
-    current_palette, current_palette_for_surface, set_active_color_style, RetroScreen,
-    ShellSurfaceKind,
+    current_palette, current_palette_for_surface, set_active_color_style, RetroPalette,
+    RetroScreen, ShellSurfaceKind,
 };
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
 use super::RobcoNativeApp;
 use crate::config::{
-    CliAcsMode, CliColorMode, CrtPreset, DesktopIconStyle, NativeStartupWindowMode,
-    WallpaperSizeMode, CUSTOM_THEME_NAME,
+    CliAcsMode, CliColorMode, CrtPreset, DesktopCursorThemeSelection, DesktopIconStyle,
+    NativeStartupWindowMode, WallpaperSizeMode, CUSTOM_THEME_NAME,
 };
 use crate::theme::{
-    ColorStyle, FullColorTheme, LayoutProfile, MonochromePreset, TerminalLayoutProfile, ThemePack,
+    ColorStyle, ColorToken, FullColorTheme, LauncherStyle, MonochromePreset, PanelType,
+    TerminalLayoutProfile, ThemePack, WindowHeaderStyle,
 };
+use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
 use eframe::egui::{self, Context, Key, RichText, TextEdit};
 use std::path::Path;
 
@@ -31,6 +35,64 @@ const MONOCHROME_THEME_NAMES: &[&str] = &[
     "Blue",
     "Light Blue",
     CUSTOM_THEME_NAME,
+];
+
+const COLOR_PALETTE_COLUMNS: usize = 8;
+const COLOR_PALETTE: &[[u8; 3]] = &[
+    // Row 1: Grayscale
+    [0, 0, 0],
+    [68, 68, 68],
+    [102, 102, 102],
+    [136, 136, 136],
+    [170, 170, 170],
+    [204, 204, 204],
+    [238, 238, 238],
+    [255, 255, 255],
+    // Row 2: Pure saturated
+    [255, 0, 0],
+    [255, 128, 0],
+    [255, 255, 0],
+    [0, 255, 0],
+    [0, 255, 255],
+    [0, 0, 255],
+    [128, 0, 255],
+    [255, 0, 255],
+    // Row 3: Medium
+    [192, 0, 0],
+    [192, 96, 0],
+    [192, 192, 0],
+    [0, 192, 0],
+    [0, 192, 192],
+    [0, 0, 192],
+    [96, 0, 192],
+    [192, 0, 192],
+    // Row 4: Dark
+    [128, 0, 0],
+    [128, 64, 0],
+    [128, 128, 0],
+    [0, 128, 0],
+    [0, 128, 128],
+    [0, 0, 128],
+    [64, 0, 128],
+    [128, 0, 128],
+    // Row 5: Pastel
+    [255, 128, 128],
+    [255, 192, 128],
+    [255, 255, 128],
+    [128, 255, 128],
+    [128, 255, 255],
+    [128, 128, 255],
+    [192, 128, 255],
+    [255, 128, 255],
+    // Row 6: Light
+    [255, 192, 192],
+    [255, 224, 192],
+    [255, 255, 192],
+    [192, 255, 192],
+    [192, 255, 255],
+    [192, 192, 255],
+    [224, 192, 255],
+    [255, 192, 255],
 ];
 
 fn monochrome_theme_name_for_color_style(style: &ColorStyle) -> &'static str {
@@ -101,16 +163,72 @@ fn selected_theme_pack_name(selected_id: Option<&str>, theme_packs: &[ThemePack]
     selected_id
         .and_then(|id| theme_packs.iter().find(|theme| theme.id == id))
         .map(|theme| theme.name.clone())
-        .unwrap_or_else(|| "Manual".to_string())
+        .unwrap_or_else(|| "Custom".to_string())
+}
+
+fn theme_pack_name_by_id(theme_pack_id: &str, theme_packs: &[ThemePack]) -> String {
+    theme_packs
+        .iter()
+        .find(|theme| theme.id == theme_pack_id)
+        .map(|theme| theme.name.clone())
+        .unwrap_or_else(|| theme_pack_id.to_string())
+}
+
+fn theme_pack_has_cursor_assets(theme: &ThemePack) -> bool {
+    theme.cursor_pack.is_some()
+        || theme
+            .asset_pack
+            .as_ref()
+            .and_then(|asset_pack| super::resolve_asset_pack_root(&theme.id, &asset_pack.path))
+            .map(|asset_root| asset_root.join("cursors").join("cursors.json").exists())
+            .unwrap_or(false)
+}
+
+fn desktop_cursor_theme_options(theme_packs: &[ThemePack]) -> Vec<DesktopCursorThemeSelection> {
+    let mut options = vec![
+        DesktopCursorThemeSelection::FollowTheme,
+        DesktopCursorThemeSelection::Builtin,
+    ];
+    options.extend(
+        theme_packs
+            .iter()
+            .filter(|theme| theme_pack_has_cursor_assets(theme))
+            .map(|theme| DesktopCursorThemeSelection::ThemePack {
+                theme_pack_id: theme.id.clone(),
+            }),
+    );
+    options
+}
+
+fn desktop_cursor_theme_selection_label(
+    selection: &DesktopCursorThemeSelection,
+    active_theme_pack_id: Option<&str>,
+    theme_packs: &[ThemePack],
+) -> String {
+    match selection {
+        DesktopCursorThemeSelection::FollowTheme => active_theme_pack_id
+            .map(|theme_pack_id| {
+                format!(
+                    "Theme Default ({})",
+                    theme_pack_name_by_id(theme_pack_id, theme_packs)
+                )
+            })
+            .unwrap_or_else(|| "Theme Default".to_string()),
+        DesktopCursorThemeSelection::Builtin => "Force Built-in".to_string(),
+        DesktopCursorThemeSelection::ThemePack { theme_pack_id } => {
+            theme_pack_name_by_id(theme_pack_id, theme_packs)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TerminalTweaksRow {
-    Surface,
-    SurfaceOption(u8),
+    SectionSelector(u8),
     DropdownOption(TerminalTweaksDropdown, usize),
     WallpaperPicker,
     WallpaperMode,
+    TerminalWallpaperPicker,
+    TerminalWallpaperMode,
     WindowMode,
     CrtEnabled,
     CrtPreset,
@@ -128,7 +246,6 @@ enum TerminalTweaksRow {
     CrtPhosphorSoftness,
     CrtBrightness,
     CrtContrast,
-    DesktopMenu(u8),
     DesktopThemePack,
     DesktopColorMode,
     DesktopMonoTheme,
@@ -138,10 +255,9 @@ enum TerminalTweaksRow {
     DesktopFullColorTheme,
     DesktopIconStyle,
     DesktopBuiltinIcon(usize),
+    DesktopCursorTheme,
     DesktopShowCursor,
     DesktopCursorScale,
-    DesktopLayout,
-    TerminalMenu(u8),
     TerminalThemePack,
     TerminalColorMode,
     TerminalMonoTheme,
@@ -158,6 +274,7 @@ enum TerminalTweaksRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TerminalTweaksDropdown {
     WallpaperMode,
+    TerminalWallpaperMode,
     WindowMode,
     CrtPreset,
     DesktopThemePack,
@@ -165,7 +282,7 @@ pub(super) enum TerminalTweaksDropdown {
     DesktopMonoTheme,
     DesktopFullColorTheme,
     DesktopIconStyle,
-    DesktopLayout,
+    DesktopCursorTheme,
     TerminalThemePack,
     TerminalColorMode,
     TerminalMonoTheme,
@@ -235,6 +352,30 @@ fn wallpaper_size_mode_label(mode: WallpaperSizeMode) -> &'static str {
     }
 }
 
+fn panel_type_label(panel_type: PanelType) -> &'static str {
+    match panel_type {
+        PanelType::MenuBar => "Menu Bar",
+        PanelType::Taskbar => "Taskbar",
+        PanelType::Disabled => "Disabled",
+    }
+}
+
+fn launcher_style_label(style: LauncherStyle) -> &'static str {
+    match style {
+        LauncherStyle::StartMenu => "Start Menu",
+        LauncherStyle::Overlay => "Overlay",
+        LauncherStyle::Hidden => "Hidden",
+    }
+}
+
+fn window_header_label(style: WindowHeaderStyle) -> &'static str {
+    match style {
+        WindowHeaderStyle::Standard => "Standard",
+        WindowHeaderStyle::Compact => "Compact",
+        WindowHeaderStyle::Hidden => "Hidden",
+    }
+}
+
 fn desktop_icon_style_label(style: DesktopIconStyle) -> &'static str {
     match style {
         DesktopIconStyle::Dos => "DOS",
@@ -260,24 +401,6 @@ fn cli_acs_mode_label(mode: CliAcsMode) -> &'static str {
     }
 }
 
-fn desktop_section_label(tab: u8) -> &'static str {
-    match tab {
-        0 => "Background",
-        1 => "Display",
-        2 => "Colors",
-        3 => "Icons",
-        _ => "Layout",
-    }
-}
-
-fn terminal_section_label(tab: u8) -> &'static str {
-    match tab {
-        0 => "Colors",
-        1 => "Layout",
-        _ => "Terminal",
-    }
-}
-
 fn full_color_theme_label(theme_id: &str) -> &'static str {
     match theme_id {
         "nucleon-dark" => "Nucleon Dark",
@@ -298,12 +421,43 @@ fn wallpaper_display_name(path: &str) -> String {
         .unwrap_or_else(|| trimmed.to_string())
 }
 
+fn full_color_token_label(token: ColorToken) -> &'static str {
+    match token {
+        ColorToken::BgPrimary => "Background",
+        ColorToken::BgSecondary => "Alt Background",
+        ColorToken::FgPrimary => "Text",
+        ColorToken::FgSecondary => "Alt Text",
+        ColorToken::FgDim => "Dim Text",
+        ColorToken::Accent => "Accent",
+        ColorToken::AccentHover => "Accent Hover",
+        ColorToken::AccentActive => "Accent Active",
+        ColorToken::PanelBg => "Panel",
+        ColorToken::PanelBorder => "Panel Border",
+        ColorToken::WindowChrome => "Window Chrome",
+        ColorToken::WindowChromeFocused => "Focused Chrome",
+        ColorToken::Selection => "Selection",
+        ColorToken::SelectionFg => "Selection Text",
+        ColorToken::Border => "Border",
+        ColorToken::Separator => "Separator",
+        ColorToken::StatusBar => "Status Bar",
+        ColorToken::Error => "Error",
+        ColorToken::Warning => "Warning",
+        ColorToken::Success => "Success",
+    }
+}
+
+fn terminal_tweaks_section_name(section: u8) -> &'static str {
+    match section {
+        0 => "Wallpaper",
+        1 => "Theme",
+        2 => "Effects",
+        _ => "Display",
+    }
+}
+
 fn terminal_tweaks_indent(row: TerminalTweaksRow) -> usize {
     match row {
-        TerminalTweaksRow::Surface
-        | TerminalTweaksRow::DesktopMenu(_)
-        | TerminalTweaksRow::TerminalMenu(_) => 0,
-        TerminalTweaksRow::SurfaceOption(_) => 2,
+        TerminalTweaksRow::SectionSelector(_) => 0,
         TerminalTweaksRow::DropdownOption(_, _) => 4,
         _ => 2,
     }
@@ -316,53 +470,281 @@ impl RobcoNativeApp {
         self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Tweaks));
     }
 
-    fn terminal_tweaks_entries(&self, theme_packs: &[ThemePack]) -> Vec<TerminalTweaksEntry> {
-        let mut entries = vec![
-            TerminalTweaksEntry::Header("Surface"),
-            TerminalTweaksEntry::Row(TerminalTweaksRow::Surface),
-        ];
-        if self.terminal_tweaks_surface_dropdown_open {
-            entries.extend([
-                TerminalTweaksEntry::Row(TerminalTweaksRow::SurfaceOption(0)),
-                TerminalTweaksEntry::Row(TerminalTweaksRow::SurfaceOption(1)),
-            ]);
-        }
-        if self.tweaks_surface_tab == 0 {
-            entries.push(TerminalTweaksEntry::Header("Desktop Menus"));
-            for tab in 0..5 {
-                entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopMenu(
-                    tab,
-                )));
-                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
-                    self.append_desktop_terminal_tweaks_entries(tab, &mut entries);
-                }
-            }
-        } else {
-            entries.push(TerminalTweaksEntry::Header("Terminal Menus"));
-            for tab in 0..3 {
-                entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalMenu(
-                    tab,
-                )));
-                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
-                    self.append_terminal_terminal_tweaks_entries(tab, &mut entries);
-                }
-            }
-        }
-        self.inflate_terminal_tweaks_dropdown_entries(entries, theme_packs)
+    fn activate_desktop_surface_style(&mut self) {
+        set_active_color_style(
+            ShellSurfaceKind::Desktop,
+            self.desktop_active_color_style.clone(),
+            self.desktop_color_overrides.clone(),
+        );
     }
 
-    fn append_desktop_terminal_tweaks_entries(
-        &self,
-        tab: u8,
-        entries: &mut Vec<TerminalTweaksEntry>,
-    ) {
-        match tab {
-            0 => entries.extend([
+    fn activate_terminal_surface_style(&mut self) {
+        set_active_color_style(
+            ShellSurfaceKind::Terminal,
+            self.terminal_active_color_style.clone(),
+            self.terminal_color_overrides.clone(),
+        );
+    }
+
+    fn clear_desktop_color_overrides(&mut self) {
+        self.desktop_color_overrides = None;
+        self.tweaks_customize_colors_open = false;
+    }
+
+    fn clear_terminal_color_overrides(&mut self) {
+        self.terminal_color_overrides = None;
+        self.tweaks_customize_colors_open = false;
+    }
+
+    fn clear_desktop_theme_pack_selection(&mut self) {
+        let had_theme_pack = self.desktop_active_theme_pack_id.take().is_some();
+        let asset_state_changed = self.sync_active_desktop_asset_pack();
+        if had_theme_pack || asset_state_changed {
+            self.icon_cache_dirty = true;
+        }
+    }
+
+    fn set_desktop_cursor_theme_selection(
+        &mut self,
+        selection: DesktopCursorThemeSelection,
+    ) -> bool {
+        let selection = super::canonical_desktop_cursor_theme_selection(selection);
+        if self.desktop_active_cursor_theme_selection == selection {
+            return false;
+        }
+        self.desktop_active_cursor_theme_selection = selection;
+        self.sync_active_desktop_asset_pack();
+        true
+    }
+
+    fn apply_desktop_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
+        let changed = self.desktop_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
+            || self.desktop_color_overrides.is_some();
+        if !changed {
+            return false;
+        }
+        self.desktop_active_theme_pack_id = Some(theme.id.clone());
+        self.desktop_active_color_style = theme.color_style.clone();
+        self.desktop_active_layout = theme.layout_profile.clone();
+        self.clear_desktop_color_overrides();
+        self.sync_active_desktop_asset_pack();
+        self.icon_cache_dirty = true;
+        self.activate_desktop_surface_style();
+        true
+    }
+
+    fn apply_terminal_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
+        let changed = self.terminal_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
+            || self.terminal_color_overrides.is_some();
+        if !changed {
+            return false;
+        }
+        self.terminal_active_theme_pack_id = Some(theme.id.clone());
+        self.terminal_active_color_style = theme.color_style.clone();
+        self.terminal_branding = theme.terminal_branding.clone();
+        self.terminal_decoration = theme.terminal_decoration.clone();
+        self.clear_terminal_color_overrides();
+        self.activate_terminal_surface_style();
+        true
+    }
+
+    fn set_desktop_color_style_selection(&mut self, style: ColorStyle) -> bool {
+        if self.desktop_active_color_style == style
+            && self.desktop_active_theme_pack_id.is_none()
+            && self.desktop_color_overrides.is_none()
+        {
+            return false;
+        }
+        self.desktop_active_color_style = style;
+        self.clear_desktop_theme_pack_selection();
+        self.clear_desktop_color_overrides();
+        self.icon_cache_dirty = true;
+        self.activate_desktop_surface_style();
+        true
+    }
+
+    fn set_terminal_color_style_selection(&mut self, style: ColorStyle) -> bool {
+        if self.terminal_active_color_style == style
+            && self.terminal_active_theme_pack_id.is_none()
+            && self.terminal_color_overrides.is_none()
+        {
+            return false;
+        }
+        self.terminal_active_color_style = style;
+        self.terminal_active_theme_pack_id = None;
+        self.clear_terminal_color_overrides();
+        self.activate_terminal_surface_style();
+        true
+    }
+
+    fn set_desktop_monochrome_custom_rgb(&mut self, rgb: [u8; 3]) -> bool {
+        self.set_desktop_color_style_selection(ColorStyle::Monochrome {
+            preset: MonochromePreset::Custom,
+            custom_rgb: Some(rgb),
+        })
+    }
+
+    fn set_terminal_monochrome_custom_rgb(&mut self, rgb: [u8; 3]) -> bool {
+        self.set_terminal_color_style_selection(ColorStyle::Monochrome {
+            preset: MonochromePreset::Custom,
+            custom_rgb: Some(rgb),
+        })
+    }
+
+    fn set_desktop_full_color_theme(&mut self, theme_id: &str) -> bool {
+        self.set_desktop_color_style_selection(ColorStyle::FullColor {
+            theme_id: theme_id.to_string(),
+        })
+    }
+
+    fn set_terminal_full_color_theme(&mut self, theme_id: &str) -> bool {
+        self.set_terminal_color_style_selection(ColorStyle::FullColor {
+            theme_id: theme_id.to_string(),
+        })
+    }
+
+    fn draw_surface_sub_tabs(ui: &mut egui::Ui, active_surface: &mut u8, palette: &RetroPalette) {
+        ui.horizontal(|ui| {
+            for (i, label) in ["Desktop", "Terminal"].iter().enumerate() {
+                let active = *active_surface == i as u8;
+                let button = ui.add(
+                    egui::Button::new(
+                        RichText::new(*label)
+                            .color(if active {
+                                palette.selected_fg
+                            } else {
+                                palette.fg
+                            })
+                            .strong(),
+                    )
+                    .stroke(egui::Stroke::new(
+                        if active { 1.5 } else { 0.5 },
+                        palette.dim,
+                    ))
+                    .fill(if active {
+                        palette.selected_bg
+                    } else {
+                        palette.panel
+                    }),
+                );
+                if button.clicked() {
+                    *active_surface = i as u8;
+                }
+            }
+        });
+        ui.add_space(10.0);
+    }
+
+    fn terminal_tweaks_entries(&self, theme_packs: &[ThemePack]) -> Vec<TerminalTweaksEntry> {
+        let active_section = self.terminal_tweaks_active_section.min(3);
+        let mut entries = Vec::new();
+
+        entries.push(TerminalTweaksEntry::Row(
+            TerminalTweaksRow::SectionSelector(0),
+        ));
+        if active_section == 0 {
+            entries.push(TerminalTweaksEntry::Header("  Desktop"));
+            entries.extend([
                 TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperPicker),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperMode),
-            ]),
-            1 => entries.extend([
-                TerminalTweaksEntry::Row(TerminalTweaksRow::WindowMode),
+            ]);
+            entries.push(TerminalTweaksEntry::Header("  Terminal"));
+            entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalWallpaperPicker),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalWallpaperMode),
+            ]);
+        }
+
+        entries.push(TerminalTweaksEntry::Row(
+            TerminalTweaksRow::SectionSelector(1),
+        ));
+        if active_section == 1 {
+            entries.push(TerminalTweaksEntry::Header("  Desktop"));
+            entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopThemePack),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopColorMode),
+            ]);
+            if matches!(
+                self.desktop_active_color_style,
+                ColorStyle::Monochrome { .. }
+            ) {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopMonoTheme,
+                ));
+                if monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
+                    == CUSTOM_THEME_NAME
+                {
+                    entries.extend([
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomRed),
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomGreen),
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomBlue),
+                    ]);
+                }
+            } else {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopFullColorTheme,
+                ));
+                entries.push(TerminalTweaksEntry::Header(
+                    "    Use Desktop Tweaks window for color customization",
+                ));
+            }
+            entries.push(TerminalTweaksEntry::Row(
+                TerminalTweaksRow::DesktopIconStyle,
+            ));
+            for (index, _) in desktop_builtin_icons().iter().enumerate() {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopBuiltinIcon(index),
+                ));
+            }
+            entries.push(TerminalTweaksEntry::Row(
+                TerminalTweaksRow::DesktopCursorTheme,
+            ));
+            entries.push(TerminalTweaksEntry::Row(
+                TerminalTweaksRow::DesktopShowCursor,
+            ));
+            if self.settings.draft.desktop_show_cursor {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::DesktopCursorScale,
+                ));
+            }
+
+            entries.push(TerminalTweaksEntry::Header("  Terminal"));
+            entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalThemePack),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalColorMode),
+            ]);
+            if matches!(
+                self.terminal_active_color_style,
+                ColorStyle::Monochrome { .. }
+            ) {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::TerminalMonoTheme,
+                ));
+                if monochrome_theme_name_for_color_style(&self.terminal_active_color_style)
+                    == CUSTOM_THEME_NAME
+                {
+                    entries.extend([
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomRed),
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomGreen),
+                        TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomBlue),
+                    ]);
+                }
+            } else {
+                entries.push(TerminalTweaksEntry::Row(
+                    TerminalTweaksRow::TerminalFullColorTheme,
+                ));
+                entries.push(TerminalTweaksEntry::Header(
+                    "    Use Desktop Tweaks window for color customization",
+                ));
+            }
+            entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalLayout));
+        }
+
+        entries.push(TerminalTweaksEntry::Row(
+            TerminalTweaksRow::SectionSelector(2),
+        ));
+        if active_section == 2 {
+            entries.extend([
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtEnabled),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtPreset),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtCurvature),
@@ -379,96 +761,22 @@ impl RobcoNativeApp {
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtPhosphorSoftness),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtBrightness),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::CrtContrast),
-            ]),
-            2 => {
-                entries.extend([
-                    TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopThemePack),
-                    TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopColorMode),
-                ]);
-                if matches!(
-                    self.desktop_active_color_style,
-                    ColorStyle::Monochrome { .. }
-                ) {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::DesktopMonoTheme,
-                    ));
-                    if monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
-                        == CUSTOM_THEME_NAME
-                    {
-                        entries.extend([
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomRed),
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomGreen),
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomBlue),
-                        ]);
-                    }
-                } else {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::DesktopFullColorTheme,
-                    ));
-                }
-            }
-            3 => {
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopIconStyle,
-                ));
-                for (index, _) in desktop_builtin_icons().iter().enumerate() {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::DesktopBuiltinIcon(index),
-                    ));
-                }
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopShowCursor,
-                ));
-                if self.settings.draft.desktop_show_cursor {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::DesktopCursorScale,
-                    ));
-                }
-            }
-            _ => entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopLayout)),
+            ]);
         }
-    }
 
-    fn append_terminal_terminal_tweaks_entries(
-        &self,
-        tab: u8,
-        entries: &mut Vec<TerminalTweaksEntry>,
-    ) {
-        match tab {
-            0 => {
-                entries.extend([
-                    TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalThemePack),
-                    TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalColorMode),
-                ]);
-                if matches!(
-                    self.terminal_active_color_style,
-                    ColorStyle::Monochrome { .. }
-                ) {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::TerminalMonoTheme,
-                    ));
-                    if monochrome_theme_name_for_color_style(&self.terminal_active_color_style)
-                        == CUSTOM_THEME_NAME
-                    {
-                        entries.extend([
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomRed),
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomGreen),
-                            TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalCustomBlue),
-                        ]);
-                    }
-                } else {
-                    entries.push(TerminalTweaksEntry::Row(
-                        TerminalTweaksRow::TerminalFullColorTheme,
-                    ));
-                }
-            }
-            1 => entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalLayout)),
-            _ => entries.extend([
+        entries.push(TerminalTweaksEntry::Row(
+            TerminalTweaksRow::SectionSelector(3),
+        ));
+        if active_section == 3 {
+            entries.extend([
+                TerminalTweaksEntry::Row(TerminalTweaksRow::WindowMode),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalStyledPty),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalPtyColorMode),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalBorderGlyphs),
-            ]),
+            ]);
         }
+
+        self.inflate_terminal_tweaks_dropdown_entries(entries, theme_packs)
     }
 
     fn terminal_tweaks_selectable_indices(entries: &[TerminalTweaksEntry]) -> Vec<usize> {
@@ -514,6 +822,9 @@ impl RobcoNativeApp {
     fn terminal_tweaks_dropdown_for_row(row: TerminalTweaksRow) -> Option<TerminalTweaksDropdown> {
         match row {
             TerminalTweaksRow::WallpaperMode => Some(TerminalTweaksDropdown::WallpaperMode),
+            TerminalTweaksRow::TerminalWallpaperMode => {
+                Some(TerminalTweaksDropdown::TerminalWallpaperMode)
+            }
             TerminalTweaksRow::WindowMode => Some(TerminalTweaksDropdown::WindowMode),
             TerminalTweaksRow::CrtPreset => Some(TerminalTweaksDropdown::CrtPreset),
             TerminalTweaksRow::DesktopThemePack => Some(TerminalTweaksDropdown::DesktopThemePack),
@@ -523,7 +834,9 @@ impl RobcoNativeApp {
                 Some(TerminalTweaksDropdown::DesktopFullColorTheme)
             }
             TerminalTweaksRow::DesktopIconStyle => Some(TerminalTweaksDropdown::DesktopIconStyle),
-            TerminalTweaksRow::DesktopLayout => Some(TerminalTweaksDropdown::DesktopLayout),
+            TerminalTweaksRow::DesktopCursorTheme => {
+                Some(TerminalTweaksDropdown::DesktopCursorTheme)
+            }
             TerminalTweaksRow::TerminalThemePack => Some(TerminalTweaksDropdown::TerminalThemePack),
             TerminalTweaksRow::TerminalColorMode => Some(TerminalTweaksDropdown::TerminalColorMode),
             TerminalTweaksRow::TerminalMonoTheme => Some(TerminalTweaksDropdown::TerminalMonoTheme),
@@ -547,7 +860,8 @@ impl RobcoNativeApp {
         theme_packs: &[ThemePack],
     ) -> Vec<String> {
         match dropdown {
-            TerminalTweaksDropdown::WallpaperMode => vec![
+            TerminalTweaksDropdown::WallpaperMode
+            | TerminalTweaksDropdown::TerminalWallpaperMode => vec![
                 wallpaper_size_mode_label(WallpaperSizeMode::DefaultSize).to_string(),
                 wallpaper_size_mode_label(WallpaperSizeMode::FitToScreen).to_string(),
                 wallpaper_size_mode_label(WallpaperSizeMode::Centered).to_string(),
@@ -571,9 +885,9 @@ impl RobcoNativeApp {
                 CrtPreset::Custom.label().to_string(),
             ],
             TerminalTweaksDropdown::DesktopThemePack
-            | TerminalTweaksDropdown::TerminalThemePack => std::iter::once("Manual".to_string())
-                .chain(theme_packs.iter().map(|theme| theme.name.clone()))
-                .collect(),
+            | TerminalTweaksDropdown::TerminalThemePack => {
+                theme_packs.iter().map(|theme| theme.name.clone()).collect()
+            }
             TerminalTweaksDropdown::DesktopColorMode
             | TerminalTweaksDropdown::TerminalColorMode => {
                 vec!["Monochrome".to_string(), "Full Color".to_string()]
@@ -594,9 +908,15 @@ impl RobcoNativeApp {
                 desktop_icon_style_label(DesktopIconStyle::Minimal).to_string(),
                 desktop_icon_style_label(DesktopIconStyle::NoIcons).to_string(),
             ],
-            TerminalTweaksDropdown::DesktopLayout => LayoutProfile::builtin_layouts()
+            TerminalTweaksDropdown::DesktopCursorTheme => desktop_cursor_theme_options(theme_packs)
                 .into_iter()
-                .map(|profile| profile.name)
+                .map(|selection| {
+                    desktop_cursor_theme_selection_label(
+                        &selection,
+                        self.desktop_active_theme_pack_id.as_deref(),
+                        theme_packs,
+                    )
+                })
                 .collect(),
             TerminalTweaksDropdown::TerminalLayout => TerminalLayoutProfile::builtin_layouts()
                 .into_iter()
@@ -630,6 +950,15 @@ impl RobcoNativeApp {
                     WallpaperSizeMode::Stretch => 4,
                 }
             }
+            TerminalTweaksDropdown::TerminalWallpaperMode => {
+                match self.settings.draft.terminal_wallpaper_size_mode {
+                    WallpaperSizeMode::DefaultSize => 0,
+                    WallpaperSizeMode::FitToScreen => 1,
+                    WallpaperSizeMode::Centered => 2,
+                    WallpaperSizeMode::Tile => 3,
+                    WallpaperSizeMode::Stretch => 4,
+                }
+            }
             TerminalTweaksDropdown::WindowMode => {
                 match self.settings.draft.native_startup_window_mode {
                     NativeStartupWindowMode::Windowed => 0,
@@ -650,7 +979,6 @@ impl RobcoNativeApp {
                 .desktop_active_theme_pack_id
                 .as_deref()
                 .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
-                .map(|idx| idx + 1)
                 .unwrap_or(0),
             TerminalTweaksDropdown::DesktopColorMode => {
                 if matches!(
@@ -683,15 +1011,16 @@ impl RobcoNativeApp {
                     DesktopIconStyle::NoIcons => 3,
                 }
             }
-            TerminalTweaksDropdown::DesktopLayout => LayoutProfile::builtin_layouts()
+            TerminalTweaksDropdown::DesktopCursorTheme => desktop_cursor_theme_options(theme_packs)
                 .iter()
-                .position(|profile| profile.id == self.desktop_active_layout.id)
+                .position(|selection| {
+                    *selection == self.desktop_active_cursor_theme_selection
+                })
                 .unwrap_or(0),
             TerminalTweaksDropdown::TerminalThemePack => self
                 .terminal_active_theme_pack_id
                 .as_deref()
                 .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
-                .map(|idx| idx + 1)
                 .unwrap_or(0),
             TerminalTweaksDropdown::TerminalColorMode => {
                 if matches!(
@@ -783,21 +1112,13 @@ impl RobcoNativeApp {
         theme_packs: &[ThemePack],
     ) -> String {
         match row {
-            TerminalTweaksRow::Surface => format!(
-                "Surface: {}",
-                if self.tweaks_surface_tab == 0 {
-                    "Desktop"
+            TerminalTweaksRow::SectionSelector(section) => {
+                let marker = if self.terminal_tweaks_active_section == section {
+                    "[-]"
                 } else {
-                    "Terminal"
-                }
-            ),
-            TerminalTweaksRow::SurfaceOption(tab) => {
-                let label = if tab == 0 { "Desktop" } else { "Terminal" };
-                if self.tweaks_surface_tab == tab {
-                    format!("{label} (current)")
-                } else {
-                    label.to_string()
-                }
+                    "[+]"
+                };
+                format!("{marker} {}", terminal_tweaks_section_name(section))
             }
             TerminalTweaksRow::DropdownOption(dropdown, index) => {
                 let options = self.terminal_tweaks_dropdown_options(dropdown, theme_packs);
@@ -811,15 +1132,6 @@ impl RobcoNativeApp {
                     label
                 }
             }
-            TerminalTweaksRow::DesktopMenu(tab) => format!(
-                "{} {}",
-                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
-                    "[-]"
-                } else {
-                    "[+]"
-                },
-                desktop_section_label(tab)
-            ),
             TerminalTweaksRow::WallpaperPicker => format!(
                 "Wallpaper File: {} [browse]",
                 wallpaper_display_name(&self.settings.draft.desktop_wallpaper)
@@ -827,6 +1139,14 @@ impl RobcoNativeApp {
             TerminalTweaksRow::WallpaperMode => format!(
                 "Wallpaper Mode: {}",
                 wallpaper_size_mode_label(self.settings.draft.desktop_wallpaper_size_mode)
+            ),
+            TerminalTweaksRow::TerminalWallpaperPicker => format!(
+                "Wallpaper File: {} [browse]",
+                wallpaper_display_name(&self.settings.draft.terminal_wallpaper)
+            ),
+            TerminalTweaksRow::TerminalWallpaperMode => format!(
+                "Wallpaper Mode: {}",
+                wallpaper_size_mode_label(self.settings.draft.terminal_wallpaper_size_mode)
             ),
             TerminalTweaksRow::WindowMode => format!(
                 "Window Mode: {}",
@@ -956,6 +1276,14 @@ impl RobcoNativeApp {
                 "Icon Style: {}",
                 desktop_icon_style_label(self.settings.draft.desktop_icon_style)
             ),
+            TerminalTweaksRow::DesktopCursorTheme => format!(
+                "Cursor Theme: {}",
+                desktop_cursor_theme_selection_label(
+                    &self.desktop_active_cursor_theme_selection,
+                    self.desktop_active_theme_pack_id.as_deref(),
+                    theme_packs,
+                )
+            ),
             TerminalTweaksRow::DesktopBuiltinIcon(index) => desktop_builtin_icons()
                 .get(index)
                 .map(|entry| {
@@ -986,18 +1314,6 @@ impl RobcoNativeApp {
             TerminalTweaksRow::DesktopCursorScale => format!(
                 "Cursor Size: {:.1}x",
                 self.settings.draft.desktop_cursor_scale
-            ),
-            TerminalTweaksRow::DesktopLayout => {
-                format!("Desktop Layout: {}", self.desktop_active_layout.name)
-            }
-            TerminalTweaksRow::TerminalMenu(tab) => format!(
-                "{} {}",
-                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
-                    "[-]"
-                } else {
-                    "[+]"
-                },
-                terminal_section_label(tab)
             ),
             TerminalTweaksRow::TerminalThemePack => format!(
                 "Theme Pack: {}",
@@ -1063,35 +1379,19 @@ impl RobcoNativeApp {
 
     fn terminal_tweaks_row_help(&self, row: TerminalTweaksRow) -> String {
         match row {
-            TerminalTweaksRow::Surface => {
-                "Enter opens or closes the Desktop and Terminal picker.".to_string()
-            }
-            TerminalTweaksRow::SurfaceOption(tab) => {
-                if self.tweaks_surface_tab == tab {
-                    "This surface is already active.".to_string()
-                } else {
-                    "Switches the Tweaks tree to this surface and closes the picker.".to_string()
-                }
-            }
+            TerminalTweaksRow::SectionSelector(section) => format!(
+                "Enter opens {}. Only one section stays expanded at a time.",
+                terminal_tweaks_section_name(section)
+            ),
             TerminalTweaksRow::DropdownOption(_, _) => {
                 "Applies this value and closes the option list.".to_string()
             }
-            TerminalTweaksRow::DesktopMenu(tab) => {
-                if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
-                    "This menu is expanded below. Press Enter again to collapse it.".to_string()
-                } else {
-                    "Opens this desktop menu inline so its settings appear beneath it.".to_string()
-                }
-            }
-            TerminalTweaksRow::TerminalMenu(tab) => {
-                if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
-                    "This menu is expanded below. Press Enter again to collapse it.".to_string()
-                } else {
-                    "Opens this terminal menu inline so its settings appear beneath it.".to_string()
-                }
-            }
             TerminalTweaksRow::WallpaperPicker => {
                 "Enter opens the terminal file browser and returns here after selection."
+                    .to_string()
+            }
+            TerminalTweaksRow::TerminalWallpaperPicker => {
+                "Enter opens the terminal wallpaper picker and returns here after selection."
                     .to_string()
             }
             TerminalTweaksRow::WindowMode => {
@@ -1149,13 +1449,16 @@ impl RobcoNativeApp {
             TerminalTweaksRow::DesktopIconStyle => {
                 "Enter opens the desktop icon-style list.".to_string()
             }
+            TerminalTweaksRow::DesktopCursorTheme => {
+                "Enter opens the desktop cursor-theme list.".to_string()
+            }
             TerminalTweaksRow::DesktopBuiltinIcon(_) => {
                 "Toggle individual built-in desktop icons.".to_string()
             }
             TerminalTweaksRow::DesktopShowCursor | TerminalTweaksRow::DesktopCursorScale => {
                 "Controls the software cursor on the desktop surface.".to_string()
             }
-            TerminalTweaksRow::DesktopLayout | TerminalTweaksRow::TerminalLayout => {
+            TerminalTweaksRow::TerminalLayout => {
                 "Enter opens the layout list for this surface.".to_string()
             }
             TerminalTweaksRow::TerminalStyledPty => {
@@ -1167,7 +1470,7 @@ impl RobcoNativeApp {
             TerminalTweaksRow::TerminalBorderGlyphs => {
                 "Enter opens the border glyph list.".to_string()
             }
-            TerminalTweaksRow::WallpaperMode => {
+            TerminalTweaksRow::WallpaperMode | TerminalTweaksRow::TerminalWallpaperMode => {
                 "Enter opens the wallpaper sizing list.".to_string()
             }
         }
@@ -1193,6 +1496,22 @@ impl RobcoNativeApp {
                 if let Some(next) = options.get(index).copied() {
                     if next != self.settings.draft.desktop_wallpaper_size_mode {
                         set_desktop_wallpaper_size_mode(&mut self.settings.draft, next);
+                        mutation.persist_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalWallpaperMode => {
+                let options = [
+                    WallpaperSizeMode::DefaultSize,
+                    WallpaperSizeMode::FitToScreen,
+                    WallpaperSizeMode::Centered,
+                    WallpaperSizeMode::Tile,
+                    WallpaperSizeMode::Stretch,
+                ];
+                if let Some(next) = options.get(index).copied() {
+                    if next != self.settings.draft.terminal_wallpaper_size_mode {
+                        self.settings.draft.terminal_wallpaper_size_mode = next;
                         mutation.persist_changed = true;
                         changed = true;
                     }
@@ -1236,26 +1555,11 @@ impl RobcoNativeApp {
                 }
             }
             TerminalTweaksDropdown::DesktopThemePack => {
-                let next = if index == 0 {
-                    None
-                } else {
-                    theme_packs.get(index - 1).map(|theme| theme.id.clone())
-                };
-                let current = self.desktop_active_theme_pack_id.clone();
-                if next != current {
-                    self.desktop_active_theme_pack_id = next.clone();
-                    if let Some(id) = next {
-                        if let Some(theme) = theme_packs.iter().find(|theme| theme.id == id) {
-                            self.desktop_active_color_style = theme.color_style.clone();
-                            self.desktop_active_layout = theme.layout_profile.clone();
-                            set_active_color_style(
-                                ShellSurfaceKind::Desktop,
-                                self.desktop_active_color_style.clone(),
-                            );
-                        }
+                if let Some(theme) = theme_packs.get(index) {
+                    if self.apply_desktop_theme_pack_selection(theme) {
+                        mutation.appearance_changed = true;
+                        changed = true;
                     }
-                    mutation.appearance_changed = true;
-                    changed = true;
                 }
             }
             TerminalTweaksDropdown::DesktopColorMode => {
@@ -1270,13 +1574,7 @@ impl RobcoNativeApp {
                     _ => None,
                 };
                 if let Some(next_style) = next {
-                    if next_style != self.desktop_active_color_style {
-                        self.desktop_active_color_style = next_style;
-                        self.desktop_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Desktop,
-                            self.desktop_active_color_style.clone(),
-                        );
+                    if self.set_desktop_color_style_selection(next_style) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1288,13 +1586,7 @@ impl RobcoNativeApp {
                         next,
                         custom_rgb_for_color_style(&self.desktop_active_color_style),
                     );
-                    if next_style != self.desktop_active_color_style {
-                        self.desktop_active_color_style = next_style;
-                        self.desktop_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Desktop,
-                            self.desktop_active_color_style.clone(),
-                        );
+                    if self.set_desktop_color_style_selection(next_style) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1302,16 +1594,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksDropdown::DesktopFullColorTheme => {
                 if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
-                    let next_style = ColorStyle::FullColor {
-                        theme_id: theme.id.clone(),
-                    };
-                    if next_style != self.desktop_active_color_style {
-                        self.desktop_active_color_style = next_style;
-                        self.desktop_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Desktop,
-                            self.desktop_active_color_style.clone(),
-                        );
+                    if self.set_desktop_full_color_theme(&theme.id) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1332,36 +1615,20 @@ impl RobcoNativeApp {
                     }
                 }
             }
-            TerminalTweaksDropdown::DesktopLayout => {
-                if let Some(profile) = LayoutProfile::builtin_layouts().get(index) {
-                    if profile.id != self.desktop_active_layout.id {
-                        self.desktop_active_layout = profile.clone();
-                        self.desktop_active_theme_pack_id = None;
+            TerminalTweaksDropdown::DesktopCursorTheme => {
+                if let Some(next) = desktop_cursor_theme_options(theme_packs).get(index).cloned() {
+                    if self.set_desktop_cursor_theme_selection(next) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
                 }
             }
             TerminalTweaksDropdown::TerminalThemePack => {
-                let next = if index == 0 {
-                    None
-                } else {
-                    theme_packs.get(index - 1).map(|theme| theme.id.clone())
-                };
-                let current = self.terminal_active_theme_pack_id.clone();
-                if next != current {
-                    self.terminal_active_theme_pack_id = next.clone();
-                    if let Some(id) = next {
-                        if let Some(theme) = theme_packs.iter().find(|theme| theme.id == id) {
-                            self.terminal_active_color_style = theme.color_style.clone();
-                            set_active_color_style(
-                                ShellSurfaceKind::Terminal,
-                                self.terminal_active_color_style.clone(),
-                            );
-                        }
+                if let Some(theme) = theme_packs.get(index) {
+                    if self.apply_terminal_theme_pack_selection(theme) {
+                        mutation.appearance_changed = true;
+                        changed = true;
                     }
-                    mutation.appearance_changed = true;
-                    changed = true;
                 }
             }
             TerminalTweaksDropdown::TerminalColorMode => {
@@ -1376,13 +1643,7 @@ impl RobcoNativeApp {
                     _ => None,
                 };
                 if let Some(next_style) = next {
-                    if next_style != self.terminal_active_color_style {
-                        self.terminal_active_color_style = next_style;
-                        self.terminal_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Terminal,
-                            self.terminal_active_color_style.clone(),
-                        );
+                    if self.set_terminal_color_style_selection(next_style) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1394,13 +1655,7 @@ impl RobcoNativeApp {
                         next,
                         custom_rgb_for_color_style(&self.terminal_active_color_style),
                     );
-                    if next_style != self.terminal_active_color_style {
-                        self.terminal_active_color_style = next_style;
-                        self.terminal_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Terminal,
-                            self.terminal_active_color_style.clone(),
-                        );
+                    if self.set_terminal_color_style_selection(next_style) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1408,16 +1663,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksDropdown::TerminalFullColorTheme => {
                 if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
-                    let next_style = ColorStyle::FullColor {
-                        theme_id: theme.id.clone(),
-                    };
-                    if next_style != self.terminal_active_color_style {
-                        self.terminal_active_color_style = next_style;
-                        self.terminal_active_theme_pack_id = None;
-                        set_active_color_style(
-                            ShellSurfaceKind::Terminal,
-                            self.terminal_active_color_style.clone(),
-                        );
+                    if self.set_terminal_full_color_theme(&theme.id) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1471,49 +1717,21 @@ impl RobcoNativeApp {
     ) -> (TerminalTweaksMutation, bool) {
         let mut mutation = TerminalTweaksMutation::default();
         let mut action_taken = false;
-        if !matches!(
-            row,
-            TerminalTweaksRow::Surface
-                | TerminalTweaksRow::SurfaceOption(_)
-                | TerminalTweaksRow::DropdownOption(_, _)
-        ) {
-            self.terminal_tweaks_surface_dropdown_open = false;
+        let previously_open_dropdown = self.terminal_tweaks_open_dropdown;
+        if !matches!(row, TerminalTweaksRow::DropdownOption(_, _)) {
             self.terminal_tweaks_open_dropdown = None;
         }
         match row {
-            TerminalTweaksRow::Surface => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_surface_dropdown_open =
-                        !self.terminal_tweaks_surface_dropdown_open;
-                    self.terminal_tweaks_open_dropdown = None;
-                    self.terminal_nav.settings_idx = 0;
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::SurfaceOption(tab) => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.tweaks_surface_tab = tab;
-                    self.terminal_tweaks_surface_dropdown_open = false;
-                    self.terminal_tweaks_open_dropdown = None;
-                    self.terminal_nav.settings_idx = 0;
+            TerminalTweaksRow::SectionSelector(section) => {
+                if matches!(step, TerminalTweaksStep::Activate)
+                    && self.terminal_tweaks_active_section != section
+                {
+                    self.terminal_tweaks_active_section = section;
                     action_taken = true;
                 }
             }
             TerminalTweaksRow::DropdownOption(dropdown, index) => {
                 return self.apply_terminal_tweaks_dropdown_selection(dropdown, index, theme_packs);
-            }
-            TerminalTweaksRow::DesktopMenu(tab) => {
-                self.terminal_tweaks_open_dropdown = None;
-                self.desktop_tweaks_tab = tab;
-                let next = if self.terminal_tweaks_desktop_expanded_menu == Some(tab) {
-                    None
-                } else {
-                    Some(tab)
-                };
-                if self.terminal_tweaks_desktop_expanded_menu != next {
-                    self.terminal_tweaks_desktop_expanded_menu = next;
-                    action_taken = true;
-                }
             }
             TerminalTweaksRow::WallpaperPicker => {
                 if matches!(step, TerminalTweaksStep::Activate) {
@@ -1524,9 +1742,19 @@ impl RobcoNativeApp {
                     action_taken = true;
                 }
             }
+            TerminalTweaksRow::TerminalWallpaperPicker => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    let start =
+                        wallpaper_browser_start_dir(&self.settings.draft.terminal_wallpaper);
+                    self.picking_terminal_wallpaper = true;
+                    self.open_document_browser_at(start, TerminalScreen::Settings);
+                    self.apply_status_update(clear_shell_status());
+                    action_taken = true;
+                }
+            }
             TerminalTweaksRow::WallpaperMode => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::WallpaperMode)
                     {
                         None
@@ -1536,15 +1764,26 @@ impl RobcoNativeApp {
                     action_taken = true;
                 }
             }
-            TerminalTweaksRow::WindowMode => {
+            TerminalTweaksRow::TerminalWallpaperMode => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
-                        == Some(TerminalTweaksDropdown::WindowMode)
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalWallpaperMode)
                     {
                         None
                     } else {
-                        Some(TerminalTweaksDropdown::WindowMode)
+                        Some(TerminalTweaksDropdown::TerminalWallpaperMode)
                     };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::WindowMode => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown =
+                        if previously_open_dropdown == Some(TerminalTweaksDropdown::WindowMode) {
+                            None
+                        } else {
+                            Some(TerminalTweaksDropdown::WindowMode)
+                        };
                     action_taken = true;
                 }
             }
@@ -1564,13 +1803,12 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::CrtPreset => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
-                        == Some(TerminalTweaksDropdown::CrtPreset)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::CrtPreset)
-                    };
+                    self.terminal_tweaks_open_dropdown =
+                        if previously_open_dropdown == Some(TerminalTweaksDropdown::CrtPreset) {
+                            None
+                        } else {
+                            Some(TerminalTweaksDropdown::CrtPreset)
+                        };
                     action_taken = true;
                 }
             }
@@ -1700,7 +1938,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::DesktopThemePack => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::DesktopThemePack)
                     {
                         None
@@ -1712,7 +1950,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::DesktopColorMode => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::DesktopColorMode)
                     {
                         None
@@ -1724,7 +1962,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::DesktopMonoTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::DesktopMonoTheme)
                     {
                         None
@@ -1744,23 +1982,14 @@ impl RobcoNativeApp {
                     TerminalTweaksRow::DesktopCustomBlue => adjust_u8(&mut rgb[2], step.delta()),
                     _ => false,
                 };
-                if changed {
-                    self.desktop_active_color_style = ColorStyle::Monochrome {
-                        preset: MonochromePreset::Custom,
-                        custom_rgb: Some(rgb),
-                    };
-                    self.desktop_active_theme_pack_id = None;
-                    set_active_color_style(
-                        ShellSurfaceKind::Desktop,
-                        self.desktop_active_color_style.clone(),
-                    );
+                if changed && self.set_desktop_monochrome_custom_rgb(rgb) {
                     mutation.appearance_changed = true;
                     action_taken = true;
                 }
             }
             TerminalTweaksRow::DesktopFullColorTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::DesktopFullColorTheme)
                     {
                         None
@@ -1772,12 +2001,24 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::DesktopIconStyle => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::DesktopIconStyle)
                     {
                         None
                     } else {
                         Some(TerminalTweaksDropdown::DesktopIconStyle)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::DesktopCursorTheme => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
+                        == Some(TerminalTweaksDropdown::DesktopCursorTheme)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::DesktopCursorTheme)
                     };
                     action_taken = true;
                 }
@@ -1811,34 +2052,9 @@ impl RobcoNativeApp {
                     action_taken = true;
                 }
             }
-            TerminalTweaksRow::DesktopLayout => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopLayout)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopLayout)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::TerminalMenu(tab) => {
-                self.terminal_tweaks_open_dropdown = None;
-                self.terminal_tweaks_tab = tab;
-                let next = if self.terminal_tweaks_terminal_expanded_menu == Some(tab) {
-                    None
-                } else {
-                    Some(tab)
-                };
-                if self.terminal_tweaks_terminal_expanded_menu != next {
-                    self.terminal_tweaks_terminal_expanded_menu = next;
-                    action_taken = true;
-                }
-            }
             TerminalTweaksRow::TerminalThemePack => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalThemePack)
                     {
                         None
@@ -1850,7 +2066,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::TerminalColorMode => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalColorMode)
                     {
                         None
@@ -1862,7 +2078,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::TerminalMonoTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalMonoTheme)
                     {
                         None
@@ -1882,23 +2098,14 @@ impl RobcoNativeApp {
                     TerminalTweaksRow::TerminalCustomBlue => adjust_u8(&mut rgb[2], step.delta()),
                     _ => false,
                 };
-                if changed {
-                    self.terminal_active_color_style = ColorStyle::Monochrome {
-                        preset: MonochromePreset::Custom,
-                        custom_rgb: Some(rgb),
-                    };
-                    self.terminal_active_theme_pack_id = None;
-                    set_active_color_style(
-                        ShellSurfaceKind::Terminal,
-                        self.terminal_active_color_style.clone(),
-                    );
+                if changed && self.set_terminal_monochrome_custom_rgb(rgb) {
                     mutation.appearance_changed = true;
                     action_taken = true;
                 }
             }
             TerminalTweaksRow::TerminalFullColorTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalFullColorTheme)
                     {
                         None
@@ -1910,7 +2117,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::TerminalLayout => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalLayout)
                     {
                         None
@@ -1927,7 +2134,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::TerminalPtyColorMode => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalPtyColorMode)
                     {
                         None
@@ -1939,7 +2146,7 @@ impl RobcoNativeApp {
             }
             TerminalTweaksRow::TerminalBorderGlyphs => {
                 if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if self.terminal_tweaks_open_dropdown
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
                         == Some(TerminalTweaksDropdown::TerminalBorderGlyphs)
                     {
                         None
@@ -1951,6 +2158,370 @@ impl RobcoNativeApp {
             }
         }
         (mutation, action_taken)
+    }
+
+    fn export_full_color_theme(&mut self, terminal: bool) {
+        let base_id = if terminal {
+            full_color_theme_id_for_color_style(&self.terminal_active_color_style)
+        } else {
+            full_color_theme_id_for_color_style(&self.desktop_active_color_style)
+        };
+        let mut theme =
+            FullColorTheme::builtin_by_id(base_id).unwrap_or_else(FullColorTheme::nucleon_dark);
+        let overrides = if terminal {
+            self.terminal_color_overrides.as_ref()
+        } else {
+            self.desktop_color_overrides.as_ref()
+        };
+        if let Some(overrides) = overrides {
+            for (token, color) in overrides {
+                theme.tokens.insert(*token, *color);
+            }
+        }
+        theme.id = if terminal {
+            format!("{base_id}-terminal-custom")
+        } else {
+            format!("{base_id}-custom")
+        };
+        theme.name = if terminal {
+            format!("{} (Terminal Custom)", theme.name)
+        } else {
+            format!("{} (Custom)", theme.name)
+        };
+        let export_dir = crate::config::nucleon_data_dir().join("exported_themes");
+        if std::fs::create_dir_all(&export_dir).is_err() {
+            self.apply_status_update(settings_status("Failed to export theme."));
+            return;
+        }
+        let path = export_dir.join(format!("{}.json", theme.id));
+        match serde_json::to_string_pretty(&theme) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(()) => {
+                    self.apply_status_update(settings_status(format!(
+                        "Theme exported to {}",
+                        path.display()
+                    )));
+                }
+                Err(_) => self.apply_status_update(settings_status("Failed to export theme.")),
+            },
+            Err(_) => self.apply_status_update(settings_status("Failed to export theme.")),
+        }
+    }
+
+    fn draw_full_color_customization_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        terminal: bool,
+    ) -> bool {
+        ui.add_space(6.0);
+        let toggle_label = if self.tweaks_customize_colors_open {
+            "[-] Customize Colors"
+        } else {
+            "[+] Customize Colors"
+        };
+        if ui.button(toggle_label).clicked() {
+            self.tweaks_customize_colors_open = !self.tweaks_customize_colors_open;
+            if !self.tweaks_customize_colors_open {
+                self.tweaks_editing_color_token = None;
+            }
+        }
+
+        let mut appearance_changed = false;
+        if self.tweaks_customize_colors_open {
+            let palette = current_palette();
+            let base_theme_id = if terminal {
+                full_color_theme_id_for_color_style(&self.terminal_active_color_style)
+            } else {
+                full_color_theme_id_for_color_style(&self.desktop_active_color_style)
+            }
+            .to_string();
+            let base_theme = FullColorTheme::builtin_by_id(&base_theme_id)
+                .unwrap_or_else(FullColorTheme::nucleon_dark);
+            let mut working_overrides = if terminal {
+                self.terminal_color_overrides
+                    .clone()
+                    .unwrap_or_else(|| base_theme.tokens.clone())
+            } else {
+                self.desktop_color_overrides
+                    .clone()
+                    .unwrap_or_else(|| base_theme.tokens.clone())
+            };
+
+            let all_tokens = ColorToken::all();
+
+            // Token list — clicking a swatch opens an inline picker right below it
+            for (idx, token) in all_tokens.iter().enumerate() {
+                let entry = working_overrides
+                    .entry(*token)
+                    .or_insert([128, 128, 128, 255]);
+                let is_selected = self.tweaks_editing_color_token == Some(idx);
+                let preview = egui::Color32::from_rgba_unmultiplied(
+                    entry[0], entry[1], entry[2], entry[3],
+                );
+
+                ui.horizontal(|ui| {
+                    let btn = ui.add(
+                        egui::Button::new("")
+                            .min_size(egui::vec2(22.0, 22.0))
+                            .fill(preview)
+                            .stroke(egui::Stroke::new(
+                                if is_selected { 2.5 } else { 1.0 },
+                                if is_selected {
+                                    palette.selected_fg
+                                } else {
+                                    palette.dim
+                                },
+                            )),
+                    );
+                    if btn.clicked() {
+                        self.tweaks_editing_color_token = if is_selected {
+                            None
+                        } else {
+                            Some(idx)
+                        };
+                    }
+                    let label_text = if is_selected {
+                        RichText::new(full_color_token_label(*token))
+                            .color(palette.selected_fg)
+                            .strong()
+                    } else {
+                        RichText::new(full_color_token_label(*token)).color(palette.fg)
+                    };
+                    ui.label(label_text);
+                });
+
+                // Inline color picker — appears directly under the selected token
+                if is_selected {
+                    let frame_stroke = egui::Stroke::new(1.0, palette.dim);
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin::same(6.0))
+                        .stroke(frame_stroke)
+                        .show(ui, |ui| {
+                            let saved_spacing = ui.spacing().item_spacing;
+                            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                            egui::Grid::new(("color_palette_grid", terminal, idx))
+                                .num_columns(COLOR_PALETTE_COLUMNS)
+                                .show(ui, |ui| {
+                                    for (index, swatch) in COLOR_PALETTE.iter().enumerate() {
+                                        let swatch_color = egui::Color32::from_rgb(
+                                            swatch[0], swatch[1], swatch[2],
+                                        );
+                                        if ui
+                                            .add(
+                                                egui::Button::new("")
+                                                    .min_size(egui::vec2(20.0, 20.0))
+                                                    .fill(swatch_color)
+                                                    .stroke(egui::Stroke::new(
+                                                        0.5,
+                                                        palette.dim,
+                                                    )),
+                                            )
+                                            .clicked()
+                                        {
+                                            let entry = working_overrides
+                                                .entry(*token)
+                                                .or_insert([128, 128, 128, 255]);
+                                            *entry =
+                                                [swatch[0], swatch[1], swatch[2], 255];
+                                            appearance_changed = true;
+                                        }
+                                        if (index + 1) % COLOR_PALETTE_COLUMNS == 0 {
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                            ui.spacing_mut().item_spacing = saved_spacing;
+                            ui.add_space(4.0);
+                            let entry = working_overrides
+                                .entry(*token)
+                                .or_insert([128, 128, 128, 255]);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("Custom:").color(palette.fg),
+                                );
+                                let mut color =
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        entry[0], entry[1], entry[2], entry[3],
+                                    );
+                                if color_edit_button_srgba(
+                                    ui,
+                                    &mut color,
+                                    Alpha::Opaque,
+                                )
+                                .changed()
+                                {
+                                    *entry =
+                                        [color.r(), color.g(), color.b(), 255];
+                                    appearance_changed = true;
+                                }
+                            });
+                        });
+                }
+            }
+
+            if appearance_changed {
+                if terminal {
+                    self.terminal_color_overrides = Some(working_overrides);
+                } else {
+                    self.desktop_color_overrides = Some(working_overrides);
+                }
+            }
+        }
+
+        if appearance_changed {
+            if terminal {
+                self.terminal_active_theme_pack_id = None;
+                self.activate_terminal_surface_style();
+            } else {
+                self.clear_desktop_theme_pack_selection();
+                self.activate_desktop_surface_style();
+            }
+        }
+
+        let has_overrides = if terminal {
+            self.terminal_color_overrides.is_some()
+        } else {
+            self.desktop_color_overrides.is_some()
+        };
+        if has_overrides {
+            ui.add_space(8.0);
+            if ui.button("Export Theme...").clicked() {
+                self.export_full_color_theme(terminal);
+            }
+        }
+
+        appearance_changed
+    }
+
+    fn draw_layout_override_controls(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        if ui
+            .button(if self.tweaks_layout_overrides_open {
+                "[-] Layout Overrides"
+            } else {
+                "[+] Layout Overrides"
+            })
+            .clicked()
+        {
+            self.tweaks_layout_overrides_open = !self.tweaks_layout_overrides_open;
+        }
+        if !self.tweaks_layout_overrides_open {
+            return false;
+        }
+
+        ui.add_space(8.0);
+        ui.small(
+            "Changing these values detaches the desktop surface from the selected theme pack and shows it as Custom.",
+        );
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Top");
+            egui::ComboBox::from_id_salt("layout_top_panel")
+                .selected_text(panel_type_label(self.desktop_active_layout.top_panel))
+                .show_ui(ui, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    for panel_type in [PanelType::MenuBar, PanelType::Taskbar, PanelType::Disabled]
+                    {
+                        if Self::retro_choice_button(
+                            ui,
+                            panel_type_label(panel_type),
+                            self.desktop_active_layout.top_panel == panel_type,
+                        )
+                        .clicked()
+                        {
+                            self.desktop_active_layout.top_panel = panel_type;
+                            self.clear_desktop_theme_pack_selection();
+                            changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label("Bottom");
+            egui::ComboBox::from_id_salt("layout_bottom_panel")
+                .selected_text(panel_type_label(self.desktop_active_layout.bottom_panel))
+                .show_ui(ui, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    for panel_type in [PanelType::Taskbar, PanelType::MenuBar, PanelType::Disabled]
+                    {
+                        if Self::retro_choice_button(
+                            ui,
+                            panel_type_label(panel_type),
+                            self.desktop_active_layout.bottom_panel == panel_type,
+                        )
+                        .clicked()
+                        {
+                            self.desktop_active_layout.bottom_panel = panel_type;
+                            self.clear_desktop_theme_pack_selection();
+                            changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label("Launcher");
+            egui::ComboBox::from_id_salt("layout_launcher_style")
+                .selected_text(launcher_style_label(
+                    self.desktop_active_layout.launcher_style,
+                ))
+                .show_ui(ui, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    for style in [
+                        LauncherStyle::StartMenu,
+                        LauncherStyle::Overlay,
+                        LauncherStyle::Hidden,
+                    ] {
+                        if Self::retro_choice_button(
+                            ui,
+                            launcher_style_label(style),
+                            self.desktop_active_layout.launcher_style == style,
+                        )
+                        .clicked()
+                        {
+                            self.desktop_active_layout.launcher_style = style;
+                            self.clear_desktop_theme_pack_selection();
+                            changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label("Window Headers");
+            egui::ComboBox::from_id_salt("layout_window_header_style")
+                .selected_text(window_header_label(
+                    self.desktop_active_layout.window_header_style,
+                ))
+                .show_ui(ui, |ui| {
+                    Self::apply_settings_control_style(ui);
+                    for style in [
+                        WindowHeaderStyle::Standard,
+                        WindowHeaderStyle::Compact,
+                        WindowHeaderStyle::Hidden,
+                    ] {
+                        if Self::retro_choice_button(
+                            ui,
+                            window_header_label(style),
+                            self.desktop_active_layout.window_header_style == style,
+                        )
+                        .clicked()
+                        {
+                            self.desktop_active_layout.window_header_style = style;
+                            self.clear_desktop_theme_pack_selection();
+                            changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+        });
+
+        changed
     }
 
     pub(super) fn draw_terminal_tweaks_screen(&mut self, ctx: &Context) {
@@ -2022,8 +2593,8 @@ impl RobcoNativeApp {
                 let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
                 let (screen, _) = RetroScreen::new(ui, layout.cols, layout.rows);
                 let painter = ui.painter_at(screen.rect);
-                screen.paint_bg(&painter, palette.bg);
-                for (idx, line) in crate::config::HEADER_LINES.iter().enumerate() {
+                screen.paint_terminal_background(&painter, &palette);
+                for (idx, line) in self.active_terminal_header_lines().iter().enumerate() {
                     screen.centered_text(
                         &painter,
                         layout.header_start_row + idx,
@@ -2032,15 +2603,32 @@ impl RobcoNativeApp {
                         true,
                     );
                 }
-                screen.separator(&painter, layout.separator_top_row, &palette);
-                screen.centered_text(&painter, layout.title_row, "Tweaks", palette.fg, true);
-                screen.separator(&painter, layout.separator_bottom_row, &palette);
-                screen.underlined_text(
+                screen.themed_separator(
+                    &painter,
+                    layout.separator_top_row,
+                    &palette,
+                    &self.terminal_decoration,
+                );
+                screen.themed_title(
+                    &painter,
+                    layout.title_row,
+                    "Tweaks",
+                    &palette,
+                    &self.terminal_decoration,
+                );
+                screen.themed_separator(
+                    &painter,
+                    layout.separator_bottom_row,
+                    &palette,
+                    &self.terminal_decoration,
+                );
+                screen.themed_subtitle(
                     &painter,
                     layout.content_col,
                     layout.subtitle_row,
-                    "Surface dropdown with collapsible Desktop and Terminal menus",
-                    palette.fg,
+                    "Wallpaper, Theme, Effects, and Display settings",
+                    &palette,
+                    &self.terminal_decoration,
                 );
 
                 let help_row = layout.status_row.saturating_sub(1);
@@ -2195,8 +2783,11 @@ impl RobcoNativeApp {
                 .max_height(body_max_height)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        for (i, label) in ["Desktop", "Terminal"].iter().enumerate() {
-                            let active = self.tweaks_surface_tab == i as u8;
+                        for (i, label) in ["Wallpaper", "Theme", "Effects", "Display"]
+                            .iter()
+                            .enumerate()
+                        {
+                            let active = self.tweaks_tab == i as u8;
                             let color = if active {
                                 palette.selected_fg
                             } else {
@@ -2215,69 +2806,41 @@ impl RobcoNativeApp {
                                 }),
                             );
                             if btn.clicked() {
-                                self.tweaks_surface_tab = i as u8;
+                                self.tweaks_tab = i as u8;
                             }
                         }
                     });
                     ui.add_space(10.0);
                     Self::retro_separator(ui);
                     ui.add_space(8.0);
-                    match self.tweaks_surface_tab {
+                    match self.tweaks_tab {
                         0 => {
-                            ui.horizontal(|ui| {
-                                for (i, label) in
-                                    ["Background", "Display", "Colors", "Icons", "Layout"]
-                                        .iter()
-                                        .enumerate()
-                                {
-                                    let active = self.desktop_tweaks_tab == i as u8;
-                                    let color = if active {
-                                        palette.selected_fg
-                                    } else {
-                                        palette.fg
-                                    };
-                                    let btn = ui.add(
-                                        egui::Button::new(
-                                            RichText::new(*label).color(color).strong(),
-                                        )
-                                        .stroke(egui::Stroke::new(
-                                            if active { 2.0 } else { 1.0 },
-                                            palette.fg,
-                                        ))
-                                        .fill(if active {
-                                            palette.selected_bg
-                                        } else {
-                                            palette.panel
-                                        }),
-                                    );
-                                    if btn.clicked() {
-                                        self.desktop_tweaks_tab = i as u8;
-                                    }
-                                }
-                            });
-                            ui.add_space(10.0);
-                            Self::retro_separator(ui);
-                            ui.add_space(8.0);
-                            match self.desktop_tweaks_tab {
+                            Self::draw_surface_sub_tabs(
+                                ui,
+                                &mut self.tweaks_wallpaper_surface,
+                                &palette,
+                            );
+                            match self.tweaks_wallpaper_surface {
                                 0 => {
-                                    Self::settings_section(ui, "Wallpaper", |ui| {
+                                    Self::settings_section(ui, "Desktop Wallpaper", |ui| {
                                         ui.label("Wallpaper Path");
                                         ui.horizontal(|ui| {
-                                            let w =
-                                                Self::responsive_input_width(ui, 0.72, 160.0, 400.0);
+                                            let width = Self::responsive_input_width(
+                                                ui, 0.72, 160.0, 400.0,
+                                            );
                                             if ui
                                                 .add(
                                                     TextEdit::singleline(
                                                         &mut self.settings.draft.desktop_wallpaper,
                                                     )
-                                                    .desired_width(w)
+                                                    .desired_width(width)
                                                     .hint_text("/path/to/image.png"),
                                                 )
                                                 .changed()
                                             {
                                                 persist_changed = true;
                                             }
-                                            if ui.button("Browse…").clicked() {
+                                            if ui.button("Browse...").clicked() {
                                                 let start = wallpaper_browser_start_dir(
                                                     &self.settings.draft.desktop_wallpaper,
                                                 );
@@ -2288,17 +2851,9 @@ impl RobcoNativeApp {
                                         ui.add_space(8.0);
                                         ui.horizontal(|ui| {
                                             ui.label("Wallpaper Mode");
-                                            let selected = match self
-                                                .settings
-                                                .draft
-                                                .desktop_wallpaper_size_mode
-                                            {
-                                                WallpaperSizeMode::DefaultSize => "Default Size",
-                                                WallpaperSizeMode::FitToScreen => "Fit To Screen",
-                                                WallpaperSizeMode::Centered => "Centered",
-                                                WallpaperSizeMode::Tile => "Tile",
-                                                WallpaperSizeMode::Stretch => "Stretch",
-                                            };
+                                            let selected = wallpaper_size_mode_label(
+                                                self.settings.draft.desktop_wallpaper_size_mode,
+                                            );
                                             egui::ComboBox::from_id_salt(
                                                 "native_settings_wallpaper_mode",
                                             )
@@ -2342,90 +2897,123 @@ impl RobcoNativeApp {
                                         });
                                     });
                                 }
-                                1 => {
-                                    Self::settings_section(ui, "Window", |ui| {
-                                        ui.label("Window Mode");
-                                        ui.horizontal_wrapped(|ui| {
-                                            for mode in [
-                                                NativeStartupWindowMode::Windowed,
-                                                NativeStartupWindowMode::Maximized,
-                                                NativeStartupWindowMode::BorderlessFullscreen,
-                                                NativeStartupWindowMode::Fullscreen,
-                                            ] {
-                                                if Self::retro_choice_button(
-                                                    ui,
-                                                    mode.label(),
-                                                    self.settings.draft.native_startup_window_mode
-                                                        == mode,
+                                _ => {
+                                    Self::settings_section(ui, "Terminal Wallpaper", |ui| {
+                                        ui.label("Wallpaper Path");
+                                        ui.horizontal(|ui| {
+                                            let width = Self::responsive_input_width(
+                                                ui, 0.72, 160.0, 400.0,
+                                            );
+                                            if ui
+                                                .add(
+                                                    TextEdit::singleline(
+                                                        &mut self.settings.draft.terminal_wallpaper,
+                                                    )
+                                                    .desired_width(width)
+                                                    .hint_text("/path/to/image.png"),
                                                 )
-                                                .clicked()
-                                                    && self.settings.draft.native_startup_window_mode
-                                                        != mode
-                                                {
-                                                    self.settings.draft.native_startup_window_mode =
-                                                        mode;
-                                                    persist_changed = true;
-                                                    window_mode_changed = true;
-                                                }
+                                                .changed()
+                                            {
+                                                persist_changed = true;
+                                            }
+                                            if ui.button("Browse...").clicked() {
+                                                let start = wallpaper_browser_start_dir(
+                                                    &self.settings.draft.terminal_wallpaper,
+                                                );
+                                                self.picking_terminal_wallpaper = true;
+                                                self.open_embedded_file_manager_at(start);
                                             }
                                         });
                                         ui.add_space(8.0);
-                                        ui.small(
-                                            "Applies immediately and persists across launches. Windowed is the safest mode on older GPUs.",
-                                        );
-                                    });
-                                    ui.add_space(10.0);
-                                    persist_changed |= self.draw_settings_display_effects_panel(ui);
-                                }
-                                2 => {
-                                    Self::settings_section(ui, "Desktop Theme Pack", |ui| {
-                                        egui::ComboBox::from_id_salt(
-                                            "native_desktop_theme_pack",
-                                        )
-                                        .selected_text(
-                                            RichText::new(selected_theme_pack_name(
-                                                self.desktop_active_theme_pack_id.as_deref(),
-                                                &theme_packs,
-                                            ))
-                                            .color(palette.fg),
-                                        )
-                                        .show_ui(ui, |ui| {
-                                            Self::apply_settings_control_style(ui);
-                                            if Self::retro_choice_button(
-                                                ui,
-                                                "Manual",
-                                                self.desktop_active_theme_pack_id.is_none(),
+                                        ui.horizontal(|ui| {
+                                            ui.label("Wallpaper Mode");
+                                            let selected = wallpaper_size_mode_label(
+                                                self.settings.draft.terminal_wallpaper_size_mode,
+                                            );
+                                            egui::ComboBox::from_id_salt(
+                                                "native_settings_terminal_wallpaper_mode",
                                             )
-                                            .clicked()
-                                            {
-                                                self.desktop_active_theme_pack_id = None;
-                                                appearance_changed = true;
-                                                ui.close_menu();
-                                            }
-                                            for theme in &theme_packs {
-                                                let selected = self
-                                                    .desktop_active_theme_pack_id
-                                                    .as_deref()
-                                                    == Some(theme.id.as_str());
-                                                if Self::retro_choice_button(
-                                                    ui,
-                                                    &theme.name,
-                                                    selected,
-                                                )
-                                                .clicked()
-                                                {
-                                                    self.desktop_active_theme_pack_id =
-                                                        Some(theme.id.clone());
-                                                    self.desktop_active_color_style =
-                                                        theme.color_style.clone();
-                                                    self.desktop_active_layout =
-                                                        theme.layout_profile.clone();
-                                                    desktop_runtime_changed = true;
-                                                    appearance_changed = true;
-                                                    ui.close_menu();
+                                            .selected_text(
+                                                RichText::new(selected).color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                for (mode, label) in [
+                                                    (
+                                                        WallpaperSizeMode::DefaultSize,
+                                                        "Default Size",
+                                                    ),
+                                                    (
+                                                        WallpaperSizeMode::FitToScreen,
+                                                        "Fit To Screen",
+                                                    ),
+                                                    (WallpaperSizeMode::Centered, "Centered"),
+                                                    (WallpaperSizeMode::Tile, "Tile"),
+                                                    (WallpaperSizeMode::Stretch, "Stretch"),
+                                                ] {
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        label,
+                                                        self.settings
+                                                            .draft
+                                                            .terminal_wallpaper_size_mode
+                                                            == mode,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        self.settings.draft
+                                                            .terminal_wallpaper_size_mode = mode;
+                                                        persist_changed = true;
+                                                        ui.close_menu();
+                                                    }
                                                 }
-                                            }
+                                            });
                                         });
+                                    });
+                                }
+                            }
+                        }
+                        1 => {
+                            Self::draw_surface_sub_tabs(
+                                ui,
+                                &mut self.tweaks_theme_surface,
+                                &palette,
+                            );
+                            match self.tweaks_theme_surface {
+                                0 => {
+                                    Self::settings_section(ui, "Theme Pack", |ui| {
+                                        egui::ComboBox::from_id_salt("native_desktop_theme_pack")
+                                            .selected_text(
+                                                RichText::new(selected_theme_pack_name(
+                                                    self.desktop_active_theme_pack_id.as_deref(),
+                                                    &theme_packs,
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                for theme in &theme_packs {
+                                                    let selected = self
+                                                        .desktop_active_theme_pack_id
+                                                        .as_deref()
+                                                        == Some(theme.id.as_str());
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &theme.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self
+                                                            .apply_desktop_theme_pack_selection(theme)
+                                                        {
+                                                            desktop_runtime_changed = true;
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
                                     });
                                     ui.add_space(10.0);
                                     Self::settings_section(ui, "Color Mode", |ui| {
@@ -2442,18 +3030,15 @@ impl RobcoNativeApp {
                                             .clicked()
                                                 && !desktop_is_monochrome
                                             {
-                                                self.desktop_active_color_style =
+                                                if self.set_desktop_color_style_selection(
                                                     ColorStyle::Monochrome {
                                                         preset: MonochromePreset::Green,
                                                         custom_rgb: None,
-                                                    };
-                                                self.desktop_active_theme_pack_id = None;
-                                                desktop_runtime_changed = true;
-                                                appearance_changed = true;
-                                                set_active_color_style(
-                                                    ShellSurfaceKind::Desktop,
-                                                    self.desktop_active_color_style.clone(),
-                                                );
+                                                    },
+                                                ) {
+                                                    desktop_runtime_changed = true;
+                                                    appearance_changed = true;
+                                                }
                                             }
                                             if Self::retro_choice_button(
                                                 ui,
@@ -2463,17 +3048,12 @@ impl RobcoNativeApp {
                                             .clicked()
                                                 && desktop_is_monochrome
                                             {
-                                                self.desktop_active_color_style =
-                                                    ColorStyle::FullColor {
-                                                        theme_id: "nucleon-dark".to_string(),
-                                                    };
-                                                self.desktop_active_theme_pack_id = None;
-                                                desktop_runtime_changed = true;
-                                                appearance_changed = true;
-                                                set_active_color_style(
-                                                    ShellSurfaceKind::Desktop,
-                                                    self.desktop_active_color_style.clone(),
-                                                );
+                                                if self.set_desktop_full_color_theme(
+                                                    "nucleon-dark",
+                                                ) {
+                                                    desktop_runtime_changed = true;
+                                                    appearance_changed = true;
+                                                }
                                             }
                                         });
                                     });
@@ -2482,189 +3062,138 @@ impl RobcoNativeApp {
                                         self.desktop_active_color_style,
                                         ColorStyle::Monochrome { .. }
                                     ) {
-                                        Self::settings_section(
-                                            ui,
-                                            "Desktop Monochrome Theme",
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label("Theme");
-                                                    let mut current_idx =
-                                                        MONOCHROME_THEME_NAMES
-                                                            .iter()
-                                                            .position(|name| {
-                                                                *name
-                                                                    == monochrome_theme_name_for_color_style(
-                                                                        &self.desktop_active_color_style,
-                                                                    )
-                                                            })
-                                                            .unwrap_or(0);
-                                                    egui::ComboBox::from_id_salt(
-                                                        "native_desktop_theme",
-                                                    )
-                                                    .selected_text(
-                                                        RichText::new(
-                                                            MONOCHROME_THEME_NAMES[current_idx],
-                                                        )
-                                                        .color(palette.fg),
-                                                    )
-                                                    .show_ui(ui, |ui| {
-                                                        Self::apply_settings_control_style(ui);
-                                                        for (idx, name) in
-                                                            MONOCHROME_THEME_NAMES
-                                                                .iter()
-                                                                .enumerate()
-                                                        {
-                                                            if Self::retro_choice_button(
-                                                                ui,
-                                                                *name,
-                                                                current_idx == idx,
+                                        Self::settings_section(ui, "Monochrome Theme", |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Theme");
+                                                let mut current_idx = MONOCHROME_THEME_NAMES
+                                                    .iter()
+                                                    .position(|name| {
+                                                        *name
+                                                            == monochrome_theme_name_for_color_style(
+                                                                &self.desktop_active_color_style,
                                                             )
-                                                            .clicked()
-                                                            {
-                                                                current_idx = idx;
-                                                                self.desktop_active_color_style =
-                                                                    color_style_from_theme_name(
-                                                                        name,
-                                                                        custom_rgb_for_color_style(
-                                                                            &self.desktop_active_color_style,
-                                                                        ),
-                                                                    );
-                                                                self.desktop_active_theme_pack_id =
-                                                                    None;
+                                                    })
+                                                    .unwrap_or(0);
+                                                egui::ComboBox::from_id_salt(
+                                                    "native_desktop_theme",
+                                                )
+                                                .selected_text(
+                                                    RichText::new(
+                                                        MONOCHROME_THEME_NAMES[current_idx],
+                                                    )
+                                                    .color(palette.fg),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    Self::apply_settings_control_style(ui);
+                                                    for (idx, name) in
+                                                        MONOCHROME_THEME_NAMES.iter().enumerate()
+                                                    {
+                                                        if Self::retro_choice_button(
+                                                            ui,
+                                                            *name,
+                                                            current_idx == idx,
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            current_idx = idx;
+                                                            if self.set_desktop_color_style_selection(
+                                                                color_style_from_theme_name(
+                                                                    name,
+                                                                    custom_rgb_for_color_style(
+                                                                        &self.desktop_active_color_style,
+                                                                    ),
+                                                                ),
+                                                            ) {
                                                                 desktop_runtime_changed = true;
                                                                 appearance_changed = true;
-                                                                set_active_color_style(
-                                                                    ShellSurfaceKind::Desktop,
-                                                                    self.desktop_active_color_style
-                                                                        .clone(),
-                                                                );
-                                                                ui.close_menu();
                                                             }
+                                                            ui.close_menu();
                                                         }
-                                                    });
+                                                    }
                                                 });
-                                                if monochrome_theme_name_for_color_style(
+                                            });
+                                            if monochrome_theme_name_for_color_style(
+                                                &self.desktop_active_color_style,
+                                            ) == CUSTOM_THEME_NAME
+                                            {
+                                                let mut rgb = custom_rgb_for_color_style(
                                                     &self.desktop_active_color_style,
-                                                ) == CUSTOM_THEME_NAME
-                                                {
-                                                    let mut rgb = custom_rgb_for_color_style(
-                                                        &self.desktop_active_color_style,
-                                                    );
-                                                    let preview_color =
-                                                        egui::Color32::from_rgb(
-                                                            rgb[0], rgb[1], rgb[2],
-                                                        );
-                                                    ui.visuals_mut().selection.bg_fill =
-                                                        preview_color;
-                                                    ui.visuals_mut()
-                                                        .widgets
-                                                        .inactive
-                                                        .bg_fill = palette.dim;
-                                                    let mut changed_rgb = false;
-                                                    changed_rgb |= ui
-                                                        .add(
-                                                            egui::Slider::new(
-                                                                &mut rgb[0],
-                                                                0..=255,
-                                                            )
+                                                );
+                                                let preview_color = egui::Color32::from_rgb(
+                                                    rgb[0], rgb[1], rgb[2],
+                                                );
+                                                ui.visuals_mut().selection.bg_fill = preview_color;
+                                                ui.visuals_mut().widgets.inactive.bg_fill =
+                                                    palette.dim;
+                                                let mut changed_rgb = false;
+                                                changed_rgb |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[0], 0..=255)
                                                             .text("Red"),
-                                                        )
-                                                        .changed();
-                                                    changed_rgb |= ui
-                                                        .add(
-                                                            egui::Slider::new(
-                                                                &mut rgb[1],
-                                                                0..=255,
-                                                            )
+                                                    )
+                                                    .changed();
+                                                changed_rgb |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[1], 0..=255)
                                                             .text("Green"),
-                                                        )
-                                                        .changed();
-                                                    changed_rgb |= ui
-                                                        .add(
-                                                            egui::Slider::new(
-                                                                &mut rgb[2],
-                                                                0..=255,
-                                                            )
+                                                    )
+                                                    .changed();
+                                                changed_rgb |= ui
+                                                    .add(
+                                                        egui::Slider::new(&mut rgb[2], 0..=255)
                                                             .text("Blue"),
-                                                        )
-                                                        .changed();
-                                                    if changed_rgb {
-                                                        self.desktop_active_color_style =
-                                                            ColorStyle::Monochrome {
-                                                                preset:
-                                                                    MonochromePreset::Custom,
-                                                                custom_rgb: Some(rgb),
-                                                            };
-                                                        self.desktop_active_theme_pack_id = None;
-                                                        desktop_runtime_changed = true;
-                                                        appearance_changed = true;
-                                                        set_active_color_style(
-                                                            ShellSurfaceKind::Desktop,
-                                                            self.desktop_active_color_style
-                                                                .clone(),
-                                                        );
-                                                    }
+                                                    )
+                                                    .changed();
+                                                if changed_rgb
+                                                    && self.set_desktop_monochrome_custom_rgb(rgb)
+                                                {
+                                                    desktop_runtime_changed = true;
+                                                    appearance_changed = true;
                                                 }
-                                            },
-                                        );
+                                            }
+                                        });
                                     } else {
-                                        Self::settings_section(
-                                            ui,
-                                            "Desktop Full Color Theme",
-                                            |ui| {
-                                                let selected_theme_id =
-                                                    full_color_theme_id_for_color_style(
-                                                        &self.desktop_active_color_style,
-                                                    )
-                                                    .to_string();
-                                                for theme in FullColorTheme::builtin_themes() {
-                                                    let selected =
-                                                        selected_theme_id == theme.id.as_str();
-                                                    let label = match theme.id.as_str() {
-                                                        "nucleon-dark" => {
-                                                            "Nucleon Dark - Dark background, teal accents"
-                                                        }
-                                                        "nucleon-light" => {
-                                                            "Nucleon Light - Light background, slate blue accents"
-                                                        }
-                                                        _ => theme.name.as_str(),
-                                                    };
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        label,
-                                                        selected,
-                                                    )
+                                        Self::settings_section(ui, "Full Color Theme", |ui| {
+                                            let selected_theme_id = full_color_theme_id_for_color_style(
+                                                &self.desktop_active_color_style,
+                                            )
+                                            .to_string();
+                                            for theme in FullColorTheme::builtin_themes() {
+                                                let selected =
+                                                    selected_theme_id == theme.id.as_str();
+                                                let label = match theme.id.as_str() {
+                                                    "nucleon-dark" => {
+                                                        "Nucleon Dark - Dark background, teal accents"
+                                                    }
+                                                    "nucleon-light" => {
+                                                        "Nucleon Light - Light background, slate blue accents"
+                                                    }
+                                                    _ => theme.name.as_str(),
+                                                };
+                                                if Self::retro_choice_button(ui, label, selected)
                                                     .clicked()
+                                                {
+                                                    if self.set_desktop_full_color_theme(&theme.id)
                                                     {
-                                                        self.desktop_active_color_style =
-                                                            ColorStyle::FullColor {
-                                                                theme_id: theme.id.clone(),
-                                                            };
-                                                        self.desktop_active_theme_pack_id = None;
                                                         desktop_runtime_changed = true;
                                                         appearance_changed = true;
-                                                        set_active_color_style(
-                                                            ShellSurfaceKind::Desktop,
-                                                            self.desktop_active_color_style
-                                                                .clone(),
-                                                        );
                                                     }
                                                 }
-                                            },
-                                        );
+                                            }
+                                            if self.draw_full_color_customization_controls(ui, false)
+                                            {
+                                                desktop_runtime_changed = true;
+                                                appearance_changed = true;
+                                            }
+                                        });
                                     }
-                                }
-                                3 => {
-                                    Self::settings_section(ui, "Desktop Icons", |ui| {
+                                    ui.add_space(10.0);
+                                    Self::settings_section(ui, "Icons", |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label("Icon Style");
-                                            let selected = match self.settings.draft.desktop_icon_style
-                                            {
-                                                DesktopIconStyle::Dos => "DOS",
-                                                DesktopIconStyle::Win95 => "Win95",
-                                                DesktopIconStyle::Minimal => "Minimal",
-                                                DesktopIconStyle::NoIcons => "No Icons",
-                                            };
+                                            let selected = desktop_icon_style_label(
+                                                self.settings.draft.desktop_icon_style,
+                                            );
                                             egui::ComboBox::from_id_salt(
                                                 "native_settings_desktop_icons",
                                             )
@@ -2725,7 +3254,51 @@ impl RobcoNativeApp {
                                                 persist_changed = true;
                                             }
                                         }
-                                        ui.add_space(8.0);
+                                    });
+                                    ui.add_space(10.0);
+                                    Self::settings_section(ui, "Cursors", |ui| {
+                                        let cursor_theme_options =
+                                            desktop_cursor_theme_options(&theme_packs);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Cursor Theme");
+                                            egui::ComboBox::from_id_salt(
+                                                "native_settings_desktop_cursor_theme",
+                                            )
+                                            .selected_text(
+                                                RichText::new(desktop_cursor_theme_selection_label(
+                                                    &self.desktop_active_cursor_theme_selection,
+                                                    self.desktop_active_theme_pack_id.as_deref(),
+                                                    &theme_packs,
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                for selection in &cursor_theme_options {
+                                                    let label = desktop_cursor_theme_selection_label(
+                                                        selection,
+                                                        self.desktop_active_theme_pack_id.as_deref(),
+                                                        &theme_packs,
+                                                    );
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &label,
+                                                        self.desktop_active_cursor_theme_selection
+                                                            == *selection,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self.set_desktop_cursor_theme_selection(
+                                                            selection.clone(),
+                                                        ) {
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(6.0);
                                         if Self::retro_checkbox_row(
                                             ui,
                                             &mut self.settings.draft.desktop_show_cursor,
@@ -2744,131 +3317,56 @@ impl RobcoNativeApp {
                                                 persist_changed |= ui
                                                     .add(
                                                         egui::Slider::new(
-                                                            &mut self
-                                                                .settings
-                                                                .draft
-                                                                .desktop_cursor_scale,
+                                                            &mut self.settings.draft.desktop_cursor_scale,
                                                             0.5..=2.5,
                                                         )
-                                                        .text("Cursor Size"),
+                                                        .text("Cursor Scale"),
                                                     )
                                                     .changed();
                                             });
                                         }
                                     });
-                                }
-                                _ => {
-                                    Self::settings_section(ui, "Desktop Layout", |ui| {
-                                        for profile in LayoutProfile::builtin_layouts() {
-                                            let selected =
-                                                self.desktop_active_layout.id == profile.id;
-                                            let description = match profile.id.as_str() {
-                                                "classic" => {
-                                                    "Classic - Panel at top, taskbar at bottom"
-                                                }
-                                                "minimal" => {
-                                                    "Minimal - Panel at bottom, no taskbar"
-                                                }
-                                                _ => profile.name.as_str(),
-                                            };
-                                            if Self::retro_choice_button(
-                                                ui,
-                                                description,
-                                                selected,
-                                            )
-                                            .clicked()
-                                            {
-                                                self.desktop_active_layout = profile;
-                                                self.desktop_active_theme_pack_id = None;
-                                                desktop_runtime_changed = true;
-                                                appearance_changed = true;
-                                            }
+                                    ui.add_space(10.0);
+                                    Self::settings_section(ui, "Layout Overrides", |ui| {
+                                        if self.draw_layout_override_controls(ui) {
+                                            desktop_runtime_changed = true;
+                                            appearance_changed = true;
                                         }
                                     });
                                 }
-                            }
-                        }
-                        _ => {
-                            ui.horizontal(|ui| {
-                                for (i, label) in ["Colors", "Layout", "Terminal"]
-                                    .iter()
-                                    .enumerate()
-                                {
-                                    let active = self.terminal_tweaks_tab == i as u8;
-                                    let color = if active {
-                                        palette.selected_fg
-                                    } else {
-                                        palette.fg
-                                    };
-                                    let btn = ui.add(
-                                        egui::Button::new(
-                                            RichText::new(*label).color(color).strong(),
-                                        )
-                                        .stroke(egui::Stroke::new(
-                                            if active { 2.0 } else { 1.0 },
-                                            palette.fg,
-                                        ))
-                                        .fill(if active {
-                                            palette.selected_bg
-                                        } else {
-                                            palette.panel
-                                        }),
-                                    );
-                                    if btn.clicked() {
-                                        self.terminal_tweaks_tab = i as u8;
-                                    }
-                                }
-                            });
-                            ui.add_space(10.0);
-                            Self::retro_separator(ui);
-                            ui.add_space(8.0);
-                            match self.terminal_tweaks_tab {
-                                0 => {
+                                _ => {
                                     Self::settings_section(ui, "Terminal Theme Pack", |ui| {
-                                        egui::ComboBox::from_id_salt(
-                                            "native_terminal_theme_pack",
-                                        )
-                                        .selected_text(
-                                            RichText::new(selected_theme_pack_name(
-                                                self.terminal_active_theme_pack_id.as_deref(),
-                                                &theme_packs,
-                                            ))
-                                            .color(palette.fg),
-                                        )
-                                        .show_ui(ui, |ui| {
-                                            Self::apply_settings_control_style(ui);
-                                            if Self::retro_choice_button(
-                                                ui,
-                                                "Manual",
-                                                self.terminal_active_theme_pack_id.is_none(),
+                                        egui::ComboBox::from_id_salt("native_terminal_theme_pack")
+                                            .selected_text(
+                                                RichText::new(selected_theme_pack_name(
+                                                    self.terminal_active_theme_pack_id.as_deref(),
+                                                    &theme_packs,
+                                                ))
+                                                .color(palette.fg),
                                             )
-                                            .clicked()
-                                            {
-                                                self.terminal_active_theme_pack_id = None;
-                                                appearance_changed = true;
-                                                ui.close_menu();
-                                            }
-                                            for theme in &theme_packs {
-                                                let selected = self
-                                                    .terminal_active_theme_pack_id
-                                                    .as_deref()
-                                                    == Some(theme.id.as_str());
-                                                if Self::retro_choice_button(
-                                                    ui,
-                                                    &theme.name,
-                                                    selected,
-                                                )
-                                                .clicked()
-                                                {
-                                                    self.terminal_active_theme_pack_id =
-                                                        Some(theme.id.clone());
-                                                    self.terminal_active_color_style =
-                                                        theme.color_style.clone();
-                                                    appearance_changed = true;
-                                                    ui.close_menu();
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                for theme in &theme_packs {
+                                                    let selected = self
+                                                        .terminal_active_theme_pack_id
+                                                        .as_deref()
+                                                        == Some(theme.id.as_str());
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &theme.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self
+                                                            .apply_terminal_theme_pack_selection(theme)
+                                                        {
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
                                                 }
-                                            }
-                                        });
+                                            });
                                     });
                                     ui.add_space(10.0);
                                     Self::settings_section(ui, "Color Mode", |ui| {
@@ -2885,17 +3383,14 @@ impl RobcoNativeApp {
                                             .clicked()
                                                 && !terminal_is_monochrome
                                             {
-                                                self.terminal_active_color_style =
+                                                if self.set_terminal_color_style_selection(
                                                     ColorStyle::Monochrome {
                                                         preset: MonochromePreset::Green,
                                                         custom_rgb: None,
-                                                    };
-                                                self.terminal_active_theme_pack_id = None;
-                                                appearance_changed = true;
-                                                set_active_color_style(
-                                                    ShellSurfaceKind::Terminal,
-                                                    self.terminal_active_color_style.clone(),
-                                                );
+                                                    },
+                                                ) {
+                                                    appearance_changed = true;
+                                                }
                                             }
                                             if Self::retro_choice_button(
                                                 ui,
@@ -2905,16 +3400,11 @@ impl RobcoNativeApp {
                                             .clicked()
                                                 && terminal_is_monochrome
                                             {
-                                                self.terminal_active_color_style =
-                                                    ColorStyle::FullColor {
-                                                        theme_id: "nucleon-dark".to_string(),
-                                                    };
-                                                self.terminal_active_theme_pack_id = None;
-                                                appearance_changed = true;
-                                                set_active_color_style(
-                                                    ShellSurfaceKind::Terminal,
-                                                    self.terminal_active_color_style.clone(),
-                                                );
+                                                if self.set_terminal_full_color_theme(
+                                                    "nucleon-dark",
+                                                ) {
+                                                    appearance_changed = true;
+                                                }
                                             }
                                         });
                                     });
@@ -2929,16 +3419,14 @@ impl RobcoNativeApp {
                                             |ui| {
                                                 ui.horizontal(|ui| {
                                                     ui.label("Theme");
-                                                    let mut current_idx =
-                                                        MONOCHROME_THEME_NAMES
-                                                            .iter()
-                                                            .position(|name| {
-                                                                *name
-                                                                    == monochrome_theme_name_for_color_style(
-                                                                        &self.terminal_active_color_style,
-                                                                    )
-                                                            })
-                                                            .unwrap_or(0);
+                                                    let mut current_idx = MONOCHROME_THEME_NAMES
+                                                        .iter()
+                                                        .position(|name| {
+                                                            *name == monochrome_theme_name_for_color_style(
+                                                                &self.terminal_active_color_style,
+                                                            )
+                                                        })
+                                                        .unwrap_or(0);
                                                     egui::ComboBox::from_id_salt(
                                                         "native_terminal_theme",
                                                     )
@@ -2963,21 +3451,16 @@ impl RobcoNativeApp {
                                                             .clicked()
                                                             {
                                                                 current_idx = idx;
-                                                                self.terminal_active_color_style =
+                                                                if self.set_terminal_color_style_selection(
                                                                     color_style_from_theme_name(
                                                                         name,
                                                                         custom_rgb_for_color_style(
                                                                             &self.terminal_active_color_style,
                                                                         ),
-                                                                    );
-                                                                self.terminal_active_theme_pack_id =
-                                                                    None;
-                                                                appearance_changed = true;
-                                                                set_active_color_style(
-                                                                    ShellSurfaceKind::Terminal,
-                                                                    self.terminal_active_color_style
-                                                                        .clone(),
-                                                                );
+                                                                    ),
+                                                                ) {
+                                                                    appearance_changed = true;
+                                                                }
                                                                 ui.close_menu();
                                                             }
                                                         }
@@ -2990,16 +3473,13 @@ impl RobcoNativeApp {
                                                     let mut rgb = custom_rgb_for_color_style(
                                                         &self.terminal_active_color_style,
                                                     );
-                                                    let preview_color =
-                                                        egui::Color32::from_rgb(
-                                                            rgb[0], rgb[1], rgb[2],
-                                                        );
+                                                    let preview_color = egui::Color32::from_rgb(
+                                                        rgb[0], rgb[1], rgb[2],
+                                                    );
                                                     ui.visuals_mut().selection.bg_fill =
                                                         preview_color;
-                                                    ui.visuals_mut()
-                                                        .widgets
-                                                        .inactive
-                                                        .bg_fill = palette.dim;
+                                                    ui.visuals_mut().widgets.inactive.bg_fill =
+                                                        palette.dim;
                                                     let mut changed_rgb = false;
                                                     changed_rgb |= ui
                                                         .add(
@@ -3028,20 +3508,11 @@ impl RobcoNativeApp {
                                                             .text("Blue"),
                                                         )
                                                         .changed();
-                                                    if changed_rgb {
-                                                        self.terminal_active_color_style =
-                                                            ColorStyle::Monochrome {
-                                                                preset:
-                                                                    MonochromePreset::Custom,
-                                                                custom_rgb: Some(rgb),
-                                                            };
-                                                        self.terminal_active_theme_pack_id = None;
+                                                    if changed_rgb
+                                                        && self
+                                                            .set_terminal_monochrome_custom_rgb(rgb)
+                                                    {
                                                         appearance_changed = true;
-                                                        set_active_color_style(
-                                                            ShellSurfaceKind::Terminal,
-                                                            self.terminal_active_color_style
-                                                                .clone(),
-                                                        );
                                                     }
                                                 }
                                             },
@@ -3069,30 +3540,25 @@ impl RobcoNativeApp {
                                                         _ => theme.name.as_str(),
                                                     };
                                                     if Self::retro_choice_button(
-                                                        ui,
-                                                        label,
-                                                        selected,
+                                                        ui, label, selected,
                                                     )
                                                     .clicked()
                                                     {
-                                                        self.terminal_active_color_style =
-                                                            ColorStyle::FullColor {
-                                                                theme_id: theme.id.clone(),
-                                                            };
-                                                        self.terminal_active_theme_pack_id = None;
-                                                        appearance_changed = true;
-                                                        set_active_color_style(
-                                                            ShellSurfaceKind::Terminal,
-                                                            self.terminal_active_color_style
-                                                                .clone(),
-                                                        );
+                                                        if self.set_terminal_full_color_theme(
+                                                            &theme.id,
+                                                        ) {
+                                                            appearance_changed = true;
+                                                        }
                                                     }
+                                                }
+                                                if self.draw_full_color_customization_controls(ui, true)
+                                                {
+                                                    appearance_changed = true;
                                                 }
                                             },
                                         );
                                     }
-                                }
-                                1 => {
+                                    ui.add_space(10.0);
                                     Self::settings_section(ui, "Terminal Layout", |ui| {
                                         for profile in TerminalLayoutProfile::builtin_layouts() {
                                             let selected =
@@ -3119,79 +3585,106 @@ impl RobcoNativeApp {
                                         }
                                     });
                                 }
-                                _ => {
-                                    Self::settings_section(ui, "PTY Display", |ui| {
-                                        if Self::retro_checkbox_row(
+                            }
+                        }
+                        2 => {
+                            persist_changed |= self.draw_settings_display_effects_panel(ui);
+                        }
+                        _ => {
+                            Self::settings_section(ui, "Window Mode", |ui| {
+                                ui.label("Window Mode");
+                                ui.horizontal_wrapped(|ui| {
+                                    for mode in [
+                                        NativeStartupWindowMode::Windowed,
+                                        NativeStartupWindowMode::Maximized,
+                                        NativeStartupWindowMode::BorderlessFullscreen,
+                                        NativeStartupWindowMode::Fullscreen,
+                                    ] {
+                                        if Self::retro_choice_button(
                                             ui,
-                                            &mut self.settings.draft.cli_styled_render,
-                                            "Styled PTY rendering",
+                                            mode.label(),
+                                            self.settings.draft.native_startup_window_mode == mode,
                                         )
                                         .clicked()
+                                            && self.settings.draft.native_startup_window_mode != mode
                                         {
+                                            self.settings.draft.native_startup_window_mode = mode;
                                             persist_changed = true;
+                                            window_mode_changed = true;
                                         }
-                                        ui.add_space(8.0);
-                                        ui.horizontal(|ui| {
-                                            ui.label("PTY Color Mode");
-                                            let selected = match self.settings.draft.cli_color_mode
-                                            {
-                                                CliColorMode::ThemeLock => "Theme Lock",
-                                                CliColorMode::PaletteMap => "Palette-map",
-                                                CliColorMode::Color => "Color",
-                                                CliColorMode::Monochrome => "Monochrome",
-                                            };
-                                            egui::ComboBox::from_id_salt(
-                                                "native_settings_cli_color",
-                                            )
-                                            .selected_text(
-                                                RichText::new(selected).color(palette.fg),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                Self::apply_settings_control_style(ui);
-                                                for (mode, label) in [
-                                                    (CliColorMode::ThemeLock, "Theme Lock"),
-                                                    (CliColorMode::PaletteMap, "Palette-map"),
-                                                    (CliColorMode::Color, "Color"),
-                                                    (CliColorMode::Monochrome, "Monochrome"),
-                                                ] {
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        label,
-                                                        self.settings.draft.cli_color_mode == mode,
-                                                    )
-                                                    .clicked()
-                                                        && self.settings.draft.cli_color_mode
-                                                            != mode
-                                                    {
-                                                        self.settings.draft.cli_color_mode = mode;
-                                                        persist_changed = true;
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                            });
-                                        });
-                                        ui.add_space(8.0);
-                                        if ui
-                                            .button(match self.settings.draft.cli_acs_mode {
-                                                CliAcsMode::Ascii => {
-                                                    "Border Glyphs: ASCII"
-                                                }
-                                                CliAcsMode::Unicode => {
-                                                    "Border Glyphs: Unicode Smooth"
-                                                }
-                                            })
-                                            .clicked()
-                                        {
-                                            self.settings.draft.cli_acs_mode =
-                                                match self.settings.draft.cli_acs_mode {
-                                                    CliAcsMode::Ascii => CliAcsMode::Unicode,
-                                                    CliAcsMode::Unicode => CliAcsMode::Ascii,
-                                                };
-                                            persist_changed = true;
-                                        }
-                                    });
+                                    }
+                                });
+                            });
+                            ui.add_space(10.0);
+                            Self::settings_section(ui, "PTY Rendering", |ui| {
+                                if Self::retro_checkbox_row(
+                                    ui,
+                                    &mut self.settings.draft.cli_styled_render,
+                                    "Styled PTY rendering",
+                                )
+                                .clicked()
+                                {
+                                    persist_changed = true;
                                 }
-                            }
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("PTY Color Mode");
+                                    let selected =
+                                        cli_color_mode_label(self.settings.draft.cli_color_mode);
+                                    egui::ComboBox::from_id_salt("native_settings_cli_color")
+                                        .selected_text(RichText::new(selected).color(palette.fg))
+                                        .show_ui(ui, |ui| {
+                                            Self::apply_settings_control_style(ui);
+                                            for (mode, label) in [
+                                                (CliColorMode::ThemeLock, "Theme Lock"),
+                                                (CliColorMode::PaletteMap, "Palette-map"),
+                                                (CliColorMode::Color, "Color"),
+                                                (CliColorMode::Monochrome, "Monochrome"),
+                                            ] {
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    label,
+                                                    self.settings.draft.cli_color_mode == mode,
+                                                )
+                                                .clicked()
+                                                    && self.settings.draft.cli_color_mode != mode
+                                                {
+                                                    self.settings.draft.cli_color_mode = mode;
+                                                    persist_changed = true;
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+                                });
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("Border Glyphs");
+                                    let selected =
+                                        cli_acs_mode_label(self.settings.draft.cli_acs_mode);
+                                    egui::ComboBox::from_id_salt("native_settings_cli_glyphs")
+                                        .selected_text(RichText::new(selected).color(palette.fg))
+                                        .show_ui(ui, |ui| {
+                                            Self::apply_settings_control_style(ui);
+                                            for (mode, label) in [
+                                                (CliAcsMode::Ascii, "ASCII"),
+                                                (CliAcsMode::Unicode, "Unicode Smooth"),
+                                            ] {
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    label,
+                                                    self.settings.draft.cli_acs_mode == mode,
+                                                )
+                                                .clicked()
+                                                    && self.settings.draft.cli_acs_mode != mode
+                                                {
+                                                    self.settings.draft.cli_acs_mode = mode;
+                                                    persist_changed = true;
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+                                });
+                            });
                         }
                     }
                 });

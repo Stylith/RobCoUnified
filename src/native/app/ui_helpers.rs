@@ -1,9 +1,10 @@
 use super::super::desktop_app::DesktopWindow;
 use super::super::retro_ui::current_palette;
-use super::RobcoNativeApp;
+use super::{CachedIcon, RobcoNativeApp};
 use eframe::egui::{
     self, Align2, Color32, Context, FontFamily, FontId, Id, RichText, TextStyle, TextureHandle,
 };
+use std::path::Path;
 
 impl RobcoNativeApp {
     pub(super) fn load_svg_icon(
@@ -12,8 +13,8 @@ impl RobcoNativeApp {
         svg_bytes: &[u8],
         size_px: Option<u32>,
     ) -> TextureHandle {
-        let tree = usvg::Tree::from_data(svg_bytes, &usvg::Options::default())
-            .expect("invalid SVG in src/Icons");
+        let tree =
+            usvg::Tree::from_data(svg_bytes, &usvg::Options::default()).expect("invalid SVG icon");
         let natural = tree.size().to_int_size();
         let target_size = size_px.unwrap_or(natural.width().max(natural.height()));
         let scale = target_size as f32 / natural.width().max(natural.height()) as f32;
@@ -36,14 +37,107 @@ impl RobcoNativeApp {
         ctx.load_texture(id, image, egui::TextureOptions::LINEAR)
     }
 
-    pub(super) fn ensure_cached_svg_icon(
-        slot: &mut Option<TextureHandle>,
+    pub(super) fn load_svg_icon_color(
         ctx: &Context,
         id: &str,
         svg_bytes: &[u8],
         size_px: Option<u32>,
     ) -> TextureHandle {
-        slot.get_or_insert_with(|| Self::load_svg_icon(ctx, id, svg_bytes, size_px))
+        let tree =
+            usvg::Tree::from_data(svg_bytes, &usvg::Options::default()).expect("invalid SVG icon");
+        let natural = tree.size().to_int_size();
+        let target_size = size_px.unwrap_or(natural.width().max(natural.height()));
+        let scale = target_size as f32 / natural.width().max(natural.height()) as f32;
+        let width = (natural.width() as f32 * scale).round() as u32;
+        let height = (natural.height() as f32 * scale).round() as u32;
+
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).expect("zero-sized SVG icon");
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        );
+
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for pixel in pixmap.pixels() {
+            let color = pixel.demultiply();
+            rgba.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
+        }
+        let image =
+            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
+        ctx.load_texture(id, image, egui::TextureOptions::LINEAR)
+    }
+
+    fn resolve_themed_icon_bytes(
+        icon_name: &str,
+        asset_pack_path: Option<&Path>,
+        color_mode_is_full_color: bool,
+    ) -> Option<(Vec<u8>, bool)> {
+        let pack_path = asset_pack_path?;
+        let ordered_dirs = if color_mode_is_full_color {
+            [("icons_color", true), ("icons_mono", false)]
+        } else {
+            [("icons_mono", false), ("icons_color", true)]
+        };
+        for (dir, is_full_color) in ordered_dirs {
+            let icon_path = pack_path.join(dir).join(icon_name);
+            if let Ok(bytes) = std::fs::read(icon_path) {
+                return Some((bytes, is_full_color));
+            }
+        }
+        None
+    }
+
+    pub(super) fn load_themed_svg_icon(
+        ctx: &Context,
+        id: &str,
+        icon_name: &str,
+        builtin_svg_bytes: &[u8],
+        size_px: Option<u32>,
+        asset_pack_path: Option<&Path>,
+        color_mode_is_full_color: bool,
+    ) -> CachedIcon {
+        if let Some((svg_bytes, is_full_color)) =
+            Self::resolve_themed_icon_bytes(icon_name, asset_pack_path, color_mode_is_full_color)
+        {
+            let texture = if is_full_color {
+                Self::load_svg_icon_color(ctx, id, &svg_bytes, size_px)
+            } else {
+                Self::load_svg_icon(ctx, id, &svg_bytes, size_px)
+            };
+            return CachedIcon {
+                texture,
+                is_full_color,
+            };
+        }
+
+        CachedIcon {
+            texture: Self::load_svg_icon(ctx, id, builtin_svg_bytes, size_px),
+            is_full_color: false,
+        }
+    }
+
+    pub(super) fn ensure_cached_svg_icon(
+        slot: &mut Option<CachedIcon>,
+        ctx: &Context,
+        id: &str,
+        icon_name: &str,
+        builtin_svg_bytes: &[u8],
+        size_px: Option<u32>,
+        asset_pack_path: Option<&Path>,
+        color_mode_is_full_color: bool,
+    ) -> CachedIcon {
+        slot.get_or_insert_with(|| {
+            Self::load_themed_svg_icon(
+                ctx,
+                id,
+                icon_name,
+                builtin_svg_bytes,
+                size_px,
+                asset_pack_path,
+                color_mode_is_full_color,
+            )
+        })
             .clone()
     }
 
@@ -55,6 +149,20 @@ impl RobcoNativeApp {
     ) {
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(texture.id(), rect, uv, tint);
+    }
+
+    pub(super) fn paint_cached_icon(
+        painter: &egui::Painter,
+        icon: &CachedIcon,
+        rect: egui::Rect,
+        tint: Color32,
+    ) {
+        let effective_tint = if icon.is_full_color {
+            Color32::WHITE
+        } else {
+            tint
+        };
+        Self::paint_tinted_texture(painter, &icon.texture, rect, effective_tint);
     }
 
     pub(super) fn fit_texture_rect(texture: &TextureHandle, bounds: egui::Rect) -> egui::Rect {
@@ -215,7 +323,7 @@ impl RobcoNativeApp {
 
     pub(super) fn retro_settings_tile(
         ui: &mut egui::Ui,
-        texture: Option<&TextureHandle>,
+        texture: Option<&CachedIcon>,
         icon: &str,
         label: &str,
         enabled: bool,
@@ -245,7 +353,7 @@ impl RobcoNativeApp {
                 egui::pos2(rect.center().x, rect.top() + desired.y * 0.34),
                 egui::vec2(icon_side, icon_side),
             );
-            Self::paint_tinted_texture(ui.painter(), texture, icon_rect, text_color);
+            Self::paint_cached_icon(ui.painter(), texture, icon_rect, text_color);
         } else {
             ui.painter().text(
                 rect.left_top() + egui::vec2(8.0, desired.y * 0.18),
@@ -315,5 +423,101 @@ impl RobcoNativeApp {
                 add_contents(ui)
             })
             .inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RobcoNativeApp;
+    use std::path::PathBuf;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(prefix: &str) -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "nucleon_phase7_ui_helpers_{prefix}_{}_{}",
+                std::process::id(),
+                unique
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn phase_7_icon_bytes_prefer_full_color_directory() {
+        let temp = TempDirGuard::new("prefer_color");
+        std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
+        std::fs::create_dir_all(temp.path.join("icons_mono")).expect("create mono dir");
+        std::fs::write(
+            temp.path.join("icons_color").join("pixel--folder-solid.svg"),
+            b"color",
+        )
+        .expect("write color icon");
+        std::fs::write(
+            temp.path.join("icons_mono").join("pixel--folder-solid.svg"),
+            b"mono",
+        )
+        .expect("write mono icon");
+
+        let (bytes, is_full_color) = RobcoNativeApp::resolve_themed_icon_bytes(
+            "pixel--folder-solid.svg",
+            Some(temp.path.as_path()),
+            true,
+        )
+        .expect("themed icon bytes");
+
+        assert_eq!(bytes, b"color");
+        assert!(is_full_color);
+    }
+
+    #[test]
+    fn phase_7_icon_bytes_fall_back_to_color_when_mono_missing() {
+        let temp = TempDirGuard::new("fallback_color");
+        std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
+        std::fs::write(
+            temp.path.join("icons_color").join("pixel--folder-solid.svg"),
+            b"color-only",
+        )
+        .expect("write color icon");
+
+        let (bytes, is_full_color) = RobcoNativeApp::resolve_themed_icon_bytes(
+            "pixel--folder-solid.svg",
+            Some(temp.path.as_path()),
+            false,
+        )
+        .expect("themed icon bytes");
+
+        assert_eq!(bytes, b"color-only");
+        assert!(is_full_color);
+    }
+
+    #[test]
+    fn phase_7_icon_bytes_return_none_when_icon_missing_everywhere() {
+        let temp = TempDirGuard::new("missing");
+        std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
+        std::fs::create_dir_all(temp.path.join("icons_mono")).expect("create mono dir");
+
+        assert!(
+            RobcoNativeApp::resolve_themed_icon_bytes(
+                "pixel--folder-solid.svg",
+                Some(temp.path.as_path()),
+                true,
+            )
+            .is_none()
+        );
     }
 }

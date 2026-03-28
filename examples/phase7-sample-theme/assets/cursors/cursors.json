@@ -1,0 +1,18 @@
+{
+  "arrow": {
+    "width": 8,
+    "height": 11,
+    "hotspot_x": 0,
+    "hotspot_y": 0,
+    "mask": "#       \n##      \n#O#     \n#OO#    \n#OOO#   \n#OOOO#  \n#OO##   \n#O# O#  \n #  O#  \n    O#  \n     #  "
+  },
+  "ibeam": null,
+  "pointing_hand": null,
+  "resize_horizontal": null,
+  "resize_vertical": null,
+  "resize_nwse": null,
+  "resize_nesw": null,
+  "move_cursor": null,
+  "forbidden": null,
+  "wait": null
+}
