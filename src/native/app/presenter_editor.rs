@@ -1,11 +1,13 @@
 use super::super::command_layer::CommandLayerTarget;
 use super::super::desktop_app::DesktopWindow;
 use super::super::editor_app::{EditorCommand, EditorTextAlign, EDITOR_APP_TITLE};
-use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions};
-use super::RobcoNativeApp;
+use super::desktop_window_mgmt::{
+    DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
+};
+use super::NucleonNativeApp;
 use eframe::egui::{self, Align2, Context, Id, Key, Layout, RichText, TextEdit};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_editor(&mut self, ctx: &Context) {
         let terminal_command_layer_open =
             !self.desktop_mode_open && self.command_layer_open_for(CommandLayerTarget::Editor);
@@ -151,7 +153,12 @@ impl RobcoNativeApp {
         let generation = self.desktop_window_generation(wid);
         let text_edit_id = Id::new(("editor_text_edit", wid.instance, generation));
         let shown = window.show(ctx, |ui| {
-            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                &title,
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             if let Some(path) = &self.editor.path {
                 ui.small(path.display().to_string());
             }
@@ -269,7 +276,7 @@ impl RobcoNativeApp {
                 .resizable(false)
                 .fixed_size(egui::vec2(360.0, 132.0))
                 .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .frame(Self::desktop_window_frame())
+                .frame(self.desktop_window_frame())
                 .show(ctx, |ui| {
                     Self::apply_settings_control_style(ui);
                     ui.add_space(6.0);

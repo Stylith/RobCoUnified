@@ -1,8 +1,8 @@
 use super::data::home_dir_fallback;
 use super::menu::TerminalScreen;
 use super::retro_ui::{
-    current_palette_for_surface, RetroPalette, RetroScreen, ShellSurfaceKind,
-    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    current_palette_for_surface, RetroPalette, RetroScreen, ShellSurfaceKind, FIXED_PTY_CELL_H,
+    FIXED_PTY_CELL_W,
 };
 use crate::pty::{PtyLaunchOptions, PtySession, PtyStyledCell};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
@@ -16,7 +16,6 @@ const PERF_ALPHA: f32 = 0.18;
 pub const TERMINAL_MODE_PTY_CELL_W: f32 = 11.5;
 pub const TERMINAL_MODE_PTY_CELL_H: f32 = 22.0;
 const NUCLEON_NATIVE_PTY_TEXTURE_ENV: &str = "NUCLEON_NATIVE_PTY_TEXTURE";
-const LEGACY_ROBCOS_NATIVE_PTY_TEXTURE_ENV: &str = "ROBCOS_NATIVE_PTY_TEXTURE";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LineConnections {
@@ -361,7 +360,7 @@ pub fn draw_embedded_pty_in_ui_sized(
     if let Some(label) = state.session.top_bar_label() {
         let bar_rect = screen.row_rect(0, 0, pty_cols as usize);
         let bar_font = FontId::monospace((bar_rect.height() * 0.72).max(screen.font().size + 2.0));
-        painter.rect_filled(bar_rect, 0.0, palette.selected_bg);
+        painter.rect_filled(bar_rect, 0.0, palette.bar_bg);
         painter.text(
             bar_rect.center(),
             Align2::CENTER_CENTER,
@@ -435,12 +434,8 @@ pub fn draw_embedded_pty_in_ui_sized(
                 cell.ch != ' ' && (fg != palette.fg || cell.bold || cell.italic || cell.underline)
             });
         }
-        let use_texture = [
-            NUCLEON_NATIVE_PTY_TEXTURE_ENV,
-            LEGACY_ROBCOS_NATIVE_PTY_TEXTURE_ENV,
-        ]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok())
+        let use_texture = std::env::var(NUCLEON_NATIVE_PTY_TEXTURE_ENV)
+        .ok()
         .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
         .unwrap_or(false);
         let allow_texture = !row_requires_cell_draw.iter().any(|needs| *needs);
@@ -609,11 +604,11 @@ pub fn draw_embedded_pty_in_ui_sized(
                     &content_painter,
                     col_idx,
                     row_idx + row_offset,
-                        &cell_to_draw,
-                        surface,
-                        border_conn,
-                    );
-                }
+                    &cell_to_draw,
+                    surface,
+                    border_conn,
+                );
+            }
         }
 
         if !snapshot.cursor_hidden {

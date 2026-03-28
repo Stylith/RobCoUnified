@@ -3,10 +3,9 @@ use super::super::desktop_app::{
     build_taskbar_entries, DesktopMenuAction, DesktopTaskbarEntry, WindowInstanceId,
 };
 use super::super::retro_ui::current_palette;
-use crate::theme::DockPosition;
 use eframe::egui::{self, Context, RichText, TopBottomPanel};
 
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
 struct TaskbarGroup {
     kind: DesktopWindow,
@@ -47,20 +46,18 @@ fn group_taskbar_entries(entries: Vec<DesktopTaskbarEntry>) -> Vec<TaskbarGroup>
     groups
 }
 
-impl RobcoNativeApp {
-    pub(super) fn draw_desktop_taskbar(
-        &mut self,
-        ctx: &Context,
-        position: DockPosition,
-        size: f32,
-    ) {
+impl NucleonNativeApp {
+    pub(super) fn draw_desktop_taskbar(&mut self, ctx: &Context, top: bool, size: f32) {
         self.sync_desktop_active_window();
-        let panel = match position {
-            DockPosition::Bottom => TopBottomPanel::bottom("native_desktop_taskbar"),
-            DockPosition::Left | DockPosition::Right => {
-                TopBottomPanel::bottom("native_desktop_taskbar")
-            }
-            DockPosition::Hidden => return,
+        let panel_id = if top {
+            "native_taskbar_top"
+        } else {
+            "native_taskbar_bottom"
+        };
+        let panel = if top {
+            TopBottomPanel::top(panel_id)
+        } else {
+            TopBottomPanel::bottom(panel_id)
         };
         panel
             .exact_height(size)
@@ -68,7 +65,7 @@ impl RobcoNativeApp {
             .show(ctx, |ui| {
                 let palette = current_palette();
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
+                    .rect_filled(ui.max_rect(), 0.0, palette.bar_bg);
 
                 ui.horizontal(|ui| {
                     Self::apply_desktop_panel_button_style(ui);

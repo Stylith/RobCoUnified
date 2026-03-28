@@ -8,13 +8,13 @@ use super::super::desktop_session_service::{
     take_pending_session_switch as take_native_pending_session_switch,
     user_record as session_user_record, NativePendingSessionSwitch,
 };
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use super::{ParkedSessionState, SessionState, SESSION_LEADER_WINDOW};
 use eframe::egui::{self, Context, Key, Modifiers};
 use std::collections::HashMap;
 use std::time::Instant;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn session_idx_from_digit_key(key: Key) -> Option<usize> {
         match key {
             Key::Num1 => Some(0),
@@ -81,10 +81,23 @@ impl RobcoNativeApp {
             start_menu_rename: self.start_menu_rename.take(),
             secondary_windows: std::mem::take(&mut self.secondary_windows),
             desktop_wasm_addon: self.desktop_wasm_addon.take(),
-            terminal_tweaks_surface_dropdown_open: self.terminal_tweaks_surface_dropdown_open,
+            tweaks_tab: self.tweaks_tab,
+            tweaks_wallpaper_surface: self.tweaks_wallpaper_surface,
+            tweaks_theme_surface: self.tweaks_theme_surface,
+            tweaks_layout_overrides_open: self.tweaks_layout_overrides_open,
+            tweaks_customize_colors_open: self.tweaks_customize_colors_open,
+            tweaks_editing_color_token: self.tweaks_editing_color_token,
+            terminal_tweaks_active_section: self.terminal_tweaks_active_section,
             terminal_tweaks_open_dropdown: self.terminal_tweaks_open_dropdown,
-            terminal_tweaks_desktop_expanded_menu: self.terminal_tweaks_desktop_expanded_menu,
-            terminal_tweaks_terminal_expanded_menu: self.terminal_tweaks_terminal_expanded_menu,
+            desktop_color_overrides: self.desktop_color_overrides.clone(),
+            terminal_color_overrides: self.terminal_color_overrides.clone(),
+            desktop_active_shell_style: self.desktop_active_shell_style.clone(),
+            terminal_decoration: self.terminal_decoration.clone(),
+            picking_terminal_wallpaper: self.picking_terminal_wallpaper,
+            picking_theme_import: self.picking_theme_import,
+            active_sound_pack_path: self.active_sound_pack_path.clone(),
+            active_asset_pack_path: self.active_asset_pack_path.clone(),
+            active_cursor_pack: self.active_cursor_pack.clone(),
         };
         self.session_runtime.insert(idx, parked);
     }
@@ -156,10 +169,24 @@ impl RobcoNativeApp {
         self.secondary_windows = parked.secondary_windows;
         self.desktop_wasm_addon = parked.desktop_wasm_addon;
         self.desktop_wasm_addon_last_frame_at = None;
-        self.terminal_tweaks_surface_dropdown_open = parked.terminal_tweaks_surface_dropdown_open;
+        self.tweaks_tab = parked.tweaks_tab;
+        self.tweaks_wallpaper_surface = parked.tweaks_wallpaper_surface;
+        self.tweaks_theme_surface = parked.tweaks_theme_surface;
+        self.tweaks_layout_overrides_open = parked.tweaks_layout_overrides_open;
+        self.tweaks_customize_colors_open = parked.tweaks_customize_colors_open;
+        self.tweaks_editing_color_token = parked.tweaks_editing_color_token;
+        self.terminal_tweaks_active_section = parked.terminal_tweaks_active_section;
         self.terminal_tweaks_open_dropdown = parked.terminal_tweaks_open_dropdown;
-        self.terminal_tweaks_desktop_expanded_menu = parked.terminal_tweaks_desktop_expanded_menu;
-        self.terminal_tweaks_terminal_expanded_menu = parked.terminal_tweaks_terminal_expanded_menu;
+        self.desktop_color_overrides = parked.desktop_color_overrides;
+        self.terminal_color_overrides = parked.terminal_color_overrides;
+        self.desktop_active_shell_style = parked.desktop_active_shell_style;
+        self.terminal_decoration = parked.terminal_decoration;
+        self.picking_terminal_wallpaper = parked.picking_terminal_wallpaper;
+        self.picking_theme_import = parked.picking_theme_import;
+        self.active_sound_pack_path = parked.active_sound_pack_path;
+        self.active_asset_pack_path = parked.active_asset_pack_path;
+        self.active_cursor_pack = parked.active_cursor_pack;
+        crate::sound::set_active_sound_pack(self.active_sound_pack_path.clone());
         true
     }
 

@@ -1,16 +1,16 @@
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Color32, Context};
 
 const STANDALONE_INSTALLER_DEFAULT_SIZE: [f32; 2] = [800.0, 600.0];
 const STANDALONE_INSTALLER_MIN_SIZE: [f32; 2] = [500.0, 400.0];
 
-pub struct RobcoNativeInstallerApp {
-    inner: RobcoNativeApp,
+pub struct NucleonNativeInstallerApp {
+    inner: NucleonNativeApp,
 }
 
-impl RobcoNativeInstallerApp {
+impl NucleonNativeInstallerApp {
     pub fn new(session_username: Option<String>) -> Self {
-        let mut inner = RobcoNativeApp::default();
+        let mut inner = NucleonNativeApp::default();
         inner.prepare_standalone_installer_window(session_username);
         Self { inner }
     }
@@ -24,7 +24,7 @@ impl RobcoNativeInstallerApp {
     }
 }
 
-impl eframe::App for RobcoNativeInstallerApp {
+impl eframe::App for NucleonNativeInstallerApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
     }

@@ -1,9 +1,9 @@
-# RobCoUnified CRT Display Effects System
+# NucleonOS CRT Display Effects System
 
 ## Overview
 
 This document describes the CRT display effects system for the
-RobCoUnified desktop environment.
+NucleonOS desktop environment.
 
 The goal is to reproduce a retro CRT monitor aesthetic similar to
 COOL‑RETRO‑TERM, while maintaining good performance and allowing full
@@ -176,7 +176,7 @@ pub struct DisplayEffectsSettings {
 pub enum CrtPreset {
     Off,
     Subtle,
-    RobCoStandard,
+    NucleonStandard,
     WornTerminal,
     ExtremeRetro,
     Custom,
@@ -191,7 +191,7 @@ No CRT effects.
 Subtle\
 Minimal scanlines and vignette.
 
-RobCo Standard\
+Classic\
 Recommended default with moderate CRT effects.
 
 Worn Terminal\
@@ -208,7 +208,7 @@ Display Effects
 
 Enable CRT Effects
 
-Preset - Off - Subtle - RobCo Standard - Worn Terminal - Extreme Retro -
+Preset - Off - Subtle - Classic - Worn Terminal - Extreme Retro -
 Custom
 
 Advanced Settings - Curvature - Scanlines - Glow - Blur - Noise -
@@ -251,7 +251,7 @@ Provide a low‑power preset.
 
 Off → minimal GPU cost\
 Subtle → very low cost\
-RobCoStandard → moderate cost\
+NucleonStandard → moderate cost\
 WornTerminal → moderate‑high cost\
 ExtremeRetro → high cost
 

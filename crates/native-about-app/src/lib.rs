@@ -1,4 +1,4 @@
-use robcos_shared::config::{get_settings, load_about};
+use nucleon_shared::config::{get_settings, load_about};
 use sysinfo::System;
 
 const DEFAULT_ASCII: &[&str] = &[

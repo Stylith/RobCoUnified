@@ -24,7 +24,7 @@ pub fn embedded_terminal(terminal: &mut Term) -> Result<()> {
             ("PROMPT".into(), "> ".into()),
             ("ZDOTDIR".into(), "/dev/null".into()),
         ],
-        top_bar: Some("ROBCO MAINTENANCE TERMLINK".into()),
+        top_bar: Some("NUCLEON MAINTENANCE TERMLINK".into()),
         force_render_mode: Some(true),
     };
 

@@ -1,15 +1,15 @@
-use super::{NativeSettingsPanel, RobcoNativeApp};
+use super::{NativeSettingsPanel, NucleonNativeApp};
 use eframe::egui::{self, Color32, Context};
 
 const STANDALONE_SETTINGS_DEFAULT_SIZE: [f32; 2] = [760.0, 500.0];
 
-pub struct RobcoNativeSettingsApp {
-    inner: RobcoNativeApp,
+pub struct NucleonNativeSettingsApp {
+    inner: NucleonNativeApp,
 }
 
-impl RobcoNativeSettingsApp {
+impl NucleonNativeSettingsApp {
     pub fn new(session_username: Option<String>, panel: Option<NativeSettingsPanel>) -> Self {
-        let mut inner = RobcoNativeApp::default();
+        let mut inner = NucleonNativeApp::default();
         inner.prepare_standalone_settings_window(session_username, panel);
         Self { inner }
     }
@@ -23,7 +23,7 @@ impl RobcoNativeSettingsApp {
     }
 }
 
-impl eframe::App for RobcoNativeSettingsApp {
+impl eframe::App for NucleonNativeSettingsApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
     }

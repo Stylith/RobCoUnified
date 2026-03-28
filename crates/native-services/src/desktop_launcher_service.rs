@@ -248,5 +248,4 @@ mod tests {
         assert_eq!(err, "Beta already exists.");
         assert!(source.contains_key("Alpha"));
     }
-
 }

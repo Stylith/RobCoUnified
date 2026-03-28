@@ -4,7 +4,7 @@ default-members = [".", "crates/legacy-shell", "crates/native-services", "crates
 resolver = "2"
 
 [package]
-name = "robcos"
+name = "nucleon"
 version = "0.4.4"
 edition = "2021"
 description = "nucleon-core shell/runtime platform"
@@ -40,19 +40,19 @@ wasmi         = "0.40"
 zip           = "2"
 tar           = "0.4"
 flate2        = "1"
-robcos-native-services = { path = "crates/native-services" }
-robcos-shared = { path = "crates/shared" }
-robcos-native-editor-app = { path = "crates/native-editor-app" }
-robcos-native-file-manager-app = { path = "crates/native-file-manager-app" }
-robcos-native-terminal-app = { path = "crates/native-terminal-app" }
-robcos-native-installer-app = { path = "crates/native-installer-app" }
-robcos-native-settings-app = { path = "crates/native-settings-app" }
-robcos-native-programs-app = { path = "crates/native-programs-app" }
-robcos-native-default-apps-app = { path = "crates/native-default-apps-app" }
-robcos-native-connections-app = { path = "crates/native-connections-app" }
-robcos-native-edit-menus-app = { path = "crates/native-edit-menus-app" }
-robcos-native-document-browser-app = { path = "crates/native-document-browser-app" }
-robcos-native-about-app = { path = "crates/native-about-app" }
+nucleon-native-services = { path = "crates/native-services" }
+nucleon-shared = { path = "crates/shared" }
+nucleon-native-editor-app = { path = "crates/native-editor-app" }
+nucleon-native-file-manager-app = { path = "crates/native-file-manager-app" }
+nucleon-native-terminal-app = { path = "crates/native-terminal-app" }
+nucleon-native-installer-app = { path = "crates/native-installer-app" }
+nucleon-native-settings-app = { path = "crates/native-settings-app" }
+nucleon-native-programs-app = { path = "crates/native-programs-app" }
+nucleon-native-default-apps-app = { path = "crates/native-default-apps-app" }
+nucleon-native-connections-app = { path = "crates/native-connections-app" }
+nucleon-native-edit-menus-app = { path = "crates/native-edit-menus-app" }
+nucleon-native-document-browser-app = { path = "crates/native-document-browser-app" }
+nucleon-native-about-app = { path = "crates/native-about-app" }
 
 [build-dependencies]
 winres        = "0.1"

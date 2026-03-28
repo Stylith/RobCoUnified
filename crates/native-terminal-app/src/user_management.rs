@@ -1,7 +1,7 @@
 use crate::UserManagementMode;
-use robcos_native_services::desktop_user_service::sorted_usernames;
-use robcos_shared::config::{hacking_difficulty_label, HackingDifficulty};
-use robcos_shared::core::auth::AuthMethod;
+use nucleon_native_services::desktop_user_service::sorted_usernames;
+use nucleon_shared::config::{hacking_difficulty_label, HackingDifficulty};
+use nucleon_shared::core::auth::AuthMethod;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementAction {

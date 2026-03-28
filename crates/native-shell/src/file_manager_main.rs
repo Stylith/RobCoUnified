@@ -1,10 +1,10 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::{reload_settings, set_current_user};
-use robcos::core::auth::ensure_default_admin;
-use robcos::native::{
+use nucleon::config::{reload_settings, set_current_user};
+use nucleon::core::auth::ensure_default_admin;
+use nucleon::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    standalone_env_value, RobcoNativeFileManagerApp,
+    standalone_env_value, NucleonNativeFileManagerApp,
 };
 use std::path::PathBuf;
 
@@ -41,8 +41,8 @@ fn main() -> Result<()> {
 
     let mut viewport = ViewportBuilder::default()
         .with_title(APP_TITLE)
-        .with_inner_size(RobcoNativeFileManagerApp::default_window_size())
-        .with_min_inner_size(RobcoNativeFileManagerApp::min_window_size());
+        .with_inner_size(NucleonNativeFileManagerApp::default_window_size())
+        .with_min_inner_size(NucleonNativeFileManagerApp::min_window_size());
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeFileManagerApp::new(start_path.clone())))
+            Ok(Box::new(NucleonNativeFileManagerApp::new(start_path.clone())))
         }),
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))

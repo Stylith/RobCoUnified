@@ -1,14 +1,13 @@
 use super::super::desktop_launcher_service::{catalog_names, ProgramCatalog};
-use crate::native::installed_hosted_application_names;
 use super::launch_registry::{
     about_launch_target, connections_launch_target, default_apps_launch_target,
     desktop_launch_target_available_for_profile, edit_menus_launch_target, editor_launch_target,
-    file_manager_launch_target,
-    terminal_launch_target_available_for_profile,
+    file_manager_launch_target, terminal_launch_target_available_for_profile,
 };
 use super::*;
+use crate::native::installed_hosted_application_names;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn settings_home_rows_for_session(
         &mut self,
         is_admin: bool,
@@ -106,8 +105,7 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn desktop_applications_sections(&mut self) -> Arc<DesktopApplicationsSections> {
-        let (show_file_manager, show_text_editor) =
-            self.visible_application_builtins();
+        let (show_file_manager, show_text_editor) = self.visible_application_builtins();
         let needs_rebuild = self
             .desktop_applications_sections_cache
             .as_ref()

@@ -1,1 +1,1 @@
-pub use robcos_hosted_addon_contract::*;
+pub use nucleon_hosted_addon_contract::*;

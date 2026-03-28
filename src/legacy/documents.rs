@@ -894,7 +894,7 @@ pub fn edit_text_file(terminal: &mut Term, path: &Path) -> Result<()> {
             return Ok(());
         }
     };
-    run_editor(terminal, "ROBCO Word Processor", &text, path.to_path_buf())
+    run_editor(terminal, "Nucleon Text Editor", &text, path.to_path_buf())
 }
 
 // ── Journal ───────────────────────────────────────────────────────────────────
@@ -918,7 +918,7 @@ pub(crate) fn system_documents_dir() -> PathBuf {
 }
 
 pub fn text_editor_dir() -> PathBuf {
-    let base = system_documents_dir().join("ROBCO Word Processor");
+    let base = system_documents_dir().join("Nucleon Text Editor");
     if let Some(u) = get_current_user() {
         let d = base.join(&u);
         let _ = std::fs::create_dir_all(&d);
@@ -1006,7 +1006,7 @@ pub fn new_text_document(terminal: &mut Term) -> Result<()> {
     } else {
         String::new()
     };
-    run_editor(terminal, "ROBCO Word Processor", &existing, path)
+    run_editor(terminal, "Nucleon Text Editor", &existing, path)
 }
 
 fn new_log(terminal: &mut Term) -> Result<()> {
@@ -1130,7 +1130,7 @@ pub fn text_editor_menu(terminal: &mut Term) -> Result<()> {
     loop {
         match run_menu(
             terminal,
-            "ROBCO Word Processor",
+            "Nucleon Text Editor",
             &["New Document", "Open Document", "---", "Back"],
             None,
         )? {
@@ -1329,7 +1329,7 @@ mod tests {
     fn text_editor_uses_system_documents_subfolder() {
         let dir = text_editor_dir();
         assert!(dir.components().any(|component| {
-            component.as_os_str() == std::ffi::OsStr::new("ROBCO Word Processor")
+            component.as_os_str() == std::ffi::OsStr::new("Nucleon Text Editor")
         }));
         assert!(dir.starts_with(crate::documents::system_documents_dir()));
     }

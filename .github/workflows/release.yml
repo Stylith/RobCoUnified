@@ -77,25 +77,25 @@ jobs:
 
       - name: Build release binary
         if: matrix.target != 'universal-apple-darwin'
-        run: cargo build --release --target ${{ matrix.target }} -p robcos-native-shell --bin nucleon-native
+        run: cargo build --release --target ${{ matrix.target }} -p nucleon-native-shell --bin nucleon-native
 
       - name: Build release binary (macOS universal)
         if: matrix.target == 'universal-apple-darwin'
         shell: bash
         run: |
-          cargo build --release --target aarch64-apple-darwin -p robcos-native-shell --bin nucleon-native
-          cargo build --release --target x86_64-apple-darwin -p robcos-native-shell --bin nucleon-native
+          cargo build --release --target aarch64-apple-darwin -p nucleon-native-shell --bin nucleon-native
+          cargo build --release --target x86_64-apple-darwin -p nucleon-native-shell --bin nucleon-native
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           dist_dir="dist/nucleon-core-${{ matrix.asset_name }}"
-          app_dir="$dist_dir/RobCoOS.app"
+          app_dir="$dist_dir/NucleonOS.app"
           contents_dir="$app_dir/Contents"
           macos_dir="$contents_dir/MacOS"
           resources_dir="$contents_dir/Resources"
-          iconset_dir="$dist_dir/RobCoOS.iconset"
+          iconset_dir="$dist_dir/NucleonOS.iconset"
 
           mkdir -p "$macos_dir" "$resources_dir" "$iconset_dir"
           lipo -create \
@@ -112,19 +112,19 @@ jobs:
             <key>CFBundleDevelopmentRegion</key>
             <string>en</string>
             <key>CFBundleDisplayName</key>
-            <string>RobCoOS</string>
+            <string>NucleonOS</string>
             <key>CFBundleExecutable</key>
             <string>${{ matrix.package_bin_name }}</string>
             <key>CFBundleIconFile</key>
-            <string>RobCoOS.icns</string>
+            <string>NucleonOS.icns</string>
             <key>CFBundleIconName</key>
-            <string>RobCoOS</string>
+            <string>NucleonOS</string>
             <key>CFBundleIdentifier</key>
-            <string>com.stylith.robcoos</string>
+            <string>com.stylith.nucleon</string>
             <key>CFBundleInfoDictionaryVersion</key>
             <string>6.0</string>
             <key>CFBundleName</key>
-            <string>RobCoOS</string>
+            <string>NucleonOS</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleShortVersionString</key>
@@ -146,7 +146,7 @@ jobs:
             double=$((size * 2))
             sips -z "$double" "$double" icon.png --out "$iconset_dir/icon_${size}x${size}@2x.png"
           done
-          iconutil -c icns "$iconset_dir" -o "$resources_dir/RobCoOS.icns"
+          iconutil -c icns "$iconset_dir" -o "$resources_dir/NucleonOS.icns"
 
           cp README.md LICENSE "$dist_dir/"
           (

@@ -38,7 +38,7 @@ fn dim_style() -> ratatui::style::Style {
 // (text, char_delay_ms, pause_ms, centered)
 const SEQUENCES: &[(&str, u64, u64, bool)] = &[
     (
-        "WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE",
+        "WELCOME TO NUCLEON TERMLINK\nSET TERMINAL/INQUIRE",
         40,
         2000,
         false,
@@ -50,14 +50,14 @@ const SEQUENCES: &[(&str, u64, u64, bool)] = &[
         false,
     ),
     (
-        "ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode",
+        "NUCLEON TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Nucleon Project\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode",
         30,
         2000,
         false,
     ),
     ("LOGON ADMIN", 100, 3000, false),
     (
-        "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM\nCOPYRIGHT 2075-2077 ROBCO INDUSTRIES\n-SERVER 1-",
+        "NUCLEON UNIFIED OPERATING SYSTEM\nNUCLEON-CORE OPEN SOURCE PROJECT\n-SERVER 1-",
         50,
         2000,
         true,

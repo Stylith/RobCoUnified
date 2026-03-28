@@ -8,7 +8,7 @@ use super::super::desktop_status_service::{
 };
 use super::super::desktop_user_service::{sorted_user_records, sorted_usernames};
 use super::super::settings_standalone::standalone_settings_panel_from_arg;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::config::{
     current_settings_file, ConnectionKind, NativeStartupWindowMode, SavedConnection, Settings,
 };
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn sync_runtime_settings_cache(&mut self) {
         self.live_desktop_file_manager_settings = self.settings.draft.desktop_file_manager.clone();
         self.live_hacking_difficulty = self.settings.draft.hacking_difficulty;
@@ -101,6 +101,10 @@ impl RobcoNativeApp {
         for result in results {
             match result {
                 BackgroundResult::SettingsPersisted => {
+                    // Update the sync marker now that the file is actually written,
+                    // so the mtime check in maybe_sync_settings_from_disk and the
+                    // IPC handler won't treat our own write as an external change.
+                    self.refresh_settings_sync_marker();
                     super::super::ipc::notify_settings_changed();
                 }
                 BackgroundResult::RepositoryAddonInstalled {
@@ -176,8 +180,15 @@ impl RobcoNativeApp {
         for msg in messages {
             match msg {
                 super::super::ipc::IpcMessage::SettingsChanged => {
-                    let settings = reload_settings_snapshot();
-                    self.replace_settings_draft(settings);
+                    // Only reload if the file was actually changed externally.
+                    // When we persist our own settings, the SettingsPersisted handler
+                    // updates the sync marker, so our mtime already matches.
+                    let current_mtime = Self::current_settings_file_mtime();
+                    if current_mtime != self.last_settings_file_mtime {
+                        let settings = reload_settings_snapshot();
+                        self.replace_settings_draft(settings);
+                        self.refresh_settings_sync_marker();
+                    }
                 }
                 super::super::ipc::IpcMessage::OpenInEditor { path } => {
                     self.launch_editor_path_via_registry(std::path::PathBuf::from(path));
@@ -203,7 +214,10 @@ impl RobcoNativeApp {
     pub(super) fn maybe_sync_settings_from_disk(&mut self, ctx: &Context) {
         const SETTINGS_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 
-        if self.settings.open || self.last_settings_sync_check.elapsed() < SETTINGS_SYNC_INTERVAL {
+        if self.settings.open
+            || self.tweaks_open
+            || self.last_settings_sync_check.elapsed() < SETTINGS_SYNC_INTERVAL
+        {
             return;
         }
         self.last_settings_sync_check = Instant::now();
@@ -308,7 +322,7 @@ impl RobcoNativeApp {
 
     pub(super) fn reset_desktop_settings_window(&mut self) {
         let draft = load_settings_snapshot();
-        let defaults = robcos_native_settings_app::build_desktop_settings_ui_defaults(
+        let defaults = nucleon_native_settings_app::build_desktop_settings_ui_defaults(
             &draft,
             self.session
                 .as_ref()

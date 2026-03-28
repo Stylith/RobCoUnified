@@ -1,10 +1,12 @@
 use super::super::desktop_app::DesktopWindow;
-use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions};
-use super::RobcoNativeApp;
+use super::desktop_window_mgmt::{
+    DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
+};
+use super::NucleonNativeApp;
 use eframe::egui::{self, Context};
-use robcos_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
+use nucleon_native_programs_app::{resolve_desktop_applications_request, DesktopProgramRequest};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_applications(&mut self, ctx: &Context) {
         if !self.applications.open || self.desktop_window_is_minimized(DesktopWindow::Applications)
         {
@@ -27,7 +29,12 @@ impl RobcoNativeApp {
         );
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, "Applications", maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                "Applications",
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             let sections = self.desktop_applications_sections();
             let body_max_height = ui.available_height().max(120.0);
             egui::ScrollArea::vertical()

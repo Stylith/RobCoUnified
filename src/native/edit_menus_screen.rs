@@ -1,6 +1,6 @@
 use super::menu::draw_terminal_menu_screen;
 use eframe::egui::Context;
-pub use robcos_native_edit_menus_app::{
+pub use nucleon_native_edit_menus_app::{
     apply_edit_menus_activation, apply_edit_menus_selected_idx, build_edit_menus_view_model,
     EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest, TerminalEditMenusState,
 };
@@ -22,6 +22,7 @@ pub fn draw_edit_menus_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> TerminalEditMenusRequest {
     let model = build_edit_menus_view_model(state, entries, text_editor_visible);
     let mut selected_idx = model.selected_idx;
@@ -42,6 +43,7 @@ pub fn draw_edit_menus_screen(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     apply_edit_menus_selected_idx(state, selected_idx);
     apply_edit_menus_activation(state, entries, activated)

@@ -2,7 +2,7 @@ mod classic_overlay;
 mod classic_screen;
 mod classic_status_bar;
 
-use super::app::RobcoNativeApp;
+use super::app::NucleonNativeApp;
 use super::shell_slots::SlotAction;
 use crate::theme::TerminalLayoutProfile;
 use eframe::egui::Context;
@@ -21,7 +21,7 @@ pub struct TerminalSlotContext<'a> {
 
 pub trait TerminalSlotRenderer {
     fn slot(&self) -> TerminalSlot;
-    fn render(&self, app: &mut RobcoNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction>;
+    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction>;
 }
 
 pub struct TerminalSlotRegistry {
@@ -42,7 +42,7 @@ impl TerminalSlotRegistry {
     pub fn render_slot(
         &self,
         slot: TerminalSlot,
-        app: &mut RobcoNativeApp,
+        app: &mut NucleonNativeApp,
         ctx: &Context,
         layout: &TerminalLayoutProfile,
     ) -> Vec<SlotAction> {

@@ -1,6 +1,6 @@
 use super::menu::draw_terminal_menu_screen;
-pub use robcos_native_programs_app::ProgramMenuEvent;
-use robcos_native_programs_app::{build_program_menu_items, resolve_program_menu_event};
+pub use nucleon_native_programs_app::ProgramMenuEvent;
+use nucleon_native_programs_app::{build_program_menu_items, resolve_program_menu_event};
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_programs_menu(
@@ -20,6 +20,7 @@ pub fn draw_programs_menu(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> ProgramMenuEvent {
     let items = build_program_menu_items(entries);
     let activated = draw_terminal_menu_screen(
@@ -39,6 +40,7 @@ pub fn draw_programs_menu(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     resolve_program_menu_event(entries, activated)
 }

@@ -3,15 +3,11 @@ use std::io::Write;
 use std::path::PathBuf;
 
 const NUCLEON_DIAG_PATH_ENV: &str = "NUCLEON_DIAG_PATH";
-const LEGACY_ROBCOS_DIAG_PATH_ENV: &str = "ROBCOS_DIAG_PATH";
 
 fn diagnostics_path() -> PathBuf {
-    for name in [NUCLEON_DIAG_PATH_ENV, LEGACY_ROBCOS_DIAG_PATH_ENV] {
-        if let Ok(path) = std::env::var(name) {
-            return PathBuf::from(path);
-        }
-    }
-    diagnostics_log_file()
+    std::env::var(NUCLEON_DIAG_PATH_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| diagnostics_log_file())
 }
 
 fn ensure_parent(path: &PathBuf) {

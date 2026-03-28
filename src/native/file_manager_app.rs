@@ -26,8 +26,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(test)]
-use robcos_native_file_manager_app::FileManagerAction;
-pub use robcos_native_file_manager_app::{
+use nucleon_native_file_manager_app::FileManagerAction;
+pub use nucleon_native_file_manager_app::{
     commit_picker_selection, open_target_for_file_manager_action, open_with_extension_key,
     prepare_open_with_launch, selected_file, selection_activation_for_selected_path,
     FileManagerClipboardMode, FileManagerEditRuntime, FileManagerOpenTarget, FileManagerPickMode,
@@ -35,7 +35,7 @@ pub use robcos_native_file_manager_app::{
     OpenWithLaunchRequest,
 };
 #[cfg(test)]
-pub use robcos_native_file_manager_app::{open_with_state_for_path, FileManagerClipboardItem};
+pub use nucleon_native_file_manager_app::{open_with_state_for_path, FileManagerClipboardItem};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileManagerCommandRequest {
@@ -148,7 +148,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_file_manager_app_{prefix}_{}_{}",
+                "nucleon_native_file_manager_app_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));

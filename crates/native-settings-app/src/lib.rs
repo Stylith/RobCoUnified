@@ -1,15 +1,15 @@
-use robcos_native_services::desktop_default_apps_service::{
+use nucleon_native_services::desktop_default_apps_service::{
     custom_command_input_for_slot, DefaultAppSlot,
 };
-use robcos_native_services::desktop_user_service::sorted_usernames;
-use robcos_native_terminal_app::{SettingsChoiceKind, SettingsChoiceOverlay};
-use robcos_shared::config::{
+use nucleon_native_services::desktop_user_service::sorted_usernames;
+use nucleon_native_terminal_app::{SettingsChoiceKind, SettingsChoiceOverlay};
+use nucleon_shared::config::{
     CliAcsMode, CrtPreset, DesktopCliProfiles, DesktopPtyProfileSettings, NativeStartupWindowMode,
     OpenMode, Settings, CUSTOM_THEME_NAME, THEMES,
 };
-use robcos_shared::connections::macos_connections_disabled;
-use robcos_shared::core::auth::AuthMethod;
-use robcos_shared::platform::CapabilityId;
+use nucleon_shared::connections::macos_connections_disabled;
+use nucleon_shared::core::auth::AuthMethod;
+use nucleon_shared::platform::CapabilityId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalSettingsEvent {
@@ -495,7 +495,7 @@ pub fn handle_settings_activation_with_visibility(
         SettingsRowId::CrtEffectsEnabled => {
             draft.display_effects.enabled = !draft.display_effects.enabled;
             if draft.display_effects.enabled && draft.display_effects.preset == CrtPreset::Off {
-                draft.display_effects.apply_preset(CrtPreset::RobCoStandard);
+                draft.display_effects.apply_preset(CrtPreset::Classic);
             }
             TerminalSettingsEvent::Persist
         }
@@ -570,7 +570,7 @@ pub fn open_settings_choice(draft: &Settings, kind: SettingsChoiceKind) -> Setti
         SettingsChoiceKind::CrtPreset => match draft.display_effects.preset {
             CrtPreset::Off => 0,
             CrtPreset::Subtle => 1,
-            CrtPreset::RobCoStandard => 2,
+            CrtPreset::Classic => 2,
             CrtPreset::WornTerminal => 3,
             CrtPreset::ExtremeRetro => 4,
             CrtPreset::Custom => 5,
@@ -592,7 +592,7 @@ pub fn settings_choice_items(kind: SettingsChoiceKind) -> Vec<String> {
         SettingsChoiceKind::CrtPreset => vec![
             CrtPreset::Off.label().to_string(),
             CrtPreset::Subtle.label().to_string(),
-            CrtPreset::RobCoStandard.label().to_string(),
+            CrtPreset::Classic.label().to_string(),
             CrtPreset::WornTerminal.label().to_string(),
             CrtPreset::ExtremeRetro.label().to_string(),
             CrtPreset::Custom.label().to_string(),
@@ -625,7 +625,7 @@ pub fn apply_settings_choice(draft: &mut Settings, kind: SettingsChoiceKind, sel
         SettingsChoiceKind::CrtPreset => {
             let preset = match selected {
                 1 => CrtPreset::Subtle,
-                2 => CrtPreset::RobCoStandard,
+                2 => CrtPreset::Classic,
                 3 => CrtPreset::WornTerminal,
                 4 => CrtPreset::ExtremeRetro,
                 5 => CrtPreset::Custom,
@@ -1073,7 +1073,7 @@ fn adjust_crt_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robcos_shared::config::get_settings;
+    use nucleon_shared::config::get_settings;
 
     #[test]
     fn terminal_settings_rows_include_default_apps_and_about() {

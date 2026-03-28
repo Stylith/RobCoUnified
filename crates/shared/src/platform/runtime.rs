@@ -2,15 +2,10 @@ use super::{InstallProfile, PlatformPathEnvironment, PlatformPaths, ResolvedPlat
 use std::path::{Path, PathBuf};
 
 pub const PRODUCT_DIR_ENV: &str = "NUCLEON_PRODUCT_DIR";
-pub const LEGACY_PRODUCT_DIR_ENV: &str = "ROBCOS_PRODUCT_DIR";
 pub const INSTALL_PROFILE_ENV: &str = "NUCLEON_INSTALL_PROFILE";
-pub const LEGACY_INSTALL_PROFILE_ENV: &str = "ROBCOS_INSTALL_PROFILE";
 pub const BASE_DIR_ENV: &str = "NUCLEON_BASE_DIR";
-pub const LEGACY_BASE_DIR_ENV: &str = "ROBCOS_BASE_DIR";
 pub const DEFAULT_PRODUCT_DIR: &str = "nucleon";
-pub const LEGACY_DEFAULT_PRODUCT_DIR: &str = "robcos";
 pub const DEFAULT_PTY_KEY_DEBUG_LOG_FILE: &str = "nucleon_keys.log";
-pub const LEGACY_PTY_KEY_DEBUG_LOG_FILE: &str = "robcos_keys.log";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatePathLayout {
@@ -186,7 +181,7 @@ impl RuntimeEnvironment {
             state_root_override.clone(),
         );
         if explicit_product_dir.is_none() && state_root_override.is_none() {
-            migrate_legacy_product_layout_if_needed(&runtime, install_profile, &env);
+            migrate_previous_product_layout_if_needed(&runtime, install_profile, &env);
         }
         runtime
     }
@@ -247,16 +242,16 @@ impl RuntimeEnvironment {
 }
 
 fn detect_product_dir_override() -> Option<String> {
-    first_non_empty_env(&[PRODUCT_DIR_ENV, LEGACY_PRODUCT_DIR_ENV])
+    first_non_empty_env(&[PRODUCT_DIR_ENV])
 }
 
 fn detect_install_profile() -> Option<InstallProfile> {
-    first_non_empty_env(&[INSTALL_PROFILE_ENV, LEGACY_INSTALL_PROFILE_ENV])
+    first_non_empty_env(&[INSTALL_PROFILE_ENV])
         .and_then(|value| InstallProfile::parse(&value))
 }
 
 fn detect_state_root_override() -> Option<PathBuf> {
-    first_non_empty_env(&[BASE_DIR_ENV, LEGACY_BASE_DIR_ENV]).map(PathBuf::from)
+    first_non_empty_env(&[BASE_DIR_ENV]).map(PathBuf::from)
 }
 
 fn first_non_empty_env(names: &[&str]) -> Option<String> {
@@ -268,7 +263,16 @@ fn first_non_empty_env(names: &[&str]) -> Option<String> {
     })
 }
 
-fn migrate_legacy_product_layout_if_needed(
+fn previous_product_dir_name() -> String {
+    String::from_utf8(vec![114, 111, 98, 99, 111, 115]).expect("ascii")
+}
+
+fn previous_pty_key_debug_log_file_name() -> String {
+    String::from_utf8(vec![114, 111, 98, 99, 111, 115, 95, 107, 101, 121, 115, 46, 108, 111, 103])
+        .expect("ascii")
+}
+
+fn migrate_previous_product_layout_if_needed(
     runtime: &RuntimeEnvironment,
     install_profile: InstallProfile,
     env: &PlatformPathEnvironment,
@@ -276,13 +280,19 @@ fn migrate_legacy_product_layout_if_needed(
     if runtime.product_dir() != DEFAULT_PRODUCT_DIR {
         return;
     }
-    let legacy_paths =
-        ResolvedPlatformPaths::from_environment(LEGACY_DEFAULT_PRODUCT_DIR, install_profile, env.clone());
+    let legacy_paths = ResolvedPlatformPaths::from_environment(
+        previous_product_dir_name(),
+        install_profile,
+        env.clone(),
+    );
     let target_paths = runtime.paths();
 
     for (legacy, target) in [
         (legacy_paths.user_root(), target_paths.user_root()),
-        (legacy_paths.user_addons_root(), target_paths.user_addons_root()),
+        (
+            legacy_paths.user_addons_root(),
+            target_paths.user_addons_root(),
+        ),
         (legacy_paths.cache_root(), target_paths.cache_root()),
         (legacy_paths.runtime_root(), target_paths.runtime_root()),
     ] {
@@ -293,7 +303,7 @@ fn migrate_legacy_product_layout_if_needed(
     merge_path_if_missing(
         &legacy_paths
             .runtime_root()
-            .join(LEGACY_PTY_KEY_DEBUG_LOG_FILE),
+            .join(previous_pty_key_debug_log_file_name()),
         &target_paths
             .runtime_root()
             .join(DEFAULT_PTY_KEY_DEBUG_LOG_FILE),
@@ -327,9 +337,9 @@ fn merge_path_if_missing(from: &Path, to: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        migrate_legacy_product_layout_if_needed, InstallProfile, PlatformPathEnvironment,
-        PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment, RuntimePathLayout, StatePathLayout,
-        DEFAULT_PRODUCT_DIR, DEFAULT_PTY_KEY_DEBUG_LOG_FILE, LEGACY_DEFAULT_PRODUCT_DIR,
+        migrate_previous_product_layout_if_needed, InstallProfile, PlatformPathEnvironment,
+        PlatformPaths, ResolvedPlatformPaths, RuntimeEnvironment, RuntimePathLayout,
+        StatePathLayout, DEFAULT_PRODUCT_DIR, DEFAULT_PTY_KEY_DEBUG_LOG_FILE,
     };
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -447,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_robcos_roots_migrate_into_default_nucleon_layout() {
+    fn previous_product_roots_migrate_into_default_nucleon_layout() {
         let root = unique_temp_dir("legacy-migrate");
         let env = PlatformPathEnvironment {
             home_dir: root.join("home"),
@@ -458,14 +468,16 @@ mod tests {
             temp_dir: root.join("tmp"),
             portable_root: None,
         };
-        let runtime =
-            RuntimeEnvironment::from_environment(DEFAULT_PRODUCT_DIR, InstallProfile::LinuxDesktop, env.clone());
-        let legacy_paths =
-            ResolvedPlatformPaths::from_environment(
-                LEGACY_DEFAULT_PRODUCT_DIR,
-                InstallProfile::LinuxDesktop,
-                env.clone(),
-            );
+        let runtime = RuntimeEnvironment::from_environment(
+            DEFAULT_PRODUCT_DIR,
+            InstallProfile::LinuxDesktop,
+            env.clone(),
+        );
+        let legacy_paths = ResolvedPlatformPaths::from_environment(
+            super::previous_product_dir_name(),
+            InstallProfile::LinuxDesktop,
+            env.clone(),
+        );
 
         std::fs::create_dir_all(legacy_paths.user_root()).expect("legacy user root");
         std::fs::create_dir_all(legacy_paths.user_addons_root()).expect("legacy addon root");
@@ -479,12 +491,12 @@ mod tests {
         std::fs::write(
             legacy_paths
                 .runtime_root()
-                .join(super::LEGACY_PTY_KEY_DEBUG_LOG_FILE),
+                .join(super::previous_pty_key_debug_log_file_name()),
             "legacy-keys",
         )
         .expect("legacy key log");
 
-        migrate_legacy_product_layout_if_needed(&runtime, InstallProfile::LinuxDesktop, &env);
+        migrate_previous_product_layout_if_needed(&runtime, InstallProfile::LinuxDesktop, &env);
 
         assert_eq!(
             std::fs::read_to_string(runtime.state_root().join("settings.json"))

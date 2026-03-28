@@ -8,8 +8,9 @@ This is the current handoff for `nucleon-core` on branch `WIP`.
 - Remote: `origin https://github.com/Stylith/nucleon-core.git`
 - Branch: `WIP`
 - Product direction: neutral core platform plus shell/theme composition with desktop and terminal treated as distinct shell surfaces
-- Current checkpoint: Phase 0 through Phase 4 of the theme system are implemented in code
-- Current focus: Phase 4 manual validation and polish, not a new feature phase yet
+- Current checkpoint: Phase 0 through Phase 8 implemented in code; Phases 7-8 audited and verified
+- Current focus: Phase 9 (sound theming) — Phases 9-11 are spec'd in THEME_PHASE_CODEX_SPEC.md
+- Phase 11 is the full product rebrand (crate renames, type renames, UI strings, CI/CD, state dir migration)
 
 ## Source Of Truth
 
@@ -108,6 +109,94 @@ Implemented behavior:
   - window chrome
   - Tweaks tabs and controls
 
+### Phase 5
+
+This phase is now implemented in code.
+
+Implemented behavior:
+
+- terminal header branding is theme-controlled through `ThemePack.terminal_branding`
+- `ThemePack::classic()` now defaults terminal branding to none
+- native terminal screens no longer hardcode the heritage header
+- when terminal branding is hidden, the terminal layout reclaims the old 3 header rows
+- terminal branding is persisted in shared config through `Settings.terminal_branding`
+- terminal theme-pack selection in Tweaks updates the live terminal branding state
+
+### Phase 6 (initial — superseded)
+
+What was implemented from the initial Phase 6:
+- "Custom" naming (was "Manual"), read-only state label
+- Built-in ThemePacks: Classic, Nucleon
+- Flat top-level tabs: [Appearance, Desktop, Display, Terminal]
+- Layout Overrides collapsible section
+
+### Phase 6 (REVISED)
+
+This phase is now implemented in code.
+
+Implemented behavior:
+
+- desktop Tweaks top-level tabs are now:
+  - `Wallpaper`
+  - `Theme`
+  - `Effects`
+  - `Display`
+- `Wallpaper` and `Theme` each contain Desktop/Terminal sub-tabs
+- terminal wallpaper path and size mode are now supported through shared config and live runtime rendering
+- desktop and terminal full-color flows now support live per-token customization with `Custom` as the detached state label
+- desktop Tweaks full-color customization now lists each token with a small current-color box; clicking the box opens a compact Paint-style preset palette with a wider hue range
+- customized full-color themes can be exported to `exported_themes/`
+- layout overrides now use per-position `PanelType` controls:
+  - top panel
+  - bottom panel
+  - launcher style
+  - window header style
+- `DockPosition` and `PanelPosition` have been replaced by `PanelType` in the active layout model
+- terminal screen separators/title/subtitle rendering is now controlled by `TerminalDecoration`
+- terminal retro screens now paint through the wallpaper-aware terminal background helper
+
+### Phase 6 (POLISH)
+
+This polish pass is now implemented in code.
+
+Implemented behavior:
+
+- desktop menu bar and taskbar panel IDs are position-aware, so top/bottom can both be `MenuBar` or both be `Taskbar` without egui ID collisions
+- Desktop/Terminal sub-tab buttons in desktop Tweaks now use the same stronger visual weight as the main tabs
+- terminal-native Tweaks now shows collapsible top-level sections:
+  - `Wallpaper`
+  - `Theme`
+  - `Effects`
+  - `Display`
+- only one terminal-native Tweaks section stays expanded at a time
+- built-in ThemePack selection is now:
+  - `Classic`
+  - `Nucleon`
+- old persisted pack IDs `nucleon-dark` / `nucleon-light` are normalized to `nucleon` at runtime for compatibility
+- the `Nucleon Dark` and `Nucleon Light` choices remain available as full-color theme variants inside the Theme controls
+
+### Post-Phase 6 Fixes
+
+These fixes were applied after Phase 6 POLISH and are now in the codebase:
+
+**Color palette picker bug fix:**
+- The inline MS Paint-style color grid in Tweaks was not persisting color changes
+- Root cause: settings persistence spawned a background thread, which triggered an IPC `SettingsChanged` self-notification, which reloaded settings from disk and called `apply_surface_theme_state_from_settings()` — unconditionally clearing `desktop_color_overrides` and `tweaks_customize_colors_open`
+- Fix: three-part — (1) `SettingsPersisted` handler now calls `refresh_settings_sync_marker()` after file write, (2) IPC `SettingsChanged` handler guards with mtime check to skip self-notifications, (3) `maybe_sync_settings_from_disk` skips while Tweaks is open
+
+**Color palette picker UX:**
+- Palette grid and custom color picker now render inline directly below the selected token (not at the bottom of the token list)
+- Each token row is clickable; clicking opens a bordered frame with the 48-color grid + `color_edit_button_srgba` fine-tuner
+
+**RetroPalette separation:**
+- Added 3 new fields: `window_chrome`, `window_chrome_focused`, `bar_bg`
+- Mapped from `ColorToken::WindowChrome`, `WindowChromeFocused`, `StatusBar`
+- Window headers now use `window_chrome_focused` instead of `selected_bg`
+- Taskbar, menu bar, PTY status bar now use `bar_bg` instead of `selected_bg`
+- `selected_bg` is now only used for actual selection highlighting (file manager, start menu hover, etc.)
+- Monochrome mode unchanged (all three new fields default to `fg`)
+- Built-in Nucleon themes already had distinct values for these tokens — now wired through
+
 ## Key Files
 
 ### Shared theme types
@@ -119,6 +208,7 @@ Notable types:
 - `ColorStyle`
 - `LayoutProfile`
 - `TerminalLayoutProfile`
+- `TerminalBranding`
 - `ThemePack`
 
 ### Desktop slots
@@ -136,7 +226,7 @@ Notable types:
 
 - [src/native/app.rs](/home/stylith/nucleon-core/src/native/app.rs)
 
-Important runtime fields on `RobcoNativeApp`:
+Important runtime fields on `NucleonNativeApp`:
 
 - `desktop_active_layout`
 - `terminal_active_layout`
@@ -144,10 +234,16 @@ Important runtime fields on `RobcoNativeApp`:
 - `terminal_active_theme_pack_id`
 - `desktop_active_color_style`
 - `terminal_active_color_style`
+- `desktop_color_overrides`
+- `terminal_color_overrides`
+- `terminal_branding`
+- `terminal_decoration`
 - `terminal_slot_registry`
-- `tweaks_surface_tab`
-- `desktop_tweaks_tab`
-- `terminal_tweaks_tab`
+- `tweaks_tab`
+- `tweaks_wallpaper_surface`
+- `tweaks_theme_surface`
+- `tweaks_layout_overrides_open`
+- `tweaks_customize_colors_open`
 
 ### Frame routing
 
@@ -182,19 +278,20 @@ Compatibility note:
 
 Current Tweaks behavior:
 
-- top-level surface tabs:
+- desktop Tweaks top-level tabs:
+  - `Wallpaper`
+  - `Theme`
+  - `Effects`
+  - `Display`
+- desktop `Wallpaper` and `Theme` tabs each contain:
   - `Desktop`
   - `Terminal`
-- desktop sub-tabs:
-  - `Background`
+- terminal-native Tweaks sections:
+  - `Wallpaper`
+  - `Theme`
+  - `Effects`
   - `Display`
-  - `Colors`
-  - `Icons`
-  - `Layout`
-- terminal sub-tabs:
-  - `Colors`
-  - `Layout`
-  - `Terminal`
+- terminal-native Tweaks keeps one of those sections expanded at a time
 - desktop mode uses the desktop Tweaks window
 - terminal mode uses a terminal-native Tweaks screen via `Settings -> Appearance`
 
@@ -203,6 +300,7 @@ Theme-pack rule currently implemented in Tweaks:
 - one installed catalog is shared
 - Desktop and Terminal choose independently from that catalog
 - selecting a theme pack for one surface does not retheme the other surface
+- `Custom` appears only as the selected-state label when overrides are active
 
 ## Important Runtime Semantics
 
@@ -232,6 +330,11 @@ Current per-surface durable settings fields are:
 - `Settings.terminal_color_style`
 - `Settings.desktop_layout_profile`
 - `Settings.terminal_layout_profile`
+- `Settings.terminal_branding`
+- `Settings.desktop_wallpaper`
+- `Settings.terminal_wallpaper`
+- `Settings.desktop_wallpaper_size_mode`
+- `Settings.terminal_wallpaper_size_mode`
 
 The old global `Settings.active_theme_pack_id` is legacy compatibility state now, not the source of truth for the split runtime model.
 
@@ -267,8 +370,9 @@ These fixes are already in this checkpoint. Do not reintroduce the older single-
 
 Verified at this checkpoint:
 
-- `cargo check -p robcos`
-- `cargo check -p robcos-native-shell`
+- `cargo check -p nucleon`
+- `cargo check -p nucleon-native-shell`
+- `cargo check -p nucleon -p nucleon-native-shell`
 
 They both pass.
 
@@ -324,6 +428,7 @@ On the next machine, test these exact flows first:
    - document browser
    - about
    - embedded PTY
+   - classic terminal screens render without the old heritage header and content starts 3 rows higher
 7. In desktop mode, verify recoloring/layout for:
    - top bar
    - top-bar dropdown menus and submenus
@@ -348,7 +453,12 @@ If something regresses, inspect these files first:
 ## What Is Not Done Yet
 
 - manual GUI validation of Phase 4 across Desktop and Terminal surfaces
-- remaining Phase 4 polish bugs in built-in full-color themes and Tweaks UX
+- manual GUI validation of Phase 5 terminal branding/header behavior
+- manual GUI validation of Phase 6 polish behavior:
+  - panel ID collision cases
+  - terminal-native Tweaks one-section expansion
+  - desktop Tweaks sub-tab sizing/weight
+  - built-in ThemePack dropdown showing `Classic | Nucleon`
 - sound-theme/sound-pack system
 - asset-pack / shell-style phase spec
 - `nucleon-core-themes` packaging phase spec
@@ -362,7 +472,7 @@ If resuming on another machine:
 2. Read this handoff second.
 3. Start by running the two cargo checks.
 4. Then do the manual Desktop vs Terminal surface-independence tests above.
-5. Fix anything that still fails the Phase 4 polish boundary above.
-6. Only after validation and polish should you continue into Phase 5 or later deferred work.
+5. Validate the Phase 5 terminal-branding/header behavior and the Phase 6 polish items above.
+6. Only after that validation should you continue into Phase 7 or later deferred work.
 
 Do not revert the runtime surface split in order to “simplify” polish work. Any remaining Full Color, Tweaks, or persistence issues should be brought up to the current split runtime model, not the other way around.

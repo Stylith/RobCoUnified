@@ -1,8 +1,8 @@
-use robcos_native_services::desktop_default_apps_service::{
+use nucleon_native_services::desktop_default_apps_service::{
     binding_label_for_slot, default_app_binding_matches, default_app_choices_for_slot,
     default_app_slot_label, DefaultAppChoiceAction, DefaultAppSlot,
 };
-use robcos_shared::config::{DefaultAppBinding, Settings};
+use nucleon_shared::config::{DefaultAppBinding, Settings};
 
 #[derive(Debug, Clone)]
 pub enum DefaultAppsEvent {
@@ -137,7 +137,7 @@ pub fn resolve_terminal_default_apps_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robcos_shared::config::get_settings;
+    use nucleon_shared::config::get_settings;
 
     #[test]
     fn build_default_apps_root_items_contains_two_slots_and_back() {

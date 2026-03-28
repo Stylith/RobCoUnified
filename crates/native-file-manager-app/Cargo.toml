@@ -1,5 +1,5 @@
 [package]
-name = "robcos-native-file-manager-app"
+name = "nucleon-native-file-manager-app"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
@@ -10,5 +10,5 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1"
-robcos-native-services = { path = "../native-services" }
-robcos-shared = { path = "../shared" }
+nucleon-native-services = { path = "../native-services" }
+nucleon-shared = { path = "../shared" }

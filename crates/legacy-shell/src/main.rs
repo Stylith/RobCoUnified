@@ -5,13 +5,13 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::backend::CrosstermBackend;
-use robcos::auth::{clear_session, ensure_default_admin, login_screen};
-use robcos::checks::{print_preflight, run_preflight};
-use robcos::config::{get_settings, set_current_user, OpenMode};
-use robcos::ui::{flash_message, run_menu_with_index, MenuResult, Term};
-use robcos::{
-    apps, boot, config, desktop, documents, installer, pty, session, settings,
-    shell_terminal, sound,
+use nucleon::auth::{clear_session, ensure_default_admin, login_screen};
+use nucleon::checks::{print_preflight, run_preflight};
+use nucleon::config::{get_settings, set_current_user, OpenMode};
+use nucleon::ui::{flash_message, run_menu_with_index, MenuResult, Term};
+use nucleon::{
+    apps, boot, config, desktop, documents, installer, pty, session, settings, shell_terminal,
+    sound,
 };
 use std::collections::HashMap;
 use std::io::stdout;
@@ -165,7 +165,6 @@ fn run_terminal_route(
 
 fn write_key_debug_startup_marker() {
     let path = std::env::var_os("NUCLEON_KEY_DEBUG_PATH")
-        .or_else(|| std::env::var_os("ROBCOS_KEY_DEBUG_PATH"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp/nucleon_keys.log"));
 
@@ -376,7 +375,7 @@ fn run(terminal: &mut Term, show_bootup: bool) -> Result<()> {
                     "Settings",
                     "Logout",
                 ],
-                Some("RobcOS v0.2.1"),
+                Some("NucleonOS v0.2.1"),
                 &mut menu_idx,
             )?;
             terminal_runtime
@@ -486,7 +485,7 @@ fn main() -> Result<()> {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e),
         Err(_) => {
-            eprintln!("RobcOS crashed. Check /tmp/robcos_error.log");
+            eprintln!("NucleonOS crashed. Check /tmp/nucleon_error.log");
             Ok(())
         }
     }

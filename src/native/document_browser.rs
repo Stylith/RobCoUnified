@@ -1,8 +1,9 @@
 use super::file_manager::NativeFileManagerState;
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
-use crate::config::HEADER_LINES;
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
 use eframe::egui::{self, Context};
-pub use robcos_native_document_browser_app::{
+pub use nucleon_native_document_browser_app::{
     activate_browser_selection, browser_rows, sync_browser_selection,
     TerminalDocumentBrowserRequest,
 };
@@ -42,6 +43,7 @@ pub fn draw_terminal_document_browser(
     status_row_alt: usize,
     content_col: usize,
     input_enabled: bool,
+    header_lines: &[String],
 ) -> DocumentBrowserEvent {
     let rows_data = browser_rows(file_manager);
     *selected_idx = (*selected_idx).min(rows_data.len().saturating_sub(1));
@@ -97,21 +99,23 @@ pub fn draw_terminal_document_browser(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(&painter, title_row, "Open Documents", palette.fg, true);
-            screen.separator(&painter, separator_bottom_row, &palette);
-            screen.underlined_text(
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(&painter, title_row, "Open Documents", &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
+            screen.themed_subtitle(
                 &painter,
                 content_col,
                 subtitle_row,
                 &file_manager.cwd.display().to_string(),
-                palette.fg,
+                &palette,
+                &decoration,
             );
             let visible_rows = status_row.saturating_sub(menu_start_row);
             let scroll_offset = if rows_data.len() <= visible_rows {

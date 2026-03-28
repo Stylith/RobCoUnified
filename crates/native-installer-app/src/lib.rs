@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use robcos_shared::config::{
+use nucleon_shared::config::{
     load_apps, load_games, load_installed_package_descriptions, load_networks, save_apps,
     save_games, save_installed_package_descriptions, save_networks,
 };

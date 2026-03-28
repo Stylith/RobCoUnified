@@ -1,4 +1,4 @@
-use robcos_hosted_addon_contract::{
+use nucleon_hosted_addon_contract::{
     HostedAddonInitRequest, HostedAddonRequest, HostedAddonResponse, HostedAddonUpdateRequest,
 };
 use std::sync::{Mutex, OnceLock};
@@ -61,10 +61,7 @@ pub fn handle_json_request<T: WasmAddon>(
     ((ptr << 32) | len) as i64
 }
 
-pub fn handle_json_bytes<T: WasmAddon>(
-    instance: &OnceLock<Mutex<T>>,
-    bytes: &[u8],
-) -> Vec<u8> {
+pub fn handle_json_bytes<T: WasmAddon>(instance: &OnceLock<Mutex<T>>, bytes: &[u8]) -> Vec<u8> {
     let response = match serde_json::from_slice::<HostedAddonRequest>(bytes) {
         Ok(request) => dispatch_request(instance, request),
         Err(error) => HostedAddonResponse::Error {
@@ -94,12 +91,7 @@ macro_rules! export_wasm_addon {
 
         #[no_mangle]
         pub extern "C" fn nd_handle_json(ptr: i32, len: i32) -> i64 {
-            $crate::handle_json_request::<$addon_ty>(
-                &ND_INSTANCE,
-                &ND_RESPONSE_BUFFER,
-                ptr,
-                len,
-            )
+            $crate::handle_json_request::<$addon_ty>(&ND_INSTANCE, &ND_RESPONSE_BUFFER, ptr, len)
         }
     };
 }
@@ -107,7 +99,7 @@ macro_rules! export_wasm_addon {
 #[cfg(test)]
 mod tests {
     use super::{dispatch_request, handle_json_bytes, WasmAddon};
-    use robcos_hosted_addon_contract::{
+    use nucleon_hosted_addon_contract::{
         HostedAddonFrame, HostedAddonInitRequest, HostedAddonRequest, HostedAddonResponse,
         HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest,
     };

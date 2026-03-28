@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Result};
-use robcos_native_services::shared_file_manager_settings::{
+use nucleon_native_services::shared_file_manager_settings::{
     open_with_default_for_extension, open_with_history_for_extension,
 };
-use robcos_shared::config::{
+use nucleon_shared::config::{
     file_manager_trash_dir, get_settings, DesktopFileManagerSettings, FileManagerSortMode,
     FileManagerViewMode,
 };
-use robcos_shared::default_apps::parse_custom_command_line;
-use robcos_shared::launcher::command_exists;
+use nucleon_shared::default_apps::parse_custom_command_line;
+use nucleon_shared::launcher::command_exists;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -798,6 +798,7 @@ pub enum FileManagerPickMode {
     SaveAs,
     ShortcutIcon(usize),
     Wallpaper,
+    ThemeImport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -806,6 +807,7 @@ pub enum FileManagerSelectionActivation {
     FillSaveAsName(String),
     PickShortcutIcon { shortcut_idx: usize, path: PathBuf },
     PickWallpaper(PathBuf),
+    PickThemeImport(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -819,6 +821,7 @@ pub enum FileManagerOpenTarget {
 pub enum FileManagerPickerCommit {
     SetShortcutIcon { shortcut_idx: usize, path: PathBuf },
     SetWallpaper(PathBuf),
+    ImportTheme(PathBuf),
 }
 
 pub fn open_with_extension_key(path: &Path) -> String {
@@ -921,6 +924,9 @@ pub fn selection_activation_for_selected_path(
         FileManagerPickMode::Wallpaper => {
             FileManagerSelectionActivation::PickWallpaper(selected_path)
         }
+        FileManagerPickMode::ThemeImport => {
+            FileManagerSelectionActivation::PickThemeImport(selected_path)
+        }
     }
 }
 
@@ -953,6 +959,9 @@ pub fn commit_picker_selection(
         FileManagerPickMode::Wallpaper => {
             selected_file.ok_or_else(|| "Select an image file first.".to_string())?
         }
+        FileManagerPickMode::ThemeImport => {
+            selected_file.ok_or_else(|| "Select a theme manifest or .ndpkg file first.".to_string())?
+        }
         FileManagerPickMode::None | FileManagerPickMode::SaveAs => {
             return Err("No picker action is active.".to_string());
         }
@@ -967,6 +976,9 @@ pub fn commit_picker_selection(
         }
         FileManagerPickMode::Wallpaper => {
             Ok(FileManagerPickerCommit::SetWallpaper(selected_file.path))
+        }
+        FileManagerPickMode::ThemeImport => {
+            Ok(FileManagerPickerCommit::ImportTheme(selected_file.path))
         }
         FileManagerPickMode::None | FileManagerPickMode::SaveAs => {
             Err("No picker action is active.".to_string())
@@ -1565,7 +1577,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_file_manager_app_{prefix}_{}_{}",
+                "nucleon_native_file_manager_app_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));
@@ -1694,7 +1706,7 @@ mod tests {
     #[test]
     fn open_target_for_file_manager_action_prefers_default_open_with() {
         let mut settings = DesktopFileManagerSettings::default();
-        robcos_native_services::shared_file_manager_settings::set_open_with_default_in_settings(
+        nucleon_native_services::shared_file_manager_settings::set_open_with_default_in_settings(
             &mut settings,
             "txt",
             Some("echo"),

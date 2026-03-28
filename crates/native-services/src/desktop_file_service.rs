@@ -60,7 +60,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_desktop_file_service_{prefix}_{}_{}",
+                "nucleon_native_desktop_file_service_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn open_directory_location_requires_existing_directory() {
-        let missing = std::env::temp_dir().join("robco_native_missing_directory");
+        let missing = std::env::temp_dir().join("nucleon_native_missing_directory");
         let err = open_directory_location(missing.clone()).expect_err("missing directory");
 
         assert!(err.contains(&missing.display().to_string()));

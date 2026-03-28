@@ -1,11 +1,11 @@
 use super::super::desktop_app::DesktopWindow;
 use super::super::file_manager_desktop;
 use super::desktop_window_mgmt::DesktopHeaderAction;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Context, Id};
 use std::path::PathBuf;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_file_manager(&mut self, ctx: &Context) {
         if !self.file_manager.open || self.desktop_window_is_minimized(DesktopWindow::FileManager) {
             return;
@@ -30,7 +30,7 @@ impl RobcoNativeApp {
             .id(egui_id)
             .open(&mut open)
             .title_bar(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .resizable(true)
             .min_size(min_size)
             .default_size([default_size.x, default_size.y]);
@@ -75,7 +75,8 @@ impl RobcoNativeApp {
             has_clipboard,
             self.editor.save_as_input.clone(),
             self.picking_icon_for_shortcut,
-            self.picking_wallpaper,
+            self.picking_wallpaper || self.picking_terminal_wallpaper,
+            self.picking_theme_import,
         );
         let footer_model = file_manager_desktop::build_footer_model(&desktop_model);
 
@@ -149,6 +150,8 @@ impl RobcoNativeApp {
             self.editor.save_as_input = None;
             self.picking_icon_for_shortcut = None;
             self.picking_wallpaper = false;
+            self.picking_terminal_wallpaper = false;
+            self.picking_theme_import = false;
         }
         self.update_desktop_window_state(DesktopWindow::FileManager, open);
     }

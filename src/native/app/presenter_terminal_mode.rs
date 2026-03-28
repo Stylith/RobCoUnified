@@ -1,8 +1,8 @@
 use super::super::desktop_app::{DesktopWindow, WindowInstanceId};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::Context;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_terminal_mode(&mut self, ctx: &Context) {
         if !self.terminal_mode.open || self.desktop_window_is_minimized(DesktopWindow::TerminalMode)
         {

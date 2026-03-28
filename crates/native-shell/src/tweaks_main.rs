@@ -1,12 +1,12 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::{reload_settings, set_current_user};
-use robcos::core::auth::ensure_default_admin;
-use robcos::native::{
+use nucleon::config::{reload_settings, set_current_user};
+use nucleon::core::auth::ensure_default_admin;
+use nucleon::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    standalone_env_value, RobcoNativeTweaksApp,
+    standalone_env_value, NucleonNativeTweaksApp,
 };
-use robcos_native_tweaks_app::TWEAKS_APP_TITLE;
+use nucleon_native_tweaks_app::TWEAKS_APP_TITLE;
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
 
@@ -37,8 +37,8 @@ fn main() -> Result<()> {
 
     let mut viewport = ViewportBuilder::default()
         .with_title(TWEAKS_APP_TITLE)
-        .with_inner_size(RobcoNativeTweaksApp::default_window_size())
-        .with_min_inner_size(RobcoNativeTweaksApp::min_window_size());
+        .with_inner_size(NucleonNativeTweaksApp::default_window_size())
+        .with_min_inner_size(NucleonNativeTweaksApp::min_window_size());
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -54,7 +54,9 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeTweaksApp::new(session_username.clone())))
+            Ok(Box::new(NucleonNativeTweaksApp::new(
+                session_username.clone(),
+            )))
         }),
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))

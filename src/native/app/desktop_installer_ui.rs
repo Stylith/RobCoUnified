@@ -6,13 +6,15 @@ use super::super::installer_screen::{
     runtime_tool_title, DesktopInstallerConfirm, DesktopInstallerEvent, DesktopInstallerState,
     DesktopInstallerView, InstallerCategory, InstallerMenuTarget, InstallerPackageAction,
 };
-use super::super::retro_ui::{current_palette, RetroPalette};
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
+};
 use super::super::{
     install_user_addon, installed_addon_inventory_sections, remove_installed_addon,
     repository_sync_action_for_manifest, set_addon_enabled_override, InstalledAddonRecord,
     RepositoryAddonAction, RepositoryAddonRecord,
 };
-use super::{CachedIcon, DesktopHeaderAction, RobcoNativeApp};
+use super::{CachedIcon, DesktopHeaderAction, NucleonNativeApp};
 use eframe::egui::{self, Color32, Context, Id, Key, RichText};
 
 enum AddonRowAction {
@@ -22,7 +24,7 @@ enum AddonRowAction {
     RepositorySync(RepositoryAddonAction),
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     // ─── Desktop Program Installer ─────────────────────────────────────────────
 
     pub(super) fn draw_installer(&mut self, ctx: &Context) {
@@ -59,7 +61,7 @@ impl RobcoNativeApp {
             .id(egui_id)
             .open(&mut open)
             .title_bar(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .resizable(false)
             .min_size([min_size.x, min_size.y])
             .max_size(workspace_rect.size())
@@ -119,8 +121,12 @@ impl RobcoNativeApp {
             egui::TopBottomPanel::top(Id::new(("inst_top", generation)))
                 .frame(egui::Frame::none())
                 .show_inside(ui, |ui| {
-                    header_action =
-                        Self::draw_desktop_window_header(ui, "RobCo Program Installer", maximized);
+                    header_action = Self::draw_desktop_window_header(
+                        ui,
+                        "Nucleon Package Installer",
+                        maximized,
+                        &self.desktop_active_shell_style,
+                    );
                 });
 
             egui::TopBottomPanel::bottom(Id::new(("inst_bottom", generation)))
@@ -387,6 +393,7 @@ impl RobcoNativeApp {
     // ── Installer sub-views ─────────────────────────────────────────────────
 
     pub(super) fn apply_installer_widget_style(ui: &mut egui::Ui, palette: RetroPalette) {
+        let shell_style = current_shell_style();
         ui.visuals_mut().window_fill = palette.bg;
         ui.visuals_mut().panel_fill = palette.bg;
         ui.visuals_mut().faint_bg_color = palette.bg;
@@ -413,10 +420,10 @@ impl RobcoNativeApp {
         widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
         ui.visuals_mut().extreme_bg_color = palette.panel;
         ui.visuals_mut().code_bg_color = palette.bg;
-        ui.visuals_mut().window_shadow = egui::epaint::Shadow::NONE;
-        ui.visuals_mut().popup_shadow = egui::epaint::Shadow::NONE;
-        ui.visuals_mut().window_rounding = egui::Rounding::ZERO;
-        ui.visuals_mut().menu_rounding = egui::Rounding::ZERO;
+        ui.visuals_mut().window_shadow = shell_style_shadow(&shell_style);
+        ui.visuals_mut().popup_shadow = shell_style_shadow(&shell_style);
+        ui.visuals_mut().window_rounding = shell_style_rounding(&shell_style);
+        ui.visuals_mut().menu_rounding = shell_style_rounding(&shell_style);
         ui.visuals_mut().selection.bg_fill = palette.selection_bg;
         ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, palette.fg);
         ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(1.5, palette.fg);
@@ -425,14 +432,15 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn apply_installer_dropdown_style(ui: &mut egui::Ui, palette: RetroPalette) {
+        let shell_style = current_shell_style();
         let mut style = ui.style().as_ref().clone();
         style.visuals.window_fill = palette.bg;
         style.visuals.panel_fill = palette.bg;
         style.visuals.window_stroke = egui::Stroke::new(1.0, palette.fg);
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.window_rounding = shell_style_rounding(&shell_style);
+        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
+        style.visuals.window_shadow = shell_style_shadow(&shell_style);
+        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
         style.visuals.widgets.noninteractive.bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
@@ -507,7 +515,7 @@ impl RobcoNativeApp {
         ui.vertical_centered(|ui| {
             ui.add_space(12.0);
             ui.label(
-                RichText::new("RobCo Program Installer")
+                RichText::new("Nucleon Package Installer")
                     .color(palette.fg)
                     .heading()
                     .strong()
@@ -1018,6 +1026,22 @@ impl RobcoNativeApp {
         const HEADER_H: f32 = 28.0;
         const FOOTER_H: f32 = 40.0;
         let sections = installed_addon_inventory_sections();
+        let repository_addon_indices = sections
+            .repository_available
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, record)| {
+                (record.manifest.kind != crate::platform::AddonKind::Theme).then_some(idx)
+            })
+            .collect::<Vec<_>>();
+        let repository_theme_indices = sections
+            .repository_available
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, record)| {
+                (record.manifest.kind == crate::platform::AddonKind::Theme).then_some(idx)
+            })
+            .collect::<Vec<_>>();
         let total = sections.essential.len() + sections.optional.len();
         let row_height = 58.0;
 
@@ -1083,9 +1107,10 @@ impl RobcoNativeApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(format!(
-                        "{} installed | {} repository | {} essential | {} optional | {} issue(s)",
+                        "{} installed | {} repository addon(s) | {} repository theme(s) | {} essential | {} optional | {} issue(s)",
                         total,
-                        sections.repository_available.len(),
+                        repository_addon_indices.len(),
+                        repository_theme_indices.len(),
                         sections.essential.len(),
                         sections.optional.len(),
                         sections.issues.len() + usize::from(sections.repository_issue.is_some())
@@ -1194,7 +1219,7 @@ impl RobcoNativeApp {
                         }
                     }
 
-                    if !sections.repository_available.is_empty() {
+                    if !repository_addon_indices.is_empty() {
                         if !sections.essential.is_empty() || !sections.optional.is_empty() {
                             ui.add_space(12.0);
                             ui.separator();
@@ -1206,7 +1231,34 @@ impl RobcoNativeApp {
                                 .strong(),
                         );
                         ui.add_space(6.0);
-                        for record in &sections.repository_available {
+                        for idx in &repository_addon_indices {
+                            let record = &sections.repository_available[*idx];
+                            if let Some(action) = Self::draw_installer_repository_addon_row(
+                                ui, palette, row_width, row_height, record,
+                            ) {
+                                *deferred_repository_action =
+                                    Some((record.manifest.id.clone(), action));
+                            }
+                        }
+                    }
+
+                    if !repository_theme_indices.is_empty() {
+                        if !sections.essential.is_empty()
+                            || !sections.optional.is_empty()
+                            || !repository_addon_indices.is_empty()
+                        {
+                            ui.add_space(12.0);
+                            ui.separator();
+                            ui.add_space(12.0);
+                        }
+                        ui.label(
+                            RichText::new("Repository Themes")
+                                .color(palette.dim)
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
+                        for idx in &repository_theme_indices {
+                            let record = &sections.repository_available[*idx];
                             if let Some(action) = Self::draw_installer_repository_addon_row(
                                 ui, palette, row_width, row_height, record,
                             ) {

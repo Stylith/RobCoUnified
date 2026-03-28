@@ -40,22 +40,22 @@ use super::super::shell_screen::draw_main_menu_screen;
 use super::super::terminal_open_with_picker::{draw_open_with_picker, OpenWithPickerAction};
 use super::super::wasm_addon_runtime::{collect_hosted_keyboard_input, draw_hosted_addon_frame};
 use super::launch_registry::{editor_launch_target, file_manager_launch_target};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use super::BUILTIN_TEXT_EDITOR_APP;
 use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
 use crate::theme::TerminalStatusBarPosition;
 use chrono::{Local, Timelike};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText, Stroke, TopBottomPanel};
-use robcos_native_programs_app::{
+use nucleon_native_programs_app::{
     build_terminal_application_entries, build_terminal_game_entries,
     resolve_terminal_applications_request, resolve_terminal_catalog_request,
     resolve_terminal_games_request, DesktopProgramRequest, TerminalProgramRequest,
 };
-use robcos_native_settings_app::TerminalSettingsPanel;
-use robcos_shared::platform::{HostedAddonSize, LaunchTarget};
+use nucleon_native_settings_app::TerminalSettingsPanel;
+use nucleon_shared::platform::{HostedAddonSize, LaunchTarget};
 use std::time::Duration;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     fn draw_terminal_game_shell<F>(ctx: &Context, title: &str, controls: &str, draw_game: F)
     where
         F: FnOnce(&mut egui::Ui),
@@ -99,11 +99,12 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_main_menu(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let activated = draw_main_menu_screen(
             ctx,
             &mut self.terminal_nav.main_menu_idx,
             &self.shell_status,
-            &format!("RobcOS v{}", env!("CARGO_PKG_VERSION")),
+            &format!("NucleonOS v{}", env!("CARGO_PKG_VERSION")),
             layout.cols,
             layout.rows,
             layout.header_start_row,
@@ -114,6 +115,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         if let Some(action) = activated {
             let action = resolve_main_menu_action(action);
@@ -123,6 +125,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_applications(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let (show_file_manager, show_text_editor) = self.visible_application_builtins();
         let mut configured_names = catalog_names(ProgramCatalog::Applications);
         for name in installed_hosted_application_names() {
@@ -154,6 +157,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         let request = resolve_terminal_applications_request(event, BUILTIN_TEXT_EDITOR_APP);
         self.apply_terminal_program_request(request, TerminalScreen::Applications);
@@ -201,6 +205,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_documents(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let mut items = vec!["Logs".to_string()];
         items.extend(Self::sorted_document_categories());
         items.push("---".to_string());
@@ -226,6 +231,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
             &self.shell_status,
+            &header_lines,
         );
         self.terminal_nav.documents_idx = selected;
         if let Some(idx) = activated {
@@ -254,6 +260,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_logs(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let items = vec![
             "New Log".to_string(),
             "View Logs".to_string(),
@@ -281,6 +288,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
             &self.shell_status,
+            &header_lines,
         );
         self.terminal_nav.logs_idx = selected;
         if let Some(idx) = activated {
@@ -305,6 +313,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_document_browser(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         sync_browser_selection(&mut self.file_manager, self.terminal_nav.browser_idx);
         // If open-with picker is open, handle it as overlay
         if let Some(ref mut picker) = self.terminal_open_with_picker {
@@ -353,6 +362,7 @@ impl RobcoNativeApp {
                     layout.status_row_alt,
                     layout.content_col,
                     false,
+                    &header_lines,
                 );
                 if let Some(action) = picker_action {
                     match action {
@@ -400,6 +410,7 @@ impl RobcoNativeApp {
                 layout.status_row_alt,
                 layout.content_col,
                 false,
+                &header_lines,
             );
             return;
         }
@@ -420,6 +431,7 @@ impl RobcoNativeApp {
             layout.status_row_alt,
             layout.content_col,
             true,
+            &header_lines,
         );
         match event {
             DocumentBrowserEvent::None => {}
@@ -506,6 +518,7 @@ impl RobcoNativeApp {
             return;
         }
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let previous_window_mode = self.settings.draft.native_startup_window_mode;
         let visibility = self.terminal_settings_visibility();
         let event = run_terminal_settings_screen(
@@ -527,6 +540,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         match event {
             TerminalSettingsEvent::None => {}
@@ -539,13 +553,7 @@ impl RobcoNativeApp {
             TerminalSettingsEvent::OpenPanel(panel) => {
                 self.terminal_settings_panel = panel;
                 if matches!(panel, TerminalSettingsPanel::Appearance) {
-                    self.tweaks_surface_tab = 1;
-                    self.terminal_tweaks_surface_dropdown_open = false;
                     self.terminal_tweaks_open_dropdown = None;
-                    if self.terminal_tweaks_terminal_expanded_menu.is_none() {
-                        self.terminal_tweaks_terminal_expanded_menu =
-                            Some(self.terminal_tweaks_tab);
-                    }
                 }
                 self.terminal_nav.settings_idx = 0;
                 self.terminal_nav.settings_choice = None;
@@ -591,6 +599,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_edit_menus(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let (_, show_text_editor) = self.visible_application_builtins();
         let applications = self.edit_program_entries(EditMenuTarget::Applications);
         let documents = self.edit_program_entries(EditMenuTarget::Documents);
@@ -617,6 +626,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         match event {
             TerminalEditMenusRequest::None => {}
@@ -736,6 +746,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_connections(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let request = draw_terminal_connections_screen(
             ctx,
             &mut self.terminal_connections,
@@ -750,6 +761,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         self.apply_terminal_connections_request(request);
     }
@@ -772,6 +784,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_default_apps(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let event = draw_default_apps_screen(
             ctx,
             &self.settings.draft,
@@ -789,6 +802,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         match event {
             TerminalDefaultAppsRequest::None => {}
@@ -821,6 +835,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_about(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         match draw_about_screen(
             ctx,
             layout.cols,
@@ -833,6 +848,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         ) {
             TerminalAboutRequest::None => {}
             TerminalAboutRequest::Back => {
@@ -843,6 +859,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_network(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let entries = catalog_names(ProgramCatalog::Network);
         let event = draw_programs_menu(
             ctx,
@@ -861,6 +878,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         let request = resolve_terminal_catalog_request(event, ProgramCatalog::Network);
         self.apply_terminal_program_request(request, TerminalScreen::Network);
@@ -868,6 +886,7 @@ impl RobcoNativeApp {
 
     pub(super) fn draw_terminal_games(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let mut configured_names = catalog_names(ProgramCatalog::Games);
         for name in installed_hosted_game_names() {
             if !configured_names.iter().any(|existing| existing == &name) {
@@ -893,6 +912,7 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         match event {
             ProgramMenuEvent::None => {}
@@ -1108,6 +1128,7 @@ impl RobcoNativeApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let event = draw_installer_screen(
             ctx,
             &mut self.terminal_installer,
@@ -1122,12 +1143,14 @@ impl RobcoNativeApp {
             layout.menu_start_row,
             layout.status_row,
             layout.content_col,
+            &header_lines,
         );
         self.apply_installer_event(event);
     }
 
     pub(super) fn draw_terminal_user_management(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
+        let header_lines = self.active_terminal_header_lines().to_vec();
         let mode = self.terminal_nav.user_management_mode.clone();
         let screen = user_management_screen_for_mode(
             &mode,
@@ -1160,6 +1183,7 @@ impl RobcoNativeApp {
             layout.status_row,
             layout.content_col,
             &self.shell_status,
+            &header_lines,
         );
         self.terminal_nav.user_management_idx = selected;
         if let Some(idx) = activated {

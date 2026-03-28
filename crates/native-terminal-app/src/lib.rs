@@ -1,12 +1,12 @@
 mod user_management;
 
-pub use robcos_native_services::desktop_default_apps_service::DefaultAppSlot;
-use robcos_native_services::desktop_settings_service::pty_force_render_mode;
-use robcos_native_services::shared_types::FlashAction;
-pub use robcos_native_services::shared_types::TerminalScreen;
-use robcos_shared::config::HackingDifficulty;
-use robcos_shared::core::auth::AuthMethod;
-use robcos_shared::core::hacking::HackingGame;
+pub use nucleon_native_services::desktop_default_apps_service::DefaultAppSlot;
+use nucleon_native_services::desktop_settings_service::pty_force_render_mode;
+use nucleon_native_services::shared_types::FlashAction;
+pub use nucleon_native_services::shared_types::TerminalScreen;
+use nucleon_shared::config::HackingDifficulty;
+use nucleon_shared::core::auth::AuthMethod;
+use nucleon_shared::core::hacking::HackingGame;
 pub use user_management::{
     handle_user_management_selection, plan_user_management_action, user_management_screen_for_mode,
     UserManagementAction, UserManagementExecutionPlan, UserManagementScreen,
@@ -707,7 +707,7 @@ pub fn terminal_shell_launch_plan(
     }
 
     let title = match surface {
-        TerminalShellSurface::Embedded => "ROBCO MAINTENANCE TERMLINK",
+        TerminalShellSurface::Embedded => "NUCLEON MAINTENANCE TERMLINK",
         TerminalShellSurface::Desktop => "Terminal",
     };
     let mut plan =
@@ -956,19 +956,19 @@ pub fn terminal_screen_open_plan(
             reset_user_management_to_root: false,
             clear_status,
         },
-        TerminalScreen::EditMenus
-        | TerminalScreen::About
-        | TerminalScreen::PtyApp => TerminalScreenOpenPlan {
-            screen,
-            index_target: TerminalSelectionIndexTarget::None,
-            selected_idx,
-            reset_installer: false,
-            reset_connections: false,
-            clear_settings_choice: false,
-            clear_default_app_slot: false,
-            reset_user_management_to_root: false,
-            clear_status,
-        },
+        TerminalScreen::EditMenus | TerminalScreen::About | TerminalScreen::PtyApp => {
+            TerminalScreenOpenPlan {
+                screen,
+                index_target: TerminalSelectionIndexTarget::None,
+                selected_idx,
+                reset_installer: false,
+                reset_connections: false,
+                clear_settings_choice: false,
+                clear_default_app_slot: false,
+                reset_user_management_to_root: false,
+                clear_status,
+            }
+        }
     }
 }
 
@@ -1250,7 +1250,7 @@ mod tests {
     fn embedded_terminal_shell_plan_uses_maintenance_title_and_fixed_metrics() {
         let plan =
             terminal_shell_launch_plan(TerminalShellSurface::Embedded, Some("/bin/zsh"), true);
-        assert_eq!(plan.title, "ROBCO MAINTENANCE TERMLINK");
+        assert_eq!(plan.title, "NUCLEON MAINTENANCE TERMLINK");
         assert_eq!(plan.argv, vec!["/bin/zsh".to_string(), "-l".to_string()]);
         assert!(plan.env.is_empty());
         assert!(plan.use_fixed_terminal_metrics);

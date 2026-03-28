@@ -1,8 +1,8 @@
 [package]
-name = "robcos-native-document-browser-app"
+name = "nucleon-native-document-browser-app"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
-robcos-native-file-manager-app = { path = "../native-file-manager-app" }
+nucleon-native-file-manager-app = { path = "../native-file-manager-app" }

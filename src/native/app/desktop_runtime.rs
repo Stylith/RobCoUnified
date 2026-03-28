@@ -3,30 +3,25 @@ use super::super::desktop_session_service::{
     bind_login_identity, last_session_username, user_record as session_user_record,
 };
 use super::super::desktop_status_service::{clear_settings_status, clear_shell_status};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use super::SecondaryWindowApp;
 use crate::config::{get_current_user, OpenMode};
 use crate::core::auth::AuthMethod;
 use eframe::egui::{self, Context};
-use robcos_native_settings_app::{desktop_settings_default_panel, NativeSettingsPanel};
+use nucleon_native_settings_app::{desktop_settings_default_panel, NativeSettingsPanel};
 use std::path::PathBuf;
 use std::time::Duration;
 
 const NUCLEON_AUTOLOGIN_USER_ENV: &str = "NUCLEON_AUTOLOGIN_USER";
-const LEGACY_ROBCOS_AUTOLOGIN_USER_ENV: &str = "ROBCOS_AUTOLOGIN_USER";
 
 fn autologin_user_override() -> Option<String> {
-    [NUCLEON_AUTOLOGIN_USER_ENV, LEGACY_ROBCOS_AUTOLOGIN_USER_ENV]
-        .into_iter()
-        .find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+    std::env::var(NUCLEON_AUTOLOGIN_USER_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn apply_autologin_open_mode(&mut self) {
         if matches!(self.settings.draft.default_open_mode, OpenMode::Desktop) {
             self.desktop_mode_open = true;
@@ -100,6 +95,8 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.picking_icon_for_shortcut = None;
         self.picking_wallpaper = false;
+        self.picking_terminal_wallpaper = false;
+        self.picking_theme_import = false;
         self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Settings));
         self.apply_status_update(clear_settings_status());
     }
@@ -108,7 +105,7 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         self.dispatch_context_menu_action(ctx);
         if self.terminal_prompt.is_some() {
@@ -135,6 +132,7 @@ impl RobcoNativeApp {
         self.prepare_standalone_window_shell(session_username, true);
         self.prime_desktop_window_defaults(DesktopWindow::Tweaks);
         self.tweaks_open = true;
+        self.picking_theme_import = false;
         self.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::Tweaks));
     }
 
@@ -142,7 +140,7 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         self.draw_tweaks(ctx);
         if !self.tweaks_open {
@@ -160,6 +158,8 @@ impl RobcoNativeApp {
         self.file_manager.open = false;
         self.picking_icon_for_shortcut = None;
         self.picking_wallpaper = false;
+        self.picking_terminal_wallpaper = false;
+        self.picking_theme_import = false;
         self.editor.reset_for_desktop_new_document();
         self.editor.status.clear();
         self.editor.ui.reset_search();
@@ -176,7 +176,7 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         if self.terminal_prompt.is_some() {
             self.handle_terminal_prompt_input(ctx);
@@ -260,7 +260,7 @@ impl RobcoNativeApp {
         self.process_background_results(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         self.draw_applications(ctx);
         if !self.applications.open {
@@ -281,7 +281,7 @@ impl RobcoNativeApp {
         self.process_desktop_pty_input_early(ctx);
         self.maybe_sync_settings_from_disk(ctx);
         self.sync_desktop_appearance(ctx);
-        self.sync_terminal_appearance();
+        self.sync_terminal_appearance(ctx);
         self.sync_native_display_effects();
         self.sync_native_cursor_mode();
         let pty_last = self.active_window_kind() == Some(DesktopWindow::PtyApp)

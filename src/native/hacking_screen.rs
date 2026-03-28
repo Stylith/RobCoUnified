@@ -70,12 +70,12 @@ pub fn draw_hacking_screen(
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
             let (screen, _) = RetroScreen::new(ui, cols, screen_rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
+            screen.paint_terminal_background(&painter, &palette);
 
             screen.centered_text(
                 &painter,
                 0,
-                "ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL",
+                "NUCLEON TERMLINK PROTOCOL",
                 palette.fg,
                 true,
             );
@@ -214,7 +214,7 @@ pub fn draw_locked_screen(
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
             let (screen, _) = RetroScreen::new(ui, cols, screen_rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
+            screen.paint_terminal_background(&painter, &palette);
             screen.centered_text(&painter, 14, "TERMINAL LOCKED", palette.fg, true);
             screen.centered_text(
                 &painter,

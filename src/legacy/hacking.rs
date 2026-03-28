@@ -464,7 +464,7 @@ fn draw_grid_frame(
         };
 
         // Header
-        let hdr = Paragraph::new("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL")
+        let hdr = Paragraph::new("NUCLEON TERMLINK PROTOCOL")
             .alignment(Alignment::Center)
             .style(ns);
         f.render_widget(

@@ -1,4 +1,4 @@
-use robcos_native_services::desktop_connections_service::{
+use nucleon_native_services::desktop_connections_service::{
     bluetooth_disconnect_targets, bluetooth_installer_status_hint, connection_kind_plural_label,
     connection_network_group_label, connection_network_groups, connection_requires_password,
     connections_macos_blueutil_missing, disconnect_connection_status, discovered_connection_label,
@@ -7,8 +7,8 @@ use robcos_native_services::desktop_connections_service::{
     forget_saved_connection_and_refresh_settings, saved_connection_label,
     saved_connections_for_kind,
 };
-use robcos_shared::config::{ConnectionKind, SavedConnection};
-use robcos_shared::connections::{DiscoveredConnection, NetworkMenuGroup};
+use nucleon_shared::config::{ConnectionKind, SavedConnection};
+use nucleon_shared::connections::{DiscoveredConnection, NetworkMenuGroup};
 
 #[derive(Debug, Clone)]
 pub enum ConnectionsView {

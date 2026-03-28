@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn wallpaper_browser_start_dir_falls_back_for_builtin_wallpaper_names() {
-        let start = wallpaper_browser_start_dir("RobCo");
+        let start = wallpaper_browser_start_dir("Default");
 
         assert!(!start.as_os_str().is_empty());
     }

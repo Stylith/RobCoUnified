@@ -118,10 +118,7 @@ impl WasmAddonModuleSession {
     }
 }
 
-fn format_wasm_instantiate_error(
-    module: &InstalledWasmAddonModule,
-    error: &str,
-) -> String {
+fn format_wasm_instantiate_error(module: &InstalledWasmAddonModule, error: &str) -> String {
     if error.contains("__wbindgen_placeholder__") {
         return format!(
             "WASM addon '{}' from '{}' expects wasm-bindgen/web imports and is not compatible with the shell addon host.",
@@ -187,12 +184,14 @@ impl WasmHostedAddonState {
         if should_refresh_host_context(&input) || self.host_context.is_none() {
             self.host_context = initial_host_context(&self.bundle_dir);
         }
-        match self.session.request(&HostedAddonRequest::Update(HostedAddonUpdateRequest {
-            size,
-            delta_seconds,
-            input,
-            host_context: self.host_context.clone(),
-        }))? {
+        match self
+            .session
+            .request(&HostedAddonRequest::Update(HostedAddonUpdateRequest {
+                size,
+                delta_seconds,
+                input,
+                host_context: self.host_context.clone(),
+            }))? {
             HostedAddonResponse::Ready { title, frame } => {
                 self.title = title;
                 self.frame = frame;
@@ -210,7 +209,6 @@ impl WasmHostedAddonState {
     pub(crate) fn title(&self) -> &str {
         &self.title
     }
-
 
     pub(crate) fn draw(&mut self, ui: &mut Ui) {
         let frame = self.frame.clone();
@@ -253,8 +251,11 @@ impl WasmHostedAddonState {
                         content_rect.top() + (*y * scale),
                     );
                     let size = egui::vec2(width * scale, height * scale);
-                    painter
-                        .rect_filled(egui::Rect::from_min_size(min, size), 0.0, hosted_color(fill));
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(min, size),
+                        0.0,
+                        hosted_color(fill),
+                    );
                 }
                 HostedDrawCommand::Text {
                     x,
@@ -291,10 +292,8 @@ impl WasmHostedAddonState {
                     let size = egui::vec2(width * scale, height * scale);
                     let image_rect = egui::Rect::from_min_size(min, size);
                     if let Some(texture) = self.load_texture(ui.ctx(), asset_path) {
-                        let uv = egui::Rect::from_min_max(
-                            egui::pos2(0.0, 0.0),
-                            egui::pos2(1.0, 1.0),
-                        );
+                        let uv =
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                         let mut mesh = egui::epaint::Mesh::with_texture(texture.id());
                         mesh.add_rect_with_uv(
                             image_rect,
@@ -413,10 +412,12 @@ fn resolve_bundle_asset_path(bundle_dir: &Path, asset_path: &str) -> Option<Path
     if relative.is_absolute() {
         return None;
     }
-    if relative
-        .components()
-        .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
-    {
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
         return None;
     }
     Some(bundle_dir.join(relative))
@@ -583,9 +584,8 @@ mod tests {
     use super::WasmAddonModuleSession;
     use crate::native::InstalledWasmAddonModule;
     use crate::platform::{
-        AddonId, HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol,
-        HostedAddonRequest, HostedAddonResponse, HostedAddonSize, HostedAddonSurface,
-        HostedAddonUpdateRequest,
+        AddonId, HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol, HostedAddonRequest,
+        HostedAddonResponse, HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest,
     };
     use std::fs;
     use std::path::PathBuf;

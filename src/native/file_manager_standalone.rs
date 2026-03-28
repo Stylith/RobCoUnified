@@ -154,7 +154,7 @@ impl FileManagerDialog {
                 current_default,
                 ..
             } => {
-                let ext_label = robcos_native_file_manager_app::open_with_extension_label(ext_key);
+                let ext_label = nucleon_native_file_manager_app::open_with_extension_label(ext_key);
                 if let Some(default_command) = current_default {
                     format!("Command for {ext_label} (default: {default_command})")
                 } else {
@@ -190,7 +190,7 @@ impl FileManagerDialog {
     }
 }
 
-pub struct RobcoNativeFileManagerApp {
+pub struct NucleonNativeFileManagerApp {
     file_manager: NativeFileManagerState,
     runtime: FileManagerEditRuntime,
     settings_draft: Settings,
@@ -200,13 +200,13 @@ pub struct RobcoNativeFileManagerApp {
     dialog: Option<FileManagerDialog>,
 }
 
-impl Default for RobcoNativeFileManagerApp {
+impl Default for NucleonNativeFileManagerApp {
     fn default() -> Self {
         Self::new(None)
     }
 }
 
-impl RobcoNativeFileManagerApp {
+impl NucleonNativeFileManagerApp {
     pub fn new(requested_path: Option<PathBuf>) -> Self {
         let settings_draft = load_settings_snapshot();
         let start_dir = home_dir_fallback();
@@ -390,7 +390,7 @@ impl RobcoNativeFileManagerApp {
         match file_manager_app::prepare_open_with_launch(&entry.path, &command) {
             Ok(launch) => {
                 self.apply_status(self.launch_open_with_request(launch));
-                use robcos_native_services::shared_file_manager_settings::FileManagerSettingsUpdate;
+                use nucleon_native_services::shared_file_manager_settings::FileManagerSettingsUpdate;
                 apply_file_manager_settings_update(
                     &mut self.settings_draft,
                     FileManagerSettingsUpdate::RecordOpenWithCommand { ext_key, command },
@@ -434,7 +434,9 @@ impl RobcoNativeFileManagerApp {
             | file_manager_desktop::FileManagerDesktopFooterRequest::CommitIconPicker
             | file_manager_desktop::FileManagerDesktopFooterRequest::CancelIconPicker
             | file_manager_desktop::FileManagerDesktopFooterRequest::CommitWallpaperPicker
-            | file_manager_desktop::FileManagerDesktopFooterRequest::CancelWallpaperPicker => {}
+            | file_manager_desktop::FileManagerDesktopFooterRequest::CancelWallpaperPicker
+            | file_manager_desktop::FileManagerDesktopFooterRequest::CommitThemeImportPicker
+            | file_manager_desktop::FileManagerDesktopFooterRequest::CancelThemeImportPicker => {}
         }
     }
 
@@ -514,8 +516,8 @@ impl RobcoNativeFileManagerApp {
                     if let Some(entry) = self.selected_file() {
                         let ext_key = file_manager_app::open_with_extension_key(&entry.path);
                         let known_apps =
-                            robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
-                        let open_with = robcos_native_file_manager_app::open_with_state_for_path(
+                            nucleon_native_file_manager_app::known_apps_for_extension(&ext_key);
+                        let open_with = nucleon_native_file_manager_app::open_with_state_for_path(
                             &entry.path,
                             &self.settings_draft.desktop_file_manager,
                         );
@@ -1015,7 +1017,7 @@ impl RobcoNativeFileManagerApp {
     }
 }
 
-impl eframe::App for RobcoNativeFileManagerApp {
+impl eframe::App for NucleonNativeFileManagerApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.file_manager.ensure_selection_valid();
         self.handle_keyboard_shortcuts(ctx);
@@ -1032,6 +1034,7 @@ impl eframe::App for RobcoNativeFileManagerApp {
             self.runtime.has_clipboard(),
             None,
             None,
+            false,
             false,
         );
         let footer_model = build_footer_model(&desktop_model);
@@ -1166,7 +1169,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_file_manager_standalone_{prefix}_{}_{}",
+                "nucleon_native_file_manager_standalone_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));

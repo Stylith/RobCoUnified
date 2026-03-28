@@ -14,8 +14,8 @@ pub(super) fn build_open_with_context_entries(
         return (Vec::new(), 0);
     };
     let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
-    let known_apps = robcos_native_file_manager_app::known_apps_for_extension(&ext_key);
-    let open_with = robcos_native_file_manager_app::open_with_state_for_path(&entry.path, settings);
+    let known_apps = nucleon_native_file_manager_app::known_apps_for_extension(&ext_key);
+    let open_with = nucleon_native_file_manager_app::open_with_state_for_path(&entry.path, settings);
 
     let mut entries = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -33,7 +33,7 @@ pub(super) fn build_open_with_context_entries(
     (entries, known_app_count)
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     fn attach_file_manager_context_menu(
         action: &mut Option<ContextMenuAction>,
         response: &egui::Response,
@@ -348,7 +348,9 @@ impl RobcoNativeApp {
     ) {
         let allow_multi = !save_picker_mode
             && self.picking_icon_for_shortcut.is_none()
-            && !self.picking_wallpaper;
+            && !self.picking_wallpaper
+            && !self.picking_terminal_wallpaper
+            && !self.picking_theme_import;
         let ctrl_toggle = allow_multi && ctx.input(|i| i.modifiers.ctrl);
 
         if response.secondary_clicked() && !self.file_manager.is_path_selected(&row.path) {
@@ -420,7 +422,12 @@ impl RobcoNativeApp {
             .exact_height(top_panel_height)
             .show_inside(ui, |ui| {
                 *header_action =
-                    Self::draw_desktop_window_header(ui, FILE_MANAGER_APP_TITLE, maximized);
+                    Self::draw_desktop_window_header(
+                        ui,
+                        FILE_MANAGER_APP_TITLE,
+                        maximized,
+                        &self.desktop_active_shell_style,
+                    );
 
                 if let Some(banner) = banner {
                     egui::Frame::none()

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::{reload_settings, set_current_user};
-use robcos::core::auth::ensure_default_admin;
-use robcos::native::{
+use nucleon::config::{reload_settings, set_current_user};
+use nucleon::core::auth::ensure_default_admin;
+use nucleon::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
-    standalone_env_value, RobcoNativeInstallerApp,
+    standalone_env_value, NucleonNativeInstallerApp,
 };
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
@@ -37,8 +37,8 @@ fn main() -> Result<()> {
 
     let mut viewport = ViewportBuilder::default()
         .with_title(APP_TITLE)
-        .with_inner_size(RobcoNativeInstallerApp::default_window_size())
-        .with_min_inner_size(RobcoNativeInstallerApp::min_window_size());
+        .with_inner_size(NucleonNativeInstallerApp::default_window_size())
+        .with_min_inner_size(NucleonNativeInstallerApp::min_window_size());
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeInstallerApp::new(
+            Ok(Box::new(NucleonNativeInstallerApp::new(
                 session_username.clone(),
             )))
         }),

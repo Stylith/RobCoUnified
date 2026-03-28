@@ -5,15 +5,17 @@ use super::super::desktop_search_service::{
 };
 use super::super::desktop_session_service::active_session_username as active_native_session_username;
 use super::super::editor_app::EDITOR_APP_TITLE;
-use super::super::retro_ui::current_palette;
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow,
+};
 use eframe::egui::{self, Color32, Context, Key, RichText, TextEdit};
 
 const BUILTIN_TEXT_EDITOR_APP: &str = EDITOR_APP_TITLE;
 
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::native::{installed_hosted_application_names, installed_hosted_game_names};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn spotlight_gather_results(&mut self) {
         let query = self.spotlight_query.to_lowercase();
         let tab = self.spotlight_tab;
@@ -147,6 +149,7 @@ impl RobcoNativeApp {
         }
 
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let screen = ctx.screen_rect();
         let box_width = 600.0_f32.min(screen.width() - 40.0);
         let box_height = 420.0_f32.min(screen.height() - 80.0);
@@ -162,7 +165,8 @@ impl RobcoNativeApp {
                 egui::Frame::none()
                     .fill(palette.bg)
                     .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .shadow(egui::epaint::Shadow::NONE)
+                    .rounding(shell_style_rounding(&shell_style))
+                    .shadow(shell_style_shadow(&shell_style))
                     .inner_margin(egui::Margin::same(12.0)),
             )
             .show(ctx, |ui| {

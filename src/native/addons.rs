@@ -5,9 +5,9 @@ use crate::config;
 #[cfg(test)]
 use crate::platform::CapabilityId;
 use crate::platform::{
-    addon_manifest_path, build_layered_addon_registry, discover_addon_manifests, AddonEntrypoint,
-    AddonArtifact, AddonId, AddonKind, AddonManifest, AddonManifestDiscovery,
-    AddonManifestLoadIssue, AddonRegistry, AddonRepositoryIndex, AddonRelease, AddonScope,
+    addon_manifest_path, build_layered_addon_registry, discover_addon_manifests, AddonArtifact,
+    AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonManifestDiscovery,
+    AddonManifestLoadIssue, AddonRegistry, AddonRelease, AddonRepositoryIndex, AddonScope,
     AddonStateOverrides, DiscoveredAddonManifest, FileAssociation, HostedAddonProtocol,
     InstallProfile,
 };
@@ -240,7 +240,10 @@ pub fn installed_wasm_addon_module_by_display_name(
         .find(|record| {
             record.effective_enabled
                 && record.manifest.display_name == display_name
-                && matches!(record.manifest.entrypoint, AddonEntrypoint::WasmModule { .. })
+                && matches!(
+                    record.manifest.entrypoint,
+                    AddonEntrypoint::WasmModule { .. }
+                )
         })
         .and_then(installed_wasm_addon_module_from_record)
 }
@@ -253,26 +256,88 @@ pub fn installed_hosted_application_names() -> Vec<String> {
     hosted_application_names_from_registry(&installed_enabled_addon_manifest_registry())
 }
 
-pub fn installed_theme_packs() -> Vec<ThemePack> {
-    let mut themes = vec![ThemePack::classic()];
+fn load_theme_pack_from_manifest(manifest_path: &Path) -> Result<ThemePack, String> {
+    let raw = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("Failed to read theme manifest: {error}"))?;
+    serde_json::from_str(&raw).map_err(|error| format!("Failed to parse theme manifest: {error}"))
+}
+
+fn load_legacy_theme_pack(bundle_dir: &Path) -> Option<ThemePack> {
+    let raw = fs::read_to_string(bundle_dir.join("theme.json")).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn installed_theme_bundle_records() -> Vec<(ThemePack, PathBuf)> {
+    let mut bundles = Vec::new();
+    let themes_dir = config::themes_directory();
+    if let Ok(entries) = fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let bundle_dir = entry.path();
+            if !bundle_dir.is_dir() {
+                continue;
+            }
+            let manifest_path = bundle_dir.join("manifest.json");
+            let Ok(theme) = load_theme_pack_from_manifest(&manifest_path) else {
+                continue;
+            };
+            bundles.push((theme, bundle_dir));
+        }
+    }
+
+    // Compatibility path for pre-Phase 10 theme bundles that still ship as addon manifests
+    // plus a sibling `theme.json`.
     for record in installed_addon_inventory() {
         if record.manifest.kind != AddonKind::Theme {
             continue;
         }
-        let Some(manifest_path) = record.manifest_path.as_ref() else {
+        let Some(bundle_dir) = record
+            .manifest_path
+            .as_ref()
+            .and_then(|manifest_path| manifest_path.parent().map(Path::to_path_buf))
+        else {
             continue;
         };
-        let Some(bundle_dir) = manifest_path.parent() else {
+        let Some(theme) = load_legacy_theme_pack(&bundle_dir) else {
             continue;
         };
-        let theme_path = bundle_dir.join("theme.json");
-        let Ok(raw) = fs::read_to_string(&theme_path) else {
-            continue;
-        };
-        let Ok(theme) = serde_json::from_str::<ThemePack>(&raw) else {
-            continue;
-        };
-        themes.push(theme);
+        bundles.push((theme, bundle_dir));
+    }
+
+    bundles
+}
+
+fn user_installed_theme_pack_ids() -> Vec<AddonId> {
+    let mut ids = Vec::new();
+    let themes_dir = config::themes_directory();
+    if let Ok(entries) = fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let bundle_dir = entry.path();
+            if !bundle_dir.is_dir() {
+                continue;
+            }
+            let manifest_path = bundle_dir.join("manifest.json");
+            let Ok(theme) = load_theme_pack_from_manifest(&manifest_path) else {
+                continue;
+            };
+            ids.push(AddonId::from(theme.id));
+        }
+    }
+    ids
+}
+
+pub(crate) fn installed_theme_bundle_dir(theme_pack_id: &str) -> Option<PathBuf> {
+    installed_theme_bundle_records()
+        .into_iter()
+        .find(|(theme, _)| theme.id == theme_pack_id)
+        .map(|(_, bundle_dir)| bundle_dir)
+}
+
+pub fn installed_theme_packs() -> Vec<ThemePack> {
+    let mut themes = ThemePack::builtin_theme_packs();
+    for (theme, _) in installed_theme_bundle_records() {
+        if !themes.iter().any(|existing| existing.id == theme.id) {
+            themes.push(theme);
+        }
     }
     themes
 }
@@ -280,6 +345,8 @@ pub fn installed_theme_packs() -> Vec<ThemePack> {
 pub fn apply_theme_pack(theme: &ThemePack) {
     config::update_settings(|settings| {
         settings.active_theme_pack_id = Some(theme.id.clone());
+        settings.terminal_branding = (!theme.terminal_branding.header_lines.is_empty())
+            .then(|| theme.terminal_branding.clone());
         if let ColorStyle::Monochrome { preset, custom_rgb } = &theme.color_style {
             settings.theme = legacy_theme_name_for_preset(*preset).to_string();
             if let Some(custom_rgb) = custom_rgb {
@@ -406,6 +473,8 @@ fn installed_addon_inventory_sections_with_overrides(
         .iter()
         .map(|record| record.manifest.id.clone())
         .collect::<Vec<_>>();
+    let mut installed_ids = installed_ids;
+    installed_ids.extend(user_installed_theme_pack_ids());
     let (repository_available, repository_source, repository_issue) =
         repository_addon_inventory(&installed_ids, config::install_profile());
     InstalledAddonInventorySections {
@@ -497,9 +566,11 @@ pub fn repository_sync_action_for_manifest(
     Ok(Some(action))
 }
 
-pub fn repository_addon_for_id(addon_id: &AddonId) -> Result<Option<RepositoryAddonRecord>, String> {
-    let Some((index, source_path)) = config::load_addon_repository_index()
-        .map_err(|error| error.to_string())?
+pub fn repository_addon_for_id(
+    addon_id: &AddonId,
+) -> Result<Option<RepositoryAddonRecord>, String> {
+    let Some((index, source_path)) =
+        config::load_addon_repository_index().map_err(|error| error.to_string())?
     else {
         return Ok(None);
     };
@@ -592,14 +663,13 @@ fn install_user_addon_at_path(
     overrides: &mut AddonStateOverrides,
 ) -> Result<String, String> {
     let prepared = prepare_addon_install_source(source_path)?;
-    let manifest_path = addon_manifest_path(prepared.install_path()).ok_or_else(|| {
-        format!(
-            "No addon manifest found at '{}'.",
-            source_path.display()
-        )
-    })?;
+    let manifest_path = addon_manifest_path(prepared.install_path())
+        .ok_or_else(|| format!("No addon manifest found at '{}'.", source_path.display()))?;
     let manifest = load_addon_manifest(&manifest_path)?;
-    if first_party_addon_registry().manifest(&manifest.id).is_some() {
+    if first_party_addon_registry()
+        .manifest(&manifest.id)
+        .is_some()
+    {
         return Err(format!(
             "Addon '{}' conflicts with a built-in first-party addon id and cannot be installed here.",
             manifest.id
@@ -672,6 +742,38 @@ impl Drop for PreparedAddonInstallSource {
     }
 }
 
+struct PreparedThemeInstallSource {
+    install_path: PathBuf,
+    manifest_path: PathBuf,
+    cleanup_dir: Option<PathBuf>,
+}
+
+impl PreparedThemeInstallSource {
+    fn direct(install_path: PathBuf, manifest_path: PathBuf) -> Self {
+        Self {
+            install_path,
+            manifest_path,
+            cleanup_dir: None,
+        }
+    }
+
+    fn extracted(install_path: PathBuf, manifest_path: PathBuf, cleanup_dir: PathBuf) -> Self {
+        Self {
+            install_path,
+            manifest_path,
+            cleanup_dir: Some(cleanup_dir),
+        }
+    }
+}
+
+impl Drop for PreparedThemeInstallSource {
+    fn drop(&mut self) {
+        if let Some(dir) = self.cleanup_dir.take() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+}
+
 fn prepare_addon_install_source(source_path: &Path) -> Result<PreparedAddonInstallSource, String> {
     if !is_supported_addon_archive(source_path) {
         return Ok(PreparedAddonInstallSource::direct(source_path));
@@ -685,7 +787,90 @@ fn prepare_addon_install_source(source_path: &Path) -> Result<PreparedAddonInsta
             source_path.display()
         )
     })?;
-    Ok(PreparedAddonInstallSource::extracted(install_path, staging_root))
+    Ok(PreparedAddonInstallSource::extracted(
+        install_path,
+        staging_root,
+    ))
+}
+
+fn resolve_theme_bundle_root(staging_root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let manifest_path = staging_root.join("manifest.json");
+    if manifest_path.is_file() && load_theme_pack_from_manifest(&manifest_path).is_ok() {
+        return Some((staging_root.to_path_buf(), manifest_path));
+    }
+
+    let entries = fs::read_dir(staging_root).ok()?;
+    let mut dirs = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    if dirs.len() != 1 {
+        return None;
+    }
+    let only_dir = dirs.pop()?;
+    let manifest_path = only_dir.join("manifest.json");
+    if manifest_path.is_file() && load_theme_pack_from_manifest(&manifest_path).is_ok() {
+        Some((only_dir, manifest_path))
+    } else {
+        None
+    }
+}
+
+fn prepare_theme_install_source(
+    source_path: &Path,
+    copy_parent_dir_for_manifest: bool,
+) -> Result<PreparedThemeInstallSource, String> {
+    if is_supported_addon_archive(source_path) {
+        let staging_root = addon_archive_temp_dir("theme-install")?;
+        extract_addon_archive(source_path, &staging_root)?;
+        let (install_path, manifest_path) = resolve_theme_bundle_root(&staging_root).ok_or_else(|| {
+            format!(
+                "No theme manifest found after extracting archive '{}'.",
+                source_path.display()
+            )
+        })?;
+        return Ok(PreparedThemeInstallSource::extracted(
+            install_path,
+            manifest_path,
+            staging_root,
+        ));
+    }
+
+    if source_path.is_dir() {
+        let manifest_path = source_path.join("manifest.json");
+        if !manifest_path.is_file() {
+            return Err(format!(
+                "No theme manifest found at '{}'.",
+                source_path.display()
+            ));
+        }
+        load_theme_pack_from_manifest(&manifest_path)?;
+        return Ok(PreparedThemeInstallSource::direct(
+            source_path.to_path_buf(),
+            manifest_path,
+        ));
+    }
+
+    if !source_path.is_file() {
+        return Err(format!(
+            "Theme source '{}' does not exist.",
+            source_path.display()
+        ));
+    }
+
+    load_theme_pack_from_manifest(source_path)?;
+    let install_path = if copy_parent_dir_for_manifest {
+        source_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| source_path.to_path_buf())
+    } else {
+        source_path.to_path_buf()
+    };
+    Ok(PreparedThemeInstallSource::direct(
+        install_path,
+        source_path.to_path_buf(),
+    ))
 }
 
 fn is_supported_addon_archive(path: &Path) -> bool {
@@ -751,10 +936,18 @@ fn extract_addon_archive(source_path: &Path, destination_dir: &Path) -> Result<(
 }
 
 fn extract_zip_archive(source_path: &Path, destination_dir: &Path) -> Result<(), String> {
-    let file = fs::File::open(source_path)
-        .map_err(|error| format!("Failed to open addon archive '{}': {error}", source_path.display()))?;
-    let mut archive = ZipArchive::new(file)
-        .map_err(|error| format!("Failed to read addon zip archive '{}': {error}", source_path.display()))?;
+    let file = fs::File::open(source_path).map_err(|error| {
+        format!(
+            "Failed to open addon archive '{}': {error}",
+            source_path.display()
+        )
+    })?;
+    let mut archive = ZipArchive::new(file).map_err(|error| {
+        format!(
+            "Failed to read addon zip archive '{}': {error}",
+            source_path.display()
+        )
+    })?;
     for idx in 0..archive.len() {
         let mut entry = archive
             .by_index(idx)
@@ -785,8 +978,12 @@ fn extract_tar_archive(
     destination_dir: &Path,
     gzip: bool,
 ) -> Result<(), String> {
-    let file = fs::File::open(source_path)
-        .map_err(|error| format!("Failed to open addon archive '{}': {error}", source_path.display()))?;
+    let file = fs::File::open(source_path).map_err(|error| {
+        format!(
+            "Failed to open addon archive '{}': {error}",
+            source_path.display()
+        )
+    })?;
     if gzip {
         let decoder = GzDecoder::new(file);
         let mut archive = TarArchive::new(decoder);
@@ -810,9 +1007,11 @@ fn unpack_tar_archive<R: Read>(
         if !entry.header().entry_type().is_file() && !entry.header().entry_type().is_dir() {
             continue;
         }
-        let relative_path = sanitize_archive_relative_path(&entry.path().map_err(|error| {
-            format!("Failed to read addon tar archive path: {error}")
-        })?)?;
+        let relative_path = sanitize_archive_relative_path(
+            &entry
+                .path()
+                .map_err(|error| format!("Failed to read addon tar archive path: {error}"))?,
+        )?;
         let output_path = destination_dir.join(relative_path);
         if entry.header().entry_type().is_dir() {
             fs::create_dir_all(&output_path)
@@ -914,6 +1113,64 @@ fn remove_empty_parent_dirs(mut dir: Option<&Path>, stop_at: &Path) {
     }
 }
 
+fn install_dir_name_for_theme_pack(theme: &ThemePack) -> Result<&str, String> {
+    use std::path::Component;
+
+    let theme_id = theme.id.as_str();
+    let mut components = Path::new(theme_id).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(theme_id),
+        _ => Err(format!(
+            "Theme pack '{}' has an invalid id for installation.",
+            theme.id
+        )),
+    }
+}
+
+fn install_theme_bundle_at_path(
+    source_path: &Path,
+    themes_root: &Path,
+    copy_parent_dir_for_manifest: bool,
+) -> Result<ThemePack, String> {
+    let prepared = prepare_theme_install_source(source_path, copy_parent_dir_for_manifest)?;
+    let theme = load_theme_pack_from_manifest(&prepared.manifest_path)?;
+    let install_dir_name = install_dir_name_for_theme_pack(&theme)?;
+
+    fs::create_dir_all(themes_root)
+        .map_err(|error| format!("Failed to create themes directory: {error}"))?;
+    let canonical_root = fs::canonicalize(themes_root)
+        .map_err(|error| format!("Failed to resolve themes directory: {error}"))?;
+    let canonical_source = fs::canonicalize(&prepared.install_path)
+        .map_err(|error| format!("Failed to resolve theme source: {error}"))?;
+    if canonical_source.starts_with(&canonical_root) {
+        return Err(format!(
+            "Theme source '{}' is already inside the themes directory.",
+            source_path.display()
+        ));
+    }
+
+    let target_dir = canonical_root.join(install_dir_name);
+    if target_dir.exists() {
+        fs::remove_dir_all(&target_dir)
+            .map_err(|error| format!("Failed to replace existing theme install: {error}"))?;
+    }
+    fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("Failed to create theme install directory: {error}"))?;
+
+    if prepared.install_path.is_dir() {
+        copy_dir_contents(&prepared.install_path, &target_dir)?;
+    } else {
+        fs::copy(&prepared.manifest_path, target_dir.join("manifest.json"))
+            .map_err(|error| format!("Failed to copy theme manifest: {error}"))?;
+    }
+
+    load_theme_pack_from_manifest(&target_dir.join("manifest.json"))
+}
+
+pub(crate) fn import_theme_bundle_from_path(source_path: &Path) -> Result<ThemePack, String> {
+    install_theme_bundle_at_path(source_path, &config::themes_directory(), true)
+}
+
 fn copy_dir_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
     for entry in
         fs::read_dir(source_dir).map_err(|error| format!("Failed to read addon source: {error}"))?
@@ -950,9 +1207,12 @@ fn install_repository_addon_from_index(
     downloads_root: &Path,
     user_addons_root: &Path,
 ) -> Result<String, String> {
-    let package = index
-        .addon(addon_id)
-        .ok_or_else(|| format!("Addon '{}' is not available in the repository feed.", addon_id))?;
+    let package = index.addon(addon_id).ok_or_else(|| {
+        format!(
+            "Addon '{}' is not available in the repository feed.",
+            addon_id
+        )
+    })?;
     if package.manifest.essential {
         return Err(format!(
             "Addon '{}' is essential and cannot be installed from the repository feed.",
@@ -963,9 +1223,13 @@ fn install_repository_addon_from_index(
         .release(&package.manifest.version)
         .or_else(|| package.releases.first())
         .ok_or_else(|| format!("Addon '{}' has no repository release metadata.", addon_id))?;
-    let artifact = release
-        .artifact_for_profile(profile)
-        .ok_or_else(|| format!("Addon '{}' has no artifact for {}.", addon_id, profile_name(profile)))?;
+    let artifact = release.artifact_for_profile(profile).ok_or_else(|| {
+        format!(
+            "Addon '{}' has no artifact for {}.",
+            addon_id,
+            profile_name(profile)
+        )
+    })?;
 
     let format = artifact.format.as_deref().unwrap_or("manifest-json");
     if !matches!(
@@ -995,8 +1259,15 @@ fn install_repository_addon_from_index(
     }
     fs::create_dir_all(&staging_dir)
         .map_err(|error| format!("Failed to create addon download cache: {error}"))?;
-    let staged_source = stage_repository_artifact(index, repository_source, artifact, &staging_dir)?;
+    let staged_source =
+        stage_repository_artifact(index, repository_source, artifact, &staging_dir)?;
     verify_repository_artifact_checksum(&staged_source, &artifact.sha256)?;
+
+    if package.manifest.kind == AddonKind::Theme {
+        let theme =
+            install_theme_bundle_at_path(&staged_source, &config::themes_directory(), false)?;
+        return Ok(format!("Installed {}.", theme.name));
+    }
 
     let mut overrides = addon_state_overrides();
     let message = install_user_addon_at_path(&staged_source, user_addons_root, &mut overrides)?;
@@ -1133,13 +1404,21 @@ fn resolve_repository_file_path(
         .join(url)
 }
 
-fn resolve_repository_url(index: &AddonRepositoryIndex, repository_source: &Path, url: &str) -> String {
+fn resolve_repository_url(
+    index: &AddonRepositoryIndex,
+    repository_source: &Path,
+    url: &str,
+) -> String {
     if looks_like_http_url(url) {
         return url.to_string();
     }
     if let Some(base_url) = index.base_url.as_deref() {
         if looks_like_http_url(base_url) {
-            return format!("{}/{}", base_url.trim_end_matches('/'), url.trim_start_matches('/'));
+            return format!(
+                "{}/{}",
+                base_url.trim_end_matches('/'),
+                url.trim_start_matches('/')
+            );
         }
     }
     resolve_repository_file_path(index, repository_source, url)
@@ -1164,8 +1443,8 @@ fn verify_repository_artifact_checksum(path: &Path, expected_hex: &str) -> Resul
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
-    let mut file =
-        fs::File::open(path).map_err(|error| format!("Failed to open downloaded artifact: {error}"))?;
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Failed to open downloaded artifact: {error}"))?;
     let mut hasher = Sha256::new();
     let mut buf = [0_u8; 8192];
     loop {
@@ -1200,8 +1479,8 @@ fn collect_directory_files(
     dir: &Path,
     files: &mut Vec<(String, PathBuf)>,
 ) -> Result<(), String> {
-    for entry in
-        fs::read_dir(dir).map_err(|error| format!("Failed to read addon directory bundle: {error}"))?
+    for entry in fs::read_dir(dir)
+        .map_err(|error| format!("Failed to read addon directory bundle: {error}"))?
     {
         let entry =
             entry.map_err(|error| format!("Failed to read addon directory entry: {error}"))?;
@@ -1529,17 +1808,19 @@ mod tests {
         first_party_addon_registry_for_profile,
         first_party_addon_registry_for_profile_with_registry, first_party_addon_runtime,
         first_party_capability_enabled_str, hosted_game_names_from_registry,
-        installed_hosted_addon_process_from_record, installed_wasm_addon_module_from_record,
-        installed_addon_inventory_sections_with_overrides, installed_addon_inventory_with_overrides,
-        repository_addon_inventory_from_index,
+        installed_addon_inventory_sections_with_overrides,
+        installed_addon_inventory_with_overrides,
         installed_enabled_addon_manifest_registry_with_overrides,
+        installed_hosted_addon_process_from_record, installed_wasm_addon_module_from_record,
+        repository_addon_inventory_from_index,
     };
     use crate::platform::{
-        AddonArtifact, AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonRegistry,
-        AddonManifestDiscovery, AddonManifestLoadIssue, AddonRelease, AddonRepositoryIndex,
-        AddonScope, AddonStateOverrides, CapabilityId, DiscoveredAddonManifest,
-        HostedAddonProtocol, InstallProfile, IndexedAddonPackage,
+        AddonArtifact, AddonEntrypoint, AddonId, AddonKind, AddonManifest, AddonManifestDiscovery,
+        AddonManifestLoadIssue, AddonRegistry, AddonRelease, AddonRepositoryIndex, AddonScope,
+        AddonStateOverrides, CapabilityId, DiscoveredAddonManifest, HostedAddonProtocol,
+        IndexedAddonPackage, InstallProfile,
     };
+    use crate::theme::{ColorStyle, FullColorTheme, SoundPack, ThemePack};
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::io::Read;
@@ -1674,9 +1955,7 @@ mod tests {
         assert!(registry
             .manifest(&AddonId::from("shell.settings"))
             .is_some());
-        assert!(registry
-            .manifest(&AddonId::from(TOOL_ADDON_ID))
-            .is_none());
+        assert!(registry.manifest(&AddonId::from(TOOL_ADDON_ID)).is_none());
     }
 
     #[test]
@@ -1742,10 +2021,8 @@ mod tests {
             manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User),
         ])
         .unwrap();
-        let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
-            &registry,
-            &overrides,
-        );
+        let enabled_registry =
+            installed_enabled_addon_manifest_registry_with_overrides(&registry, &overrides);
 
         let registry = first_party_addon_registry_for_profile_with_registry(
             InstallProfile::LinuxDesktop,
@@ -1755,9 +2032,7 @@ mod tests {
         assert!(registry
             .manifest(&AddonId::from("shell.settings"))
             .is_some());
-        assert!(registry
-            .manifest(&AddonId::from(TOOL_ADDON_ID))
-            .is_none());
+        assert!(registry.manifest(&AddonId::from(TOOL_ADDON_ID)).is_none());
     }
 
     #[test]
@@ -1785,10 +2060,8 @@ mod tests {
         let mut overrides = AddonStateOverrides::default();
         overrides.set_enabled(AddonId::from("shell.connections"), Some(false));
         let registry = AddonRegistry::from_manifests([disableable]).unwrap();
-        let enabled_registry = installed_enabled_addon_manifest_registry_with_overrides(
-            &registry,
-            &overrides,
-        );
+        let enabled_registry =
+            installed_enabled_addon_manifest_registry_with_overrides(&registry, &overrides);
 
         assert_eq!(
             first_party_addon_disabled_reason_with_registry(
@@ -2076,7 +2349,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(install_root.join("addons.sample").join("manifest.json").exists());
+        assert!(install_root
+            .join("addons.sample")
+            .join("manifest.json")
+            .exists());
         assert_eq!(
             fs::read_to_string(
                 install_root
@@ -2099,8 +2375,12 @@ mod tests {
             &[
                 (
                     "sample-addon/manifest.json",
-                    serde_json::to_string(&manifest("addons.sample", "Sample Addon", AddonScope::User))
-                        .unwrap(),
+                    serde_json::to_string(&manifest(
+                        "addons.sample",
+                        "Sample Addon",
+                        AddonScope::User,
+                    ))
+                    .unwrap(),
                 ),
                 ("sample-addon/assets/icon.txt", "icon".to_string()),
             ],
@@ -2113,7 +2393,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(install_root.join("addons.sample").join("manifest.json").exists());
+        assert!(install_root
+            .join("addons.sample")
+            .join("manifest.json")
+            .exists());
         assert_eq!(
             fs::read_to_string(
                 install_root
@@ -2156,8 +2439,12 @@ mod tests {
         let manifest_path = source_root.join("settings.json");
         fs::write(
             &manifest_path,
-            serde_json::to_string(&manifest("shell.settings", "Settings Override", AddonScope::User))
-                .unwrap(),
+            serde_json::to_string(&manifest(
+                "shell.settings",
+                "Settings Override",
+                AddonScope::User,
+            ))
+            .unwrap(),
         )
         .unwrap();
 
@@ -2172,6 +2459,112 @@ mod tests {
     }
 
     #[test]
+    fn install_theme_bundle_from_manifest_file_copies_parent_directory_contents() {
+        let source_root = temp_dir("install_theme_bundle_from_manifest_file_source");
+        let install_root = temp_dir("install_theme_bundle_from_manifest_file_install");
+        let bundle_dir = source_root.join("sample-theme");
+        fs::create_dir_all(bundle_dir.join("colors")).unwrap();
+        fs::create_dir_all(bundle_dir.join("sounds")).unwrap();
+
+        let manifest = theme_pack("signal-forge-custom", "Signal Forge Custom");
+        let mut colors = FullColorTheme::nucleon_dark();
+        colors.id = "signal-forge-custom".to_string();
+        colors.name = "Signal Forge Custom".to_string();
+
+        fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir.join("colors").join("custom.json"),
+            serde_json::to_string_pretty(&colors).unwrap(),
+        )
+        .unwrap();
+        fs::write(bundle_dir.join("sounds").join("navigate.wav"), "wave").unwrap();
+
+        let installed = super::install_theme_bundle_at_path(
+            &bundle_dir.join("manifest.json"),
+            &install_root,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(installed.id, "signal-forge-custom");
+        assert_eq!(installed.name, "Signal Forge Custom");
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("signal-forge-custom")
+                    .join("colors")
+                    .join("custom.json")
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(&colors).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("signal-forge-custom")
+                    .join("sounds")
+                    .join("navigate.wav")
+            )
+            .unwrap(),
+            "wave"
+        );
+    }
+
+    #[test]
+    fn install_theme_bundle_from_ndpkg_archive_extracts_bundle_contents() {
+        let source_root = temp_dir("install_theme_bundle_from_ndpkg_archive_source");
+        let install_root = temp_dir("install_theme_bundle_from_ndpkg_archive_install");
+        let archive_path = source_root.join("signal-forge.ndpkg");
+        let manifest = theme_pack("archive-theme", "Archive Theme");
+        let mut colors = FullColorTheme::nucleon_dark();
+        colors.id = "archive-theme".to_string();
+        colors.name = "Archive Theme".to_string();
+        write_zip_archive(
+            &archive_path,
+            &[
+                (
+                    "archive-theme/manifest.json",
+                    serde_json::to_string_pretty(&manifest).unwrap(),
+                ),
+                (
+                    "archive-theme/colors/custom.json",
+                    serde_json::to_string_pretty(&colors).unwrap(),
+                ),
+                ("archive-theme/sounds/navigate.wav", "wave".to_string()),
+            ],
+        );
+
+        let installed =
+            super::install_theme_bundle_at_path(&archive_path, &install_root, false).unwrap();
+
+        assert_eq!(installed.id, "archive-theme");
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("archive-theme")
+                    .join("colors")
+                    .join("custom.json")
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(&colors).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("archive-theme")
+                    .join("sounds")
+                    .join("navigate.wav")
+            )
+            .unwrap(),
+            "wave"
+        );
+    }
+
+    #[test]
     fn install_repository_addon_from_index_installs_relative_manifest_artifact() {
         let repository_root =
             temp_dir("install_repository_addon_from_index_installs_relative_manifest_artifact");
@@ -2179,7 +2572,11 @@ mod tests {
         let downloads_root = temp_dir("install_repository_addon_from_index_download_root");
         let artifact_path = repository_root.join("feed-sample.json");
         let artifact_manifest = manifest("tools.feed-sample", "Feed Sample", AddonScope::User);
-        fs::write(&artifact_path, serde_json::to_string(&artifact_manifest).unwrap()).unwrap();
+        fs::write(
+            &artifact_path,
+            serde_json::to_string(&artifact_manifest).unwrap(),
+        )
+        .unwrap();
 
         let message = super::install_repository_addon_from_index(
             &AddonRepositoryIndex {
@@ -2211,12 +2608,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(message, "Installed Feed Sample.");
-        assert!(
-            install_root
-                .join("tools.feed-sample")
-                .join("manifest.json")
-                .exists()
-        );
+        assert!(install_root
+            .join("tools.feed-sample")
+            .join("manifest.json")
+            .exists());
     }
 
     #[test]
@@ -2230,7 +2625,11 @@ mod tests {
         let artifact_path = repository_root.join(format!("{TOOL_ARTIFACT_STEM}.json"));
         let artifact_manifest = manifest(TOOL_ADDON_ID, TOOL_ADDON_NAME, AddonScope::User)
             .with_capability("code-reference");
-        fs::write(&artifact_path, serde_json::to_string(&artifact_manifest).unwrap()).unwrap();
+        fs::write(
+            &artifact_path,
+            serde_json::to_string(&artifact_manifest).unwrap(),
+        )
+        .unwrap();
 
         let message = super::install_repository_addon_from_index(
             &AddonRepositoryIndex {
@@ -2262,7 +2661,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
-        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
+        assert!(install_root
+            .join(TOOL_ADDON_ID)
+            .join("manifest.json")
+            .exists());
     }
 
     #[test]
@@ -2314,10 +2716,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
-        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
+        assert!(install_root
+            .join(TOOL_ADDON_ID)
+            .join("manifest.json")
+            .exists());
         assert_eq!(
-            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
-                .unwrap(),
+            fs::read_to_string(
+                install_root
+                    .join(TOOL_ADDON_ID)
+                    .join("assets")
+                    .join("help.txt")
+            )
+            .unwrap(),
             "launch codes"
         );
     }
@@ -2326,11 +2736,17 @@ mod tests {
     fn install_repository_addon_from_index_rejects_checksum_mismatch() {
         let repository_root =
             temp_dir("install_repository_addon_from_index_rejects_checksum_mismatch_repo");
-        let install_root = temp_dir("install_repository_addon_from_index_rejects_checksum_mismatch_install");
-        let downloads_root = temp_dir("install_repository_addon_from_index_rejects_checksum_mismatch_download");
+        let install_root =
+            temp_dir("install_repository_addon_from_index_rejects_checksum_mismatch_install");
+        let downloads_root =
+            temp_dir("install_repository_addon_from_index_rejects_checksum_mismatch_download");
         let artifact_path = repository_root.join("feed-sample.json");
         let artifact_manifest = manifest("tools.feed-sample", "Feed Sample", AddonScope::User);
-        fs::write(&artifact_path, serde_json::to_string(&artifact_manifest).unwrap()).unwrap();
+        fs::write(
+            &artifact_path,
+            serde_json::to_string(&artifact_manifest).unwrap(),
+        )
+        .unwrap();
 
         let err = super::install_repository_addon_from_index(
             &AddonRepositoryIndex {
@@ -2368,7 +2784,8 @@ mod tests {
     fn install_repository_addon_from_index_installs_zip_bundle() {
         let repository_root =
             temp_dir("install_repository_addon_from_index_installs_zip_bundle_repo");
-        let install_root = temp_dir("install_repository_addon_from_index_installs_zip_bundle_install");
+        let install_root =
+            temp_dir("install_repository_addon_from_index_installs_zip_bundle_install");
         let downloads_root =
             temp_dir("install_repository_addon_from_index_installs_zip_bundle_download");
         let archive_path = repository_root.join(format!("{TOOL_ARTIFACT_STEM}.zip"));
@@ -2415,10 +2832,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
-        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
+        assert!(install_root
+            .join(TOOL_ADDON_ID)
+            .join("manifest.json")
+            .exists());
         assert_eq!(
-            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
-                .unwrap(),
+            fs::read_to_string(
+                install_root
+                    .join(TOOL_ADDON_ID)
+                    .join("assets")
+                    .join("help.txt")
+            )
+            .unwrap(),
             "launch codes"
         );
     }
@@ -2475,10 +2900,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(message, format!("Installed {TOOL_ADDON_NAME}."));
-        assert!(install_root.join(TOOL_ADDON_ID).join("manifest.json").exists());
+        assert!(install_root
+            .join(TOOL_ADDON_ID)
+            .join("manifest.json")
+            .exists());
         assert_eq!(
-            fs::read_to_string(install_root.join(TOOL_ADDON_ID).join("assets").join("help.txt"))
-                .unwrap(),
+            fs::read_to_string(
+                install_root
+                    .join(TOOL_ADDON_ID)
+                    .join("assets")
+                    .join("help.txt")
+            )
+            .unwrap(),
             "launch codes"
         );
     }
@@ -2524,6 +2957,19 @@ mod tests {
         .with_scope(scope)
     }
 
+    fn theme_pack(id: &str, name: &str) -> ThemePack {
+        let mut theme = ThemePack::heritage();
+        theme.id = id.to_string();
+        theme.name = name.to_string();
+        theme.color_style = ColorStyle::FullColor {
+            theme_id: "nucleon-dark".to_string(),
+        };
+        theme.sound_pack = SoundPack {
+            path: Some("sounds".to_string()),
+        };
+        theme
+    }
+
     fn sample_repository_index() -> AddonRepositoryIndex {
         AddonRepositoryIndex {
             schema_version: 1,
@@ -2537,8 +2983,7 @@ mod tests {
                         channel: Some("stable".to_string()),
                         artifacts: vec![AddonArtifact {
                             install_profile: Some(InstallProfile::LinuxDesktop),
-                            url: "https://example.invalid/addons/feed-sample-linux.zip"
-                                .to_string(),
+                            url: "https://example.invalid/addons/feed-sample-linux.zip".to_string(),
                             sha256: "abc123".to_string(),
                             signature_url: None,
                             size_bytes: Some(42),

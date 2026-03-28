@@ -1,7 +1,9 @@
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
 use eframe::egui::{self, Context};
-pub use robcos_native_about_app::TerminalAboutRequest;
-use robcos_native_about_app::{about_ascii_and_fields, get_system_info, resolve_about_request};
+pub use nucleon_native_about_app::TerminalAboutRequest;
+use nucleon_native_about_app::{about_ascii_and_fields, get_system_info, resolve_about_request};
 use std::time::Duration;
 
 #[allow(clippy::too_many_arguments)]
@@ -17,6 +19,7 @@ pub fn draw_about_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> TerminalAboutRequest {
     let (ascii, fields) = about_ascii_and_fields();
     let info = get_system_info(&fields);
@@ -35,15 +38,16 @@ pub fn draw_about_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in crate::config::HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(&painter, title_row, "About", palette.fg, true);
-            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(&painter, title_row, "About", &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
 
             let mut row = subtitle_row;
             for line in ascii {

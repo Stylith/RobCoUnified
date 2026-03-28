@@ -5,14 +5,15 @@ use super::super::desktop_app::{
     DesktopMenuBuildContext, DesktopMenuItem, DesktopMenuSection, DesktopWindow,
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
-use super::super::retro_ui::{current_palette, RetroPalette};
-use crate::theme::PanelPosition;
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
+};
 use chrono::Local;
 use eframe::egui::{self, Color32, Context, Layout, RichText, TopBottomPanel};
 
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn apply_global_retro_menu_chrome(ctx: &Context, palette: &RetroPalette) {
         let stroke = egui::Stroke::new(2.0, palette.fg);
         ctx.style_mut(|style| {
@@ -190,7 +191,10 @@ impl RobcoNativeApp {
                 DesktopMenuItem::Label { label } => {
                     ui.label(RichText::new(label).small());
                 }
-                DesktopMenuItem::Separator => Self::retro_separator(ui),
+                DesktopMenuItem::Separator => Self::retro_separator_with_thickness(
+                    ui,
+                    current_shell_style().separator_thickness,
+                ),
                 DesktopMenuItem::Submenu { label, items } => {
                     ui.menu_button(label, |ui| {
                         Self::apply_top_dropdown_menu_style(ui);
@@ -286,24 +290,29 @@ impl RobcoNativeApp {
         }
     }
 
-    pub(super) fn draw_top_bar(&mut self, ctx: &Context, position: PanelPosition, height: f32) {
+    pub(super) fn draw_top_bar(&mut self, ctx: &Context, top: bool, height: f32) {
         let palette = current_palette();
         Self::apply_global_retro_menu_chrome(ctx, &palette);
         let app_menu_name = desktop_app_menu_name(self.desktop_active_window, |id| {
             self.desktop_window_title_for_instance(id)
         });
         let active_app = self.active_desktop_app();
-        let panel = match position {
-            PanelPosition::Top => TopBottomPanel::top("native_top_bar"),
-            PanelPosition::Bottom => TopBottomPanel::bottom("native_top_bar"),
-            PanelPosition::Hidden => return,
+        let panel_id = if top {
+            "native_top_bar_top"
+        } else {
+            "native_top_bar_bottom"
+        };
+        let panel = if top {
+            TopBottomPanel::top(panel_id)
+        } else {
+            TopBottomPanel::bottom(panel_id)
         };
         panel
             .exact_height(height)
             .show_separator_line(false)
             .show(ctx, |ui| {
                 ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.selected_bg);
+                    .rect_filled(ui.max_rect(), 0.0, palette.bar_bg);
                 ui.horizontal(|ui| {
                     Self::apply_top_bar_menu_button_style(ui);
                     ui.spacing_mut().item_spacing.x = 14.0;
@@ -383,6 +392,7 @@ impl RobcoNativeApp {
 
     pub(super) fn apply_top_dropdown_menu_style(ui: &mut egui::Ui) {
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.button_frame = true;
@@ -390,10 +400,10 @@ impl RobcoNativeApp {
         style.visuals.extreme_bg_color = palette.bg;
         style.visuals.window_fill = palette.bg;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.window_rounding = shell_style_rounding(&shell_style);
+        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
+        style.visuals.window_shadow = shell_style_shadow(&shell_style);
+        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
         style.visuals.override_text_color = None;
         style.spacing.item_spacing.y = 0.0;
         style.visuals.selection.bg_fill = palette.selected_bg;

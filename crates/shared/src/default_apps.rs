@@ -32,7 +32,6 @@ pub struct DefaultAppChoice {
 }
 
 pub const FIRST_PARTY_EDITOR_ADDON_ID: &str = "shell.editor";
-pub const LEGACY_TERMINAL_WRITER_BINDING_ID: &str = "robco_terminal_writer";
 
 pub fn slot_label(slot: DefaultAppSlot) -> &'static str {
     match slot {
@@ -246,13 +245,9 @@ pub fn default_app_choices(_slot: DefaultAppSlot) -> Vec<DefaultAppChoice> {
 }
 
 fn builtin_editor_addon_id(binding_id: &str) -> Option<AddonId> {
-    if binding_id.eq_ignore_ascii_case(FIRST_PARTY_EDITOR_ADDON_ID)
-        || binding_id.eq_ignore_ascii_case(LEGACY_TERMINAL_WRITER_BINDING_ID)
-    {
-        Some(AddonId::from(FIRST_PARTY_EDITOR_ADDON_ID))
-    } else {
-        None
-    }
+    binding_id
+        .eq_ignore_ascii_case(FIRST_PARTY_EDITOR_ADDON_ID)
+        .then(|| AddonId::from(FIRST_PARTY_EDITOR_ADDON_ID))
 }
 
 pub fn parse_custom_command_line(input: &str) -> Option<Vec<String>> {
@@ -364,7 +359,7 @@ pub fn resolve_document_open(path: &Path) -> Option<ResolvedDocumentOpen> {
 mod tests {
     use super::{
         parse_custom_command_line, resolve_binding_open, DefaultAppSlot, ResolvedDocumentOpen,
-        FIRST_PARTY_EDITOR_ADDON_ID, LEGACY_TERMINAL_WRITER_BINDING_ID,
+        FIRST_PARTY_EDITOR_ADDON_ID,
     };
     use crate::config::DefaultAppBinding;
     use crate::platform::AddonId;
@@ -395,23 +390,6 @@ mod tests {
                 id: FIRST_PARTY_EDITOR_ADDON_ID.to_string(),
             },
             DefaultAppSlot::TextCode,
-        );
-
-        assert_eq!(
-            resolved,
-            Some(ResolvedDocumentOpen::BuiltinAddon(AddonId::from(
-                FIRST_PARTY_EDITOR_ADDON_ID
-            )))
-        );
-    }
-
-    #[test]
-    fn legacy_terminal_writer_binding_resolves_to_editor_addon() {
-        let resolved = resolve_binding_open(
-            &DefaultAppBinding::Builtin {
-                id: LEGACY_TERMINAL_WRITER_BINDING_ID.to_string(),
-            },
-            DefaultAppSlot::Ebook,
         );
 
         assert_eq!(

@@ -1,10 +1,10 @@
 [Desktop Entry]
 Version=__VERSION__
 Type=Application
-Name=RobCoOS
+Name=NucleonOS
 Comment=Fallout-style terminal environment built with Rust
 Exec=nucleon-native
 Icon=icon
 Terminal=true
 Categories=System;Utility;
-Keywords=terminal;retro;fallout;robco;
+Keywords=terminal;retro;nucleon;

@@ -2,11 +2,11 @@ use super::super::data::logs_dir;
 use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_documents_service::document_category_names;
 use super::super::menu::TerminalScreen;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use chrono::Local;
 use std::path::{Path, PathBuf};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn sorted_document_categories() -> Vec<String> {
         document_category_names()
     }

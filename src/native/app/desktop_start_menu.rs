@@ -7,16 +7,18 @@ use super::super::desktop_search_service::{
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::prompt::FlashAction;
-use super::super::retro_ui::current_palette;
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow,
+};
 use crate::config::install_profile;
 use crate::native::{
     installed_hosted_application_names, installed_hosted_game_names, is_installed_hosted_game,
 };
 use crate::platform::{InstallProfile, LaunchTarget};
-use crate::theme::{DockPosition, PanelPosition};
+use crate::theme::PanelType;
 use eframe::egui::{self, Align2, Context, FontFamily, FontId, Id, Key, RichText};
 
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
 use crate::sound;
 
@@ -142,9 +144,9 @@ pub(super) fn start_system_items_for_profile(
         .collect()
 }
 
-// ── impl RobcoNativeApp ───────────────────────────────────────────────────────
+// ── impl NucleonNativeApp ───────────────────────────────────────────────────────
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn open_start_menu(&mut self) {
         self.close_spotlight();
         self.start_open = true;
@@ -437,25 +439,18 @@ impl RobcoNativeApp {
         const EDGE_PAD: f32 = 8.0;
 
         let palette = current_palette();
+        let shell_style = current_shell_style();
+        let separator_thickness = shell_style.separator_thickness;
         let screen = ctx.screen_rect();
         let root_x = self
             .desktop_start_button_rect
             .map(|rect| rect.left().max(screen.left() + ROOT_LEFT))
             .unwrap_or(screen.left() + ROOT_LEFT);
-        let dock_bottom_offset = match self.desktop_active_layout.dock_position {
-            DockPosition::Bottom => self.desktop_active_layout.dock_size,
-            DockPosition::Left | DockPosition::Right | DockPosition::Hidden => 0.0,
+        let bottom_panel_offset = match self.desktop_active_layout.bottom_panel {
+            PanelType::Disabled => 0.0,
+            _ => self.desktop_active_layout.bottom_panel_height,
         };
-        let panel_bottom_offset = match (
-            self.desktop_active_layout.dock_position,
-            self.desktop_active_layout.panel_position,
-        ) {
-            (DockPosition::Hidden, PanelPosition::Bottom) => {
-                self.desktop_active_layout.panel_height
-            }
-            _ => 0.0,
-        };
-        let root_bottom = screen.bottom() - dock_bottom_offset - panel_bottom_offset;
+        let root_bottom = screen.bottom() - bottom_panel_offset;
         let root_y = (root_bottom - self.start_root_panel_height).max(screen.top() + EDGE_PAD);
         let mut branch_anchor_y = screen.top() + EDGE_PAD;
         let mut branch_x = root_x + ROOT_W - 2.0;
@@ -468,13 +463,15 @@ impl RobcoNativeApp {
                 let frame = egui::Frame::none()
                     .fill(palette.panel)
                     .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(8.0));
+                    .inner_margin(egui::Margin::same(8.0))
+                    .rounding(shell_style_rounding(&shell_style))
+                    .shadow(shell_style_shadow(&shell_style));
                 let frame_response = frame.show(ui, |ui| {
                     Self::apply_start_menu_highlight_style(ui);
                     ui.set_min_width(ROOT_W);
                     ui.set_max_width(ROOT_W);
                     ui.label(RichText::new("Start").strong().color(palette.fg));
-                    Self::retro_separator(ui);
+                    Self::retro_separator_with_thickness(ui, separator_thickness);
 
                     for row in START_ROOT_VIS_ROWS {
                         match row {
@@ -505,7 +502,7 @@ impl RobcoNativeApp {
                                 }
                             }
                             None => {
-                                Self::retro_separator(ui);
+                                Self::retro_separator_with_thickness(ui, separator_thickness);
                             }
                         }
                     }
@@ -533,6 +530,8 @@ impl RobcoNativeApp {
                         .fill(palette.panel)
                         .stroke(egui::Stroke::new(2.0, palette.fg))
                         .inner_margin(egui::Margin::same(8.0))
+                        .rounding(shell_style_rounding(&shell_style))
+                        .shadow(shell_style_shadow(&shell_style))
                         .show(ui, |ui| {
                             Self::apply_start_menu_highlight_style(ui);
                             ui.set_min_width(LEAF_W);
@@ -568,7 +567,10 @@ impl RobcoNativeApp {
                                                     });
                                                 ui.close_menu();
                                             }
-                                            Self::retro_separator(ui);
+                                            Self::retro_separator_with_thickness(
+                                                ui,
+                                                separator_thickness,
+                                            );
                                         }
                                         if ui.button("Create Shortcut").clicked() {
                                             leaf_context_action =
@@ -579,7 +581,10 @@ impl RobcoNativeApp {
                                             ui.close_menu();
                                         }
                                         if let Some((target, name)) = removable_item.as_ref() {
-                                            Self::retro_separator(ui);
+                                            Self::retro_separator_with_thickness(
+                                                ui,
+                                                separator_thickness,
+                                            );
                                             if ui
                                                 .button(format!("Remove from {}", target.title()))
                                                 .clicked()
@@ -620,6 +625,8 @@ impl RobcoNativeApp {
                                 .fill(palette.panel)
                                 .stroke(egui::Stroke::new(2.0, palette.fg))
                                 .inner_margin(egui::Margin::same(8.0))
+                                .rounding(shell_style_rounding(&shell_style))
+                                .shadow(shell_style_shadow(&shell_style))
                                 .show(ui, |ui| {
                                     Self::apply_start_menu_highlight_style(ui);
                                     ui.set_min_width(SUB_W);
@@ -648,6 +655,7 @@ impl RobcoNativeApp {
         };
 
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let mut close = false;
         let mut apply = false;
         let mut name_input = rename.name_input.clone();
@@ -662,7 +670,9 @@ impl RobcoNativeApp {
                 egui::Frame::none()
                     .fill(palette.panel)
                     .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(12.0)),
+                    .inner_margin(egui::Margin::same(12.0))
+                    .rounding(shell_style_rounding(&shell_style))
+                    .shadow(shell_style_shadow(&shell_style)),
             )
             .show(ctx, |ui| {
                 Self::apply_context_menu_style(ui);
@@ -713,13 +723,14 @@ impl RobcoNativeApp {
 
     pub(super) fn apply_start_menu_highlight_style(ui: &mut egui::Ui) {
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.window_rounding = shell_style_rounding(&shell_style);
+        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
+        style.visuals.window_shadow = shell_style_shadow(&shell_style);
+        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
         style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.widgets.noninteractive.bg_fill = palette.panel;

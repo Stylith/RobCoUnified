@@ -1,4 +1,4 @@
-use robcos_native_services::desktop_launcher_service::ProgramCatalog;
+use nucleon_native_services::desktop_launcher_service::ProgramCatalog;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramMenuEvent {
@@ -154,19 +154,15 @@ pub fn build_desktop_applications_sections(
             label,
         })
         .collect();
-    let configured = build_terminal_application_entries(
-        false,
-        false,
-        configured_names,
-        text_editor_label,
-    )
-    .into_iter()
-    .filter(|label| label != BUILTIN_FILE_MANAGER_APP)
-    .map(|label| DesktopProgramEntry {
-        action: resolve_desktop_applications_action(&label, text_editor_label),
-        label,
-    })
-    .collect();
+    let configured =
+        build_terminal_application_entries(false, false, configured_names, text_editor_label)
+            .into_iter()
+            .filter(|label| label != BUILTIN_FILE_MANAGER_APP)
+            .map(|label| DesktopProgramEntry {
+                action: resolve_desktop_applications_action(&label, text_editor_label),
+                label,
+            })
+            .collect();
     DesktopApplicationsSections {
         builtins,
         configured,
@@ -319,26 +315,16 @@ mod tests {
         let entries = build_terminal_application_entries(
             true,
             true,
-            &[
-                "Editor".to_string(),
-                "Custom App".to_string(),
-            ],
+            &["Editor".to_string(), "Custom App".to_string()],
             "Editor",
         );
-        assert_eq!(
-            entries,
-            vec!["File Manager", "Editor", "Custom App"]
-        );
+        assert_eq!(entries, vec!["File Manager", "Editor", "Custom App"]);
     }
 
     #[test]
     fn build_terminal_application_entries_can_hide_file_manager_builtin() {
-        let entries = build_terminal_application_entries(
-            false,
-            true,
-            &["Custom App".to_string()],
-            "Editor",
-        );
+        let entries =
+            build_terminal_application_entries(false, true, &["Custom App".to_string()], "Editor");
 
         assert_eq!(entries, vec!["Editor", "Custom App"]);
     }
@@ -378,10 +364,7 @@ mod tests {
         let sections = build_desktop_applications_sections(
             true,
             true,
-            &[
-                "Editor".to_string(),
-                "Custom".to_string(),
-            ],
+            &["Editor".to_string(), "Custom".to_string()],
             "Editor",
         );
         assert_eq!(
@@ -408,17 +391,14 @@ mod tests {
 
     #[test]
     fn build_desktop_applications_sections_can_hide_file_manager_builtin() {
-        let sections =
-            build_desktop_applications_sections(false, true, &[], "Editor");
+        let sections = build_desktop_applications_sections(false, true, &[], "Editor");
 
         assert_eq!(
             sections.builtins,
-            vec![
-                DesktopProgramEntry {
-                    label: "Editor".to_string(),
-                    action: DesktopApplicationsAction::OpenTextEditor,
-                }
-            ]
+            vec![DesktopProgramEntry {
+                label: "Editor".to_string(),
+                action: DesktopApplicationsAction::OpenTextEditor,
+            }]
         );
     }
 

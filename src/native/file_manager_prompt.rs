@@ -4,7 +4,7 @@ use super::prompt_flow::PromptOutcome;
 use super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use crate::default_apps::parse_custom_command_line;
 use anyhow::{anyhow, Result};
-use robcos_native_file_manager_app::{
+use nucleon_native_file_manager_app::{
     prepare_open_with_launch, FileManagerEditRuntime, OpenWithLaunchRequest,
 };
 use std::path::PathBuf;
@@ -106,7 +106,7 @@ impl FileManagerPromptRequest {
             | Self::OpenWithEditCommand { ext_key, .. } => {
                 format!(
                     "Open With {}",
-                    robcos_native_file_manager_app::open_with_extension_label(ext_key)
+                    nucleon_native_file_manager_app::open_with_extension_label(ext_key)
                 )
             }
         }
@@ -121,7 +121,7 @@ impl FileManagerPromptRequest {
                 make_default,
                 ..
             } => {
-                let ext_label = robcos_native_file_manager_app::open_with_extension_label(ext_key);
+                let ext_label = nucleon_native_file_manager_app::open_with_extension_label(ext_key);
                 if *make_default {
                     format!("Open with command for {} (saved as default):", ext_label)
                 } else {
@@ -131,7 +131,7 @@ impl FileManagerPromptRequest {
             Self::OpenWithEditCommand { ext_key, .. } => {
                 format!(
                     "Edit saved command for {}:",
-                    robcos_native_file_manager_app::open_with_extension_label(ext_key)
+                    nucleon_native_file_manager_app::open_with_extension_label(ext_key)
                 )
             }
         }
@@ -184,7 +184,7 @@ impl FileManagerPromptRequest {
 pub fn open_with_cleared_default_status(ext_key: &str) -> String {
     format!(
         "Cleared always-use command for {}.",
-        robcos_native_file_manager_app::open_with_extension_label(ext_key)
+        nucleon_native_file_manager_app::open_with_extension_label(ext_key)
     )
 }
 
@@ -192,21 +192,21 @@ pub fn open_with_set_default_status(command: &str, ext_key: &str) -> String {
     format!(
         "Now always using {} for {}.",
         command,
-        robcos_native_file_manager_app::open_with_extension_label(ext_key)
+        nucleon_native_file_manager_app::open_with_extension_label(ext_key)
     )
 }
 
 pub fn open_with_removed_saved_status(ext_key: &str) -> String {
     format!(
         "Removed saved command for {}.",
-        robcos_native_file_manager_app::open_with_extension_label(ext_key)
+        nucleon_native_file_manager_app::open_with_extension_label(ext_key)
     )
 }
 
 pub fn open_with_updated_saved_status(ext_key: &str) -> String {
     format!(
         "Updated saved command for {}.",
-        robcos_native_file_manager_app::open_with_extension_label(ext_key)
+        nucleon_native_file_manager_app::open_with_extension_label(ext_key)
     )
 }
 

@@ -1,15 +1,15 @@
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Color32, Context};
 
 const STANDALONE_TWEAKS_DEFAULT_SIZE: [f32; 2] = [820.0, 560.0];
 
-pub struct RobcoNativeTweaksApp {
-    inner: RobcoNativeApp,
+pub struct NucleonNativeTweaksApp {
+    inner: NucleonNativeApp,
 }
 
-impl RobcoNativeTweaksApp {
+impl NucleonNativeTweaksApp {
     pub fn new(session_username: Option<String>) -> Self {
-        let mut inner = RobcoNativeApp::default();
+        let mut inner = NucleonNativeApp::default();
         inner.prepare_standalone_tweaks_window(session_username);
         Self { inner }
     }
@@ -23,7 +23,7 @@ impl RobcoNativeTweaksApp {
     }
 }
 
-impl eframe::App for RobcoNativeTweaksApp {
+impl eframe::App for NucleonNativeTweaksApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
     }

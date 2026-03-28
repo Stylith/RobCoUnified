@@ -190,12 +190,7 @@ fn gather_spotlight_results_with_names(
     let mut results = Vec::new();
 
     if tab == 0 || tab == 1 {
-        for name in &[
-            "File Manager",
-            "Settings",
-            "Terminal",
-            text_editor_name,
-        ] {
+        for name in &["File Manager", "Settings", "Terminal", text_editor_name] {
             if matches_query(name) {
                 results.push(NativeSpotlightResult {
                     name: (*name).to_string(),
@@ -312,12 +307,12 @@ mod tests {
     #[test]
     fn start_application_entries_hide_duplicate_builtins() {
         let items = start_application_entries_from_names(
-            vec!["ROBCO Word Processor".to_string(), "Hex".to_string()],
+            vec!["Nucleon Text Editor".to_string(), "Hex".to_string()],
             true,
-            "ROBCO Word Processor",
+            "Nucleon Text Editor",
         );
 
-        assert_eq!(items[0].label, "ROBCO Word Processor");
+        assert_eq!(items[0].label, "Nucleon Text Editor");
         assert_eq!(items[1].label, "Hex");
     }
 
@@ -327,7 +322,7 @@ mod tests {
             "hel",
             1,
             None,
-            "ROBCO Word Processor",
+            "Nucleon Text Editor",
             vec!["Helix".to_string()],
             vec!["Missile Command".to_string()],
             Vec::new(),

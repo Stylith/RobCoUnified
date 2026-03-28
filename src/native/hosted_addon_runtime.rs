@@ -85,9 +85,8 @@ mod tests {
     use super::HostedAddonProcessSession;
     use crate::native::InstalledHostedAddonProcess;
     use crate::platform::{
-        AddonId, HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol,
-        HostedAddonRequest, HostedAddonResponse, HostedAddonSize, HostedAddonSurface,
-        HostedAddonUpdateRequest,
+        AddonId, HostedAddonFrame, HostedAddonInitRequest, HostedAddonProtocol, HostedAddonRequest,
+        HostedAddonResponse, HostedAddonSize, HostedAddonSurface, HostedAddonUpdateRequest,
     };
     use std::fs;
     use std::path::PathBuf;

@@ -1,17 +1,17 @@
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Color32, Context};
 use std::path::PathBuf;
 
 const STANDALONE_EDITOR_DEFAULT_SIZE: [f32; 2] = [820.0, 560.0];
 const STANDALONE_EDITOR_MIN_SIZE: [f32; 2] = [400.0, 300.0];
 
-pub struct RobcoNativeEditorApp {
-    inner: RobcoNativeApp,
+pub struct NucleonNativeEditorApp {
+    inner: NucleonNativeApp,
 }
 
-impl RobcoNativeEditorApp {
+impl NucleonNativeEditorApp {
     pub fn new(session_username: Option<String>, start_path: Option<PathBuf>) -> Self {
-        let mut inner = RobcoNativeApp::default();
+        let mut inner = NucleonNativeApp::default();
         inner.prepare_standalone_editor_window(session_username, start_path);
         Self { inner }
     }
@@ -25,7 +25,7 @@ impl RobcoNativeEditorApp {
     }
 }
 
-impl eframe::App for RobcoNativeEditorApp {
+impl eframe::App for NucleonNativeEditorApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
     }

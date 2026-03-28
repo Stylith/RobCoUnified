@@ -18,19 +18,19 @@ use super::super::desktop_user_service::{
 };
 use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::config::Settings;
 use crate::config::{ConnectionKind, CrtPreset};
 use crate::core::auth::AuthMethod;
 use eframe::egui::{self, RichText, TextEdit};
-use robcos_native_default_apps_app::{
+use nucleon_native_default_apps_app::{
     build_default_app_settings_choices, default_app_slot_description,
 };
-use robcos_native_settings_app::{
+use nucleon_native_settings_app::{
     gui_cli_profile_mut, gui_cli_profile_slot_label, gui_cli_profile_slots,
 };
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_settings_display_effects_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         let palette = self.current_shell_palette();
@@ -49,7 +49,7 @@ impl RobcoNativeApp {
                         self.settings
                             .draft
                             .display_effects
-                            .apply_preset(CrtPreset::RobCoStandard);
+                            .apply_preset(CrtPreset::Classic);
                     }
                     changed = true;
                 }
@@ -66,7 +66,7 @@ impl RobcoNativeApp {
                             for preset in [
                                 CrtPreset::Off,
                                 CrtPreset::Subtle,
-                                CrtPreset::RobCoStandard,
+                                CrtPreset::Classic,
                                 CrtPreset::WornTerminal,
                                 CrtPreset::ExtremeRetro,
                                 CrtPreset::Custom,
@@ -544,9 +544,7 @@ impl RobcoNativeApp {
         ui.horizontal(|ui| {
             ui.label("Menu");
             egui::ComboBox::from_id_salt("native_settings_edit_target")
-                .selected_text(
-                    RichText::new(self.settings.edit_target.title()).color(palette.fg),
-                )
+                .selected_text(RichText::new(self.settings.edit_target.title()).color(palette.fg))
                 .show_ui(ui, |ui| {
                     Self::apply_settings_control_style(ui);
                     for target in [

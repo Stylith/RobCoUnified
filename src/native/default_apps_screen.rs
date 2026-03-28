@@ -2,8 +2,8 @@ use super::desktop_default_apps_service::{default_app_slot_label, DefaultAppSlot
 use super::menu::draw_terminal_menu_screen;
 use crate::config::Settings;
 use eframe::egui::Context;
-pub use robcos_native_default_apps_app::TerminalDefaultAppsRequest;
-use robcos_native_default_apps_app::{
+pub use nucleon_native_default_apps_app::TerminalDefaultAppsRequest;
+use nucleon_native_default_apps_app::{
     build_default_app_choice_items, build_default_apps_root_items,
     resolve_default_apps_choice_event, resolve_default_apps_root_event,
     resolve_terminal_default_apps_request,
@@ -27,6 +27,7 @@ pub fn draw_default_apps_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> TerminalDefaultAppsRequest {
     match active_slot {
         Some(slot) => {
@@ -48,6 +49,7 @@ pub fn draw_default_apps_screen(
                 status_row,
                 content_col,
                 shell_status,
+                header_lines,
             );
             resolve_terminal_default_apps_request(resolve_default_apps_choice_event(
                 *slot, activated,
@@ -72,6 +74,7 @@ pub fn draw_default_apps_screen(
                 status_row,
                 content_col,
                 shell_status,
+                header_lines,
             );
             resolve_terminal_default_apps_request(resolve_default_apps_root_event(activated))
         }

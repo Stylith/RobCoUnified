@@ -8,7 +8,7 @@ use super::file_manager_app::{
     FileManagerClipboardItem,
 };
 use crate::config::{DesktopFileManagerSettings, FileManagerSortMode, FileManagerViewMode};
-use robcos_native_file_manager_app::{
+use nucleon_native_file_manager_app::{
     known_apps_for_extension, open_with_state_for_path, selected_file, FileManagerClipboardMode,
     FileManagerEditRuntime,
 };
@@ -397,7 +397,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_file_manager_menu_{prefix}_{}_{}",
+                "nucleon_native_file_manager_menu_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));

@@ -4,7 +4,7 @@ mod classic_launcher;
 mod classic_panel;
 mod classic_spotlight;
 
-use super::app::RobcoNativeApp;
+use super::app::NucleonNativeApp;
 use crate::theme::LayoutProfile;
 use eframe::egui::Context;
 
@@ -28,7 +28,7 @@ pub enum SlotAction {
 
 pub trait SlotRenderer {
     fn slot(&self) -> ShellSlot;
-    fn render(&self, app: &mut RobcoNativeApp, slot_ctx: &SlotContext) -> Vec<SlotAction>;
+    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &SlotContext) -> Vec<SlotAction>;
 }
 
 pub struct SlotRegistry {
@@ -51,7 +51,7 @@ impl SlotRegistry {
     pub fn render_slot(
         &self,
         slot: ShellSlot,
-        app: &mut RobcoNativeApp,
+        app: &mut NucleonNativeApp,
         ctx: &Context,
         layout: &LayoutProfile,
     ) -> Vec<SlotAction> {

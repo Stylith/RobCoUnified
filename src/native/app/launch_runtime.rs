@@ -10,19 +10,19 @@ use super::super::menu::{
 };
 use super::super::wasm_addon_runtime::WasmHostedAddonState;
 use super::super::NativeSettingsPanel;
-use crate::native::installed_wasm_addon_module_by_display_name;
-use crate::platform::{HostedAddonSize, HostedAddonSurface};
 use super::launch_registry::{
     self, resolve_desktop_launch_target, resolve_terminal_launch_target,
     unresolved_launch_target_status, unresolved_terminal_launch_target_status, NativeDesktopLaunch,
     NativeTerminalLaunch,
 };
-use super::{RobcoNativeApp, SecondaryWindowApp, BUILTIN_TEXT_EDITOR_APP};
+use super::{NucleonNativeApp, SecondaryWindowApp, BUILTIN_TEXT_EDITOR_APP};
+use crate::native::installed_wasm_addon_module_by_display_name;
 use crate::platform::LaunchTarget;
-use robcos_native_programs_app::{resolve_desktop_games_request, DesktopProgramRequest};
+use crate::platform::{HostedAddonSize, HostedAddonSurface};
+use nucleon_native_programs_app::{resolve_desktop_games_request, DesktopProgramRequest};
 use std::path::{Path, PathBuf};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn release_retained_wasm_addons(&mut self) {
         self.retained_wasm_addons.clear();
     }
@@ -424,8 +424,10 @@ impl RobcoNativeApp {
     }
 
     pub(super) fn open_desktop_catalog_launch(&mut self, name: &str, catalog: ProgramCatalog) {
-        if matches!(catalog, ProgramCatalog::Applications | ProgramCatalog::Games)
-            && installed_wasm_addon_module_by_display_name(name).is_some()
+        if matches!(
+            catalog,
+            ProgramCatalog::Applications | ProgramCatalog::Games
+        ) && installed_wasm_addon_module_by_display_name(name).is_some()
         {
             if let Err(err) = self.launch_desktop_wasm_addon(name) {
                 self.shell_status = err;
@@ -444,8 +446,10 @@ impl RobcoNativeApp {
         catalog: ProgramCatalog,
         return_screen: TerminalScreen,
     ) {
-        if matches!(catalog, ProgramCatalog::Applications | ProgramCatalog::Games)
-            && installed_wasm_addon_module_by_display_name(name).is_some()
+        if matches!(
+            catalog,
+            ProgramCatalog::Applications | ProgramCatalog::Games
+        ) && installed_wasm_addon_module_by_display_name(name).is_some()
         {
             if let Err(err) = self.launch_embedded_wasm_addon(name, return_screen) {
                 self.shell_status = err;

@@ -3,13 +3,13 @@ use super::super::desktop_app::{
     DesktopWindowTileAction, WindowInstanceId,
 };
 use super::super::pty_screen::NativePtyState;
-use super::super::retro_ui::current_palette;
-use crate::theme::{DockPosition, PanelPosition};
+use super::super::retro_ui::{current_palette, shell_style_rounding, shell_style_shadow};
+use crate::theme::{PanelType, ShellStyle};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
 
 use crate::native::editor_app::EditorWindow;
 
-use super::{RobcoNativeApp, SecondaryWindow, SecondaryWindowApp};
+use super::{NucleonNativeApp, SecondaryWindow, SecondaryWindowApp};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct DesktopWindowState {
@@ -45,7 +45,7 @@ pub(super) struct ResizableDesktopWindowOptions {
     pub(super) clamp_restore: bool,
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn spawn_secondary_window(
         &mut self,
         kind: DesktopWindow,
@@ -275,9 +275,9 @@ impl RobcoNativeApp {
 
     pub(super) fn note_desktop_window_rect(&mut self, window: DesktopWindow, rect: egui::Rect) {
         let id = self.current_window_id(window);
+        let restore_size = self.desktop_window_restore_size(rect);
         let state = self.desktop_window_state_mut(id);
         state.restore_pos = Some([rect.min.x, rect.min.y]);
-        let restore_size = Self::desktop_window_restore_size(rect);
         state.restore_size = Some([restore_size.x, restore_size.y]);
         state.apply_restore = false;
     }
@@ -292,15 +292,15 @@ impl RobcoNativeApp {
             return;
         }
         let generation = self.next_desktop_window_generation();
+        let current_restore = current_rect.map(|rect| (rect, self.desktop_window_restore_size(rect)));
         let state = self.desktop_window_state_mut(id);
         if state.maximized {
             state.maximized = false;
             state.apply_restore = true;
             state.generation = generation;
         } else {
-            if let Some(rect) = current_rect {
+            if let Some((rect, restore_size)) = current_restore {
                 state.restore_pos = Some([rect.min.x, rect.min.y]);
-                let restore_size = Self::desktop_window_restore_size(rect);
                 state.restore_size = Some([restore_size.x, restore_size.y]);
                 state.user_resized = true;
             }
@@ -344,7 +344,7 @@ impl RobcoNativeApp {
             .unwrap_or_else(|| Self::desktop_default_window_size(id.kind));
         let workspace = self.active_desktop_workspace_rect(ctx);
         let (pos, size) =
-            Self::desktop_window_tiled_geometry(workspace, target, min_size, restore_size);
+            self.desktop_window_tiled_geometry(workspace, target, min_size, restore_size);
         let generation = self.next_desktop_window_generation();
         let state = self.desktop_window_state_mut(id);
         state.restore_pos = Some([pos.x, pos.y]);
@@ -420,20 +420,20 @@ impl RobcoNativeApp {
 
     // ── Static helpers ──────────────────────────────────────────────────
 
-    pub(super) fn desktop_window_restore_size(rect: egui::Rect) -> egui::Vec2 {
-        Self::desktop_window_content_size(rect.size())
+    pub(super) fn desktop_window_restore_size(&self, rect: egui::Rect) -> egui::Vec2 {
+        self.desktop_window_content_size(rect.size())
     }
 
-    fn desktop_window_content_size(outer_size: egui::Vec2) -> egui::Vec2 {
-        let margin = Self::desktop_window_frame().total_margin().sum();
+    fn desktop_window_content_size(&self, outer_size: egui::Vec2) -> egui::Vec2 {
+        let margin = self.desktop_window_frame().total_margin().sum();
         egui::vec2(
             (outer_size.x - margin.x).max(160.0),
             (outer_size.y - margin.y).max(120.0),
         )
     }
 
-    fn desktop_window_outer_size(content_size: egui::Vec2) -> egui::Vec2 {
-        content_size + Self::desktop_window_frame().total_margin().sum()
+    fn desktop_window_outer_size(&self, content_size: egui::Vec2) -> egui::Vec2 {
+        content_size + self.desktop_window_frame().total_margin().sum()
     }
 
     pub(super) fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
@@ -450,16 +450,14 @@ impl RobcoNativeApp {
 
     pub(super) fn active_desktop_workspace_rect(&self, ctx: &Context) -> egui::Rect {
         let screen = ctx.screen_rect();
-        let top = match self.desktop_active_layout.panel_position {
-            PanelPosition::Top => screen.top() + self.desktop_active_layout.panel_height,
-            PanelPosition::Bottom | PanelPosition::Hidden => screen.top(),
+        let top = if self.desktop_active_layout.top_panel != PanelType::Disabled {
+            screen.top() + self.desktop_active_layout.top_panel_height
+        } else {
+            screen.top()
         };
         let mut bottom = screen.bottom();
-        if self.desktop_active_layout.panel_position == PanelPosition::Bottom {
-            bottom -= self.desktop_active_layout.panel_height;
-        }
-        if self.desktop_active_layout.dock_position != DockPosition::Hidden {
-            bottom -= self.desktop_active_layout.dock_size;
+        if self.desktop_active_layout.bottom_panel != PanelType::Disabled {
+            bottom -= self.desktop_active_layout.bottom_panel_height;
         }
         let bottom = bottom.max(top + 120.0);
         egui::Rect::from_min_max(
@@ -468,12 +466,18 @@ impl RobcoNativeApp {
         )
     }
 
-    pub(super) fn desktop_window_frame() -> egui::Frame {
+    pub(super) fn desktop_window_frame(&self) -> egui::Frame {
         let palette = current_palette();
+        let style = &self.desktop_active_shell_style;
         egui::Frame::none()
             .fill(palette.bg)
-            .stroke(egui::Stroke::new(1.0, palette.fg))
+            .stroke(egui::Stroke::new(
+                style.separator_thickness.min(2.0),
+                palette.fg,
+            ))
             .inner_margin(egui::Margin::same(1.0))
+            .rounding(shell_style_rounding(style))
+            .shadow(shell_style_shadow(style))
     }
 
     pub(super) fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -615,6 +619,7 @@ impl RobcoNativeApp {
     }
 
     fn desktop_window_tiled_geometry(
+        &self,
         workspace: egui::Rect,
         target: DesktopWindowTileAction,
         min_size: egui::Vec2,
@@ -634,8 +639,8 @@ impl RobcoNativeApp {
             Bottom,
         }
 
-        let min_outer = Self::desktop_window_outer_size(min_size);
-        let restore_outer = Self::desktop_window_outer_size(restore_size);
+        let min_outer = self.desktop_window_outer_size(min_size);
+        let restore_outer = self.desktop_window_outer_size(restore_size);
         let (requested_outer, h_anchor, v_anchor) = match target {
             DesktopWindowTileAction::LeftHalf => (
                 egui::vec2(workspace.width() * 0.5, workspace.height()),
@@ -698,7 +703,7 @@ impl RobcoNativeApp {
             },
         );
         let pos = Self::desktop_clamp_window_pos_to_workspace(workspace, pos, outer_size);
-        (pos, Self::desktop_window_content_size(outer_size))
+        (pos, self.desktop_window_content_size(outer_size))
     }
 
     // ── Window builders ─────────────────────────────────────────────────
@@ -721,7 +726,7 @@ impl RobcoNativeApp {
             .id(self.desktop_window_egui_id(id))
             .open(open)
             .title_bar(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .resizable(true)
             .min_size(options.min_size)
             .default_size(options.default_size);
@@ -1134,14 +1139,20 @@ impl RobcoNativeApp {
         ui: &mut egui::Ui,
         _title: &str,
         maximized: bool,
+        shell_style: &ShellStyle,
     ) -> DesktopHeaderAction {
         let palette = current_palette();
+        let vertical_pad = ((shell_style.title_bar_height - 20.0) / 2.0).max(2.0);
         let mut action = DesktopHeaderAction::None;
-        // egui::Frame handles background fill + margin in a single allocation.
-        // No manual allocate_exact_size/child_ui, so no "double use of widget".
         egui::Frame::none()
-            .fill(palette.selected_bg)
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .fill(palette.window_chrome_focused)
+            .inner_margin(egui::Margin::symmetric(8.0, vertical_pad))
+            .rounding(egui::Rounding {
+                nw: shell_style.border_radius,
+                ne: shell_style.border_radius,
+                sw: 0.0,
+                se: 0.0,
+            })
             .show(ui, |ui| {
                 ui.set_min_height(20.0);
                 ui.horizontal(|ui| {
@@ -1205,7 +1216,7 @@ impl RobcoNativeApp {
 #[cfg(test)]
 mod tests {
     use super::super::super::desktop_app::DesktopWindowTileAction;
-    use super::RobcoNativeApp;
+    use super::NucleonNativeApp;
     use eframe::egui;
 
     #[test]
@@ -1214,24 +1225,25 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(1000.0, 700.0));
         let min_size = egui::vec2(320.0, 240.0);
         let restore_size = egui::vec2(480.0, 360.0);
+        let app = NucleonNativeApp::default();
 
-        let (top_right_pos, top_right_size) = RobcoNativeApp::desktop_window_tiled_geometry(
+        let (top_right_pos, top_right_size) = app.desktop_window_tiled_geometry(
             workspace,
             DesktopWindowTileAction::TopRightQuarter,
             min_size,
             restore_size,
         );
-        let top_right_outer = RobcoNativeApp::desktop_window_outer_size(top_right_size);
+        let top_right_outer = app.desktop_window_outer_size(top_right_size);
         assert_eq!(top_right_pos.y, workspace.top());
         assert!((top_right_pos.x + top_right_outer.x - workspace.right()).abs() < 0.01);
 
-        let (center_pos, center_size) = RobcoNativeApp::desktop_window_tiled_geometry(
+        let (center_pos, center_size) = app.desktop_window_tiled_geometry(
             workspace,
             DesktopWindowTileAction::Center,
             min_size,
             restore_size,
         );
-        let center_outer = RobcoNativeApp::desktop_window_outer_size(center_size);
+        let center_outer = app.desktop_window_outer_size(center_size);
         assert!((center_pos.x + center_outer.x * 0.5 - workspace.center().x).abs() < 0.01);
         assert!((center_pos.y + center_outer.y * 0.5 - workspace.center().y).abs() < 0.01);
     }

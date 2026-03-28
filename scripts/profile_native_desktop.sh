@@ -1,11 +1,11 @@
 #!/bin/zsh
 set -euo pipefail
 
-BINARY_PATH="${1:-/Users/hal-9000/RobCoUnified/target/release/robcos-native}"
-PROFILE_DIR="$(mktemp -d /tmp/robcos-profile.XXXXXX)"
+BINARY_PATH="${1:-/Users/hal-9000/nucleon-core/target/release/nucleon-native}"
+PROFILE_DIR="$(mktemp -d /tmp/nucleon-profile.XXXXXX)"
 LOG_FILE="$PROFILE_DIR/startup.log"
 REPAINT_LOG="$PROFILE_DIR/repaint.log"
-APP_LOG="/tmp/robcos-profile-run.log"
+APP_LOG="/tmp/nucleon-profile-run.log"
 
 mkdir -p "$PROFILE_DIR/users"
 mkdir -p "$PROFILE_DIR/users/profile"
@@ -22,10 +22,10 @@ JSON
 
 START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
 
-ROBCOS_BASE_DIR="$PROFILE_DIR" \
-ROBCOS_AUTOLOGIN_USER=profile \
-ROBCOS_STARTUP_PROFILE_LOG="$LOG_FILE" \
-ROBCOS_REPAINT_TRACE_LOG="$REPAINT_LOG" \
+NUCLEON_BASE_DIR="$PROFILE_DIR" \
+NUCLEON_AUTOLOGIN_USER=profile \
+NUCLEON_STARTUP_PROFILE_LOG="$LOG_FILE" \
+NUCLEON_REPAINT_TRACE_LOG="$REPAINT_LOG" \
 "$BINARY_PATH" >"$APP_LOG" 2>&1 &
 PID=$!
 

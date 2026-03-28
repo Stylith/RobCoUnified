@@ -246,7 +246,7 @@ const FILE_MANAGER_RECENT_LIMIT: usize = 12;
 const FILE_MANAGER_RECENT_FOLDERS_LIMIT: usize = 10;
 const FILE_MANAGER_OPEN_WITH_HISTORY_LIMIT: usize = 8;
 const FILE_MANAGER_OPEN_WITH_NO_EXT_KEY: &str = "__no_ext__";
-const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
+const BUILTIN_TEXT_EDITOR_APP: &str = "Nucleon Text Editor";
 
 impl FileManagerState {
     fn save_as_state(&self) -> Option<(&str, bool, u64)> {
@@ -1395,7 +1395,7 @@ fn refresh_start_leaf_items(state: &mut StartState) {
 fn desktop_hub_title(kind: DesktopHubKind) -> &'static str {
     match kind {
         DesktopHubKind::Applications => "Applications",
-        DesktopHubKind::TextEditorMenu => "ROBCO Word Processor",
+        DesktopHubKind::TextEditorMenu => "Nucleon Text Editor",
         DesktopHubKind::TextEditorDocuments => "Open Document",
         DesktopHubKind::Documents => "Documents",
         DesktopHubKind::DocumentCategory => "Documents",
@@ -1697,7 +1697,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
                 enabled: false,
             });
             items.push(DesktopHubItem {
-                label: "Back to ROBCO Word Processor".to_string(),
+                label: "Back to Nucleon Text Editor".to_string(),
                 action: DesktopHubItemAction::OpenHub(DesktopHubKind::TextEditorMenu),
                 enabled: true,
             });
@@ -2366,7 +2366,7 @@ fn desktop_hub_items(hub: &DesktopHubState, current_user: &str) -> Vec<DesktopHu
             let mut items = vec![
                 DesktopHubItem {
                     label: format!(
-                        "ROBCO Word Processor in Applications: {} [toggle]",
+                        "Nucleon Text Editor in Applications: {} [toggle]",
                         if get_settings().builtin_menu_visibility.text_editor {
                             "VISIBLE"
                         } else {
@@ -3002,7 +3002,7 @@ const DESKTOP_SETTINGS_PROFILE_ITEMS: [(DesktopProfileSlot, &str); 5] = [
 ];
 const NO_ENV_OVERRIDES: &[(&str, &str)] = &[];
 const CALCURSE_ENV_OVERRIDES: &[(&str, &str)] = &[("NCURSES_NO_UTF8_ACS", "1")];
-const WALLPAPER_DEFAULT_ROBCO: &[&str] = &[
+const WALLPAPER_DEFAULT: &[&str] = &[
     "██████╗  ██████╗ ██████╗  ██████╗  ██████╗",
     "██╔══██╗██╔═══██╗██╔══██╗██╔════╝ ██╔═══██╗",
     "██████╔╝██║   ██║██████╔╝██║      ██║   ██║",
@@ -3010,7 +3010,7 @@ const WALLPAPER_DEFAULT_ROBCO: &[&str] = &[
     "██║  ██║╚██████╔╝██████╔╝╚██████╗ ╚██████╔╝",
     "╚═╝  ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝",
 ];
-const DEFAULT_DESKTOP_WALLPAPERS: &[(&str, &[&str])] = &[("RobCo", WALLPAPER_DEFAULT_ROBCO)];
+const DEFAULT_DESKTOP_WALLPAPERS: &[(&str, &[&str])] = &[("Default", WALLPAPER_DEFAULT)];
 static BATTERY_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 static WALLPAPER_RENDER_CACHE: Mutex<Option<WallpaperRenderCache>> = Mutex::new(None);
 
@@ -4993,7 +4993,7 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
             "file_manager_settings".to_string(),
         ),
         WindowKind::TextEditor(_) => (
-            "ROBCO Word Processor".to_string(),
+            "Nucleon Text Editor".to_string(),
             "text_editor".to_string(),
         ),
     };
@@ -5624,7 +5624,6 @@ fn default_shell_command() -> Vec<String> {
         .unwrap_or_else(|| "/bin/zsh".to_string());
     vec![shell]
 }
-
 
 fn close_window_by_id(state: &mut DesktopState, window_id: u64) {
     if let Some(pos) = state.windows.iter().position(|w| w.id == window_id) {
@@ -12351,7 +12350,7 @@ fn open_desktop_text_editor_window(
             win.title = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("ROBCO Word Processor")
+                .unwrap_or("Nucleon Text Editor")
                 .to_string();
             if let WindowKind::TextEditor(editor) = &mut win.kind {
                 editor.read_only &= read_only;
@@ -12394,7 +12393,7 @@ fn open_desktop_text_editor_window(
         title: path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("ROBCO Word Processor")
+            .unwrap_or("Nucleon Text Editor")
             .to_string(),
         rect,
         restore_rect: None,
@@ -16349,7 +16348,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("robcos_{tag}_{nanos}"));
+        let dir = std::env::temp_dir().join(format!("nucleon_{tag}_{nanos}"));
         let _ = std::fs::create_dir_all(&dir);
         dir
     }

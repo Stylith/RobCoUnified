@@ -1,8 +1,9 @@
 use super::edit_menus_screen::EditMenuTarget;
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
 pub use super::shared_types::FlashAction;
 use crate::config::ConnectionKind;
-use crate::config::HEADER_LINES;
 use crate::connections::NetworkMenuGroup;
 use crate::default_apps::DefaultAppSlot;
 use crate::native::installer_screen::{InstallerMenuTarget, InstallerPackageAction};
@@ -186,6 +187,7 @@ pub fn draw_terminal_flash(
     separator_bottom_row: usize,
     message_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) {
     egui::CentralPanel::default()
         .frame(
@@ -195,14 +197,15 @@ pub fn draw_terminal_flash(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
             screen.text(&painter, content_col, message_row, message, palette.fg);
         });
 }
@@ -216,6 +219,7 @@ pub fn draw_terminal_flash_boxed(
     header_start_row: usize,
     separator_top_row: usize,
     separator_bottom_row: usize,
+    header_lines: &[String],
 ) {
     egui::CentralPanel::default()
         .frame(
@@ -225,14 +229,15 @@ pub fn draw_terminal_flash_boxed(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
 
             let box_w = (message.chars().count() + 10).clamp(44, 96);
             let box_h = 7usize;

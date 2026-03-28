@@ -1,13 +1,12 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::{get_settings, reload_settings, NativeStartupWindowMode};
-use robcos::core::auth::ensure_default_admin;
-use robcos::native::desktop_session_service::restore_current_user_from_last_session;
-use robcos::native::{configure_native_context, RobcoNativeApp};
+use nucleon::config::{get_settings, reload_settings, NativeStartupWindowMode};
+use nucleon::core::auth::ensure_default_admin;
+use nucleon::native::desktop_session_service::restore_current_user_from_last_session;
+use nucleon::native::{configure_native_context, NucleonNativeApp};
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
 const NUCLEON_NATIVE_WINDOW_MODE_ENV: &str = "NUCLEON_NATIVE_WINDOW_MODE";
-const LEGACY_ROBCOS_NATIVE_WINDOW_MODE_ENV: &str = "ROBCOS_NATIVE_WINDOW_MODE";
 
 fn load_icon() -> Option<IconData> {
     let image = image::load_from_memory(APP_ICON_BYTES).ok()?.into_rgba8();
@@ -55,24 +54,17 @@ fn resolve_native_startup_window_mode(
 }
 
 fn native_window_mode_override() -> Option<String> {
-    [
-        NUCLEON_NATIVE_WINDOW_MODE_ENV,
-        LEGACY_ROBCOS_NATIVE_WINDOW_MODE_ENV,
-    ]
-    .into_iter()
-    .find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+    std::env::var(NUCLEON_NATIVE_WINDOW_MODE_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn build_startup_viewport(mode: NativeStartupWindowMode) -> ViewportBuilder {
     let viewport = ViewportBuilder::default()
         .with_inner_size([1360.0, 840.0])
         .with_min_inner_size([960.0, 600.0])
-        .with_title("RobCoOS Native");
+        .with_title("Nucleon");
     match mode {
         NativeStartupWindowMode::Maximized => viewport
             .with_decorations(true)
@@ -114,12 +106,12 @@ fn main() -> Result<()> {
     };
 
     eframe::run_native(
-        "RobCoOS Native",
+        "Nucleon",
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeApp::default()))
+            Ok(Box::new(NucleonNativeApp::default()))
         }),
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))
@@ -128,7 +120,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{parse_native_startup_window_mode_override, resolve_native_startup_window_mode};
-    use robcos::config::NativeStartupWindowMode;
+    use nucleon::config::NativeStartupWindowMode;
 
     #[test]
     fn parse_native_startup_window_mode_override_returns_none_for_missing_or_unknown() {

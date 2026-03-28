@@ -3,16 +3,16 @@ use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_settings_service::persist_settings_draft;
 use super::super::desktop_status_service::{clear_settings_status, saved_settings_status};
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::config::{ConnectionKind, OpenMode};
 use eframe::egui::{self, Context, RichText};
-use robcos_native_settings_app::{
+use nucleon_native_settings_app::{
     desktop_settings_back_target, desktop_settings_connections_nav_items,
     desktop_settings_user_management_nav_items, settings_panel_title, NativeSettingsPanel,
     SettingsHomeTileAction,
 };
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_settings(&mut self, ctx: &Context) {
         if !self.settings.open || self.desktop_window_is_minimized(DesktopWindow::Settings) {
             return;
@@ -29,7 +29,7 @@ impl RobcoNativeApp {
             .id(egui_id)
             .open(&mut open)
             .title_bar(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .resizable(false)
             .default_pos(default_pos)
             .fixed_size(default_size);
@@ -46,7 +46,12 @@ impl RobcoNativeApp {
         let mut close_requested = false;
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, "Settings", maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                "Settings",
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             let is_admin = self.session.as_ref().is_some_and(|s| s.is_admin);
             let panel = self.settings.panel;
             let mut changed = false;

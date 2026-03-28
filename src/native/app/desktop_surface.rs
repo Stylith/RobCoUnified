@@ -14,21 +14,23 @@ use super::super::desktop_surface_service::{
 };
 use super::super::file_manager::FileEntryRow;
 use super::super::file_manager_app::{FileManagerPromptRequest, NativeFileManagerDragPayload};
-use super::super::retro_ui::{current_palette, RetroPalette};
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
+};
 use super::super::shared_file_manager_settings::FileManagerSettingsUpdate;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use super::{
     AssetCache, ContextMenuAction, DesktopIconLayoutCache, DesktopIconSelection,
     DesktopSurfaceEntriesCache, ShortcutPropertiesState, StartMenuRenameState,
 };
 use crate::config::{DesktopIconSortMode, DesktopIconStyle, WallpaperSizeMode};
 use eframe::egui::{self, Align2, Color32, Context, FontFamily, FontId, RichText, TextureHandle};
-use robcos_native_settings_app::NativeSettingsPanel;
+use nucleon_native_settings_app::NativeSettingsPanel;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn invalidate_desktop_icon_layout_cache(&mut self) {
         self.desktop_icon_layout_cache = None;
     }
@@ -702,15 +704,16 @@ impl RobcoNativeApp {
 
     pub(super) fn apply_context_menu_style(ui: &mut egui::Ui) {
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.button_frame = true;
         style.visuals.window_fill = palette.panel;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.window_rounding = shell_style_rounding(&shell_style);
+        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
+        style.visuals.window_shadow = shell_style_shadow(&shell_style);
+        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
         style.visuals.override_text_color = None;
         style.spacing.item_spacing = egui::vec2(0.0, 0.0);
         style.spacing.button_padding = egui::vec2(5.0, 2.0);
@@ -1253,15 +1256,19 @@ impl RobcoNativeApp {
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .fixed_size(egui::vec2(360.0, 260.0))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
 
                 // Header
-                let header_action =
-                    Self::draw_desktop_window_header(ui, "Shortcut Properties", false);
+                let header_action = Self::draw_desktop_window_header(
+                    ui,
+                    "Shortcut Properties",
+                    false,
+                    &self.desktop_active_shell_style,
+                );
                 if matches!(
                     header_action,
                     super::desktop_window_mgmt::DesktopHeaderAction::Close
@@ -1418,13 +1425,17 @@ impl RobcoNativeApp {
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .fixed_size(egui::vec2(440.0, 250.0))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 Self::apply_settings_control_style(ui);
-                let header_action =
-                    Self::draw_desktop_window_header(ui, "Desktop Item Properties", false);
+                let header_action = Self::draw_desktop_window_header(
+                    ui,
+                    "Desktop Item Properties",
+                    false,
+                    &self.desktop_active_shell_style,
+                );
                 if matches!(
                     header_action,
                     super::desktop_window_mgmt::DesktopHeaderAction::Close

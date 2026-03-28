@@ -1,69 +1,41 @@
 [package]
-name = "robcos-native-shell"
+name = "nucleon-native-shell"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
 
 [[bin]]
-name = "robcos-native"
+name = "nucleon-native"
 path = "src/main.rs"
 
 [[bin]]
-name = "nucleon-native"
-path = "src/nucleon_native_main.rs"
-
-[[bin]]
-name = "robcos-file-manager"
+name = "nucleon-files"
 path = "src/file_manager_main.rs"
 
 [[bin]]
-name = "nucleon-files"
-path = "src/nucleon_files_main.rs"
-
-[[bin]]
-name = "robcos-settings"
+name = "nucleon-settings"
 path = "src/settings_main.rs"
 
 [[bin]]
-name = "nucleon-settings"
-path = "src/nucleon_settings_main.rs"
-
-[[bin]]
-name = "robcos-editor"
+name = "nucleon-text"
 path = "src/editor_main.rs"
 
 [[bin]]
-name = "nucleon-text"
-path = "src/nucleon_text_main.rs"
-
-[[bin]]
-name = "robcos-applications"
+name = "nucleon-applications"
 path = "src/applications_main.rs"
 
 [[bin]]
-name = "nucleon-applications"
-path = "src/nucleon_applications_main.rs"
-
-[[bin]]
-name = "robcos-installer"
+name = "nucleon-installer"
 path = "src/installer_main.rs"
 
 [[bin]]
-name = "nucleon-installer"
-path = "src/nucleon_installer_main.rs"
-
-[[bin]]
-name = "robcos-tweaks"
-path = "src/tweaks_main.rs"
-
-[[bin]]
 name = "nucleon-tweaks"
-path = "src/nucleon_tweaks_main.rs"
+path = "src/tweaks_main.rs"
 
 [dependencies]
 anyhow = "1"
 eframe = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-robcos = { path = "../.." }
-robcos-native-tweaks-app = { path = "../native-tweaks-app" }
+nucleon = { path = "../.." }
+nucleon-native-tweaks-app = { path = "../native-tweaks-app" }

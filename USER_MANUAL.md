@@ -1,4 +1,4 @@
-# RobCoOS User Manual
+# NucleonOS User Manual
 
 ## Table of Contents
 
@@ -19,9 +19,9 @@
 
 ## 1. Overview
 
-Welcome to RobCoOS.
+Welcome to NucleonOS.
 
-RobCoOS provides a retro-styled terminal shell and a native desktop interface on top of your existing operating system. It supports multi-user login, concurrent sessions, PTY-backed terminal access, configurable apps and documents, and a windowed desktop mode with menus, taskbar, and file management.
+NucleonOS provides a retro-styled terminal shell and a native desktop interface on top of your existing operating system. It supports multi-user login, concurrent sessions, PTY-backed terminal access, configurable apps and documents, and a windowed desktop mode with menus, taskbar, and file management.
 
 ---
 
@@ -31,11 +31,11 @@ RobCoOS provides a retro-styled terminal shell and a native desktop interface on
 
 ```bash
 # Development
-cargo run -p robcos-native-shell --bin nucleon-native
+cargo run -p nucleon-native-shell --bin nucleon-native
 
 # Optimized release build
-cargo build --release -p robcos-native-shell --bin nucleon-native
-cargo run --release -p robcos-native-shell --bin nucleon-native
+cargo build --release -p nucleon-native-shell --bin nucleon-native
+cargo run --release -p nucleon-native-shell --bin nucleon-native
 ```
 
 ### Startup Flags
@@ -114,7 +114,7 @@ New users are prompted once after login to configure their default applications.
 
 ## 5. Sessions
 
-RobCoOS supports up to 9 concurrent sessions.
+NucleonOS supports up to 9 concurrent sessions.
 
 ### Session Switching
 
@@ -220,7 +220,7 @@ The hacking screen is an alternative login mode used for selected accounts.
 
 ## 10. Nuke Codes
 
-Displays externally sourced launch-code data inside RobCoOS.
+Displays externally sourced launch-code data inside NucleonOS.
 
 ---
 

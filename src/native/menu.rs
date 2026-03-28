@@ -1,7 +1,8 @@
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
-use crate::config::HEADER_LINES;
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
 use eframe::egui::{self, Context};
-pub use robcos_native_terminal_app::{
+pub use nucleon_native_terminal_app::{
     entry_for_selectable_idx, handle_user_management_selection, login_menu_rows_from_users,
     plan_user_management_action, resolve_create_username_prompt, resolve_desktop_pty_exit,
     resolve_embedded_pty_exit, resolve_hacking_screen_event, resolve_login_password_submission,
@@ -56,6 +57,7 @@ pub fn draw_terminal_menu_screen(
     status_row: usize,
     content_col: usize,
     shell_status: &str,
+    header_lines: &[String],
 ) -> Option<usize> {
     let selectable_rows = selectable_row_indices(items);
     if selectable_rows.is_empty() {
@@ -92,17 +94,25 @@ pub fn draw_terminal_menu_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(&painter, title_row, title, palette.fg, true);
-            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(&painter, title_row, title, &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
             if let Some(sub) = subtitle {
-                screen.underlined_text(&painter, content_col, subtitle_row, sub, palette.fg);
+                screen.themed_subtitle(
+                    &painter,
+                    content_col,
+                    subtitle_row,
+                    sub,
+                    &palette,
+                    &decoration,
+                );
             }
             let mut row = menu_start_row;
             for (idx, item) in items.iter().enumerate() {

@@ -31,15 +31,15 @@ use super::super::menu::{
 };
 use super::super::prompt::{FlashAction, TerminalPromptAction};
 use super::super::prompt_flow::{handle_prompt_input, PromptOutcome};
-use crate::native::install_user_addon;
 use crate::config::ConnectionKind;
 use crate::core::auth::UserRecord;
+use crate::native::install_user_addon;
 use eframe::egui::{Context, Key, Modifiers};
-use robcos_native_settings_app::TerminalSettingsPanel;
+use nucleon_native_settings_app::TerminalSettingsPanel;
 
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn apply_terminal_login_selection_plan(
         &mut self,
         plan: TerminalLoginSelectionPlan<UserRecord>,

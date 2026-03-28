@@ -10,7 +10,7 @@ use crate::ui::{
     confirm, flash_message, input_prompt, is_back_menu_label, run_menu, MenuResult, Term,
 };
 
-const BUILTIN_TEXT_EDITOR_APP: &str = "ROBCO Word Processor";
+const BUILTIN_TEXT_EDITOR_APP: &str = "Nucleon Text Editor";
 
 // ── Generic add/delete ────────────────────────────────────────────────────────
 
@@ -89,7 +89,9 @@ pub fn apps_menu(terminal: &mut Term) -> Result<()> {
             choices.push(BUILTIN_TEXT_EDITOR_APP.to_string());
         }
         choices.extend(
-            apps.keys().filter(|name| name.as_str() != BUILTIN_TEXT_EDITOR_APP).cloned(),
+            apps.keys()
+                .filter(|name| name.as_str() != BUILTIN_TEXT_EDITOR_APP)
+                .cloned(),
         );
         choices.push("---".to_string());
         choices.push("Back".to_string());
@@ -176,9 +178,9 @@ pub fn network_menu(terminal: &mut Term) -> Result<()> {
 pub fn edit_apps_menu(terminal: &mut Term) -> Result<()> {
     loop {
         let text_editor_label = if get_settings().builtin_menu_visibility.text_editor {
-            "ROBCO Word Processor in Applications: VISIBLE [toggle]"
+            "Nucleon Text Editor in Applications: VISIBLE [toggle]"
         } else {
-            "ROBCO Word Processor in Applications: HIDDEN [toggle]"
+            "Nucleon Text Editor in Applications: HIDDEN [toggle]"
         };
         match run_menu(
             terminal,

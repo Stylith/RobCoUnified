@@ -1,5 +1,9 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
+fn default_theme_pack_version() -> String {
+    "1.0.0".to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MonochromePreset {
     Green,
@@ -206,6 +210,14 @@ pub struct TerminalLayoutProfile {
     pub status_bar_height: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SoundPack {
+    /// Path to the sound pack root directory (relative to theme bundle).
+    /// Contains optional WAV files: login.wav, logout.wav, error.wav,
+    /// navigate.wav, keypress.wav, boot_01.wav through boot_05.wav
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetPack {
     pub id: String,
@@ -241,6 +253,7 @@ pub struct CursorPack {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalBranding {
+    #[serde(default, alias = "lines")]
     pub header_lines: Vec<String>,
 }
 
@@ -257,7 +270,7 @@ impl TerminalBranding {
         }
     }
 
-    pub fn robco() -> Self {
+    pub fn heritage() -> Self {
         TerminalBranding {
             header_lines: vec![
                 "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM".to_string(),
@@ -304,11 +317,15 @@ impl Default for TerminalDecoration {
 pub struct ThemePack {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(default = "default_theme_pack_version")]
     pub version: String,
     pub shell_style: ShellStyle,
     pub layout_profile: LayoutProfile,
     pub color_style: ColorStyle,
+    #[serde(default)]
+    pub sound_pack: SoundPack,
     pub asset_pack: Option<AssetPack>,
     pub cursor_pack: Option<CursorPack>,
     #[serde(default)]
@@ -504,6 +521,7 @@ impl ThemePack {
                 preset: MonochromePreset::Green,
                 custom_rgb: None,
             },
+            sound_pack: SoundPack::default(),
             asset_pack: None,
             cursor_pack: None,
             terminal_branding: TerminalBranding::none(),
@@ -529,9 +547,37 @@ impl ThemePack {
             color_style: ColorStyle::FullColor {
                 theme_id: "nucleon-light".to_string(),
             },
+            sound_pack: SoundPack::default(),
             asset_pack: None,
             cursor_pack: None,
             terminal_branding: TerminalBranding::none(),
+            terminal_decoration: TerminalDecoration::default(),
+        }
+    }
+
+    pub fn heritage() -> Self {
+        ThemePack {
+            id: "robco-heritage".to_string(),
+            name: "RobCo Heritage".to_string(),
+            description: "Restores the original RobCo terminal presentation.".to_string(),
+            version: "1.0.0".to_string(),
+            shell_style: ShellStyle {
+                id: "robco".to_string(),
+                name: "RobCo".to_string(),
+                border_radius: 0.0,
+                title_bar_height: 28.0,
+                separator_thickness: 2.0,
+                window_shadow: false,
+            },
+            layout_profile: LayoutProfile::classic(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::Green,
+                custom_rgb: None,
+            },
+            sound_pack: SoundPack::default(),
+            asset_pack: None,
+            cursor_pack: None,
+            terminal_branding: TerminalBranding::heritage(),
             terminal_decoration: TerminalDecoration::default(),
         }
     }

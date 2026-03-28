@@ -1,14 +1,14 @@
-# RobCo Writer (Vim Integration) Implementation Guide
+# Nucleon Writer (Vim Integration) Implementation Guide
 
 ## Overview
 
-This document describes how to integrate a RobCo-themed text editor module into the application using Vim.
+This document describes how to integrate a Nucleon-themed text editor module into the application using Vim.
 
 The goal is:
 - Use Vim as the underlying editor
-- Apply RobCo theming and behavior
+- Apply Nucleon theming and behavior
 - Keep maintenance low (no deep Vim fork)
-- Integrate cleanly as a built-in RobCo app
+- Integrate cleanly as a built-in Nucleon app
 
 ---
 
@@ -18,12 +18,12 @@ Use **Vim + custom runtime configuration**, not a full fork.
 
 ### Structure
 
-robco/
+nucleon/
   bin/
     vim
-    robco-writer (launcher)
+    nucleon-writer (launcher)
   runtime/
-    robco_vimrc
+    nucleon_vimrc
   addons/
 
 ---
@@ -51,7 +51,7 @@ DO NOT hardcode colors.
 
 ---
 
-### 2. Startup Screen (RobCo Intro)
+### 2. Startup Screen (Nucleon Intro)
 
 Replace Vim default intro with:
 
@@ -81,7 +81,7 @@ Behavior:
 
 ---
 
-### 3. Statusline (RobCo Style)
+### 3. Statusline (Nucleon Style)
 
 Format:
 
@@ -150,18 +150,18 @@ Then:
 
 Add:
 
-:RobCoHelp
-:RobCoClear
-:RobCoNew
+:NucleonHelp
+:NucleonClear
+:NucleonNew
 
 ---
 
 ## Wrapper Launcher
 
-Create robco-writer launcher.
+Create nucleon-writer launcher.
 
 Responsibilities:
-- Set environment variables from RobCo
+- Set environment variables from Nucleon
 - Load custom vimrc
 - Pass file arguments
 
@@ -173,19 +173,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 export ROBCO_THEME="${ROBCO_THEME:-default}"
 
-exec "$SCRIPT_DIR/vim" -u "$SCRIPT_DIR/../runtime/robco_vimrc" "$@"
+exec "$SCRIPT_DIR/vim" -u "$SCRIPT_DIR/../runtime/nucleon_vimrc" "$@"
 
 ---
 
-## Integration Into RobCo
+## Integration Into Nucleon
 
 ### App Registration
 
-id: robco_writer
-name: RobCo Writer
+id: nucleon_writer
+name: Nucleon Writer
 type: builtin
 launch: external process
-command: robco-writer
+command: nucleon-writer
 
 ---
 
@@ -207,7 +207,7 @@ When opening a file:
 2. Set environment variables
 3. Launch:
 
-robco-writer <file>
+nucleon-writer <file>
 
 Optional:
 ROBCO_READONLY=1
@@ -216,11 +216,11 @@ ROBCO_READONLY=1
 
 ### UI Integration
 
-In RobCo:
+In Nucleon:
 
-- Add "RobCo Writer" to Applications
+- Add "Nucleon Writer" to Applications
 - Add "New Document"
-- Add "Open with RobCo Writer"
+- Add "Open with Nucleon Writer"
 - Use for logs/journal system
 
 ---
@@ -229,7 +229,7 @@ In RobCo:
 
 Bundle:
 - Vim binary
-- robco_vimrc
+- nucleon_vimrc
 - launcher script
 - Vim license file
 
@@ -250,7 +250,7 @@ Do not modify Vim core unless necessary.
 
 This approach provides:
 - Full Vim power
-- RobCo visual identity
+- Nucleon visual identity
 - Low maintenance
 - Clean integration
 

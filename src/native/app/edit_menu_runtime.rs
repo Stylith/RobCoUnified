@@ -8,9 +8,9 @@ use super::super::desktop_launcher_service::{
     rename_catalog_entry, ProgramCatalog,
 };
 use super::super::edit_menus_screen::EditMenuTarget;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn edit_program_entries(&self, target: EditMenuTarget) -> Vec<String> {
         match target {
             EditMenuTarget::Applications => catalog_names(ProgramCatalog::Applications),

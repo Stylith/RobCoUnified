@@ -1,6 +1,6 @@
 // crt_shader.wgsl
 //
-// Starter CRT post-process shader for RobCoUnified.
+// Starter CRT post-process shader for NucleonOS.
 // Intended as a single-pass starting point for a WGPU/egui pipeline.
 //
 // Features included:

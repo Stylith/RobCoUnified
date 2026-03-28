@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-pub const EDITOR_APP_TITLE: &str = "ROBCO Word Processor";
+pub const EDITOR_APP_TITLE: &str = "Nucleon Text Editor";
 pub const NEW_DESKTOP_DOCUMENT_STATUS: &str = "New document. Save to choose where it goes.";
 pub const NEW_DOCUMENT_STATUS: &str = "New document.";
 

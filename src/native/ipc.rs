@@ -1,5 +1,5 @@
 //! Lightweight Unix domain socket IPC for communication between the
-//! RobCoOS shell and standalone apps.
+//! Nucleon shell and standalone apps.
 //!
 //! The shell starts a listener thread that accepts one-shot JSON messages.
 //! Standalone apps connect, send a single [`IpcMessage`], and disconnect.

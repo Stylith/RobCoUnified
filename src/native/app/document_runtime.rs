@@ -20,13 +20,13 @@ use super::super::file_manager_desktop::{
 use super::super::menu::TerminalScreen;
 use super::super::prompt::TerminalPromptAction;
 use super::super::terminal_open_with_picker::OpenWithPickerState;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::default_apps::{resolve_document_open, ResolvedDocumentOpen};
 use anyhow::Result;
 use eframe::egui::{self, Key};
 use std::path::{Path, PathBuf};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn apply_file_manager_settings_update(&mut self, update: FileManagerSettingsUpdate) {
         apply_desktop_file_manager_settings_update(&mut self.settings.draft, update);
         self.sync_runtime_settings_cache();
@@ -101,7 +101,7 @@ impl RobcoNativeApp {
         let ext_key = file_manager_app::open_with_extension_key(&row.path);
         let settings = load_settings_snapshot();
         let saved_commands =
-            robcos_native_services::shared_file_manager_settings::open_with_history_for_extension(
+            nucleon_native_services::shared_file_manager_settings::open_with_history_for_extension(
                 &settings.desktop_file_manager,
                 &ext_key,
             );
@@ -372,7 +372,7 @@ impl RobcoNativeApp {
                     .to_string();
                 let title = format!(
                     "{} - {}",
-                    robcos_native_file_manager_app::open_with_command_title(&argv[0]),
+                    nucleon_native_file_manager_app::open_with_command_title(&argv[0]),
                     display,
                 );
                 self.launch_shell_command_on_active_surface(
@@ -401,6 +401,8 @@ impl RobcoNativeApp {
         self.editor.save_as_input.is_some()
             || self.picking_icon_for_shortcut.is_some()
             || self.picking_wallpaper
+            || self.picking_terminal_wallpaper
+            || self.picking_theme_import
     }
 
     pub(super) fn file_manager_activate_or_pick(&mut self) {
@@ -408,8 +410,10 @@ impl RobcoNativeApp {
             FileManagerPickMode::SaveAs
         } else if let Some(pick_idx) = self.picking_icon_for_shortcut {
             FileManagerPickMode::ShortcutIcon(pick_idx)
-        } else if self.picking_wallpaper {
+        } else if self.picking_wallpaper || self.picking_terminal_wallpaper {
             FileManagerPickMode::Wallpaper
+        } else if self.picking_theme_import {
+            FileManagerPickMode::ThemeImport
         } else {
             FileManagerPickMode::None
         };
@@ -432,6 +436,10 @@ impl RobcoNativeApp {
             }
             FileManagerSelectionActivation::PickWallpaper(path) => {
                 self.apply_file_manager_picker_commit(FileManagerPickerCommit::SetWallpaper(path));
+                return;
+            }
+            FileManagerSelectionActivation::PickThemeImport(path) => {
+                self.apply_file_manager_picker_commit(FileManagerPickerCommit::ImportTheme(path));
                 return;
             }
         }
@@ -508,10 +516,35 @@ impl RobcoNativeApp {
                 self.persist_native_settings();
             }
             FileManagerPickerCommit::SetWallpaper(path) => {
-                set_desktop_wallpaper_path(&mut self.settings.draft, &path);
-                self.picking_wallpaper = false;
+                if self.picking_terminal_wallpaper {
+                    self.settings.draft.terminal_wallpaper = path.to_string_lossy().to_string();
+                    self.picking_terminal_wallpaper = false;
+                    self.terminal_wallpaper_texture = None;
+                    self.terminal_wallpaper_loaded_for.clear();
+                } else {
+                    set_desktop_wallpaper_path(&mut self.settings.draft, &path);
+                    self.picking_wallpaper = false;
+                }
                 self.file_manager.open = false;
                 self.persist_native_settings();
+            }
+            FileManagerPickerCommit::ImportTheme(path) => {
+                match super::super::addons::import_theme_bundle_from_path(&path) {
+                    Ok(theme) => {
+                        self.picking_theme_import = false;
+                        self.file_manager.open = false;
+                        self.apply_status_update(super::super::desktop_status_service::settings_status(
+                            format!("Imported theme: {}", theme.name),
+                        ));
+                    }
+                    Err(status) => {
+                        self.picking_theme_import = false;
+                        self.file_manager.open = false;
+                        self.apply_status_update(super::super::desktop_status_service::settings_status(
+                            status,
+                        ));
+                    }
+                }
             }
         }
         if should_return_to_terminal_caller {
@@ -562,6 +595,13 @@ impl RobcoNativeApp {
             }
             FileManagerDesktopFooterRequest::CancelWallpaperPicker => {
                 self.picking_wallpaper = false;
+                self.picking_terminal_wallpaper = false;
+            }
+            FileManagerDesktopFooterRequest::CommitThemeImportPicker => {
+                self.commit_file_manager_picker(FileManagerPickMode::ThemeImport);
+            }
+            FileManagerDesktopFooterRequest::CancelThemeImportPicker => {
+                self.picking_theme_import = false;
             }
         }
     }

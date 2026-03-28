@@ -1,5 +1,5 @@
 [package]
-name = "robcos-native-terminal-app"
+name = "nucleon-native-terminal-app"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
@@ -9,5 +9,5 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-robcos-native-services = { path = "../native-services" }
-robcos-shared = { path = "../shared" }
+nucleon-native-services = { path = "../native-services" }
+nucleon-shared = { path = "../shared" }

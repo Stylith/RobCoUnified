@@ -1,6 +1,6 @@
 # crt_shader.wgsl usage notes
 
-Suggested starting uniform values for a RobCo-style preset:
+Suggested starting uniform values for a Nucleon-style preset:
 
 - curvature: 0.06
 - scanlines: 0.28

@@ -3,10 +3,10 @@ use super::super::command_layer::{
 };
 use super::super::desktop_app::{DesktopMenuAction, DesktopMenuBuildContext};
 use super::super::editor_app::EditorTextCommand;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Context, Id};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn open_command_layer(&mut self, target: CommandLayerTarget) {
         let sections = self.command_layer_sections(target);
         self.command_layer.open_for_target(target, &sections);

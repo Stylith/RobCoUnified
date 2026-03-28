@@ -17,6 +17,8 @@ pub enum FileManagerDesktopFooterAction {
     CancelIconPicker,
     ChooseWallpaper,
     CancelWallpaperPicker,
+    ImportTheme,
+    CancelThemeImportPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +31,8 @@ pub enum FileManagerDesktopFooterRequest {
     CancelIconPicker,
     CommitWallpaperPicker,
     CancelWallpaperPicker,
+    CommitThemeImportPicker,
+    CancelThemeImportPicker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +61,7 @@ pub enum FileManagerDesktopActionMode {
     SavePicker { file_name: String },
     IconPicker,
     WallpaperPicker,
+    ThemeImportPicker,
 }
 
 impl FileManagerDesktopActionMode {
@@ -66,6 +71,7 @@ impl FileManagerDesktopActionMode {
             Self::SavePicker { .. } => Some("[ Save As mode ]"),
             Self::IconPicker => Some("[ Pick icon mode ]"),
             Self::WallpaperPicker => Some("[ Pick wallpaper mode ]"),
+            Self::ThemeImportPicker => Some("[ Import theme mode ]"),
         }
     }
 }
@@ -108,6 +114,7 @@ pub fn desktop_action_mode(
     save_as_input: Option<String>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
+    picking_theme_import: bool,
 ) -> FileManagerDesktopActionMode {
     if let Some(file_name) = save_as_input {
         FileManagerDesktopActionMode::SavePicker { file_name }
@@ -115,6 +122,8 @@ pub fn desktop_action_mode(
         FileManagerDesktopActionMode::IconPicker
     } else if picking_wallpaper {
         FileManagerDesktopActionMode::WallpaperPicker
+    } else if picking_theme_import {
+        FileManagerDesktopActionMode::ThemeImportPicker
     } else {
         FileManagerDesktopActionMode::Normal
     }
@@ -131,9 +140,15 @@ pub fn build_desktop_view_model(
     save_as_input: Option<String>,
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
+    picking_theme_import: bool,
 ) -> FileManagerDesktopViewModel {
     let action_mode =
-        desktop_action_mode(save_as_input, picking_icon_for_shortcut, picking_wallpaper);
+        desktop_action_mode(
+            save_as_input,
+            picking_icon_for_shortcut,
+            picking_wallpaper,
+            picking_theme_import,
+        );
     let path_label = file_manager.cwd.display().to_string();
     let current_drive = file_manager.current_drive_root();
     FileManagerDesktopViewModel {
@@ -280,6 +295,34 @@ pub fn build_footer_model(model: &FileManagerDesktopViewModel) -> FileManagerDes
             ],
             file_name: None,
         },
+        FileManagerDesktopActionMode::ThemeImportPicker => FileManagerDesktopFooterModel {
+            status_items: vec![
+                format!("{} item(s)", model.status.row_count),
+                format!("{} selected", model.status.selected_count),
+                model.status.view_label.clone(),
+                model.status.tree_label.clone(),
+            ],
+            leading_buttons: vec![],
+            trailing_buttons: vec![
+                FileManagerDesktopFooterButton {
+                    action: FileManagerDesktopFooterAction::CancelThemeImportPicker,
+                    label: "Cancel",
+                },
+                FileManagerDesktopFooterButton {
+                    action: FileManagerDesktopFooterAction::ImportTheme,
+                    label: "Import Theme",
+                },
+                FileManagerDesktopFooterButton {
+                    action: FileManagerDesktopFooterAction::GoUp,
+                    label: "Up",
+                },
+                FileManagerDesktopFooterButton {
+                    action: FileManagerDesktopFooterAction::OpenHome,
+                    label: "Home",
+                },
+            ],
+            file_name: None,
+        },
         FileManagerDesktopActionMode::Normal => FileManagerDesktopFooterModel {
             status_items: vec![
                 format!("{} item(s)", model.status.row_count),
@@ -348,6 +391,12 @@ pub fn resolve_footer_action(
         FileManagerDesktopFooterAction::CancelWallpaperPicker => {
             FileManagerDesktopFooterRequest::CancelWallpaperPicker
         }
+        FileManagerDesktopFooterAction::ImportTheme => {
+            FileManagerDesktopFooterRequest::CommitThemeImportPicker
+        }
+        FileManagerDesktopFooterAction::CancelThemeImportPicker => {
+            FileManagerDesktopFooterRequest::CancelThemeImportPicker
+        }
     }
 }
 
@@ -358,7 +407,7 @@ mod tests {
 
     #[test]
     fn desktop_action_mode_prioritizes_save_picker() {
-        let mode = desktop_action_mode(Some("note.txt".to_string()), Some(3), true);
+        let mode = desktop_action_mode(Some("note.txt".to_string()), Some(3), true, true);
         assert!(matches!(
             mode,
             FileManagerDesktopActionMode::SavePicker { ref file_name } if file_name == "note.txt"
@@ -386,6 +435,7 @@ mod tests {
             false,
             None,
             None,
+            false,
             false,
         );
 
@@ -416,6 +466,7 @@ mod tests {
             Some("note.txt".to_string()),
             None,
             false,
+            false,
         );
         let footer = build_footer_model(&model);
 
@@ -441,6 +492,7 @@ mod tests {
             true,
             None,
             None,
+            false,
             false,
         );
         let footer = build_footer_model(&model);

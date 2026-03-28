@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const NUCLEON_NATIVE_STANDALONE_USER_ENV: &str = "NUCLEON_NATIVE_STANDALONE_USER";
-pub const LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV: &str = "ROBCOS_NATIVE_STANDALONE_USER";
 pub const NUCLEON_NATIVE_IPC_SOCKET_ENV: &str = "NUCLEON_NATIVE_IPC_SOCKET";
-pub const LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV: &str = "ROBCOS_NATIVE_IPC_SOCKET";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandaloneNativeApp {
@@ -17,19 +15,11 @@ pub enum StandaloneNativeApp {
 }
 
 impl StandaloneNativeApp {
-    pub const fn preferred_binary_stem(self) -> &'static str {
+    pub const fn binary_stem(self) -> &'static str {
         match self {
             Self::FileManager => "nucleon-files",
             Self::Settings => "nucleon-settings",
             Self::Editor => "nucleon-text",
-        }
-    }
-
-    pub const fn legacy_binary_stem(self) -> &'static str {
-        match self {
-            Self::FileManager => "robcos-file-manager",
-            Self::Settings => "robcos-settings",
-            Self::Editor => "robcos-editor",
         }
     }
 
@@ -52,14 +42,9 @@ pub fn launch_standalone_app(
     command.args(args);
     if let Some(username) = session_username.filter(|username| !username.is_empty()) {
         command.env(NUCLEON_NATIVE_STANDALONE_USER_ENV, username);
-        command.env(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV, username);
     }
     command.env(
         NUCLEON_NATIVE_IPC_SOCKET_ENV,
-        super::ipc::socket_path().as_os_str(),
-    );
-    command.env(
-        LEGACY_ROBCOS_NATIVE_IPC_SOCKET_ENV,
         super::ipc::socket_path().as_os_str(),
     );
     command
@@ -81,21 +66,16 @@ fn resolve_binary_path(app: StandaloneNativeApp) -> Result<PathBuf, String> {
 }
 
 fn bundled_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
-    [app.preferred_binary_stem(), app.legacy_binary_stem()]
-        .into_iter()
-        .map(|stem| crate::config::bundled_binary_path(platform_binary_file_name(stem)))
-        .find(|candidate| candidate.is_file())
+    crate::config::bundled_binary_path(platform_binary_file_name(app.binary_stem()))
+        .is_file()
+        .then(|| crate::config::bundled_binary_path(platform_binary_file_name(app.binary_stem())))
 }
 
 fn sibling_binary_path(app: StandaloneNativeApp) -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok()?;
     sibling_binary_dirs(&current_exe)
         .into_iter()
-        .flat_map(|dir| {
-            [app.preferred_binary_stem(), app.legacy_binary_stem()]
-                .into_iter()
-                .map(move |stem| dir.join(platform_binary_file_name(stem)))
-        })
+        .map(|dir| dir.join(platform_binary_file_name(app.binary_stem())))
         .find(|candidate| candidate.is_file())
 }
 
@@ -122,14 +102,10 @@ fn platform_binary_file_name(binary_stem: &str) -> OsString {
 }
 
 pub fn standalone_env_value() -> Option<String> {
-    [NUCLEON_NATIVE_STANDALONE_USER_ENV, LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV]
-        .into_iter()
-        .find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+    std::env::var(NUCLEON_NATIVE_STANDALONE_USER_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -155,15 +131,15 @@ mod tests {
     #[test]
     fn standalone_apps_prefer_nucleon_binary_names() {
         assert_eq!(
-            StandaloneNativeApp::FileManager.preferred_binary_stem(),
+            StandaloneNativeApp::FileManager.binary_stem(),
             "nucleon-files"
         );
         assert_eq!(
-            StandaloneNativeApp::Settings.preferred_binary_stem(),
+            StandaloneNativeApp::Settings.binary_stem(),
             "nucleon-settings"
         );
         assert_eq!(
-            StandaloneNativeApp::Editor.preferred_binary_stem(),
+            StandaloneNativeApp::Editor.binary_stem(),
             "nucleon-text"
         );
     }
@@ -176,21 +152,15 @@ mod tests {
     }
 
     #[test]
-    fn standalone_env_value_prefers_nucleon_env_and_falls_back_to_legacy() {
+    fn standalone_env_value_reads_nucleon_env() {
         let _guard = env_lock().lock().unwrap();
         unsafe {
             std::env::remove_var(NUCLEON_NATIVE_STANDALONE_USER_ENV);
-            std::env::remove_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV);
-            std::env::set_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV, "legacy-user");
-        }
-        assert_eq!(standalone_env_value().as_deref(), Some("legacy-user"));
-        unsafe {
             std::env::set_var(NUCLEON_NATIVE_STANDALONE_USER_ENV, "nucleon-user");
         }
         assert_eq!(standalone_env_value().as_deref(), Some("nucleon-user"));
         unsafe {
             std::env::remove_var(NUCLEON_NATIVE_STANDALONE_USER_ENV);
-            std::env::remove_var(LEGACY_ROBCOS_NATIVE_STANDALONE_USER_ENV);
         }
     }
 }

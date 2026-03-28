@@ -11,11 +11,11 @@ use super::super::desktop_surface_service::{
 use super::super::installed_theme_packs;
 use super::super::menu::TerminalScreen;
 use super::super::retro_ui::{
-    current_palette, current_palette_for_surface, set_active_color_style, RetroPalette,
-    RetroScreen, ShellSurfaceKind,
+    current_palette, current_palette_for_surface, set_active_color_style, set_active_shell_style,
+    RetroPalette, RetroScreen, ShellSurfaceKind,
 };
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::config::{
     CliAcsMode, CliColorMode, CrtPreset, DesktopCursorThemeSelection, DesktopIconStyle,
     NativeStartupWindowMode, WallpaperSizeMode, CUSTOM_THEME_NAME,
@@ -179,7 +179,7 @@ fn theme_pack_has_cursor_assets(theme: &ThemePack) -> bool {
         || theme
             .asset_pack
             .as_ref()
-            .and_then(|asset_pack| super::resolve_asset_pack_root(&theme.id, &asset_pack.path))
+            .and_then(|asset_pack| super::resolve_theme_bundle_path(&theme.id, &asset_pack.path))
             .map(|asset_root| asset_root.join("cursors").join("cursors.json").exists())
             .unwrap_or(false)
 }
@@ -463,7 +463,7 @@ fn terminal_tweaks_indent(row: TerminalTweaksRow) -> usize {
     }
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn open_tweaks_from_settings(&mut self) {
         self.tweaks_open = true;
         self.prime_desktop_window_defaults(DesktopWindow::Tweaks);
@@ -471,6 +471,7 @@ impl RobcoNativeApp {
     }
 
     fn activate_desktop_surface_style(&mut self) {
+        set_active_shell_style(self.desktop_active_shell_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Desktop,
             self.desktop_active_color_style.clone(),
@@ -498,6 +499,7 @@ impl RobcoNativeApp {
 
     fn clear_desktop_theme_pack_selection(&mut self) {
         let had_theme_pack = self.desktop_active_theme_pack_id.take().is_some();
+        self.sync_active_sound_pack();
         let asset_state_changed = self.sync_active_desktop_asset_pack();
         if had_theme_pack || asset_state_changed {
             self.icon_cache_dirty = true;
@@ -524,9 +526,13 @@ impl RobcoNativeApp {
             return false;
         }
         self.desktop_active_theme_pack_id = Some(theme.id.clone());
+        self.desktop_active_shell_style = theme.shell_style.clone();
         self.desktop_active_color_style = theme.color_style.clone();
         self.desktop_active_layout = theme.layout_profile.clone();
-        self.clear_desktop_color_overrides();
+        self.desktop_color_overrides =
+            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
+        self.tweaks_customize_colors_open = false;
+        self.sync_active_sound_pack();
         self.sync_active_desktop_asset_pack();
         self.icon_cache_dirty = true;
         self.activate_desktop_surface_style();
@@ -543,7 +549,9 @@ impl RobcoNativeApp {
         self.terminal_active_color_style = theme.color_style.clone();
         self.terminal_branding = theme.terminal_branding.clone();
         self.terminal_decoration = theme.terminal_decoration.clone();
-        self.clear_terminal_color_overrides();
+        self.terminal_color_overrides =
+            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
+        self.tweaks_customize_colors_open = false;
         self.activate_terminal_surface_style();
         true
     }
@@ -879,7 +887,7 @@ impl RobcoNativeApp {
             TerminalTweaksDropdown::CrtPreset => vec![
                 CrtPreset::Off.label().to_string(),
                 CrtPreset::Subtle.label().to_string(),
-                CrtPreset::RobCoStandard.label().to_string(),
+                CrtPreset::Classic.label().to_string(),
                 CrtPreset::WornTerminal.label().to_string(),
                 CrtPreset::ExtremeRetro.label().to_string(),
                 CrtPreset::Custom.label().to_string(),
@@ -970,7 +978,7 @@ impl RobcoNativeApp {
             TerminalTweaksDropdown::CrtPreset => match self.settings.draft.display_effects.preset {
                 CrtPreset::Off => 0,
                 CrtPreset::Subtle => 1,
-                CrtPreset::RobCoStandard => 2,
+                CrtPreset::Classic => 2,
                 CrtPreset::WornTerminal => 3,
                 CrtPreset::ExtremeRetro => 4,
                 CrtPreset::Custom => 5,
@@ -1537,7 +1545,7 @@ impl RobcoNativeApp {
                 let options = [
                     CrtPreset::Off,
                     CrtPreset::Subtle,
-                    CrtPreset::RobCoStandard,
+                    CrtPreset::Classic,
                     CrtPreset::WornTerminal,
                     CrtPreset::ExtremeRetro,
                     CrtPreset::Custom,
@@ -1796,7 +1804,7 @@ impl RobcoNativeApp {
                     self.settings
                         .draft
                         .display_effects
-                        .apply_preset(CrtPreset::RobCoStandard);
+                        .apply_preset(CrtPreset::Classic);
                 }
                 mutation.persist_changed = true;
                 action_taken = true;
@@ -2188,24 +2196,79 @@ impl RobcoNativeApp {
         } else {
             format!("{} (Custom)", theme.name)
         };
-        let export_dir = crate::config::nucleon_data_dir().join("exported_themes");
-        if std::fs::create_dir_all(&export_dir).is_err() {
+        let bundle_id = theme
+            .name
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c
+                } else if c == ' ' || c == '-' || c == '_' {
+                    '-'
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let export_dir = crate::config::nucleon_data_dir()
+            .join("exported_themes")
+            .join(if bundle_id.is_empty() {
+                "custom-theme".to_string()
+            } else {
+                bundle_id.clone()
+            });
+        if std::fs::create_dir_all(export_dir.join("colors")).is_err() {
             self.apply_status_update(settings_status("Failed to export theme."));
             return;
         }
-        let path = export_dir.join(format!("{}.json", theme.id));
-        match serde_json::to_string_pretty(&theme) {
-            Ok(json) => match std::fs::write(&path, json) {
-                Ok(()) => {
-                    self.apply_status_update(settings_status(format!(
-                        "Theme exported to {}",
-                        path.display()
-                    )));
-                }
-                Err(_) => self.apply_status_update(settings_status("Failed to export theme.")),
+        let manifest = crate::theme::ThemePack {
+            id: if bundle_id.is_empty() {
+                "custom-theme".to_string()
+            } else {
+                bundle_id
             },
-            Err(_) => self.apply_status_update(settings_status("Failed to export theme.")),
+            name: theme.name.clone(),
+            description: "Exported from Tweaks".to_string(),
+            version: "1.0.0".to_string(),
+            shell_style: self.desktop_active_shell_style.clone(),
+            layout_profile: self.desktop_active_layout.clone(),
+            color_style: if terminal {
+                self.terminal_active_color_style.clone()
+            } else {
+                self.desktop_active_color_style.clone()
+            },
+            sound_pack: crate::theme::SoundPack::default(),
+            asset_pack: None,
+            cursor_pack: None,
+            terminal_branding: self.terminal_branding.clone(),
+            terminal_decoration: self.terminal_decoration.clone(),
+        };
+        let manifest_json = match serde_json::to_string_pretty(&manifest) {
+            Ok(json) => json,
+            Err(_) => {
+                self.apply_status_update(settings_status("Failed to export theme."));
+                return;
+            }
+        };
+        let colors_json = match serde_json::to_string_pretty(&theme) {
+            Ok(json) => json,
+            Err(_) => {
+                self.apply_status_update(settings_status("Failed to export theme."));
+                return;
+            }
+        };
+        if std::fs::write(export_dir.join("manifest.json"), manifest_json).is_err()
+            || std::fs::write(export_dir.join("colors").join("custom.json"), colors_json).is_err()
+        {
+            self.apply_status_update(settings_status("Failed to export theme."));
+            return;
         }
+        self.apply_status_update(settings_status(format!(
+            "Exported to {}",
+            export_dir.display()
+        )));
     }
 
     fn draw_full_color_customization_controls(
@@ -2749,7 +2812,7 @@ impl RobcoNativeApp {
             .id(egui_id)
             .open(&mut open)
             .title_bar(false)
-            .frame(Self::desktop_window_frame())
+            .frame(self.desktop_window_frame())
             .resizable(false)
             .default_pos(default_pos)
             .fixed_size(default_size);
@@ -2765,7 +2828,12 @@ impl RobcoNativeApp {
         }
         let shown = window.show(ctx, |ui| {
             Self::apply_settings_control_style(ui);
-            header_action = Self::draw_desktop_window_header(ui, "Tweaks", maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                "Tweaks",
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             let mut persist_changed = false;
             let mut window_mode_changed = false;
             let mut desktop_runtime_changed = false;
@@ -2811,7 +2879,10 @@ impl RobcoNativeApp {
                         }
                     });
                     ui.add_space(10.0);
-                    Self::retro_separator(ui);
+                    Self::retro_separator_with_thickness(
+                        ui,
+                        self.desktop_active_shell_style.separator_thickness,
+                    );
                     ui.add_space(8.0);
                     match self.tweaks_tab {
                         0 => {
@@ -3014,6 +3085,13 @@ impl RobcoNativeApp {
                                                     }
                                                 }
                                             });
+                                        ui.add_space(8.0);
+                                        if ui.button("Import Theme...").clicked() {
+                                            self.picking_theme_import = true;
+                                            self.open_embedded_file_manager_at(
+                                                crate::config::themes_directory(),
+                                            );
+                                        }
                                     });
                                     ui.add_space(10.0);
                                     Self::settings_section(ui, "Color Mode", |ui| {
@@ -3588,6 +3666,23 @@ impl RobcoNativeApp {
                             }
                         }
                         2 => {
+                            Self::settings_section(ui, "Sound", |ui| {
+                                ui.horizontal(|ui| {
+                                    if Self::retro_checkbox_row(
+                                        ui,
+                                        &mut self.settings.draft.sound,
+                                        "Enable sound",
+                                    )
+                                    .clicked()
+                                    {
+                                        persist_changed = true;
+                                    }
+                                    if ui.button("Preview ▶").clicked() {
+                                        crate::sound::preview_navigate();
+                                    }
+                                });
+                            });
+                            ui.add_space(10.0);
                             persist_changed |= self.draw_settings_display_effects_panel(ui);
                         }
                         _ => {
@@ -3693,7 +3788,10 @@ impl RobcoNativeApp {
                 self.persist_surface_theme_state_to_settings();
                 persist_changed = true;
             }
-            ui.separator();
+            Self::retro_separator_with_thickness(
+                ui,
+                self.desktop_active_shell_style.separator_thickness,
+            );
             if persist_changed {
                 {
                     let draft = self.settings.draft.clone();

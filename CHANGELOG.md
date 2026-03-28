@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Fixed macOS app-bundle data migration by importing legacy runtime state from `RobCoOS.app/Contents/MacOS` into `~/Library/Application Support/RobCoOS`.
+- Fixed macOS app-bundle data migration by importing legacy runtime state from `NucleonOS.app/Contents/MacOS` into `~/Library/Application Support/NucleonOS`.
 - Fixed user migration so existing `users.json` entries replace the temporary bootstrap admin record instead of leaving prior accounts hidden.
 - Fixed installer and runtime-tool detection for Finder-launched macOS builds by resolving `brew`, `python3`, `blueutil`, and related commands from absolute fallback paths instead of relying on inherited shell `PATH`.
 - Added direct regression coverage for the macOS runtime-data migration and command-path resolution failures that escaped the `0.4.2` release.
@@ -21,7 +21,7 @@
 
 ### Fixed
 
-- Fixed the macOS `.app` runtime data path so bundled builds create and read users, settings, and related state from `~/Library/Application Support/RobCoOS` instead of inside the app bundle.
+- Fixed the macOS `.app` runtime data path so bundled builds create and read users, settings, and related state from `~/Library/Application Support/NucleonOS` instead of inside the app bundle.
 - Embedded the retro font into the native UI and PTY renderer so standalone app bundles keep the intended typeface without relying on repo-relative `assets/fonts` paths.
 - Stabilized the native release gate by making document-category service tests independent of global user-scoped config state.
 
@@ -31,7 +31,7 @@
 
 - Fixed the release workflow so tag builds use the updated checkout and artifact actions.
 - Switched Linux release jobs to current GitHub-hosted x86_64 and ARM runners with explicit native GUI build dependencies.
-- Packaged macOS as a real universal `RobCoOS.app` bundle with the app icon instead of a bare executable zip.
+- Packaged macOS as a real universal `NucleonOS.app` bundle with the app icon instead of a bare executable zip.
 - Fixed the Linux shared sound build path so release builds no longer fail on the missing `Stdio` symbol.
 
 ## 0.4.0 - 2026-03-17

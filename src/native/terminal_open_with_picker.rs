@@ -1,6 +1,6 @@
 use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
 use eframe::egui::{self, Context, Id};
-use robcos_native_file_manager_app::known_apps_for_extension;
+use nucleon_native_file_manager_app::known_apps_for_extension;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -108,7 +108,7 @@ pub fn draw_open_with_picker(
     let viewport = ctx.screen_rect();
     let mut result = None;
 
-    let ext_label = robcos_native_file_manager_app::open_with_extension_label(&state.ext_key);
+    let ext_label = nucleon_native_file_manager_app::open_with_extension_label(&state.ext_key);
     let title = format!("Open With [{ext_label}]");
 
     egui::Area::new(Id::new("terminal_open_with_picker_overlay"))

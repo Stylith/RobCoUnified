@@ -5,7 +5,7 @@ use crate::native::{
     repository_sync_action_for_manifest, set_addon_enabled_override,
     InstalledAddonInventorySections, InstalledAddonRecord, RepositoryAddonRecord,
 };
-pub use robcos_native_installer_app::{
+pub use nucleon_native_installer_app::{
     add_package_to_menu, apply_filter, apply_search_query, available_runtime_tools,
     build_package_command, runtime_tool_action_for_selection, runtime_tool_actions,
     runtime_tool_description, runtime_tool_menu_label, runtime_tool_pkg, runtime_tool_title,
@@ -15,7 +15,7 @@ pub use robcos_native_installer_app::{
     TerminalInstallerState,
 };
 #[cfg(test)]
-use robcos_native_installer_app::{PackageManager, SearchResult};
+use nucleon_native_installer_app::{PackageManager, SearchResult};
 
 fn installer_page_size(menu_start_row: usize, status_row: usize) -> usize {
     status_row
@@ -56,6 +56,7 @@ pub fn draw_installer_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     if !is_admin(get_current_user().unwrap_or_default()) {
         return InstallerEvent::Status("Access denied. Admin only.".to_string());
@@ -76,6 +77,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::PackageManagerSelect => draw_package_manager_select(
             ctx,
@@ -91,6 +93,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::SearchResults => draw_search_results(
             ctx,
@@ -106,6 +109,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::RuntimeTools => draw_runtime_tools(
             ctx,
@@ -121,6 +125,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::AddonInventory => draw_addon_inventory(
             ctx,
@@ -136,6 +141,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::AddonActions { addon_id } => draw_addon_actions(
             ctx,
@@ -152,6 +158,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::RuntimeToolActions { tool } => draw_runtime_tool_actions(
             ctx,
@@ -168,6 +175,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::Installed => draw_installed(
             ctx,
@@ -183,6 +191,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::SearchActions { pkg } => draw_search_actions(
             ctx,
@@ -199,6 +208,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::InstalledActions { pkg } => draw_installed_actions(
             ctx,
@@ -215,6 +225,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         InstallerView::AddToMenu { pkg } => draw_add_to_menu(
             ctx,
@@ -231,6 +242,7 @@ pub fn draw_installer_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
     }
 }
@@ -250,6 +262,7 @@ fn draw_root(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     state.ensure_available_pms();
     let pm_label = state.pm_label().to_string();
@@ -281,6 +294,7 @@ fn draw_root(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(0) => InstallerEvent::OpenSearchPrompt,
@@ -333,6 +347,7 @@ fn draw_package_manager_select(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     state.ensure_available_pms();
     let mut items: Vec<String> = state
@@ -367,6 +382,7 @@ fn draw_package_manager_select(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(idx) if idx < state.available_pms.len() => {
@@ -401,6 +417,7 @@ fn draw_addon_inventory(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone)]
     enum AddonRow {
@@ -415,11 +432,39 @@ fn draw_addon_inventory(
     }
 
     let sections = installed_addon_inventory_sections();
+    let repository_addon_indices = sections
+        .repository_available
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, record)| {
+            (record.manifest.kind != crate::platform::AddonKind::Theme).then_some(idx)
+        })
+        .collect::<Vec<_>>();
+    let repository_theme_indices = sections
+        .repository_available
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, record)| {
+            (record.manifest.kind == crate::platform::AddonKind::Theme).then_some(idx)
+        })
+        .collect::<Vec<_>>();
     let installed_total = sections.essential.len() + sections.optional.len();
     let page_size = installer_page_size(menu_start_row, status_row);
-    let total_pages = paged_addon_total(&sections).div_ceil(page_size).max(1);
+    let total_pages = paged_addon_total(
+        &sections,
+        &repository_addon_indices,
+        &repository_theme_indices,
+    )
+    .div_ceil(page_size)
+    .max(1);
     state.addons_page = state.addons_page.min(total_pages.saturating_sub(1));
-    let (paged_rows, total_rows, end) = paged_addon_rows(&sections, state.addons_page, page_size);
+    let (paged_rows, total_rows, end) = paged_addon_rows(
+        &sections,
+        &repository_addon_indices,
+        &repository_theme_indices,
+        state.addons_page,
+        page_size,
+    );
 
     let mut items = Vec::new();
     let mut row_actions = Vec::new();
@@ -442,7 +487,15 @@ fn draw_addon_inventory(
                 row_actions.push(AddonRow::Optional(idx));
             }
             AddonDisplayRow::Repository(idx) => {
-                items.push(repository_addon_menu_label(&sections.repository_available[idx]));
+                items.push(repository_addon_menu_label(
+                    &sections.repository_available[idx],
+                ));
+                row_actions.push(AddonRow::Repository(idx));
+            }
+            AddonDisplayRow::RepositoryTheme(idx) => {
+                items.push(repository_addon_menu_label(
+                    &sections.repository_available[idx],
+                ));
                 row_actions.push(AddonRow::Repository(idx));
             }
         }
@@ -511,9 +564,10 @@ fn draw_addon_inventory(
             _ => None,
         });
     let addon_status = format!(
-        "{} installed   {} repository   {} issue(s)   Page {}/{}",
+        "{} installed   {} repository addon(s)   {} repository theme(s)   {} issue(s)   Page {}/{}",
         installed_total,
-        sections.repository_available.len(),
+        repository_addon_indices.len(),
+        repository_theme_indices.len(),
         sections.issues.len() + usize::from(sections.repository_issue.is_some()),
         state.addons_page + 1,
         total_pages
@@ -541,6 +595,7 @@ fn draw_addon_inventory(
         status_row,
         content_col,
         &status_line,
+        header_lines,
     );
 
     match activated {
@@ -600,6 +655,7 @@ fn draw_addon_actions(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone, Copy)]
     enum AddonAction {
@@ -659,6 +715,7 @@ fn draw_addon_actions(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
 
     match activated {
@@ -683,10 +740,12 @@ fn draw_addon_actions(
                 }
                 Err(err) => InstallerEvent::Status(err),
             },
-            Some(AddonAction::RepositorySync(label)) => InstallerEvent::StartRepositoryAddonInstall {
-                addon_id: record.manifest.id.to_string(),
-                action_label: label.to_string(),
-            },
+            Some(AddonAction::RepositorySync(label)) => {
+                InstallerEvent::StartRepositoryAddonInstall {
+                    addon_id: record.manifest.id.to_string(),
+                    action_label: label.to_string(),
+                }
+            }
             Some(AddonAction::Back) => {
                 state.view = InstallerView::AddonInventory;
                 state.action_idx = 0;
@@ -703,19 +762,30 @@ enum AddonDisplayRow {
     Essential(usize),
     Optional(usize),
     Repository(usize),
+    RepositoryTheme(usize),
 }
 
-fn paged_addon_total(sections: &InstalledAddonInventorySections) -> usize {
-    sections.essential.len() + sections.optional.len() + sections.repository_available.len()
+fn paged_addon_total(
+    sections: &InstalledAddonInventorySections,
+    repository_addon_indices: &[usize],
+    repository_theme_indices: &[usize],
+) -> usize {
+    sections.essential.len()
+        + sections.optional.len()
+        + repository_addon_indices.len()
+        + repository_theme_indices.len()
 }
 
 fn paged_addon_rows(
     sections: &InstalledAddonInventorySections,
+    repository_addon_indices: &[usize],
+    repository_theme_indices: &[usize],
     page: usize,
     page_size: usize,
 ) -> (Vec<AddonDisplayRow>, usize, usize) {
     let installed_total = sections.essential.len() + sections.optional.len();
-    let total = paged_addon_total(sections);
+    let repository_total = repository_addon_indices.len() + repository_theme_indices.len();
+    let total = paged_addon_total(sections, repository_addon_indices, repository_theme_indices);
     let start = page * page_size;
     let end = (start + page_size).min(total);
 
@@ -727,12 +797,18 @@ fn paged_addon_rows(
     let optional_end = end
         .saturating_sub(sections.essential.len())
         .min(sections.optional.len());
-    let repository_start = start
+    let repository_addon_start = start
         .saturating_sub(installed_total)
-        .min(sections.repository_available.len());
-    let repository_end = end
+        .min(repository_addon_indices.len());
+    let repository_addon_end = end
         .saturating_sub(installed_total)
-        .min(sections.repository_available.len());
+        .min(repository_addon_indices.len());
+    let repository_theme_start = start
+        .saturating_sub(installed_total + repository_addon_indices.len())
+        .min(repository_theme_indices.len());
+    let repository_theme_end = end
+        .saturating_sub(installed_total + repository_addon_indices.len())
+        .min(repository_theme_indices.len());
 
     let mut visible = Vec::new();
     if essential_start < essential_end {
@@ -743,12 +819,26 @@ fn paged_addon_rows(
         visible.push(AddonDisplayRow::SectionHeader("Optional Addons"));
         visible.extend((optional_start..optional_end).map(AddonDisplayRow::Optional));
     }
-    if repository_start < repository_end {
+    if repository_addon_start < repository_addon_end {
         visible.push(AddonDisplayRow::SectionHeader("Repository Addons"));
-        visible.extend((repository_start..repository_end).map(AddonDisplayRow::Repository));
+        visible.extend(
+            repository_addon_indices[repository_addon_start..repository_addon_end]
+                .iter()
+                .copied()
+                .map(AddonDisplayRow::Repository),
+        );
+    }
+    if repository_theme_start < repository_theme_end {
+        visible.push(AddonDisplayRow::SectionHeader("Repository Themes"));
+        visible.extend(
+            repository_theme_indices[repository_theme_start..repository_theme_end]
+                .iter()
+                .copied()
+                .map(AddonDisplayRow::RepositoryTheme),
+        );
     }
 
-    (visible, total, end)
+    (visible, installed_total + repository_total, end)
 }
 
 fn addon_inventory_menu_label(record: &InstalledAddonRecord) -> String {
@@ -865,6 +955,7 @@ fn draw_runtime_tools(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone, Copy)]
     enum RuntimeRow {
@@ -910,6 +1001,7 @@ fn draw_runtime_tools(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(idx) => match runtime_rows.get(idx) {
@@ -944,6 +1036,7 @@ fn draw_runtime_tool_actions(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     let installed = state.runtime_tool_installed_cached(tool);
     let mut items: Vec<String> = runtime_tool_actions(installed)
@@ -983,6 +1076,7 @@ fn draw_runtime_tool_actions(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     let pkg = runtime_tool_pkg(tool).to_string();
     match activated {
@@ -1016,6 +1110,7 @@ fn draw_search_results(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone)]
     enum SearchRow {
@@ -1081,6 +1176,7 @@ fn draw_search_results(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(idx) => match row_actions.get(idx) {
@@ -1125,6 +1221,7 @@ fn draw_installed(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone)]
     enum InstalledRow {
@@ -1215,6 +1312,7 @@ fn draw_installed(
         status_row,
         content_col,
         &status_line,
+        header_lines,
     );
     match activated {
         Some(idx) => match row_actions.get(idx) {
@@ -1261,6 +1359,7 @@ fn draw_search_actions(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec!["Install".to_string(), "---".to_string(), "Back".to_string()];
     let subtitle = state
@@ -1283,6 +1382,7 @@ fn draw_search_actions(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(0) => InstallerEvent::OpenConfirmAction {
@@ -1313,6 +1413,7 @@ fn draw_installed_actions(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec![
         "Update".to_string(),
@@ -1342,6 +1443,7 @@ fn draw_installed_actions(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(0) => InstallerEvent::OpenConfirmAction {
@@ -1387,6 +1489,7 @@ fn draw_add_to_menu(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec![
         "Applications".to_string(),
@@ -1412,6 +1515,7 @@ fn draw_add_to_menu(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     match activated {
         Some(0) => InstallerEvent::OpenDisplayNamePrompt {

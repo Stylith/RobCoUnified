@@ -1,10 +1,10 @@
 use super::super::data::save_text_file;
 use super::super::editor_app::EditorTextCommand;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::{self, Context, Id};
 use std::path::Path;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn run_editor_text_command(
         &mut self,
         ctx: &Context,

@@ -1,16 +1,16 @@
 [package]
-name = "robcos-legacy-shell"
+name = "nucleon-legacy-shell"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
 
 [[bin]]
-name = "robcos"
+name = "nucleon-legacy"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 crossterm = { version = "0.28", features = ["event-stream"] }
 ratatui = "0.29"
-robcos = { path = "../.." }
+nucleon = { path = "../.." }

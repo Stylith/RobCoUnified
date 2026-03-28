@@ -2,9 +2,9 @@ use super::super::desktop_status_service::shell_status;
 use super::super::file_manager_app::{self, FileManagerPromptAction, FileManagerPromptRequest};
 use super::super::prompt::{TerminalPrompt, TerminalPromptAction, TerminalPromptKind};
 use super::super::prompt_flow::PromptOutcome;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn open_password_prompt(
         &mut self,
         title: impl Into<String>,

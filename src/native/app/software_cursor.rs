@@ -161,7 +161,7 @@ pub(super) fn draw_software_cursor(
 
     let painter = ctx.layer_painter(LayerId::new(
         Order::Tooltip,
-        Id::new("robco_native_software_cursor"),
+        Id::new("nucleon_native_software_cursor"),
     ));
     let colors = cursor_colors(palette);
 

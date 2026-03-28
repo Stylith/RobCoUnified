@@ -1,9 +1,11 @@
 use super::menu::SettingsChoiceOverlay;
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
-use crate::config::{Settings, HEADER_LINES};
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
+use crate::config::Settings;
 use eframe::egui::{self, Context};
-pub use robcos_native_settings_app::TerminalSettingsEvent;
-use robcos_native_settings_app::{
+pub use nucleon_native_settings_app::TerminalSettingsEvent;
+use nucleon_native_settings_app::{
     adjust_settings_slider, apply_settings_choice, handle_settings_activation_with_visibility,
     settings_choice_items, terminal_settings_panel_rows_with_visibility, TerminalSettingsPanel,
     TerminalSettingsVisibility,
@@ -29,6 +31,7 @@ pub fn run_terminal_settings_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> TerminalSettingsEvent {
     let items = terminal_settings_rows_for_panel(*panel, draft, is_admin, visibility);
     *selected_idx = (*selected_idx).min(items.len().saturating_sub(1));
@@ -89,27 +92,29 @@ pub fn run_terminal_settings_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(
                 &painter,
                 title_row,
                 terminal_settings_title(*panel),
-                palette.fg,
-                true,
+                &palette,
+                &decoration,
             );
-            screen.separator(&painter, separator_bottom_row, &palette);
-            screen.underlined_text(
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
+            screen.themed_subtitle(
                 &painter,
                 content_col,
                 subtitle_row,
                 terminal_settings_subtitle(*panel),
-                palette.fg,
+                &palette,
+                &decoration,
             );
 
             let choice_items = choice_overlay.map(|overlay| settings_choice_items(overlay.kind));

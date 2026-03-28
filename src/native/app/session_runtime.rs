@@ -6,12 +6,12 @@ use super::super::desktop_status_service::{clear_settings_status, clear_shell_st
 use super::super::editor_app::EditorWindow;
 use super::super::installer_screen::DesktopInstallerState;
 use super::super::menu::{terminal_runtime_defaults, TerminalNavigationState, TerminalScreen};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use super::SessionState;
 use crate::core::auth::UserRecord;
-use robcos_native_settings_app::desktop_settings_default_panel;
+use nucleon_native_settings_app::desktop_settings_default_panel;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn restore_for_user(&mut self, username: &str, user: &UserRecord) {
         let settings = crate::native::desktop_settings_service::reload_settings_snapshot();
         let plan = build_native_session_restore_plan(username, user, settings.default_open_mode);
@@ -59,10 +59,17 @@ impl RobcoNativeApp {
         self.terminal_prompt = None;
         self.terminal_flash = None;
         self.session_leader_until = None;
-        self.terminal_tweaks_surface_dropdown_open = false;
+        self.tweaks_tab = 0;
+        self.tweaks_wallpaper_surface = 0;
+        self.tweaks_theme_surface = 0;
+        self.tweaks_layout_overrides_open = false;
+        self.tweaks_customize_colors_open = false;
+        self.desktop_color_overrides = None;
+        self.terminal_color_overrides = None;
+        self.terminal_tweaks_active_section = 1;
         self.terminal_tweaks_open_dropdown = None;
-        self.terminal_tweaks_desktop_expanded_menu = Some(0);
-        self.terminal_tweaks_terminal_expanded_menu = Some(0);
+        self.picking_terminal_wallpaper = false;
+        self.picking_theme_import = false;
     }
 
     pub(super) fn current_terminal_navigation_state(&self) -> TerminalNavigationState {

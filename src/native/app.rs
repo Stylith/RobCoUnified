@@ -43,8 +43,8 @@ use super::pty_screen::NativePtyState;
 use super::retro_ui::{
     configure_visuals, configure_visuals_for_palette, current_palette, current_palette_for_surface,
     palette_for_color_style, palette_for_color_style_with_overrides, set_active_color_style,
-    set_active_terminal_decoration, set_active_terminal_wallpaper, RetroPalette, ShellSurfaceKind,
-    FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
+    set_active_shell_style, set_active_terminal_decoration, set_active_terminal_wallpaper,
+    RetroPalette, ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
 use super::wasm_addon_runtime::WasmHostedAddonState;
@@ -60,10 +60,9 @@ use crate::config::{
     HackingDifficulty, Settings,
 };
 use crate::core::auth::{AuthMethod, UserRecord};
-use crate::platform::AddonKind;
 use crate::session;
 use crate::theme::{
-    ColorStyle, ColorToken, CursorPack, LayoutProfile, MonochromePreset, PanelType,
+    ColorStyle, ColorToken, CursorPack, LayoutProfile, MonochromePreset, PanelType, ShellStyle,
     TerminalBranding, TerminalDecoration, TerminalLayoutProfile,
 };
 use eframe::egui::{
@@ -72,14 +71,14 @@ use eframe::egui::{
 };
 use egui_wgpu::CrtEffects;
 #[cfg(not(test))]
-use robcos_native_programs_app::{
+use nucleon_native_programs_app::{
     build_desktop_applications_sections, DesktopApplicationsSections,
 };
 #[cfg(test)]
-use robcos_native_programs_app::{
+use nucleon_native_programs_app::{
     build_desktop_applications_sections, DesktopApplicationsSections, DesktopProgramRequest,
 };
-use robcos_native_settings_app::{
+use nucleon_native_settings_app::{
     build_desktop_settings_ui_defaults, desktop_settings_default_panel,
     desktop_settings_home_rows_with_visibility, desktop_settings_panel_enabled,
     DesktopSettingsVisibility, GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile,
@@ -380,21 +379,15 @@ fn terminal_branding_setting_value(branding: &TerminalBranding) -> Option<Termin
 }
 
 fn theme_bundle_dir_from_pack_id(theme_pack_id: &str) -> Option<PathBuf> {
-    super::installed_addon_inventory()
-        .into_iter()
-        .find(|record| {
-            record.manifest.kind == AddonKind::Theme && record.manifest.id.as_str() == theme_pack_id
-        })
-        .and_then(|record| record.manifest_path)
-        .and_then(|manifest_path| manifest_path.parent().map(Path::to_path_buf))
+    super::addons::installed_theme_bundle_dir(theme_pack_id)
 }
 
-fn resolve_asset_pack_root(theme_pack_id: &str, relative_path: &str) -> Option<PathBuf> {
-    let asset_path = PathBuf::from(relative_path);
-    if asset_path.is_absolute() {
-        return Some(asset_path);
+fn resolve_theme_bundle_path(theme_pack_id: &str, relative_path: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(relative_path);
+    if path.is_absolute() {
+        return Some(path);
     }
-    theme_bundle_dir_from_pack_id(theme_pack_id).map(|bundle_dir| bundle_dir.join(asset_path))
+    theme_bundle_dir_from_pack_id(theme_pack_id).map(|bundle_dir| bundle_dir.join(path))
 }
 
 fn load_cursor_pack_from_asset_root(asset_root: &Path) -> Option<CursorPack> {
@@ -416,7 +409,21 @@ fn desktop_asset_pack_path_from_theme_pack_id(theme_pack_id: Option<&str>) -> Op
     let Some(asset_pack) = theme.asset_pack.as_ref() else {
         return None;
     };
-    resolve_asset_pack_root(theme_pack_id, &asset_pack.path)
+    resolve_theme_bundle_path(theme_pack_id, &asset_pack.path)
+}
+
+fn desktop_sound_pack_path_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<PathBuf> {
+    let Some(theme_pack_id) = theme_pack_id else {
+        return None;
+    };
+    let Some(theme) = super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+    else {
+        return None;
+    };
+    let sound_pack_path = theme.sound_pack.path.as_deref()?;
+    resolve_theme_bundle_path(theme_pack_id, sound_pack_path)
 }
 
 fn desktop_cursor_pack_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<CursorPack> {
@@ -432,11 +439,51 @@ fn desktop_cursor_pack_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option
     let asset_pack_path = theme
         .asset_pack
         .as_ref()
-        .and_then(|asset_pack| resolve_asset_pack_root(theme_pack_id, &asset_pack.path));
+        .and_then(|asset_pack| resolve_theme_bundle_path(theme_pack_id, &asset_pack.path));
     theme
         .cursor_pack
         .clone()
         .or_else(|| asset_pack_path.as_deref().and_then(load_cursor_pack_from_asset_root))
+}
+
+fn desktop_shell_style_from_theme_pack_id(theme_pack_id: Option<&str>) -> ShellStyle {
+    super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| Some(theme.id.as_str()) == theme_pack_id)
+        .map(|theme| theme.shell_style)
+        .unwrap_or_else(|| crate::theme::ThemePack::classic().shell_style)
+}
+
+fn theme_pack_color_overrides_from_theme_pack_id(
+    theme_pack_id: Option<&str>,
+) -> Option<HashMap<ColorToken, [u8; 4]>> {
+    let theme_pack_id = theme_pack_id?;
+    let bundle_dir = theme_bundle_dir_from_pack_id(theme_pack_id)?;
+    let active_theme = super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)?;
+
+    let mut candidates = vec![bundle_dir.join("colors").join("custom.json")];
+    if let crate::theme::ColorStyle::FullColor { theme_id } = active_theme.color_style {
+        candidates.push(bundle_dir.join("colors").join(format!("{theme_id}.json")));
+        if theme_id == "nucleon-dark" {
+            candidates.push(bundle_dir.join("colors").join("dark.json"));
+        } else if theme_id == "nucleon-light" {
+            candidates.push(bundle_dir.join("colors").join("light.json"));
+        }
+    }
+
+    for colors_path in candidates {
+        let Ok(raw) = std::fs::read_to_string(colors_path) else {
+            continue;
+        };
+        let Ok(theme) = serde_json::from_str::<crate::theme::FullColorTheme>(&raw) else {
+            continue;
+        };
+        return Some(theme.tokens);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -803,7 +850,7 @@ fn apply_native_text_style(ctx: &Context) {
     ctx.set_style(style);
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn current_shell_surface_kind(&self) -> ShellSurfaceKind {
         if self.desktop_mode_open {
             ShellSurfaceKind::Desktop
@@ -881,7 +928,7 @@ impl RobcoNativeApp {
     }
 }
 
-pub struct RobcoNativeApp {
+pub struct NucleonNativeApp {
     login: TerminalLoginState,
     session: Option<SessionState>,
     file_manager: NativeFileManagerState,
@@ -914,8 +961,10 @@ pub struct RobcoNativeApp {
     desktop_active_theme_pack_id: Option<String>,
     desktop_active_cursor_theme_selection: DesktopCursorThemeSelection,
     terminal_active_theme_pack_id: Option<String>,
+    pub(super) desktop_active_shell_style: ShellStyle,
     desktop_active_color_style: ColorStyle,
     terminal_active_color_style: ColorStyle,
+    pub(super) active_sound_pack_path: Option<PathBuf>,
     pub(super) active_asset_pack_path: Option<PathBuf>,
     pub(super) active_cursor_pack: Option<CursorPack>,
     pub(super) desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
@@ -952,6 +1001,7 @@ pub struct RobcoNativeApp {
     picking_icon_for_shortcut: Option<usize>,
     picking_wallpaper: bool,
     picking_terminal_wallpaper: bool,
+    pub(super) picking_theme_import: bool,
     shortcut_icon_cache: HashMap<String, egui::TextureHandle>,
     shortcut_icon_missing: HashSet<String>,
     terminal_wallpaper_texture: Option<egui::TextureHandle>,
@@ -1048,8 +1098,13 @@ pub(super) struct ParkedSessionState {
     terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
     desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
     terminal_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+    desktop_active_shell_style: ShellStyle,
     terminal_decoration: TerminalDecoration,
     picking_terminal_wallpaper: bool,
+    picking_theme_import: bool,
+    active_sound_pack_path: Option<std::path::PathBuf>,
+    active_asset_pack_path: Option<std::path::PathBuf>,
+    active_cursor_pack: Option<CursorPack>,
 }
 
 /// App-specific state for a secondary (non-primary) window instance.
@@ -1083,7 +1138,7 @@ impl SecondaryWindow {
     }
 }
 
-impl Default for RobcoNativeApp {
+impl Default for NucleonNativeApp {
     fn default() -> Self {
         restore_current_user_from_last_session();
         session::clear_sessions();
@@ -1099,6 +1154,8 @@ impl Default for RobcoNativeApp {
         let initial_desktop_cursor_theme_selection =
             desktop_cursor_theme_selection_from_settings(&settings_draft);
         let initial_terminal_theme_pack_id = terminal_theme_pack_id_from_settings(&settings_draft);
+        let initial_desktop_shell_style =
+            desktop_shell_style_from_theme_pack_id(initial_desktop_theme_pack_id.as_deref());
         let initial_desktop_layout = desktop_layout_from_settings(&settings_draft);
         let initial_terminal_layout = terminal_layout_from_settings(&settings_draft);
         let initial_terminal_branding = terminal_branding_from_settings(&settings_draft);
@@ -1157,8 +1214,10 @@ impl Default for RobcoNativeApp {
             desktop_active_theme_pack_id: initial_desktop_theme_pack_id,
             desktop_active_cursor_theme_selection: initial_desktop_cursor_theme_selection,
             terminal_active_theme_pack_id: initial_terminal_theme_pack_id,
+            desktop_active_shell_style: initial_desktop_shell_style,
             desktop_active_color_style: initial_desktop_color_style,
             terminal_active_color_style: initial_terminal_color_style,
+            active_sound_pack_path: None,
             active_asset_pack_path: None,
             active_cursor_pack: None,
             desktop_color_overrides: None,
@@ -1195,6 +1254,7 @@ impl Default for RobcoNativeApp {
             picking_icon_for_shortcut: None,
             picking_wallpaper: false,
             picking_terminal_wallpaper: false,
+            picking_theme_import: false,
             shortcut_icon_cache: HashMap::new(),
             shortcut_icon_missing: HashSet::new(),
             terminal_wallpaper_texture: None,
@@ -1246,6 +1306,7 @@ impl Default for RobcoNativeApp {
             retained_wasm_addons: Vec::new(),
             ipc: super::ipc::start_listener(),
         };
+        app.sync_active_sound_pack();
         app.sync_active_desktop_asset_pack();
         crate::config::spawn_addon_repository_index_refresh();
         app.maybe_apply_profile_autologin();
@@ -1253,7 +1314,18 @@ impl Default for RobcoNativeApp {
     }
 }
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
+    fn sync_active_sound_pack(&mut self) -> bool {
+        let next_sound_pack_path =
+            desktop_sound_pack_path_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
+        let changed = self.active_sound_pack_path != next_sound_pack_path;
+        if changed {
+            self.active_sound_pack_path = next_sound_pack_path.clone();
+            crate::sound::set_active_sound_pack(next_sound_pack_path);
+        }
+        changed
+    }
+
     fn sync_active_desktop_asset_pack(&mut self) -> bool {
         let next_asset_pack_path =
             desktop_asset_pack_path_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
@@ -1279,16 +1351,21 @@ impl RobcoNativeApp {
             desktop_cursor_theme_selection_from_settings(&self.settings.draft);
         self.terminal_active_theme_pack_id =
             terminal_theme_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_shell_style =
+            desktop_shell_style_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
         self.desktop_active_color_style = desktop_color_style_from_settings(&self.settings.draft);
         self.terminal_active_color_style = terminal_color_style_from_settings(&self.settings.draft);
         self.desktop_active_layout = desktop_layout_from_settings(&self.settings.draft);
         self.terminal_active_layout = terminal_layout_from_settings(&self.settings.draft);
         self.terminal_branding = terminal_branding_from_settings(&self.settings.draft);
         self.terminal_decoration = terminal_decoration_from_settings(&self.settings.draft);
-        self.desktop_color_overrides = None;
-        self.terminal_color_overrides = None;
+        self.desktop_color_overrides =
+            theme_pack_color_overrides_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
+        self.terminal_color_overrides =
+            theme_pack_color_overrides_from_theme_pack_id(self.terminal_active_theme_pack_id.as_deref());
         self.tweaks_customize_colors_open = false;
         self.last_desktop_appearance = None;
+        self.sync_active_sound_pack();
         let asset_state_changed = self.sync_active_desktop_asset_pack();
         if previous_desktop_theme_pack_id != self.desktop_active_theme_pack_id
             || previous_desktop_color_style != self.desktop_active_color_style
@@ -1350,6 +1427,7 @@ impl RobcoNativeApp {
             color_style: self.desktop_active_color_style.clone(),
             overrides: self.desktop_color_overrides.clone(),
         };
+        set_active_shell_style(self.desktop_active_shell_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Desktop,
             self.desktop_active_color_style.clone(),
@@ -1394,6 +1472,7 @@ impl RobcoNativeApp {
     }
 
     fn sync_terminal_appearance(&mut self, ctx: &Context) {
+        set_active_shell_style(self.desktop_active_shell_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Terminal,
             self.terminal_active_color_style.clone(),
@@ -1435,7 +1514,7 @@ impl RobcoNativeApp {
     }
 }
 
-impl eframe::App for RobcoNativeApp {
+impl eframe::App for NucleonNativeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         Color32::from_rgb(0, 0, 0).to_normalized_gamma_f32()
     }
@@ -1462,9 +1541,10 @@ mod tests {
 
     fn session_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("native app session test lock")
+        match LOCK.get_or_init(|| Mutex::new(())).lock() {
+            Ok(guard) => guard,
+            Err(err) => err.into_inner(),
+        }
     }
 
     struct UsersRestore {
@@ -1505,7 +1585,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robco_native_{prefix}_{}_{}",
+                "nucleon_native_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));
@@ -1539,7 +1619,7 @@ mod tests {
         }
     }
 
-    fn set_runtime_marker(app: &mut RobcoNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
+    fn set_runtime_marker(app: &mut NucleonNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
         app.desktop_mode_open = false;
         app.start_open = true;
         app.start_selected_root = idx % START_ROOT_ITEMS.len();
@@ -1593,7 +1673,7 @@ mod tests {
         session::clear_sessions();
         session::take_switch_request();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         let idx = session::push_session("admin");
         session::set_active(idx);
         app.session = Some(SessionState {
@@ -1654,7 +1734,7 @@ mod tests {
         app.editor.text.clear();
         app.editor.dirty = false;
         app.editor.status.clear();
-        app.editor.ui = robcos_native_editor_app::EditorUiState::default();
+        app.editor.ui = nucleon_native_editor_app::EditorUiState::default();
         app.settings.open = false;
         app.settings.status.clear();
         app.settings.draft.theme = "Green (Default)".to_string();
@@ -1733,7 +1813,7 @@ mod tests {
         session::clear_sessions();
         session::take_switch_request();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         let s1 = session::push_session("u1");
         let s2 = session::push_session("u2");
 
@@ -1782,7 +1862,7 @@ mod tests {
         session::clear_sessions();
         session::take_switch_request();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         let s1 = session::push_session("u1");
         let s2 = session::push_session("u2");
         let s3 = session::push_session("u3");
@@ -1842,7 +1922,7 @@ mod tests {
             session::clear_sessions();
             session::take_switch_request();
 
-            let mut app = RobcoNativeApp::default();
+            let mut app = NucleonNativeApp::default();
             let s1 = session::push_session("u1");
             let s2 = session::push_session("u2");
 
@@ -1888,7 +1968,7 @@ mod tests {
     fn editor_command_open_find_replace_sets_editor_search_mode() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.editor.ui.find_open = false;
         app.editor.ui.find_replace_visible = false;
         app.editor.ui.find_occurrence = 9;
@@ -1907,7 +1987,7 @@ mod tests {
     fn editor_commands_update_view_and_format_state() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.editor.word_wrap = true;
         app.editor.font_size = 16.0;
         app.editor.ui.show_line_numbers = false;
@@ -1934,7 +2014,7 @@ mod tests {
         std::fs::write(&note, "note").expect("write note");
         std::fs::create_dir_all(&other).expect("create other directory");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager = NativeFileManagerState::new(temp.path.clone());
         app.file_manager.tabs = vec![temp.path.clone(), other.clone()];
         app.file_manager.active_tab = 0;
@@ -1970,7 +2050,7 @@ mod tests {
     fn autologin_open_mode_honors_desktop_default() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.start_open = true;
         app.settings.draft.default_open_mode = OpenMode::Desktop;
@@ -1993,7 +2073,7 @@ mod tests {
     #[test]
     fn file_manager_label_truncation_preserves_distinguishing_suffix() {
         assert_eq!(
-            RobcoNativeApp::truncate_file_manager_label(
+            NucleonNativeApp::truncate_file_manager_label(
                 "Screenshot 2026-03-18 at 17.37.56.png",
                 16,
             ),
@@ -2004,7 +2084,7 @@ mod tests {
     #[test]
     fn desktop_icon_label_lines_compact_long_file_names() {
         assert_eq!(
-            RobcoNativeApp::desktop_icon_label_lines("Screenshot 2026-03-18 at 17.37.56.png"),
+            NucleonNativeApp::desktop_icon_label_lines("Screenshot 2026-03-18 at 17.37.56.png"),
             vec!["Screenshot".to_string(), "2026-...56.png".to_string()]
         );
     }
@@ -2024,7 +2104,7 @@ mod tests {
             settings.desktop_file_manager.sort_mode = FileManagerSortMode::Name;
         });
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.cwd = temp.path.clone();
         app.file_manager.select(Some(note.clone()));
 
@@ -2072,7 +2152,7 @@ mod tests {
         std::fs::write(&keep, "alpha").expect("write keep file");
         std::fs::write(&target, "beta").expect("write target file");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_document_browser_at(temp.path.clone(), TerminalScreen::Documents);
         let rows = crate::native::document_browser::browser_rows(&app.file_manager);
         let target_idx = rows
@@ -2095,7 +2175,7 @@ mod tests {
     fn terminal_editor_blocks_logs_menu_space_shortcut() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.terminal_nav.screen = TerminalScreen::Logs;
         app.terminal_nav.logs_idx = 0;
         app.editor.open = true;
@@ -2131,10 +2211,10 @@ mod tests {
     fn wallpaper_picker_commit_persists_before_settings_reset() {
         let _guard = session_test_guard();
         let _settings = SettingsRestore::capture();
-        let wallpaper = PathBuf::from("/tmp/robco-wallpaper.png");
+        let wallpaper = PathBuf::from("/tmp/nucleon-wallpaper.png");
         let wallpaper_str = wallpaper.display().to_string();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.open = true;
         app.picking_wallpaper = true;
 
@@ -2171,7 +2251,7 @@ mod tests {
         )
         .expect("write svg");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         let row = FileEntryRow {
             path: svg_path.clone(),
             label: "icon.svg".to_string(),
@@ -2201,7 +2281,7 @@ mod tests {
             is_dir: false,
         };
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         let texture = app
             .file_manager_preview_texture(&Context::default(), &row)
             .expect("preview texture");
@@ -2210,7 +2290,7 @@ mod tests {
         assert!(texture.size()[1] <= 192);
         assert_eq!(
             app.file_manager_preview_loaded_for,
-            png_path.to_string_lossy().to_string()
+            format!("{}#monochrome", png_path.to_string_lossy())
         );
     }
 
@@ -2226,7 +2306,7 @@ mod tests {
         )
         .expect("write svg");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.settings.draft.desktop_shortcuts.push(DesktopShortcut {
             label: "Test".to_string(),
             app_name: "Test".to_string(),
@@ -2262,7 +2342,7 @@ mod tests {
     fn closing_dirty_desktop_editor_opens_confirmation_prompt() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.editor.open = true;
         app.editor.path = Some(PathBuf::from("/tmp/existing.txt"));
@@ -2289,7 +2369,7 @@ mod tests {
     fn quitting_dirty_desktop_editor_resets_document_for_next_launch() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.editor.open = true;
         app.editor.path = Some(PathBuf::from("/tmp/existing.txt"));
@@ -2328,7 +2408,7 @@ mod tests {
         let existing = temp.path.join("document.txt");
         std::fs::write(&existing, "existing").expect("seed existing document");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.file_manager.cwd = temp.path.clone();
         app.file_manager.open = true;
@@ -2363,7 +2443,7 @@ mod tests {
         let _guard = session_test_guard();
         let temp = TempDirGuard::new("save_as_then_close");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.file_manager.cwd = temp.path.clone();
         app.file_manager.open = true;
@@ -2394,7 +2474,7 @@ mod tests {
         let temp = TempDirGuard::new("terminal_save_as_prompt");
         let existing = temp.path.join("draft.txt");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.editor.open = true;
         app.editor.path = Some(existing.clone());
@@ -2421,7 +2501,7 @@ mod tests {
         let current = temp.path.join("current.txt");
         let expected = temp.path.join("archive").join("copied.txt");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.editor.open = true;
         app.editor.path = Some(current);
@@ -2444,7 +2524,7 @@ mod tests {
     fn terminal_save_without_path_opens_save_as_prompt() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.editor.open = true;
         app.editor.text = "unsaved".to_string();
@@ -2464,7 +2544,7 @@ mod tests {
         let existing = temp.path.join("New Folder");
         std::fs::create_dir_all(&existing).expect("seed existing folder");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.cwd = temp.path.clone();
 
         app.run_file_manager_command(FileManagerCommand::NewFolder);
@@ -2482,7 +2562,7 @@ mod tests {
         let file_path = temp.path.join("demo.txt");
         std::fs::write(&file_path, "demo").expect("write temp file");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
             target: launch_registry::file_manager_launch_target(),
             payload: DesktopLaunchPayload::RevealPath(file_path.clone()),
@@ -2500,7 +2580,7 @@ mod tests {
         let folder = temp.path.join("docs");
         std::fs::create_dir_all(&folder).expect("create desktop folder");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_desktop_surface_path(folder.clone());
 
         assert!(app.file_manager.open);
@@ -2515,7 +2595,7 @@ mod tests {
         let file_path = temp.path.join("desktop-note.txt");
         std::fs::write(&file_path, "surface text").expect("write desktop note");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_desktop_surface_path(file_path.clone());
 
         assert!(app.editor.open);
@@ -2528,7 +2608,7 @@ mod tests {
     fn opening_start_menu_closes_spotlight() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.spotlight_open = true;
         app.spotlight_query = "demo".to_string();
 
@@ -2542,7 +2622,7 @@ mod tests {
     fn opening_desktop_window_closes_spotlight_in_desktop_mode() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.spotlight_open = true;
 
@@ -2559,7 +2639,7 @@ mod tests {
     fn opening_second_desktop_pty_spawns_secondary_window() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         let cmd = vec![
             "/bin/sh".to_string(),
@@ -2592,7 +2672,7 @@ mod tests {
     fn closing_drawn_secondary_pty_window_keeps_primary_open() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         let cmd = vec![
             "/bin/sh".to_string(),
@@ -2641,7 +2721,8 @@ mod tests {
 
     #[test]
     fn reopening_settings_window_reprimes_component_state() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.settings.open = true;
         app.settings.panel = NativeSettingsPanel::Appearance;
         let state =
@@ -2670,18 +2751,23 @@ mod tests {
 
     #[test]
     fn change_appearance_context_menu_opens_settings_appearance_panel() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.context_menu_action = Some(ContextMenuAction::ChangeAppearance);
 
         app.dispatch_context_menu_action(&Context::default());
 
-        assert!(app.settings.open);
-        assert_eq!(app.settings.panel, NativeSettingsPanel::Appearance);
+        assert!(app.tweaks_open);
+        assert_eq!(
+            app.desktop_active_window,
+            Some(WindowInstanceId::primary(DesktopWindow::Tweaks))
+        );
     }
 
     #[test]
     fn settings_launch_target_with_panel_payload_opens_requested_panel() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
             target: launch_registry::settings_launch_target(),
@@ -2695,7 +2781,8 @@ mod tests {
 
     #[test]
     fn settings_launch_target_opens_settings_window() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.launch_settings_via_registry();
 
@@ -2727,7 +2814,7 @@ mod tests {
 
     #[test]
     fn disabled_settings_panel_coerces_to_home_panel() {
-        let panel = RobcoNativeApp::coerce_desktop_settings_panel_for_visibility(
+        let panel = NucleonNativeApp::coerce_desktop_settings_panel_for_visibility(
             NativeSettingsPanel::Connections,
             DesktopSettingsVisibility {
                 default_apps: true,
@@ -2742,7 +2829,8 @@ mod tests {
 
     #[test]
     fn file_manager_launch_target_opens_file_manager_window() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.launch_file_manager_via_registry();
 
@@ -2752,7 +2840,8 @@ mod tests {
 
     #[test]
     fn editor_launch_target_opens_editor_window() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.launch_editor_via_registry();
 
@@ -2762,7 +2851,8 @@ mod tests {
 
     #[test]
     fn terminal_launch_target_opens_terminal_window() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::terminal_launch_target(),
@@ -2774,7 +2864,8 @@ mod tests {
 
     #[test]
     fn programs_launch_target_opens_applications_window() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::programs_launch_target(),
@@ -2786,7 +2877,8 @@ mod tests {
 
     #[test]
     fn connections_launch_target_opens_settings_connections_panel() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::connections_launch_target(),
@@ -2799,7 +2891,8 @@ mod tests {
 
     #[test]
     fn desktop_menu_open_settings_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.apply_desktop_menu_action(&Context::default(), &DesktopMenuAction::OpenSettings);
 
@@ -2810,7 +2903,8 @@ mod tests {
 
     #[test]
     fn desktop_menu_open_file_manager_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.apply_desktop_menu_action(&Context::default(), &DesktopMenuAction::OpenFileManager);
 
@@ -2820,7 +2914,8 @@ mod tests {
 
     #[test]
     fn start_menu_program_installer_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.start_open = true;
 
         app.run_start_system_action(desktop_start_menu::StartSystemAction::ProgramInstaller);
@@ -2832,7 +2927,8 @@ mod tests {
 
     #[test]
     fn start_menu_connections_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.start_open = true;
 
         app.run_start_system_action(desktop_start_menu::StartSystemAction::Connections);
@@ -2845,7 +2941,8 @@ mod tests {
 
     #[test]
     fn generic_context_menu_open_settings_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.context_menu_action = Some(ContextMenuAction::OpenSettings);
 
         app.dispatch_context_menu_action(&Context::default());
@@ -2857,7 +2954,8 @@ mod tests {
 
     #[test]
     fn desktop_program_request_open_file_manager_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.apply_desktop_program_request(DesktopProgramRequest::OpenFileManager);
 
@@ -2867,7 +2965,8 @@ mod tests {
 
     #[test]
     fn desktop_program_request_open_text_editor_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.apply_desktop_program_request(DesktopProgramRequest::OpenTextEditor {
             close_window: true,
@@ -2879,7 +2978,8 @@ mod tests {
 
     #[test]
     fn open_text_editor_action_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
 
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTarget(
             launch_registry::editor_launch_target(),
@@ -2891,7 +2991,8 @@ mod tests {
 
     #[test]
     fn spotlight_terminal_result_uses_registry_launch() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.spotlight_open = true;
 
         app.spotlight_activate_result(&NativeSpotlightResult {
@@ -2912,7 +3013,7 @@ mod tests {
         let file_path = temp.path.join("notes.txt");
         std::fs::write(&file_path, "hello").expect("write temp editor file");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.execute_desktop_shell_action(DesktopShellAction::LaunchByTargetWithPayload {
             target: launch_registry::editor_launch_target(),
             payload: DesktopLaunchPayload::OpenPath(file_path.clone()),
@@ -2933,7 +3034,7 @@ mod tests {
         std::fs::write(&first_path, "first").expect("write first editor file");
         std::fs::write(&second_path, "second").expect("write second editor file");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.open_embedded_path_in_editor(first_path);
 
@@ -2951,7 +3052,7 @@ mod tests {
     #[test]
     fn terminal_open_with_request_uses_embedded_pty_surface() {
         let _guard = session_test_guard();
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
         app.navigate_to_screen(TerminalScreen::DocumentBrowser);
 
@@ -2982,7 +3083,7 @@ mod tests {
     #[test]
     fn active_surface_command_launch_uses_embedded_pty_when_desktop_is_closed() {
         let _guard = session_test_guard();
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = false;
 
         let argv = vec![
@@ -3006,7 +3107,7 @@ mod tests {
     #[test]
     fn active_surface_command_launch_uses_desktop_pty_when_desktop_is_open() {
         let _guard = session_test_guard();
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
 
         let argv = vec![
@@ -3030,7 +3131,7 @@ mod tests {
     #[test]
     fn desktop_open_with_request_uses_desktop_pty_surface() {
         let _guard = session_test_guard();
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
 
         let status = app.launch_open_with_request(OpenWithLaunchRequest {
@@ -3055,7 +3156,7 @@ mod tests {
     #[test]
     fn start_system_terminal_action_opens_desktop_terminal_shell() {
         let _guard = session_test_guard();
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
 
         app.run_start_system_action(desktop_start_menu::StartSystemAction::Terminal);
 
@@ -3067,7 +3168,8 @@ mod tests {
 
     #[test]
     fn spotlight_hides_editor_result_when_builtin_visibility_is_disabled() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.settings.draft.builtin_menu_visibility.text_editor = false;
         app.spotlight_tab = 1;
         app.spotlight_query = "editor".to_string();
@@ -3082,7 +3184,8 @@ mod tests {
 
     #[test]
     fn opening_closed_installer_window_clears_stale_restore_state() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         let state =
             app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Installer));
         state.restore_pos = Some([12.0, 36.0]);
@@ -3108,7 +3211,8 @@ mod tests {
 
     #[test]
     fn shared_desktop_window_host_tracks_position_only_and_handles_minimize() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.settings.open = true;
         let state =
             app.desktop_window_state_mut(WindowInstanceId::primary(DesktopWindow::Settings));
@@ -3138,7 +3242,8 @@ mod tests {
 
     #[test]
     fn settings_window_tracks_position_without_replaying_restore_size() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.settings.open = true;
         app.settings.panel = NativeSettingsPanel::General;
         let state =
@@ -3168,20 +3273,21 @@ mod tests {
 
     #[test]
     fn applications_window_does_not_grow_with_long_catalog_lists() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.applications.open = true;
         let sections = DesktopApplicationsSections {
             builtins: (0..80)
-                .map(|idx| robcos_native_programs_app::DesktopProgramEntry {
+                .map(|idx| nucleon_native_programs_app::DesktopProgramEntry {
                     label: format!("Builtin App {idx}"),
-                    action: robcos_native_programs_app::DesktopApplicationsAction::OpenFileManager,
+                    action: nucleon_native_programs_app::DesktopApplicationsAction::OpenFileManager,
                 })
                 .collect(),
             configured: (0..80)
-                .map(|idx| robcos_native_programs_app::DesktopProgramEntry {
+                .map(|idx| nucleon_native_programs_app::DesktopProgramEntry {
                     label: format!("Configured App {idx}"),
-                    action: robcos_native_programs_app::DesktopApplicationsAction::OpenFileManager,
+                    action: nucleon_native_programs_app::DesktopApplicationsAction::OpenFileManager,
                 })
                 .collect(),
         };
@@ -3206,14 +3312,15 @@ mod tests {
 
         let state =
             app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Applications));
-        let default_size = RobcoNativeApp::desktop_default_window_size(DesktopWindow::Applications);
+        let default_size = NucleonNativeApp::desktop_default_window_size(DesktopWindow::Applications);
         let restore_size = state.restore_size.expect("applications restore size");
         assert!(restore_size[1] <= default_size.y + 1.0);
     }
 
     #[test]
     fn editor_window_does_not_grow_with_many_lines() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.desktop_mode_open = true;
         app.editor.open = true;
         app.editor.text = (0..200)
@@ -3235,19 +3342,20 @@ mod tests {
         });
 
         let state = app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Editor));
-        let default_size = RobcoNativeApp::desktop_default_window_size(DesktopWindow::Editor);
+        let default_size = NucleonNativeApp::desktop_default_window_size(DesktopWindow::Editor);
         let restore_size = state.restore_size.expect("editor restore size");
         assert!(restore_size[1] <= default_size.y + 1.0);
     }
 
     #[test]
     fn installer_window_tracks_position_without_replaying_restore_size() {
-        let mut app = RobcoNativeApp::default();
+        let _guard = session_test_guard();
+        let mut app = NucleonNativeApp::default();
         app.desktop_installer.open = true;
         app.desktop_installer.view = DesktopInstallerView::SearchResults;
         app.desktop_installer.search_query = "apps".to_string();
         app.desktop_installer.search_results = (0..80)
-            .map(|idx| robcos_native_installer_app::SearchResult {
+            .map(|idx| nucleon_native_installer_app::SearchResult {
                 raw: format!("pkg-{idx}"),
                 pkg: format!("pkg-{idx}"),
                 description: Some("description".to_string()),
@@ -3283,7 +3391,7 @@ mod tests {
     fn closing_desktop_overlays_clears_start_and_spotlight() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.start_open = true;
         app.start_open_submenu = Some(StartSubmenu::System);
         app.start_open_leaf = Some(StartLeaf::Applications);
@@ -3301,7 +3409,7 @@ mod tests {
     fn activating_open_window_closes_desktop_overlays() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.start_open = true;
         app.spotlight_open = true;
         app.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::FileManager));
@@ -3326,7 +3434,7 @@ mod tests {
     fn activating_taskbar_for_active_window_minimizes_it() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.open = true;
         app.desktop_active_window = Some(WindowInstanceId::primary(DesktopWindow::FileManager));
 
@@ -3344,7 +3452,7 @@ mod tests {
     fn activating_taskbar_for_minimized_window_restores_it() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.open = true;
         app.start_open = true;
         app.spotlight_open = true;
@@ -3370,7 +3478,7 @@ mod tests {
     fn next_active_window_prefers_topmost_visible_window() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.open = true;
         app.settings.open = true;
         app.applications.open = true;
@@ -3385,7 +3493,7 @@ mod tests {
     fn minimizing_active_window_activates_next_topmost_window() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.file_manager.open = true;
         app.settings.open = true;
         app.applications.open = true;
@@ -3403,7 +3511,7 @@ mod tests {
     fn activating_start_root_selection_opens_current_panel() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_start_menu();
         app.start_selected_root = 0;
 
@@ -3417,7 +3525,7 @@ mod tests {
     fn start_menu_left_closes_open_panel_without_closing_menu() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_start_menu();
         app.set_start_panel_for_root(4);
 
@@ -3432,7 +3540,7 @@ mod tests {
     fn start_menu_root_navigation_clamps_to_valid_bounds() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.open_start_menu();
 
         app.start_menu_move_root_selection(-1);
@@ -3446,7 +3554,7 @@ mod tests {
     fn opening_spotlight_resets_to_all_tab() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.spotlight_tab = 3;
         app.spotlight_query = "demo".to_string();
 
@@ -3461,7 +3569,7 @@ mod tests {
     fn spotlight_tab_navigation_clamps_between_bounds() {
         let _guard = session_test_guard();
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.set_spotlight_tab(2);
         assert_eq!(app.spotlight_tab, 2);
 
@@ -3482,7 +3590,7 @@ mod tests {
         let file_path = temp.path.join("demo.txt");
         std::fs::write(&file_path, "demo").expect("write temp file");
 
-        let mut app = RobcoNativeApp::default();
+        let mut app = NucleonNativeApp::default();
         app.spotlight_open = true;
         app.spotlight_query = "demo".to_string();
 
@@ -3595,6 +3703,7 @@ mod tests {
         assert_eq!(manifest.kind, crate::platform::AddonKind::Theme);
         assert_eq!(manifest.id.as_str(), "themes.phase7-signal-forge");
         assert_eq!(theme.id, "phase7-signal-forge");
+        assert!(theme.sound_pack.path.is_none());
         assert_eq!(theme.asset_pack.as_ref().map(|pack| pack.path.as_str()), Some("assets"));
         assert!(theme.cursor_pack.is_none());
         assert!(bundle_root.join("assets/cursors/cursors.json").exists());

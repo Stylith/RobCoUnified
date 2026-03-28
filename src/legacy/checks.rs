@@ -67,7 +67,7 @@ fn has_python_module(module: &str) -> bool {
 pub fn print_preflight(report: &PreflightReport) {
     if !report.errors.is_empty() {
         eprintln!("\n╔══════════════════════════════════════════════════╗");
-        eprintln!("║         RobcOS - Dependency Error                ║");
+        eprintln!("║         NucleonOS - Dependency Error                ║");
         eprintln!("╚══════════════════════════════════════════════════╝");
         for e in &report.errors {
             eprintln!("  ✗ {e}");
@@ -75,7 +75,7 @@ pub fn print_preflight(report: &PreflightReport) {
     }
     if !report.warnings.is_empty() {
         eprintln!("\n╔══════════════════════════════════════════════════╗");
-        eprintln!("║     RobcOS - Optional Dependencies Missing       ║");
+        eprintln!("║     NucleonOS - Optional Dependencies Missing       ║");
         eprintln!("╚══════════════════════════════════════════════════╝");
         for w in &report.warnings {
             eprintln!("  ! {w}");

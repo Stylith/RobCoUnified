@@ -529,7 +529,7 @@ mod tests {
         session::take_switch_request();
 
         let username = "restore-plan-user";
-        let missing_dir = PathBuf::from("/tmp/robco-native-restore-plan-missing");
+        let missing_dir = PathBuf::from("/tmp/nucleon-native-restore-plan-missing");
         persist_shell_snapshot(username, &missing_dir, None);
 
         let idx = session::push_session_with_default_mode(username, true);

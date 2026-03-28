@@ -1,12 +1,14 @@
 use super::super::desktop_app::DesktopWindow;
-use super::super::retro_ui::current_palette;
-use super::{CachedIcon, RobcoNativeApp};
+use super::super::retro_ui::{
+    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow,
+};
+use super::{CachedIcon, NucleonNativeApp};
 use eframe::egui::{
     self, Align2, Color32, Context, FontFamily, FontId, Id, RichText, TextStyle, TextureHandle,
 };
 use std::path::Path;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn load_svg_icon(
         ctx: &Context,
         id: &str,
@@ -206,12 +208,17 @@ impl RobcoNativeApp {
         Id::new(("editor_text_edit", generation))
     }
 
-    pub(super) fn retro_separator(ui: &mut egui::Ui) {
+    pub(super) fn retro_separator_with_thickness(ui: &mut egui::Ui, thickness: f32) {
         let palette = current_palette();
-        let desired = egui::vec2(ui.available_width().max(1.0), 2.0);
+        let thickness = thickness.max(1.0);
+        let desired = egui::vec2(ui.available_width().max(1.0), thickness);
         let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, palette.fg);
-        ui.add_space(2.0);
+        ui.add_space(thickness);
+    }
+
+    pub(super) fn retro_separator(ui: &mut egui::Ui) {
+        Self::retro_separator_with_thickness(ui, 2.0);
     }
 
     pub(super) fn retro_disabled_button(
@@ -227,6 +234,7 @@ impl RobcoNativeApp {
 
     pub(super) fn apply_settings_control_style(ui: &mut egui::Ui) {
         let palette = current_palette();
+        let shell_style = current_shell_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.override_text_color = None;
@@ -236,10 +244,10 @@ impl RobcoNativeApp {
         style.visuals.extreme_bg_color = palette.bg;
         style.visuals.code_bg_color = palette.bg;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.window_rounding = shell_style_rounding(&shell_style);
+        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
+        style.visuals.window_shadow = shell_style_shadow(&shell_style);
+        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
         style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.hyperlink_color = palette.fg;
@@ -428,7 +436,7 @@ impl RobcoNativeApp {
 
 #[cfg(test)]
 mod tests {
-    use super::RobcoNativeApp;
+    use super::NucleonNativeApp;
     use std::path::PathBuf;
 
     struct TempDirGuard {
@@ -473,7 +481,7 @@ mod tests {
         )
         .expect("write mono icon");
 
-        let (bytes, is_full_color) = RobcoNativeApp::resolve_themed_icon_bytes(
+        let (bytes, is_full_color) = NucleonNativeApp::resolve_themed_icon_bytes(
             "pixel--folder-solid.svg",
             Some(temp.path.as_path()),
             true,
@@ -494,7 +502,7 @@ mod tests {
         )
         .expect("write color icon");
 
-        let (bytes, is_full_color) = RobcoNativeApp::resolve_themed_icon_bytes(
+        let (bytes, is_full_color) = NucleonNativeApp::resolve_themed_icon_bytes(
             "pixel--folder-solid.svg",
             Some(temp.path.as_path()),
             false,
@@ -512,7 +520,7 @@ mod tests {
         std::fs::create_dir_all(temp.path.join("icons_mono")).expect("create mono dir");
 
         assert!(
-            RobcoNativeApp::resolve_themed_icon_bytes(
+            NucleonNativeApp::resolve_themed_icon_bytes(
                 "pixel--folder-solid.svg",
                 Some(temp.path.as_path()),
                 true,

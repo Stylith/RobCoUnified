@@ -1,9 +1,9 @@
 [package]
-name = "robcos-native-connections-app"
+name = "nucleon-native-connections-app"
 version = "0.4.4"
 edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
-robcos-native-services = { path = "../native-services" }
-robcos-shared = { path = "../shared" }
+nucleon-native-services = { path = "../native-services" }
+nucleon-shared = { path = "../shared" }

@@ -1,11 +1,11 @@
-# RobCoOS
+# NucleonOS
 
 A Fallout-inspired terminal environment built with Rust, [ratatui](https://github.com/ratatui/ratatui), and [egui](https://github.com/emilk/egui).
 
-RobCoOS is an application-layer shell experience, not a standalone operating system. It wraps your real terminal in a retro-computing interface with multi-user support, a full desktop mode, and a built-in app ecosystem.
+NucleonOS is an application-layer shell experience, not a standalone operating system. It wraps your real terminal in a retro-computing interface with multi-user support, a full desktop mode, and a built-in app ecosystem.
 
-![RobCoOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
-![RobCoOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
+![NucleonOS Terminal Mode](assets/readme/desktop-screenshot-1.png)
+![NucleonOS Desktop Mode](assets/readme/desktop-screenshot-2.png)
 
 **Version:** `0.4.4`
 
@@ -48,16 +48,16 @@ Audio works out of the box via platform fallbacks:
 
 ```bash
 # Run the native shell in development mode
-cargo run -p robcos-native-shell --bin nucleon-native
+cargo run -p nucleon-native-shell --bin nucleon-native
 
 # Build the native shell
-cargo build --release -p robcos-native-shell --bin nucleon-native
+cargo build --release -p nucleon-native-shell --bin nucleon-native
 
 # Run the release build
-cargo run --release -p robcos-native-shell --bin nucleon-native
+cargo run --release -p nucleon-native-shell --bin nucleon-native
 
 # Skip startup preflight checks
-cargo run --release -p robcos-native-shell --bin nucleon-native -- --no-preflight
+cargo run --release -p nucleon-native-shell --bin nucleon-native -- --no-preflight
 
 # Validate the release workflow locally
 make release-check
@@ -92,9 +92,9 @@ New users, including the first admin, are prompted once after login to configure
 
 Runtime data is stored in one of these locations:
 
-- macOS `.app` build: `~/Library/Application Support/RobCoOS/`
+- macOS `.app` build: `~/Library/Application Support/NucleonOS/`
 - other builds: relative to the executable
-- any platform with `ROBCOS_BASE_DIR` set: that override directory
+- any platform with `NUCLEON_BASE_DIR` set: that override directory
 
 ```text
 <base_dir>/

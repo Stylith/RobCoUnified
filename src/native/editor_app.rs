@@ -1,5 +1,5 @@
 use super::desktop_app::{DesktopMenuAction, DesktopMenuItem, DesktopMenuSection};
-pub use robcos_native_editor_app::{
+pub use nucleon_native_editor_app::{
     EditorCommand, EditorTextAlign, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
 use std::path::PathBuf;

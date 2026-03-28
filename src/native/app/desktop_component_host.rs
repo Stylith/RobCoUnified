@@ -1,8 +1,8 @@
 use super::super::desktop_app::DesktopWindow;
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use eframe::egui::Context;
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(crate) fn desktop_component_file_manager_is_open(&self) -> bool {
         self.file_manager.open
     }

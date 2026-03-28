@@ -3,8 +3,9 @@ use super::menu::{
     MAIN_MENU_ENTRIES,
 };
 use super::prompt::{draw_terminal_prompt_overlay, TerminalPrompt};
-use super::retro_ui::{current_palette_for_surface, RetroScreen, ShellSurfaceKind};
-use crate::config::HEADER_LINES;
+use super::retro_ui::{
+    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+};
 use eframe::egui::{self, Color32, Context};
 
 #[allow(clippy::too_many_arguments)]
@@ -24,6 +25,7 @@ pub fn draw_login_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> bool {
     let selectable_count = rows
         .iter()
@@ -64,21 +66,22 @@ pub fn draw_login_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, screen_rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(
                 &painter,
                 title_row,
-                "ROBCO TERMLINK - Select User",
-                palette.fg,
-                true,
+                "NUCLEON TERMLINK - Select User",
+                &palette,
+                &decoration,
             );
-            screen.separator(&painter, separator_bottom_row, &palette);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
             screen.text(
                 &painter,
                 content_col,
@@ -169,6 +172,7 @@ pub fn draw_main_menu_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> Option<MainMenuAction> {
     if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
         let prev = *selected_idx;
@@ -200,16 +204,24 @@ pub fn draw_main_menu_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, screen_rows);
             let painter = ui.painter_at(screen.rect);
-            screen.paint_bg(&painter, palette.bg);
-            for (idx, line) in HEADER_LINES.iter().enumerate() {
+            screen.paint_terminal_background(&painter, &palette);
+            for (idx, line) in header_lines.iter().enumerate() {
                 screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
             }
-            screen.separator(&painter, separator_top_row, &palette);
-            screen.centered_text(&painter, title_row, "Main Menu", palette.fg, true);
-            screen.separator(&painter, separator_bottom_row, &palette);
-            screen.underlined_text(&painter, content_col, subtitle_row, version, palette.fg);
+            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
+            screen.themed_title(&painter, title_row, "Main Menu", &palette, &decoration);
+            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
+            screen.themed_subtitle(
+                &painter,
+                content_col,
+                subtitle_row,
+                version,
+                &palette,
+                &decoration,
+            );
 
             let mut visible_row = menu_start_row;
             let mut selectable_idx = 0usize;

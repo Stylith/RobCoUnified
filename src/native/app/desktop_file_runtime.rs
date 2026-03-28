@@ -5,12 +5,12 @@ use super::super::file_manager_app::{
     self, FileManagerCommandRequest, FileManagerEditRuntime, FileManagerOpenTarget,
     FileManagerPromptRequest,
 };
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use anyhow::Result;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn file_manager_move_paths_to_dir(
         &mut self,
         paths: Vec<PathBuf>,
@@ -96,7 +96,7 @@ impl RobcoNativeApp {
             return;
         }
         match file_manager_app::open_target_for_file_manager_action(
-            robcos_native_file_manager_app::FileManagerAction::OpenFile(path),
+            nucleon_native_file_manager_app::FileManagerAction::OpenFile(path),
             &self.live_desktop_file_manager_settings,
         ) {
             Ok(FileManagerOpenTarget::NoOp) => {}

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use eframe::egui::{IconData, ViewportBuilder};
-use robcos::config::{reload_settings, set_current_user};
-use robcos::core::auth::ensure_default_admin;
-use robcos::native::{
+use nucleon::config::{reload_settings, set_current_user};
+use nucleon::core::auth::ensure_default_admin;
+use nucleon::native::{
     configure_native_context, desktop_session_service::restore_current_user_from_last_session,
     standalone_env_value, standalone_settings_panel_from_arg, NativeSettingsPanel,
-    RobcoNativeSettingsApp,
+    NucleonNativeSettingsApp,
 };
 
 const APP_ICON_BYTES: &[u8] = include_bytes!("../../../icon.png");
@@ -49,8 +49,8 @@ fn main() -> Result<()> {
     let panel = panel_from_args();
     let mut viewport = ViewportBuilder::default()
         .with_title(APP_TITLE)
-        .with_inner_size(RobcoNativeSettingsApp::default_window_size())
-        .with_min_inner_size(RobcoNativeSettingsApp::min_window_size());
+        .with_inner_size(NucleonNativeSettingsApp::default_window_size())
+        .with_min_inner_size(NucleonNativeSettingsApp::min_window_size());
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(icon);
     }
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
         Box::new(move |cc| {
             cc.egui_ctx.set_zoom_factor(1.0);
             configure_native_context(&cc.egui_ctx);
-            Ok(Box::new(RobcoNativeSettingsApp::new(
+            Ok(Box::new(NucleonNativeSettingsApp::new(
                 session_username.clone(),
                 panel,
             )))

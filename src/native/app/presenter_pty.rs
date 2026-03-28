@@ -3,12 +3,14 @@ use super::super::menu::{resolve_desktop_pty_exit, TerminalDesktopPtyExitPlan};
 use super::super::pty_screen::{draw_embedded_pty_in_ui_focused, PtyScreenEvent};
 use super::super::retro_ui::{ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W};
 use super::super::wasm_addon_runtime::{collect_hosted_keyboard_input, draw_hosted_addon_frame};
-use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions};
-use super::RobcoNativeApp;
+use super::desktop_window_mgmt::{
+    DesktopHeaderAction, DesktopWindowRectTracking, ResizableDesktopWindowOptions,
+};
+use super::NucleonNativeApp;
 use crate::platform::HostedAddonSize;
 use eframe::egui::{self, Context, Layout};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn draw_desktop_pty_window(&mut self, ctx: &Context) {
         let wid = self.current_window_id(DesktopWindow::PtyApp);
         if wid.instance == 0 && self.desktop_wasm_addon.is_some() {
@@ -56,7 +58,12 @@ impl RobcoNativeApp {
             return;
         };
         let shown = window.show(ctx, |ui| {
-            header_action = Self::draw_desktop_window_header(ui, &window_title, maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                &window_title,
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             let available = ui.available_size();
             let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
             let rows_floor = state.desktop_rows_floor.unwrap_or(20).saturating_add(1) as usize;
@@ -166,7 +173,12 @@ impl RobcoNativeApp {
             },
         );
         let shown = window.show(ctx, |ui| {
-            header_action = Self::draw_desktop_window_header(ui, &title, maximized);
+            header_action = Self::draw_desktop_window_header(
+                ui,
+                &title,
+                maximized,
+                &self.desktop_active_shell_style,
+            );
             let available = ui.available_size();
             let size = HostedAddonSize {
                 width: available.x.max(1.0),

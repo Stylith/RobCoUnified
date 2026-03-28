@@ -139,7 +139,7 @@ pub fn build_edit_menus_view_model(
             subtitle: None,
             items: vec![
                 format!(
-                    "ROBCO Word Processor in Applications: {} [toggle]",
+                    "Nucleon Text Editor in Applications: {} [toggle]",
                     if text_editor_visible {
                         "VISIBLE"
                     } else {

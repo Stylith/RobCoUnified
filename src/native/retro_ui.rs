@@ -1,10 +1,17 @@
-use crate::config::{current_theme_color, get_settings, theme_color_for_settings, Settings};
-use crate::theme::{ColorStyle, ColorToken, FullColorTheme, MonochromePreset};
+use crate::config::{
+    current_theme_color, get_settings, theme_color_for_settings, Settings, WallpaperSizeMode,
+};
+use crate::theme::{
+    ColorStyle, ColorToken, FullColorTheme, MonochromePreset, ShellStyle, TerminalDecoration,
+    TextAlignment, ThemePack,
+};
 use eframe::egui::{
-    self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
+    self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke,
+    TextureHandle, TextureId, Ui, Vec2,
 };
 use ratatui::style::Color;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 pub const FIXED_PTY_CELL_W: f32 = 11.0;
 pub const FIXED_PTY_CELL_H: f32 = 22.0;
@@ -20,6 +27,12 @@ pub struct RetroPalette {
     pub hovered_bg: Color32,
     pub active_bg: Color32,
     pub selection_bg: Color32,
+    /// Window title bar (unfocused).
+    pub window_chrome: Color32,
+    /// Window title bar (focused).
+    pub window_chrome_focused: Color32,
+    /// Taskbar, menu bar, and status bar background.
+    pub bar_bg: Color32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,10 +47,39 @@ struct PaletteCache {
     palette: RetroPalette,
 }
 
+#[derive(Debug, Clone)]
+struct ActiveSurfaceColorStyle {
+    style: ColorStyle,
+    overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ActiveColorStyleStore {
-    desktop: Option<ColorStyle>,
-    terminal: Option<ColorStyle>,
+    desktop: Option<ActiveSurfaceColorStyle>,
+    terminal: Option<ActiveSurfaceColorStyle>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActiveTerminalWallpaper {
+    texture_id: TextureId,
+    size: [usize; 2],
+    mode: WallpaperSizeMode,
+    monochrome: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTerminalVisualStore {
+    decoration: TerminalDecoration,
+    wallpaper: Option<ActiveTerminalWallpaper>,
+}
+
+impl Default for ActiveTerminalVisualStore {
+    fn default() -> Self {
+        Self {
+            decoration: TerminalDecoration::default(),
+            wallpaper: None,
+        }
+    }
 }
 
 static PALETTE_CACHE: Mutex<Option<PaletteCache>> = Mutex::new(None);
@@ -45,6 +87,10 @@ static ACTIVE_COLOR_STYLES: Mutex<ActiveColorStyleStore> = Mutex::new(ActiveColo
     desktop: None,
     terminal: None,
 });
+static ACTIVE_TERMINAL_VISUALS: LazyLock<Mutex<ActiveTerminalVisualStore>> =
+    LazyLock::new(|| Mutex::new(ActiveTerminalVisualStore::default()));
+static ACTIVE_SHELL_STYLE: LazyLock<Mutex<ShellStyle>> =
+    LazyLock::new(|| Mutex::new(ThemePack::classic().shell_style));
 
 fn color32_from_theme(color: Color) -> Color32 {
     match color {
@@ -91,6 +137,9 @@ fn palette_for_theme_color(color: Color) -> RetroPalette {
         hovered_bg: scale(fg, 0.18),
         active_bg: scale(fg, 0.26),
         selection_bg: scale(fg, 0.26),
+        window_chrome: fg,
+        window_chrome_focused: fg,
+        bar_bg: fg,
     }
 }
 
@@ -109,29 +158,46 @@ fn palette_from_full_color_theme(theme: &FullColorTheme) -> RetroPalette {
         Color32::from_rgb(220, 220, 220),
     );
     let bg = color32_from_token(theme, ColorToken::BgPrimary, Color32::from_rgb(18, 18, 18));
+    let selected_bg = color32_from_token(theme, ColorToken::Selection, fg);
     RetroPalette {
         fg,
         dim: color32_from_token(theme, ColorToken::FgDim, scale(fg, 0.52)),
         bg,
         panel: color32_from_token(theme, ColorToken::PanelBg, scale(fg, 0.06)),
-        selected_bg: color32_from_token(theme, ColorToken::Selection, fg),
+        selected_bg,
         selected_fg: color32_from_token(theme, ColorToken::SelectionFg, bg),
         hovered_bg: color32_from_token(theme, ColorToken::AccentHover, scale(fg, 0.18)),
         active_bg: color32_from_token(theme, ColorToken::AccentActive, scale(fg, 0.26)),
         selection_bg: color32_from_token(theme, ColorToken::Selection, scale(fg, 0.26)),
+        window_chrome: color32_from_token(theme, ColorToken::WindowChrome, selected_bg),
+        window_chrome_focused: color32_from_token(theme, ColorToken::WindowChromeFocused, selected_bg),
+        bar_bg: color32_from_token(theme, ColorToken::StatusBar, selected_bg),
     }
 }
 
 pub fn palette_for_color_style(style: &ColorStyle) -> RetroPalette {
+    palette_for_color_style_with_overrides(style, None)
+}
+
+pub fn palette_for_color_style_with_overrides(
+    style: &ColorStyle,
+    overrides: Option<&HashMap<ColorToken, [u8; 4]>>,
+) -> RetroPalette {
     match style {
         ColorStyle::Monochrome { preset, custom_rgb } => {
             let color = monochrome_preset_to_color(*preset, *custom_rgb);
             palette_for_theme_color(color)
         }
-        ColorStyle::FullColor { theme_id } => match FullColorTheme::builtin_by_id(theme_id) {
-            Some(theme) => palette_from_full_color_theme(&theme),
-            None => palette_for_theme_color(Color::Rgb(111, 255, 84)),
-        },
+        ColorStyle::FullColor { theme_id } => {
+            let mut theme = FullColorTheme::builtin_by_id(theme_id)
+                .unwrap_or_else(FullColorTheme::nucleon_dark);
+            if let Some(overrides) = overrides {
+                for (token, color) in overrides {
+                    theme.tokens.insert(*token, *color);
+                }
+            }
+            palette_from_full_color_theme(&theme)
+        }
     }
 }
 
@@ -152,7 +218,7 @@ fn monochrome_preset_to_color(preset: MonochromePreset, custom_rgb: Option<[u8; 
 pub fn current_palette() -> RetroPalette {
     if let Ok(guard) = ACTIVE_COLOR_STYLES.lock() {
         if let Some(style) = guard.desktop.as_ref() {
-            return palette_for_color_style(style);
+            return palette_for_color_style_with_overrides(&style.style, style.overrides.as_ref());
         }
     }
     let color = current_theme_color();
@@ -176,22 +242,92 @@ pub fn current_palette_for_surface(surface: ShellSurfaceKind) -> RetroPalette {
             ShellSurfaceKind::Terminal => guard.terminal.as_ref(),
         };
         if let Some(style) = style {
-            return palette_for_color_style(style);
+            return palette_for_color_style_with_overrides(&style.style, style.overrides.as_ref());
         }
     }
     current_palette()
 }
 
-pub fn set_active_color_style(surface: ShellSurfaceKind, style: ColorStyle) {
+pub fn set_active_color_style(
+    surface: ShellSurfaceKind,
+    style: ColorStyle,
+    overrides: Option<HashMap<ColorToken, [u8; 4]>>,
+) {
     if let Ok(mut guard) = ACTIVE_COLOR_STYLES.lock() {
+        let active = Some(ActiveSurfaceColorStyle { style, overrides });
         match surface {
-            ShellSurfaceKind::Desktop => guard.desktop = Some(style),
-            ShellSurfaceKind::Terminal => guard.terminal = Some(style),
+            ShellSurfaceKind::Desktop => guard.desktop = active,
+            ShellSurfaceKind::Terminal => guard.terminal = active,
         }
     }
     if let Ok(mut guard) = PALETTE_CACHE.lock() {
         *guard = None;
     }
+}
+
+pub fn set_active_shell_style(style: ShellStyle) {
+    if let Ok(mut guard) = ACTIVE_SHELL_STYLE.lock() {
+        *guard = style;
+    }
+}
+
+pub fn current_shell_style() -> ShellStyle {
+    ACTIVE_SHELL_STYLE
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| ThemePack::classic().shell_style)
+}
+
+pub fn shell_style_rounding(style: &ShellStyle) -> egui::Rounding {
+    egui::Rounding::same(style.border_radius)
+}
+
+pub fn shell_style_shadow(style: &ShellStyle) -> egui::epaint::Shadow {
+    if style.window_shadow {
+        egui::epaint::Shadow {
+            offset: egui::vec2(4.0, 4.0),
+            blur: 8.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(80),
+        }
+    } else {
+        egui::epaint::Shadow::NONE
+    }
+}
+
+pub fn set_active_terminal_decoration(decoration: TerminalDecoration) {
+    if let Ok(mut guard) = ACTIVE_TERMINAL_VISUALS.lock() {
+        guard.decoration = decoration;
+    }
+}
+
+pub fn active_terminal_decoration() -> TerminalDecoration {
+    ACTIVE_TERMINAL_VISUALS
+        .lock()
+        .map(|guard| guard.decoration.clone())
+        .unwrap_or_default()
+}
+
+pub fn set_active_terminal_wallpaper(
+    texture: Option<&TextureHandle>,
+    mode: WallpaperSizeMode,
+    monochrome: bool,
+) {
+    if let Ok(mut guard) = ACTIVE_TERMINAL_VISUALS.lock() {
+        guard.wallpaper = texture.map(|texture| ActiveTerminalWallpaper {
+            texture_id: texture.id(),
+            size: texture.size(),
+            mode,
+            monochrome,
+        });
+    }
+}
+
+fn active_terminal_wallpaper() -> Option<ActiveTerminalWallpaper> {
+    ACTIVE_TERMINAL_VISUALS
+        .lock()
+        .ok()
+        .and_then(|guard| guard.wallpaper)
 }
 
 pub fn palette_for_settings(settings: &Settings) -> RetroPalette {
@@ -351,6 +487,66 @@ impl RetroScreen {
         painter.rect_filled(self.rect, 0.0, color);
     }
 
+    pub fn paint_terminal_background(&self, painter: &Painter, palette: &RetroPalette) {
+        let Some(wallpaper) = active_terminal_wallpaper() else {
+            self.paint_bg(painter, palette.bg);
+            return;
+        };
+
+        let screen = self.rect;
+        let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+        let image_size = egui::vec2(wallpaper.size[0] as f32, wallpaper.size[1] as f32);
+        let tint = if wallpaper.monochrome {
+            palette.fg
+        } else {
+            Color32::WHITE
+        };
+
+        match wallpaper.mode {
+            WallpaperSizeMode::FitToScreen | WallpaperSizeMode::Stretch => {
+                painter.image(wallpaper.texture_id, screen, uv, tint);
+            }
+            WallpaperSizeMode::Centered => {
+                painter.rect_filled(screen, 0.0, palette.bg);
+                let origin = screen.center() - image_size * 0.5;
+                painter.image(
+                    wallpaper.texture_id,
+                    Rect::from_min_size(origin, image_size),
+                    uv,
+                    tint,
+                );
+            }
+            WallpaperSizeMode::DefaultSize => {
+                painter.rect_filled(screen, 0.0, palette.bg);
+                painter.image(
+                    wallpaper.texture_id,
+                    Rect::from_min_size(screen.min, image_size),
+                    uv,
+                    tint,
+                );
+            }
+            WallpaperSizeMode::Tile => {
+                painter.rect_filled(screen, 0.0, palette.bg);
+                let mut y = screen.top();
+                while y < screen.bottom() {
+                    let mut x = screen.left();
+                    while x < screen.right() {
+                        painter.image(
+                            wallpaper.texture_id,
+                            Rect::from_min_size(Pos2::new(x, y), image_size),
+                            uv,
+                            tint,
+                        );
+                        x += image_size.x.max(1.0);
+                    }
+                    y += image_size.y.max(1.0);
+                }
+            }
+        }
+
+        self.paint_bg(painter, Color32::from_black_alpha(180));
+    }
+
     pub fn text(&self, painter: &Painter, col: usize, row: usize, text: &str, color: Color32) {
         let clipped = self.clip_text(col, text);
         let pos = self.snap_pos(Pos2::new(
@@ -411,6 +607,129 @@ impl RetroScreen {
     pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
         let text = "=".repeat(self.cols.saturating_sub(6).max(1));
         self.centered_text(painter, row, &text, palette.dim, false);
+    }
+
+    pub fn themed_separator(
+        &self,
+        painter: &Painter,
+        row: usize,
+        palette: &RetroPalette,
+        decoration: &TerminalDecoration,
+    ) {
+        if !decoration.show_separators {
+            return;
+        }
+        let repeat_len = decoration.separator_char.len().max(1);
+        let char_count = self.cols.saturating_sub(6).max(1);
+        let text = decoration
+            .separator_char
+            .repeat((char_count / repeat_len).max(1));
+        match decoration.separator_alignment {
+            TextAlignment::Center => self.centered_text(painter, row, &text, palette.dim, false),
+            TextAlignment::Left => self.text(painter, 3, row, &text, palette.dim),
+            TextAlignment::Right => {
+                let start_col = self.cols.saturating_sub(text.chars().count() + 3);
+                self.text(painter, start_col, row, &text, palette.dim);
+            }
+        }
+    }
+
+    pub fn themed_title(
+        &self,
+        painter: &Painter,
+        row: usize,
+        title: &str,
+        palette: &RetroPalette,
+        decoration: &TerminalDecoration,
+    ) {
+        match decoration.title_alignment {
+            TextAlignment::Center => {
+                self.centered_text(painter, row, title, palette.fg, decoration.title_bold)
+            }
+            TextAlignment::Left => {
+                let clipped = self.clip_text(3, title);
+                let pos = self.snap_pos(Pos2::new(
+                    self.rect.left() + 3.0 * self.cell.x,
+                    self.row_text_y(row),
+                ));
+                self.paint_text(
+                    painter,
+                    pos,
+                    Align2::LEFT_TOP,
+                    &clipped,
+                    palette.fg,
+                    decoration.title_bold,
+                );
+            }
+            TextAlignment::Right => {
+                let clipped = self.clip_text(3, title);
+                let pos = self.snap_pos(Pos2::new(
+                    self.rect.right() - 3.0 * self.cell.x,
+                    self.row_text_y(row),
+                ));
+                self.paint_text(
+                    painter,
+                    pos,
+                    Align2::RIGHT_TOP,
+                    &clipped,
+                    palette.fg,
+                    decoration.title_bold,
+                );
+            }
+        }
+    }
+
+    pub fn themed_subtitle(
+        &self,
+        painter: &Painter,
+        col: usize,
+        row: usize,
+        subtitle: &str,
+        palette: &RetroPalette,
+        decoration: &TerminalDecoration,
+    ) {
+        let clipped = self.clip_text(col, subtitle);
+        let (pos, align) = match decoration.subtitle_alignment {
+            TextAlignment::Left => (
+                self.snap_pos(Pos2::new(
+                    self.rect.left() + col as f32 * self.cell.x,
+                    self.row_text_y(row),
+                )),
+                Align2::LEFT_TOP,
+            ),
+            TextAlignment::Center => (
+                self.snap_pos(Pos2::new(self.rect.center().x, self.row_text_y(row))),
+                Align2::CENTER_TOP,
+            ),
+            TextAlignment::Right => (
+                self.snap_pos(Pos2::new(
+                    self.rect.right() - col as f32 * self.cell.x,
+                    self.row_text_y(row),
+                )),
+                Align2::RIGHT_TOP,
+            ),
+        };
+        self.paint_text(painter, pos, align, &clipped, palette.fg, false);
+        if decoration.subtitle_underlined {
+            let galley = painter.layout_no_wrap(clipped.clone(), self.font.clone(), palette.fg);
+            let width = self.snap(galley.size().x);
+            if width > 0.0 {
+                let start_x = match decoration.subtitle_alignment {
+                    TextAlignment::Left => pos.x,
+                    TextAlignment::Center => pos.x - width * 0.5,
+                    TextAlignment::Right => pos.x - width,
+                };
+                let row_bottom = self.row_top(row) + self.cell.y - 1.0;
+                let y = self.snap((pos.y + self.font.size + 1.0).min(row_bottom));
+                painter.line_segment(
+                    [
+                        self.snap_pos(Pos2::new(start_x, y)),
+                        self.snap_pos(Pos2::new(start_x + width, y)),
+                    ],
+                    Stroke::new(2.0, palette.fg),
+                );
+            }
+        }
     }
 
     pub fn row_rect(&self, col: usize, row: usize, width_chars: usize) -> Rect {
@@ -531,14 +850,18 @@ fn apply_visuals_with_palette(ctx: &Context, palette: RetroPalette) {
     ctx.set_visuals(visuals);
 }
 
+pub fn configure_visuals_for_palette(ctx: &Context, palette: RetroPalette) {
+    apply_visuals_with_palette(ctx, palette);
+}
+
 pub fn configure_visuals(ctx: &Context) {
-    apply_visuals_with_palette(ctx, current_palette());
+    configure_visuals_for_palette(ctx, current_palette());
 }
 
 pub fn configure_visuals_for_settings(ctx: &Context, settings: &Settings) {
-    apply_visuals_with_palette(ctx, palette_for_settings(settings));
+    configure_visuals_for_palette(ctx, palette_for_settings(settings));
 }
 
 pub fn configure_visuals_for_color_style(ctx: &Context, style: &ColorStyle) {
-    apply_visuals_with_palette(ctx, palette_for_color_style(style));
+    configure_visuals_for_palette(ctx, palette_for_color_style(style));
 }

@@ -27,7 +27,9 @@ impl Default for AddonRepositoryIndex {
 
 impl AddonRepositoryIndex {
     pub fn addon(&self, addon_id: &AddonId) -> Option<&IndexedAddonPackage> {
-        self.addons.iter().find(|addon| addon.manifest.id == *addon_id)
+        self.addons
+            .iter()
+            .find(|addon| addon.manifest.id == *addon_id)
     }
 }
 
@@ -237,12 +239,20 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["games.arcade-alpha", "games.arcade-beta", "tools.reference-tool"]
+            vec![
+                "games.arcade-alpha",
+                "games.arcade-beta",
+                "tools.reference-tool"
+            ]
         );
         assert!(index.addons.iter().all(|a| !a.manifest.essential));
         assert!(index.addons.iter().all(|a| a.releases.first().is_some()));
         assert_eq!(
-            index.addons.iter().map(|a| a.releases[0].artifacts[0].format.as_deref()).collect::<Vec<_>>(),
+            index
+                .addons
+                .iter()
+                .map(|a| a.releases[0].artifacts[0].format.as_deref())
+                .collect::<Vec<_>>(),
             vec![Some("ndpkg"), Some("ndpkg"), Some("ndpkg")]
         );
     }

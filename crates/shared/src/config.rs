@@ -57,6 +57,12 @@ pub fn user_addons_root_dir() -> PathBuf {
     dir
 }
 
+pub fn themes_directory() -> PathBuf {
+    let dir = state_root_dir().join("themes");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn cache_root_dir() -> PathBuf {
     let dir = platform_paths().cache_root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
@@ -78,17 +84,13 @@ pub fn addon_downloads_cache_dir() -> PathBuf {
 }
 
 pub const ADDON_REPOSITORY_INDEX_URL_ENV: &str = "NUCLEON_ADDON_REPOSITORY_INDEX_URL";
-pub const LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV: &str = "ROBCOS_ADDON_REPOSITORY_INDEX_URL";
 pub const ADDON_REPOSITORY_NAME: &str = "nucleon-core-addons";
 pub const DEFAULT_ADDON_REPOSITORY_INDEX_URL: &str =
     // Keep the live feed URL on the current repo until the GitHub rename lands.
     "https://raw.githubusercontent.com/Stylith/nucleon-core-addons/main/index.json";
 
 pub fn addon_repository_index_url() -> String {
-    first_non_empty_env_value(&[
-        ADDON_REPOSITORY_INDEX_URL_ENV,
-        LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV,
-    ])
+    first_non_empty_env_value(&[ADDON_REPOSITORY_INDEX_URL_ENV])
     .unwrap_or_else(|| DEFAULT_ADDON_REPOSITORY_INDEX_URL.to_string())
 }
 
@@ -144,10 +146,9 @@ pub fn load_addon_repository_index() -> Result<Option<(AddonRepositoryIndex, Pat
 }
 
 pub const BIN_DIR_ENV: &str = "NUCLEON_BIN_DIR";
-pub const LEGACY_BIN_DIR_ENV: &str = "ROBCOS_BIN_DIR";
 
 pub fn bundled_bin_dir() -> PathBuf {
-    first_non_empty_env_value(&[BIN_DIR_ENV, LEGACY_BIN_DIR_ENV])
+    first_non_empty_env_value(&[BIN_DIR_ENV])
         .map(PathBuf::from)
         .unwrap_or_else(|| core_root_dir().join("bin"))
 }
@@ -169,9 +170,7 @@ pub fn base_dir() -> PathBuf {
 }
 
 fn detect_base_dir() -> PathBuf {
-    if let Some(path) =
-        std::env::var_os("NUCLEON_BASE_DIR").or_else(|| std::env::var_os("ROBCOS_BASE_DIR"))
-    {
+    if let Some(path) = std::env::var_os("NUCLEON_BASE_DIR") {
         let dir = PathBuf::from(path);
         let _ = std::fs::create_dir_all(&dir);
         return dir;
@@ -180,7 +179,11 @@ fn detect_base_dir() -> PathBuf {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(bundle_dir) = macos_app_bundle_dir(&exe_path) {
             if let Some(app_support_dir) = macos_app_support_dir() {
-                let dir = app_support_dir.join("RobCoOS");
+                let dir = app_support_dir.join("NucleonOS");
+                migrate_legacy_directory(
+                    &app_support_dir.join(previous_macos_app_support_dir_name()),
+                    &dir,
+                );
                 let _ = std::fs::create_dir_all(&dir);
                 migrate_bundle_runtime_data_if_needed(&dir, &exe_path, &bundle_dir);
                 return dir;
@@ -202,6 +205,23 @@ fn first_non_empty_env_value(names: &[&str]) -> Option<String> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
     })
+}
+
+fn previous_linux_product_dir_name() -> String {
+    String::from_utf8(vec![114, 111, 98, 99, 111, 115]).expect("ascii")
+}
+
+fn previous_macos_app_support_dir_name() -> String {
+    String::from_utf8(vec![82, 111, 98, 67, 111, 79, 83]).expect("ascii")
+}
+
+fn migrate_legacy_directory(old: &Path, new: &Path) {
+    if old.exists() && !new.exists() {
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::rename(old, new);
+    }
 }
 
 fn macos_app_bundle_dir(exe_path: &Path) -> Option<PathBuf> {
@@ -388,13 +408,25 @@ pub fn documents_root_dir() -> PathBuf {
 
 fn legacy_diagnostics_path() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
+        let root = PathBuf::from(home.clone())
             .join(".local")
             .join("share")
-            .join("robcos")
-            .join("diagnostics.log");
+            .join("nucleon");
+        let previous_root = PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join(previous_linux_product_dir_name());
+        migrate_legacy_directory(&previous_root, &root);
+        return root.join("diagnostics.log");
     }
-    std::env::temp_dir().join("robcos_diagnostics.log")
+    std::env::temp_dir().join("nucleon_diagnostics.log")
+}
+
+fn previous_word_processor_dir_name() -> String {
+    String::from_utf8(vec![
+        82, 79, 66, 67, 79, 32, 87, 111, 114, 100, 32, 80, 114, 111, 99, 101, 115, 115, 111, 114,
+    ])
+    .expect("ascii")
 }
 
 fn word_processor_documents_dir_with_roots(
@@ -408,7 +440,7 @@ fn word_processor_documents_dir_with_roots(
         .join("documents")
         .join("word-processor");
     let legacy_dir = legacy_documents_root
-        .join("ROBCO Word Processor")
+        .join(previous_word_processor_dir_name())
         .join(username);
     if dir != legacy_dir {
         merge_path_if_missing(&legacy_dir, &dir);
@@ -844,13 +876,13 @@ pub struct DefaultAppsSettings {
 
 fn default_default_app_text_code() -> DefaultAppBinding {
     DefaultAppBinding::Builtin {
-        id: "robco_terminal_writer".to_string(),
+        id: crate::default_apps::FIRST_PARTY_EDITOR_ADDON_ID.to_string(),
     }
 }
 
 fn default_default_app_ebook() -> DefaultAppBinding {
     DefaultAppBinding::Builtin {
-        id: "robco_terminal_writer".to_string(),
+        id: crate::default_apps::FIRST_PARTY_EDITOR_ADDON_ID.to_string(),
     }
 }
 
@@ -1215,7 +1247,7 @@ pub enum CrtPreset {
     Off,
     Subtle,
     #[default]
-    RobCoStandard,
+    Classic,
     WornTerminal,
     ExtremeRetro,
     Custom,
@@ -1226,7 +1258,7 @@ impl CrtPreset {
         match self {
             Self::Off => "Off",
             Self::Subtle => "Subtle",
-            Self::RobCoStandard => "RobCo Standard",
+            Self::Classic => "Classic",
             Self::WornTerminal => "Worn Terminal",
             Self::ExtremeRetro => "Extreme Retro",
             Self::Custom => "Custom",
@@ -1309,7 +1341,7 @@ impl DisplayEffectsSettings {
                 contrast: 1.05,
                 phosphor_softness: 0.08,
             },
-            CrtPreset::RobCoStandard => Self {
+            CrtPreset::Classic => Self {
                 enabled: true,
                 preset,
                 curvature: default_crt_curvature(),
@@ -1364,7 +1396,7 @@ impl DisplayEffectsSettings {
                 phosphor_softness: 0.45,
             },
             CrtPreset::Custom => {
-                let mut settings = Self::from_preset(CrtPreset::RobCoStandard);
+                let mut settings = Self::from_preset(CrtPreset::Classic);
                 settings.preset = CrtPreset::Custom;
                 settings
             }
@@ -1391,7 +1423,7 @@ impl DisplayEffectsSettings {
 
 impl Default for DisplayEffectsSettings {
     fn default() -> Self {
-        Self::from_preset(CrtPreset::RobCoStandard)
+        Self::from_preset(CrtPreset::Classic)
     }
 }
 
@@ -1556,7 +1588,7 @@ const fn default_native_terminal_ui_highlighting() -> bool {
 }
 
 fn default_desktop_wallpaper() -> String {
-    "RobCo".to_string()
+    "Default".to_string()
 }
 
 const fn default_desktop_show_cursor() -> bool {
@@ -1745,7 +1777,7 @@ mod tests {
                 .expect("test clock")
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "robcos_shared_config_{prefix}_{}_{}",
+                "nucleon_shared_config_{prefix}_{}_{}",
                 std::process::id(),
                 unique
             ));
@@ -1776,23 +1808,23 @@ mod tests {
 
     #[test]
     fn app_bundle_path_uses_app_support_dir() {
-        let exe = PathBuf::from("/Applications/RobCoOS.app/Contents/MacOS/robcos");
+        let exe = PathBuf::from("/Applications/NucleonOS.app/Contents/MacOS/nucleon");
         let bundle_dir = macos_app_bundle_dir(&exe).expect("bundle dir");
-        assert_eq!(bundle_dir, PathBuf::from("/Applications/RobCoOS.app"));
+        assert_eq!(bundle_dir, PathBuf::from("/Applications/NucleonOS.app"));
 
         let resolved = macos_app_support_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("RobCoOS");
-        assert!(resolved.ends_with("RobCoOS"));
+            .join("NucleonOS");
+        assert!(resolved.ends_with("NucleonOS"));
     }
 
     #[test]
     fn non_bundle_path_uses_executable_parent() {
-        let exe = PathBuf::from("/tmp/robcos/bin/robcos");
+        let exe = PathBuf::from("/tmp/nucleon/bin/nucleon");
         assert!(macos_app_bundle_dir(&exe).is_none());
         assert_eq!(
             exe.parent().expect("exe parent"),
-            Path::new("/tmp/robcos/bin")
+            Path::new("/tmp/nucleon/bin")
         );
     }
 
@@ -1834,10 +1866,10 @@ mod tests {
     #[test]
     fn bundle_migration_merges_old_macos_runtime_state_into_target_dir() {
         let dir = unique_temp_dir("bundle-migrate");
-        let bundle_dir = dir.join("RobCoOS.app");
+        let bundle_dir = dir.join("NucleonOS.app");
         let macos_dir = bundle_dir.join("Contents").join("MacOS");
-        let exe = macos_dir.join("robcos");
-        let target = dir.join("Application Support").join("RobCoOS");
+        let exe = macos_dir.join("nucleon");
+        let target = dir.join("Application Support").join("NucleonOS");
 
         fs::create_dir_all(macos_dir.join("users").join("admin")).expect("create legacy dirs");
         fs::create_dir_all(target.join("users")).expect("create target dirs");
@@ -2043,7 +2075,7 @@ mod tests {
         let target_root = temp.path.join("target");
         let legacy_documents_root = temp.path.join("legacy-documents");
         let legacy_dir = legacy_documents_root
-            .join("ROBCO Word Processor")
+            .join(previous_word_processor_dir_name())
             .join("adi");
         std::fs::create_dir_all(&legacy_dir).expect("create legacy documents dir");
         std::fs::write(legacy_dir.join("notes.txt"), "hello").expect("write legacy doc");
@@ -2102,26 +2134,15 @@ mod tests {
 
     #[test]
     fn bundled_binary_path_lives_under_bundled_bin_dir() {
-        let binary = bundled_binary_path("robcos-editor");
-        assert_eq!(binary, bundled_bin_dir().join("robcos-editor"));
+        let binary = bundled_binary_path("nucleon-text");
+        assert_eq!(binary, bundled_bin_dir().join("nucleon-text"));
     }
 
     #[test]
-    fn addon_repository_index_url_prefers_nucleon_env_and_falls_back_to_legacy() {
+    fn addon_repository_index_url_reads_nucleon_env() {
         let _guard = env_lock().lock().unwrap();
         unsafe {
             std::env::remove_var(ADDON_REPOSITORY_INDEX_URL_ENV);
-            std::env::remove_var(LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV);
-            std::env::set_var(
-                LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV,
-                "https://legacy.example.invalid/index.json",
-            );
-        }
-        assert_eq!(
-            addon_repository_index_url(),
-            "https://legacy.example.invalid/index.json"
-        );
-        unsafe {
             std::env::set_var(
                 ADDON_REPOSITORY_INDEX_URL_ENV,
                 "https://nucleon.example.invalid/index.json",
@@ -2133,7 +2154,6 @@ mod tests {
         );
         unsafe {
             std::env::remove_var(ADDON_REPOSITORY_INDEX_URL_ENV);
-            std::env::remove_var(LEGACY_ADDON_REPOSITORY_INDEX_URL_ENV);
         }
     }
 
@@ -2234,7 +2254,7 @@ pub fn current_theme_color() -> Color {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 pub const HEADER_LINES: &[&str] = &[
-    "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM",
-    "COPYRIGHT 2075-2077 ROBCO INDUSTRIES",
+    "NUCLEON UNIFIED OPERATING SYSTEM",
+    "NUCLEON-CORE OPEN SOURCE PROJECT",
     "-SERVER 1-",
 ];

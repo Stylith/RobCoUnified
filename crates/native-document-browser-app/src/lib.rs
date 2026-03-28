@@ -1,4 +1,4 @@
-use robcos_native_file_manager_app::{FileManagerAction, NativeFileManagerState};
+use nucleon_native_file_manager_app::{FileManagerAction, NativeFileManagerState};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ mod tests {
             .expect("time went backwards")
             .as_nanos();
         let dir =
-            std::env::temp_dir().join(format!("robcos_native_document_browser_app_test_{unique}"));
+            std::env::temp_dir().join(format!("nucleon_native_document_browser_app_test_{unique}"));
         fs::create_dir_all(&dir).expect("create empty temp dir");
         let state = NativeFileManagerState::new(dir);
         let rows = browser_rows(&state);
@@ -138,7 +138,7 @@ mod tests {
             .expect("time went backwards")
             .as_nanos();
         let dir =
-            std::env::temp_dir().join(format!("robcos_native_document_browser_sync_test_{unique}"));
+            std::env::temp_dir().join(format!("nucleon_native_document_browser_sync_test_{unique}"));
         fs::create_dir_all(&dir).expect("create temp dir");
         let alpha = dir.join("alpha.txt");
         let beta = dir.join("beta.txt");

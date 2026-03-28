@@ -1,5 +1,5 @@
 use super::{ShellSlot, SlotAction, SlotContext, SlotRenderer};
-use crate::native::app::RobcoNativeApp;
+use crate::native::app::NucleonNativeApp;
 
 pub struct ClassicPanelRenderer;
 
@@ -8,7 +8,7 @@ impl SlotRenderer for ClassicPanelRenderer {
         ShellSlot::Panel
     }
 
-    fn render(&self, app: &mut RobcoNativeApp, slot_ctx: &SlotContext) -> Vec<SlotAction> {
+    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &SlotContext) -> Vec<SlotAction> {
         app.render_classic_panel_slot(slot_ctx.ctx, slot_ctx.layout);
         vec![]
     }

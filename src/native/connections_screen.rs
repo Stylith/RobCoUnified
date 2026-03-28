@@ -5,7 +5,7 @@ use super::menu::draw_terminal_menu_screen;
 use crate::config::ConnectionKind;
 use crate::connections::{DiscoveredConnection, NetworkMenuGroup};
 use eframe::egui::Context;
-pub use robcos_native_connections_app::{
+pub use nucleon_native_connections_app::{
     apply_kind_menu_activation, apply_network_groups_activation, apply_picker_activation,
     apply_saved_menu_activation, apply_search_query, build_connections_root_menu,
     build_kind_menu_model, build_network_groups_menu, build_picker_menu, build_saved_menu_model,
@@ -28,6 +28,7 @@ pub fn draw_connections_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     if connections_macos_disabled() {
         return ConnectionsEvent::Status(connections_macos_disabled_hint().to_string());
@@ -48,6 +49,7 @@ pub fn draw_connections_screen(
             menu_start_row,
             status_row,
             content_col,
+            header_lines,
         ),
         ConnectionsView::NetworkGroups => draw_network_groups(
             ctx,
@@ -64,6 +66,7 @@ pub fn draw_connections_screen(
             status_row,
             content_col,
             &mut state.view,
+            header_lines,
         ),
         ConnectionsView::Kind { kind, group } => draw_kind_menu(
             ctx,
@@ -82,6 +85,7 @@ pub fn draw_connections_screen(
             status_row,
             content_col,
             &mut state.view,
+            header_lines,
         ),
         ConnectionsView::Saved { kind, group } => draw_saved_menu(
             ctx,
@@ -100,6 +104,7 @@ pub fn draw_connections_screen(
             status_row,
             content_col,
             &mut state.view,
+            header_lines,
         ),
         ConnectionsView::Picker {
             kind,
@@ -127,6 +132,7 @@ pub fn draw_connections_screen(
             status_row,
             content_col,
             &mut state.view,
+            header_lines,
         ),
     }
 }
@@ -146,6 +152,7 @@ pub fn draw_terminal_connections_screen(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> TerminalConnectionsRequest {
     let event = draw_connections_screen(
         ctx,
@@ -161,6 +168,7 @@ pub fn draw_terminal_connections_screen(
         menu_start_row,
         status_row,
         content_col,
+        header_lines,
     );
     resolve_terminal_connections_request(state, event, connections_macos_disabled_hint())
 }
@@ -180,6 +188,7 @@ fn draw_connections_root(
     menu_start_row: usize,
     status_row: usize,
     content_col: usize,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     let menu = build_connections_root_menu();
     let activated = draw_terminal_menu_screen(
@@ -199,6 +208,7 @@ fn draw_connections_root(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     resolve_connections_root_activation(activated)
 }
@@ -219,6 +229,7 @@ fn draw_network_groups(
     status_row: usize,
     content_col: usize,
     view: &mut ConnectionsView,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     let menu = build_network_groups_menu();
     let activated = draw_terminal_menu_screen(
@@ -238,6 +249,7 @@ fn draw_network_groups(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     let mut temp_state = TerminalConnectionsState {
         view: view.clone(),
@@ -266,6 +278,7 @@ fn draw_kind_menu(
     status_row: usize,
     content_col: usize,
     view: &mut ConnectionsView,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     let model = build_kind_menu_model(kind, group);
     let activated = draw_terminal_menu_screen(
@@ -285,6 +298,7 @@ fn draw_kind_menu(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     let mut temp_state = TerminalConnectionsState {
         view: view.clone(),
@@ -313,6 +327,7 @@ fn draw_saved_menu(
     status_row: usize,
     content_col: usize,
     view: &mut ConnectionsView,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     let model = match build_saved_menu_model(kind, group) {
         Ok(model) => model,
@@ -335,6 +350,7 @@ fn draw_saved_menu(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     let mut temp_state = TerminalConnectionsState {
         view: view.clone(),
@@ -366,6 +382,7 @@ fn draw_picker(
     status_row: usize,
     content_col: usize,
     view: &mut ConnectionsView,
+    header_lines: &[String],
 ) -> ConnectionsEvent {
     let menu = build_picker_menu(title, items);
     let activated = draw_terminal_menu_screen(
@@ -385,6 +402,7 @@ fn draw_picker(
         status_row,
         content_col,
         shell_status,
+        header_lines,
     );
     let mut temp_state = TerminalConnectionsState {
         view: view.clone(),

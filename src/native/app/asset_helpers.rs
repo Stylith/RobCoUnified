@@ -3,12 +3,12 @@ use super::super::desktop_file_service::FileManagerLocation;
 use super::super::desktop_settings_service::apply_file_manager_display_settings_update as apply_desktop_file_manager_display_settings_update;
 use super::super::file_manager::FileEntryRow;
 use super::super::file_manager_app::FileManagerDisplaySettingsUpdate;
-use super::{CachedIcon, RobcoNativeApp};
+use super::{CachedIcon, NucleonNativeApp};
 use eframe::egui::{Context, TextureHandle};
-use robcos_native_settings_app::NativeSettingsPanel;
+use nucleon_native_settings_app::NativeSettingsPanel;
 use std::path::{Path, PathBuf};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn file_manager_home_path(&self) -> PathBuf {
         if let Some(session) = &self.session {
             super::super::data::word_processor_dir(&session.username)

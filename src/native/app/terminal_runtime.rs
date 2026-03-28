@@ -16,12 +16,12 @@ use super::super::menu::{
 };
 use super::super::prompt::{FlashAction, TerminalFlash, TerminalPromptAction};
 use super::super::pty_screen::{spawn_embedded_pty_with_options, NativePtyState};
-use super::RobcoNativeApp;
+use super::NucleonNativeApp;
 use crate::core::auth::{AuthMethod, UserRecord};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-impl RobcoNativeApp {
+impl NucleonNativeApp {
     pub(super) fn primary_embedded_pty_open(&self) -> bool {
         self.terminal_pty.is_some()
             && self.terminal_pty_surface == Some(TerminalShellSurface::Embedded)

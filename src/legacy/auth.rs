@@ -28,7 +28,7 @@ pub fn login_screen(terminal: &mut Term) -> Result<Option<String>> {
 
         let result = run_menu(
             terminal,
-            "ROBCO TERMLINK — Select User",
+            "NUCLEON TERMLINK — Select User",
             &opts_str,
             Some("Welcome. Please select a user."),
         )?;

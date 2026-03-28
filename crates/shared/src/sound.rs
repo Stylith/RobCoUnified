@@ -1,11 +1,11 @@
-//! RobcOS Sound System
+//! Nucleon Sound System
 //!
 //! Fire-and-forget playback using OS audio players.
 //! Boot key clips are preprocessed to remove leading dead-space and keep
 //! a short click window, which reduces random perceived gaps.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -47,6 +47,7 @@ struct SoundPaths {
 
 static PATHS: OnceLock<SoundPaths> = OnceLock::new();
 static CLIP_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+static ACTIVE_SOUND_PACK: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 struct SoundClip {
     name: &'static str,
@@ -173,23 +174,91 @@ fn scale_pcm16_wav(bytes: &[u8], volume: u8) -> Vec<u8> {
     out
 }
 
-fn clip_path(clip: &SoundClip) -> PathBuf {
+pub fn set_active_sound_pack(path: Option<PathBuf>) {
+    if let Ok(mut guard) = ACTIVE_SOUND_PACK.lock() {
+        *guard = path;
+    }
+    if let Ok(mut guard) = CLIP_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        guard.clear();
+    }
+}
+
+fn active_sound_pack_path() -> Option<PathBuf> {
+    ACTIVE_SOUND_PACK
+        .lock()
+        .ok()
+        .and_then(|guard| (*guard).clone())
+}
+
+fn cached_scaled_bytes_path(cache_key: String, temp_stem: &str, bytes: &[u8]) -> PathBuf {
     let volume = system_sound_volume();
-    let key = format!("{}_{}", clip.name, volume);
     let cache = CLIP_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(guard) = cache.lock() {
-        if let Some(existing) = guard.get(&key) {
+        if let Some(existing) = guard.get(&cache_key) {
             return existing.clone();
         }
     }
 
-    let data = scale_pcm16_wav(&clip.bytes, volume);
-    let path = std::env::temp_dir().join(format!("robcos_{}_{}.wav", clip.name, volume));
+    let data = scale_pcm16_wav(bytes, volume);
+    let safe_temp_stem = temp_stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let path = std::env::temp_dir().join(format!("nucleon_{}_{}.wav", safe_temp_stem, volume));
     let _ = std::fs::write(&path, data);
     if let Ok(mut guard) = cache.lock() {
-        guard.insert(key, path.clone());
+        guard.insert(cache_key, path.clone());
     }
     path
+}
+
+fn volume_scaled_external_clip_path(path: &Path, clip_name: &str) -> Option<PathBuf> {
+    let volume = system_sound_volume();
+    let bytes = std::fs::read(path).ok()?;
+    let cache_key = format!("external:{}:{}", path.to_string_lossy(), volume);
+    Some(cached_scaled_bytes_path(
+        cache_key,
+        &format!("theme_{clip_name}"),
+        &bytes,
+    ))
+}
+
+fn volume_scaled_builtin_clip_path(clip: &SoundClip) -> PathBuf {
+    let volume = system_sound_volume();
+    let cache_key = format!("builtin:{}:{}", clip.name, volume);
+    cached_scaled_bytes_path(cache_key, clip.name, &clip.bytes)
+}
+
+fn clip_path(clip: &SoundClip) -> PathBuf {
+    if let Some(pack_path) = active_sound_pack_path() {
+        let override_file = pack_path.join(format!("{}.wav", clip.name));
+        if override_file.is_file() {
+            if let Some(path) = volume_scaled_external_clip_path(&override_file, clip.name) {
+                return path;
+            }
+        }
+    }
+
+    volume_scaled_builtin_clip_path(clip)
+}
+
+fn active_boot_override_paths() -> Vec<PathBuf> {
+    let Some(pack_path) = active_sound_pack_path() else {
+        return Vec::new();
+    };
+
+    (1..=5)
+        .filter_map(|idx| {
+            let override_file = pack_path.join(format!("boot_{idx:02}.wav"));
+            override_file.is_file().then_some(override_file)
+        })
+        .collect()
 }
 
 fn get_paths() -> &'static SoundPaths {
@@ -216,7 +285,7 @@ fn get_paths() -> &'static SoundPaths {
         },
         boot_keys: vec![
             SoundClip {
-                name: "boot0",
+                name: "boot_01",
                 bytes: extract_boot_click_window_pcm16_mono(
                     include_bytes!("../../../src/sounds/ui_hacking_charsingle_01.wav"),
                     550,
@@ -225,7 +294,7 @@ fn get_paths() -> &'static SoundPaths {
                 ),
             },
             SoundClip {
-                name: "boot1",
+                name: "boot_02",
                 bytes: extract_boot_click_window_pcm16_mono(
                     include_bytes!("../../../src/sounds/ui_hacking_charsingle_02.wav"),
                     550,
@@ -234,7 +303,7 @@ fn get_paths() -> &'static SoundPaths {
                 ),
             },
             SoundClip {
-                name: "boot2",
+                name: "boot_03",
                 bytes: extract_boot_click_window_pcm16_mono(
                     include_bytes!("../../../src/sounds/ui_hacking_charsingle_03.wav"),
                     550,
@@ -243,7 +312,7 @@ fn get_paths() -> &'static SoundPaths {
                 ),
             },
             SoundClip {
-                name: "boot3",
+                name: "boot_04",
                 bytes: extract_boot_click_window_pcm16_mono(
                     include_bytes!("../../../src/sounds/ui_hacking_charsingle_04.wav"),
                     550,
@@ -252,7 +321,7 @@ fn get_paths() -> &'static SoundPaths {
                 ),
             },
             SoundClip {
-                name: "boot4",
+                name: "boot_05",
                 bytes: extract_boot_click_window_pcm16_mono(
                     include_bytes!("../../../src/sounds/ui_hacking_charsingle_05.wav"),
                     550,
@@ -409,12 +478,22 @@ pub fn play_boot_key() {
     if !passes_gap(&LAST_BOOT_KEY_MS, BOOT_KEY_GAP_MS) {
         return;
     }
+    let override_paths = active_boot_override_paths();
+    if !override_paths.is_empty() {
+        let idx = next_boot_key_index(override_paths.len());
+        if let Some(path) =
+            volume_scaled_external_clip_path(&override_paths[idx], &format!("boot_{:02}", idx + 1))
+        {
+            play_nonblocking(path);
+            return;
+        }
+    }
     let paths = &get_paths().boot_keys;
     if paths.is_empty() {
         return;
     }
     let idx = next_boot_key_index(paths.len());
-    play_nonblocking(clip_path(&paths[idx]));
+    play_nonblocking(volume_scaled_builtin_clip_path(&paths[idx]));
 }
 
 pub fn play_navigate() {
@@ -434,6 +513,10 @@ pub fn play_navigate() {
         return;
     }
 
+    play_nonblocking(clip_path(&get_paths().navigate));
+}
+
+pub fn preview_navigate() {
     play_nonblocking(clip_path(&get_paths().navigate));
 }
 
