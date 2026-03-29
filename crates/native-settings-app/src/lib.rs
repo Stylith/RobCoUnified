@@ -136,7 +136,6 @@ enum SettingsRowId {
     Sound,
     SystemSoundVolume,
     Bootup,
-    NavigationHints,
     Theme,
     CustomThemeRed,
     CustomThemeGreen,
@@ -468,10 +467,6 @@ pub fn handle_settings_activation_with_visibility(
         SettingsRowId::SystemSoundVolume => TerminalSettingsEvent::None,
         SettingsRowId::Bootup => {
             draft.bootup = !draft.bootup;
-            TerminalSettingsEvent::Persist
-        }
-        SettingsRowId::NavigationHints => {
-            draft.show_navigation_hints = !draft.show_navigation_hints;
             TerminalSettingsEvent::Persist
         }
         SettingsRowId::Theme => {
@@ -860,17 +855,6 @@ fn terminal_settings_rows_with_ids_for_visibility(
                     if draft.bootup { "ON" } else { "OFF" }
                 ),
                 SettingsRowId::Bootup,
-            ),
-            (
-                format!(
-                    "Navigation Hints: {} [toggle]",
-                    if draft.show_navigation_hints {
-                        "ON"
-                    } else {
-                        "OFF"
-                    }
-                ),
-                SettingsRowId::NavigationHints,
             ),
             ("Back".to_string(), SettingsRowId::Back),
         ],

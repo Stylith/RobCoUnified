@@ -125,7 +125,7 @@ self.draw_spotlight(ctx);         // desktop_spotlight.rs
 
 ### Phase 5: Terminal branding
 - Theme-controlled `TerminalBranding` (header lines)
-- Default state has no heritage header
+- Default state has no RobCo header
 
 ### Phase 6: Tweaks polish
 - Top-level tabs: Wallpaper, Theme, Effects, Display
@@ -156,7 +156,7 @@ self.draw_spotlight(ctx);         // desktop_spotlight.rs
 - `.ndpkg` theme pack export/import
 - Theme discovery from `{state_dir}/theme_packs/`
 - `nucleon-core-themes` external repo structure
-- Heritage removed from codebase entirely (external-only, lives in themes repo)
+- RobCo removed from codebase entirely (external-only, lives in themes repo)
 - `builtin_theme_packs()` removed — no built-in packs, default state is Flat + Monochrome Green
 
 ### Phase 11: Full rebrand
@@ -718,7 +718,7 @@ Paint gradient after layout if applicable.
 ### Step 9: Migrate DesktopStyle constructors
 
 Update all `DesktopStyle` constructors (classic, nucleon) to use the new struct.
-Heritage constructors have been removed — Heritage is external-only.
+RobCo constructors have been removed — RobCo is external-only.
 
 ---
 
@@ -1010,10 +1010,10 @@ pub(super) current_applied_font_id: Option<String>,     // tracks active font to
 
 When a ThemePack is installed, if it bundles embedded component manifests:
 ```
-robco-heritage/
+robco/
     manifest.json           <- ThemePack
-    shells/heritage.json    <- embedded DesktopStyleManifest
-    sounds/heritage.json    <- embedded SoundPackManifest
+    shells/robco.json       <- embedded DesktopStyleManifest
+    sounds/robco.json       <- embedded SoundPackManifest
 ```
 
 The installer:
@@ -1373,9 +1373,9 @@ JSON format but include a `kind` field to distinguish Packs/Desktop/Terminal/Col
 {
   "entries": [
     {
-      "id": "robco-heritage",
-      "name": "RobCo Heritage",
-      "description": "Classic Fallout terminal aesthetic",
+      "id": "robco",
+      "name": "RobCo",
+      "description": "The original RobCo Industries terminal presentation.",
       "version": "1.0.0",
       "kind": "Theme",
       "download_url": "...",
@@ -1594,6 +1594,12 @@ pub struct TerminalTheme {
     #[serde(default)]
     pub font: Option<FontRef>,
 
+    /// Header branding lines displayed at the top of the terminal when
+    /// the "header_visible" option is true. Empty = no header.
+    /// Example: ["ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM", "COPYRIGHT 2075-2077 ROBCO INDUSTRIES", "-SERVER 1-"]
+    #[serde(default)]
+    pub branding_lines: Vec<String>,
+
     /// Options this theme exposes to the user. Displayed in terminal Tweaks
     /// when this theme is active.
     #[serde(default)]
@@ -1621,102 +1627,152 @@ Add `use std::collections::HashMap;` at the top of the file if not already prese
 
 ---
 
-### Step 3: Create the "Classic" built-in terminal theme
+### Step 3: Create the built-in terminal themes
 
-The current hardcoded terminal UI becomes the `classic` built-in renderer. Define it as
-a `TerminalTheme`:
+Two built-in renderers exist: `"dashboard"` (default) and `"robco"` (legacy, used by
+the external RobCo theme). The default theme is Dashboard — a multi-panel
+terminal interface with a persistent navigation sidebar and home screen widgets.
 
 ```rust
 impl TerminalTheme {
-    pub fn classic() -> Self {
+    /// The default terminal theme. Multi-panel layout with nav sidebar and widgets.
+    pub fn dashboard() -> Self {
         TerminalTheme {
-            id: "classic".to_string(),
-            name: "Classic".to_string(),
-            description: "The original Nucleon terminal interface.".to_string(),
+            id: "dashboard".to_string(),
+            name: "Dashboard".to_string(),
+            description: "Multi-panel terminal with navigation sidebar and system widgets.".to_string(),
             version: "1.0.0".to_string(),
-            renderer: TerminalRenderer::Builtin { id: "classic".to_string() },
+            renderer: TerminalRenderer::Builtin { id: "dashboard".to_string() },
+            font: None,
+            branding_lines: vec![],
             options_schema: vec![
                 ThemeOptionDef {
-                    key: "separator_char".to_string(),
-                    label: "Separator Character".to_string(),
-                    description: "Character used for horizontal separators.".to_string(),
-                    kind: ThemeOptionKind::Choice {
-                        choices: vec!["=".to_string(), "-".to_string(), "*".to_string(), "#".to_string()],
-                        default: "=".to_string(),
-                    },
-                },
-                ThemeOptionDef {
-                    key: "show_separators".to_string(),
-                    label: "Show Separators".to_string(),
-                    description: "Display horizontal separator lines.".to_string(),
+                    key: "show_nav_panel".to_string(),
+                    label: "Show Navigation Panel".to_string(),
+                    description: "Display the persistent navigation sidebar.".to_string(),
                     kind: ThemeOptionKind::Bool { default: true },
                 },
                 ThemeOptionDef {
-                    key: "menu_alignment".to_string(),
-                    label: "Menu Alignment".to_string(),
-                    description: "How menu items are aligned on screen.".to_string(),
-                    kind: ThemeOptionKind::Choice {
-                        choices: vec!["Left".to_string(), "Center".to_string()],
-                        default: "Left".to_string(),
-                    },
+                    key: "nav_width".to_string(),
+                    label: "Navigation Width".to_string(),
+                    description: "Width of the navigation panel in columns.".to_string(),
+                    kind: ThemeOptionKind::Int { min: 14, max: 30, default: 20 },
                 },
                 ThemeOptionDef {
-                    key: "selection_style".to_string(),
-                    label: "Selection Style".to_string(),
-                    description: "How the selected menu item is highlighted.".to_string(),
-                    kind: ThemeOptionKind::Choice {
-                        choices: vec!["Full Row".to_string(), "Text Only".to_string()],
-                        default: "Full Row".to_string(),
-                    },
-                },
-                ThemeOptionDef {
-                    key: "selection_marker".to_string(),
-                    label: "Selection Marker".to_string(),
-                    description: "Text prefix for the selected item.".to_string(),
-                    kind: ThemeOptionKind::Choice {
-                        choices: vec!["> ".to_string(), ">> ".to_string(), "* ".to_string(), "".to_string()],
-                        default: "> ".to_string(),
-                    },
-                },
-                ThemeOptionDef {
-                    key: "header_visible".to_string(),
-                    label: "Show Header".to_string(),
-                    description: "Display the branding header at the top.".to_string(),
-                    kind: ThemeOptionKind::Bool { default: false },
-                },
-                ThemeOptionDef {
-                    key: "subtitle_underlined".to_string(),
-                    label: "Underline Subtitle".to_string(),
-                    description: "Draw an underline below the subtitle text.".to_string(),
+                    key: "show_system_status".to_string(),
+                    label: "Show System Status".to_string(),
+                    description: "Display CPU, memory, and disk usage on the home screen.".to_string(),
                     kind: ThemeOptionKind::Bool { default: true },
                 },
                 ThemeOptionDef {
-                    key: "content_margin".to_string(),
-                    label: "Content Margin".to_string(),
-                    description: "Columns of margin on each side of content.".to_string(),
-                    kind: ThemeOptionKind::Int { min: 0, max: 10, default: 3 },
+                    key: "show_recent_files".to_string(),
+                    label: "Show Recent Files".to_string(),
+                    description: "Display recently accessed files on the home screen.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "show_quick_actions".to_string(),
+                    label: "Show Quick Actions".to_string(),
+                    description: "Display quick-launch tiles on the home screen.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "clock_format".to_string(),
+                    label: "Clock Format".to_string(),
+                    description: "Time display format in the header bar.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec!["24h".to_string(), "12h".to_string()],
+                        default: "24h".to_string(),
+                    },
+                },
+                ThemeOptionDef {
+                    key: "status_shortcuts".to_string(),
+                    label: "Show Status Shortcuts".to_string(),
+                    description: "Display keyboard shortcut hints in the status bar.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
                 },
             ],
             default_options: {
                 let mut m = HashMap::new();
-                m.insert("separator_char".to_string(), ThemeOptionValue::String("=".to_string()));
-                m.insert("show_separators".to_string(), ThemeOptionValue::Bool(true));
-                m.insert("menu_alignment".to_string(), ThemeOptionValue::String("Left".to_string()));
-                m.insert("selection_style".to_string(), ThemeOptionValue::String("Full Row".to_string()));
-                m.insert("selection_marker".to_string(), ThemeOptionValue::String("> ".to_string()));
-                m.insert("header_visible".to_string(), ThemeOptionValue::Bool(false));
-                m.insert("subtitle_underlined".to_string(), ThemeOptionValue::Bool(true));
-                m.insert("content_margin".to_string(), ThemeOptionValue::Int(3));
+                m.insert("show_nav_panel".to_string(), ThemeOptionValue::Bool(true));
+                m.insert("nav_width".to_string(), ThemeOptionValue::Int(20));
+                m.insert("show_system_status".to_string(), ThemeOptionValue::Bool(true));
+                m.insert("show_recent_files".to_string(), ThemeOptionValue::Bool(true));
+                m.insert("show_quick_actions".to_string(), ThemeOptionValue::Bool(true));
+                m.insert("clock_format".to_string(), ThemeOptionValue::String("24h".to_string()));
+                m.insert("status_shortcuts".to_string(), ThemeOptionValue::Bool(true));
                 m
             },
         }
     }
 
     pub fn builtin_terminal_themes() -> Vec<TerminalTheme> {
-        vec![Self::classic()]
+        vec![Self::dashboard()]
     }
 }
 ```
+
+**Dashboard renderer layout (92×28 grid):**
+
+```
+Row 0:      Header bar — "NUCLEON OS" left, clock + date right
+Row 1:      Horizontal separator (full width)
+Rows 2-24:  Two-column layout:
+              Col 0–(nav_width-1):  Navigation panel (screen list, always visible)
+              Col nav_width:        Vertical divider character (│)
+              Col (nav_width+1)–91: Content panel (active screen)
+Row 25:     Horizontal separator (full width)
+Rows 26-27: Status bar — shortcuts left, session info right
+```
+
+**Navigation panel behavior:**
+- Lists all available terminal screens as selectable rows
+- "Home" is the first item — renders dashboard widgets in the content panel
+- Other items render the corresponding screen within the content panel bounds
+- Bottom of the nav panel (pinned to rows 21–23): `Desktop` and `Logout` items,
+  separated from the main list by a thin separator. `Desktop` switches to desktop
+  mode. `Logout` triggers session logout.
+- Active item marked with `▸`, others indented with space
+- Up/Down arrows navigate, Enter selects (or Left to focus nav, Right to focus content)
+
+**Home screen widgets (rendered in content panel when "Home" is selected):**
+- **System Status** (2 rows): CPU, MEM, DSK as filled-block progress bars (`████░░░░`) with
+  percentages. Two columns to save vertical space.
+- **Quick Actions** (1 row): Bracketed labels `[Applications]  [Documents]  [Terminal]`
+  that navigate to those screens when selected.
+- **Recent Files** (4-6 rows): Dot-leader aligned file names with relative timestamps.
+  Selecting a file opens it in the editor.
+
+**Content bounds for screen rendering:**
+Existing screen draw functions must accept rendering bounds instead of assuming full-width:
+
+```rust
+pub struct ContentBounds {
+    pub col_start: usize,    // First usable column
+    pub col_end: usize,      // Last usable column
+    pub row_start: usize,    // First usable row
+    pub row_end: usize,      // Last usable row
+}
+
+impl ContentBounds {
+    /// Full-width bounds (used by robco renderer).
+    pub fn full() -> Self {
+        ContentBounds { col_start: 3, col_end: 89, row_start: 3, row_end: 24 }
+    }
+    /// Dashboard content panel bounds.
+    pub fn dashboard(nav_width: usize) -> Self {
+        ContentBounds { col_start: nav_width + 2, col_end: 90, row_start: 3, row_end: 24 }
+    }
+}
+```
+
+The robco renderer passes `ContentBounds::full()`. The dashboard renderer passes
+`ContentBounds::dashboard(nav_width)`. Screen draw functions use `bounds.col_start`
+instead of hardcoded `TERMINAL_CONTENT_COL`.
+
+**The robco renderer still exists** — it is the refactored existing terminal code.
+The external RobCo theme (from `nucleon-core-themes`) references it via
+`TerminalRenderer::Builtin { id: "robco" }`. No built-in theme uses it directly.
 
 ---
 
@@ -1731,8 +1787,8 @@ pub(super) terminal_theme_options: HashMap<String, ThemeOptionValue>,
 
 Initialize in `Default`:
 ```rust
-terminal_active_theme: TerminalTheme::classic(),
-terminal_theme_options: TerminalTheme::classic().default_options.clone(),
+terminal_active_theme: TerminalTheme::dashboard(),
+terminal_theme_options: TerminalTheme::dashboard().default_options.clone(),
 ```
 
 Add to `ParkedSessionState`:
@@ -1819,10 +1875,11 @@ impl TerminalTheme {
 
 ---
 
-### Step 6: Refactor terminal rendering to read from theme options
+### Step 6: Refactor terminal rendering into the robco renderer
 
-The current terminal rendering reads from `TerminalDecoration` and hardcoded constants.
-Replace those reads with theme option lookups.
+The current terminal rendering code becomes the `robco` built-in renderer. This
+renderer is used by the external RobCo theme. The current hardcoded reads
+from `TerminalDecoration` are replaced with theme option lookups.
 
 **In `src/native/retro_ui.rs` — `selectable_row()`:**
 
@@ -1941,9 +1998,19 @@ if terminal_option_bool("header_visible") && !terminal_branding.header_lines.is_
 ```
 
 **Important:** Do NOT remove `TerminalDecoration` or `TerminalBranding` from the codebase yet.
-They still exist on the `ThemePack` type for backwards compatibility. The classic renderer
+They still exist on the `ThemePack` type for backwards compatibility. The robco renderer
 reads from theme options instead; existing `TerminalDecoration` values are used to initialize
 the classic theme's default options when a theme pack is applied.
+
+**Add `ContentBounds` parameter to all screen draw functions:**
+
+All terminal screen draw functions (e.g., `draw_terminal_main_menu()`,
+`draw_terminal_applications()`, etc.) must accept a `&ContentBounds` parameter
+that defines the usable column/row range. Replace all hardcoded `TERMINAL_CONTENT_COL`
+references with `bounds.col_start`. The robco renderer passes
+`ContentBounds::full()`; the dashboard renderer passes
+`ContentBounds::dashboard(nav_width)`. This allows the same screen code to render
+in either full-width or sidebar-constrained layouts.
 
 ---
 
@@ -1974,6 +2041,138 @@ This bridges the old ThemePack data into the new options system without breaking
 
 ---
 
+### Step 7b: Implement the Dashboard renderer
+
+Create the `dashboard` built-in renderer. This is the default terminal experience.
+
+**Renderer dispatch:** In `draw_terminal_runtime()` (or the slot renderer), check
+`terminal_active_theme.renderer`:
+```rust
+match &self.terminal_active_theme.renderer {
+    TerminalRenderer::Builtin { id } if id == "dashboard" => {
+        self.render_dashboard_terminal(ctx, &screen);
+    }
+    TerminalRenderer::Builtin { id } if id == "robco" => {
+        self.render_robco_terminal(ctx, &screen);
+    }
+    _ => {
+        self.render_dashboard_terminal(ctx, &screen); // fallback to default
+    }
+}
+```
+
+**`render_dashboard_terminal()`:** Draws the full dashboard layout on the 92×28 grid:
+
+1. **Header bar (row 0):** `"NUCLEON OS"` left-aligned at col 2. Clock and date
+   right-aligned. Use `terminal_option_string("clock_format")` for 12h/24h.
+
+2. **Top separator (row 1):** Full-width separator using `═` or `─`.
+
+3. **Navigation panel (rows 2–24, col 0–nav_width-1):**
+   Draw `boxed_panel()` or direct character rendering. List all terminal screens:
+   ```
+   Home, Applications, Documents, Network, Games, Programs,
+   Logs, Settings, Connections, Default Apps, About
+   ```
+   Active item rendered with `▸` prefix, others with `  ` (2-space indent).
+   Use `selectable_row()` within the nav column bounds for click support.
+   Track `self.dashboard_nav_index: usize` for keyboard navigation.
+
+4. **Vertical divider (col nav_width, rows 2–24):** Draw `│` character in each row.
+
+5. **Content panel (rows 2–24, col nav_width+1–91):**
+   - If "Home" is selected: render dashboard home widgets (see below).
+   - Otherwise: call the existing screen draw function with
+     `ContentBounds::dashboard(nav_width)` to constrain rendering.
+
+6. **Bottom separator (row 25):** Full-width separator.
+
+7. **Status bar (rows 26–27):** If `terminal_option_bool("status_shortcuts")`:
+   `"F1 Help  F2 Shell  F5 Refresh"` left-aligned. Session info right-aligned.
+
+**Dashboard home widgets (rendered in content panel):**
+
+```rust
+fn render_dashboard_home(&mut self, screen: &RetroScreen, painter: &Painter, palette: &RetroPalette, bounds: &ContentBounds) {
+    let col = bounds.col_start;
+    let mut row = bounds.row_start;
+
+    // System Status
+    if terminal_option_bool("show_system_status") {
+        screen.text(painter, col, row, "System", palette.fg);
+        row += 1;
+        screen.separator(painter, row, palette); // or themed_separator
+        row += 1;
+        // CPU bar: use sysinfo or mock data
+        let cpu_bar = format_progress_bar("CPU", cpu_percent, 16);
+        let mem_bar = format_progress_bar("MEM", mem_percent, 16);
+        screen.text(painter, col, row, &cpu_bar, palette.fg);
+        screen.text(painter, col + 35, row, &mem_bar, palette.fg);
+        row += 1;
+        let dsk_bar = format_progress_bar("DSK", disk_percent, 16);
+        screen.text(painter, col, row, &dsk_bar, palette.fg);
+        row += 2;
+    }
+
+    // Quick Actions
+    if terminal_option_bool("show_quick_actions") {
+        screen.text(painter, col, row, "Navigation", palette.fg);
+        row += 1;
+        screen.separator(painter, row, palette);
+        row += 1;
+        // Render bracketed action tiles as selectable items
+        // [Applications]  [Documents]  [Terminal]  [Settings]
+        row += 2;
+    }
+
+    // Recent Files
+    if terminal_option_bool("show_recent_files") {
+        screen.text(painter, col, row, "Recent Files", palette.fg);
+        row += 1;
+        screen.separator(painter, row, palette);
+        row += 1;
+        // List recent files with dot-leader alignment
+        // file.txt ··············· 2m ago
+    }
+}
+```
+
+**Progress bar helper:**
+```rust
+fn format_progress_bar(label: &str, percent: u8, width: usize) -> String {
+    let filled = (width as f32 * percent as f32 / 100.0) as usize;
+    let empty = width - filled;
+    format!("{}  {}{}  {}%",
+        label,
+        "█".repeat(filled),
+        "░".repeat(empty),
+        percent
+    )
+}
+```
+
+**System info:** For CPU/MEM/DSK percentages, use the `sysinfo` crate if available,
+otherwise show placeholder values. This is cosmetic — exact values are not critical
+for the theme to function.
+
+**Navigation input handling:** Add keyboard handling in the dashboard renderer:
+- Up/Down: move `dashboard_nav_index` through the screen list
+- Enter: select the screen (sets `terminal_nav.screen`)
+- Left: focus navigation panel (if content panel was focused)
+- Right: focus content panel (if nav panel was focused)
+- Tab: toggle focus between nav and content
+
+Add `dashboard_nav_focused: bool` to track which panel has keyboard focus.
+
+**App state additions:**
+```rust
+pub(super) dashboard_nav_index: usize,           // 0 = Home
+pub(super) dashboard_nav_focused: bool,           // true = nav panel has focus
+pub(super) dashboard_recent_files: Vec<(String, std::time::SystemTime)>,
+```
+
+---
+
 ### Step 8: Split Tweaks into desktop-only and terminal-only
 
 **Desktop Tweaks (`tweaks_presenter.rs` — desktop mode):**
@@ -1995,7 +2194,7 @@ controls ONLY the desktop surface.
 
 Replace the current terminal Tweaks sections with:
 ```
-Terminal:  [Classic    v]    ← TerminalTheme selector (builtin + installed)
+Terminal:  [Dashboard  v]    ← TerminalTheme selector (builtin + installed)
 Colors:    [Monochrome v]    ← Terminal color style (independent from desktop)
 Font:      [Fixedsys   v]    ← Terminal font (independent from desktop, theme can set default)
 ─────────────────────────────
@@ -2092,7 +2291,7 @@ persisted theme ID, look it up in `builtin_terminal_themes()` + installed themes
 and restore the options.
 
 If the persisted theme ID is not found (theme was uninstalled), fall back to
-`TerminalTheme::classic()` with default options.
+`TerminalTheme::dashboard()` with default options.
 
 ---
 
@@ -2188,7 +2387,7 @@ updates `desktop_active_font_id` or `terminal_active_font_id` and persists to se
 ### Verification
 
 1. `cargo check -p nucleon -p nucleon-native-shell`
-2. Classic terminal theme with default options produces pixel-identical output to pre-refactor state
+2. Dashboard terminal theme renders the multi-panel layout: nav sidebar, content panel, header bar, status bar
 3. Terminal Tweaks shows: theme selector, colors, font, dynamic options
 4. Desktop Tweaks shows: desktop style, colors, font, icons, sounds, cursors — no terminal controls
 5. Changing a theme option (e.g., separator char) immediately affects terminal rendering
@@ -2233,12 +2432,13 @@ Desktop styles must be rendering-cheap:
 2. **ElementStyle is the WM's decoration contract.** The WM will read `title_bar`, `title_bar_unfocused`, and `window_frame` from the active DesktopStyle for external windows.
 3. **ThemeColor::Palette references are resolved at render time.** Never cache resolved colors — the palette can change between frames.
 
-### Heritage theme pack
+### RobCo theme
 
-Heritage ("RobCo") is external-only. It lives in `nucleon-core-themes` repo as a
-`manifest.json` theme pack. All Heritage constructors (`ThemePack::heritage()`,
-`TerminalBranding::heritage()`) have been removed from the codebase. The Heritage
-pack definition is maintained exclusively in the external themes repository.
+RobCo is external-only. It lives in `nucleon-core-themes` repo as a terminal theme
+at `terminal/robco/manifest.json`. All Heritage constructors (`ThemePack::heritage()`,
+`TerminalBranding::heritage()`) have been removed from the codebase. The RobCo
+theme is maintained exclusively in the external themes repository. It uses the
+built-in `robco` renderer (`TerminalRenderer::Builtin { id: "robco" }`).
 
 ---
 

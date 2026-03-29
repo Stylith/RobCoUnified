@@ -221,15 +221,6 @@ impl NucleonNativeApp {
                                         {
                                             changed = true;
                                         }
-                                        if Self::retro_checkbox_row(
-                                            right,
-                                            &mut self.settings.draft.show_navigation_hints,
-                                            "Show navigation hints",
-                                        )
-                                        .clicked()
-                                        {
-                                            changed = true;
-                                        }
                                     });
                                 });
                             }
