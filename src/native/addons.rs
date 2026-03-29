@@ -11,10 +11,15 @@ use crate::platform::{
     AddonStateOverrides, DiscoveredAddonManifest, FileAssociation, HostedAddonProtocol,
     InstallProfile,
 };
-use crate::theme::{ColorStyle, MonochromePreset, ThemePack};
+use crate::theme::{
+    ColorStyle, ColorThemeManifest, CursorPackManifest, DesktopStyleManifest, FullColorTheme,
+    FontPackManifest, IconPackManifest, MonochromePreset, SoundPackManifest, TerminalTheme,
+    TerminalThemeManifest, ThemeOptionValue, ThemePack,
+};
 use flate2::read::GzDecoder;
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
@@ -52,6 +57,10 @@ pub fn first_party_addon_manifests() -> Vec<AddonManifest> {
             .with_capability("settings-ui")
             .with_permission("settings.read")
             .with_permission("settings.write"),
+        base_app_manifest("shell.addons", "Addons", "addons")
+            .essential()
+            .with_capability("addons-ui")
+            .with_permission("addons.manage"),
         base_app_manifest("shell.file-manager", "File Manager", "file-manager")
             .essential()
             .with_capability("file-browser")
@@ -150,6 +159,26 @@ pub struct RepositoryAddonRecord {
     pub manifest: AddonManifest,
     pub release: Option<AddonRelease>,
     pub repository_source: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ThemeRepositoryIndex {
+    #[serde(default)]
+    pub entries: Vec<ThemeRepositoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ThemeRepositoryEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub version: String,
+    pub kind: AddonKind,
+    #[serde(alias = "download_url")]
+    pub download_url: String,
+    #[serde(alias = "sha256")]
+    pub checksum: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,25 +291,263 @@ fn load_theme_pack_from_manifest(manifest_path: &Path) -> Result<ThemePack, Stri
     serde_json::from_str(&raw).map_err(|error| format!("Failed to parse theme manifest: {error}"))
 }
 
+fn load_desktop_style_manifest(manifest_path: &Path) -> Result<DesktopStyleManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_color_theme_manifest(manifest_path: &Path) -> Result<ColorThemeManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_terminal_theme_manifest(manifest_path: &Path) -> Result<TerminalThemeManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_icon_pack_manifest(manifest_path: &Path) -> Result<IconPackManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_sound_pack_manifest(manifest_path: &Path) -> Result<SoundPackManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_cursor_pack_manifest(manifest_path: &Path) -> Result<CursorPackManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_font_pack_manifest(manifest_path: &Path) -> Result<FontPackManifest, String> {
+    load_component_manifest(manifest_path)
+}
+
+fn load_component_manifest<T: DeserializeOwned>(manifest_path: &Path) -> Result<T, String> {
+    let raw = fs::read_to_string(manifest_path)
+        .map_err(|error| format!("Failed to read component manifest: {error}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("Failed to parse component manifest: {error}"))
+}
+
+fn installed_component_manifests<T: DeserializeOwned>(components_dir: &Path) -> Vec<T> {
+    let mut manifests = Vec::new();
+    if let Ok(entries) = fs::read_dir(components_dir) {
+        for entry in entries.flatten() {
+            let install_dir = entry.path();
+            if !install_dir.is_dir() {
+                continue;
+            }
+            let manifest_path = install_dir.join("manifest.json");
+            let Ok(manifest) = load_component_manifest(&manifest_path) else {
+                continue;
+            };
+            manifests.push(manifest);
+        }
+    }
+    manifests
+}
+
+fn builtin_desktop_style_manifests() -> Vec<DesktopStyleManifest> {
+    crate::theme::DesktopStyle::builtin_desktop_styles()
+        .into_iter()
+        .map(|style| DesktopStyleManifest {
+            id: style.id.clone(),
+            name: style.name.clone(),
+            description: format!("Built-in {} desktop style.", style.name),
+            version: "1.0.0".to_string(),
+            style,
+            font: None,
+        })
+        .collect()
+}
+
+fn builtin_color_theme_manifests() -> Vec<ColorThemeManifest> {
+    let mut manifests = vec![
+        ColorThemeManifest {
+            id: "monochrome-green".to_string(),
+            name: "Green (Default)".to_string(),
+            description: "Classic green monochrome palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::Green,
+                custom_rgb: None,
+            },
+            full_color_theme: None,
+        },
+        ColorThemeManifest {
+            id: "monochrome-white".to_string(),
+            name: "White".to_string(),
+            description: "White monochrome palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::White,
+                custom_rgb: None,
+            },
+            full_color_theme: None,
+        },
+        ColorThemeManifest {
+            id: "monochrome-amber".to_string(),
+            name: "Amber".to_string(),
+            description: "Amber monochrome palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::Amber,
+                custom_rgb: None,
+            },
+            full_color_theme: None,
+        },
+        ColorThemeManifest {
+            id: "monochrome-blue".to_string(),
+            name: "Blue".to_string(),
+            description: "Blue monochrome palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::Blue,
+                custom_rgb: None,
+            },
+            full_color_theme: None,
+        },
+        ColorThemeManifest {
+            id: "monochrome-light-blue".to_string(),
+            name: "Light Blue".to_string(),
+            description: "Light blue monochrome palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::Monochrome {
+                preset: MonochromePreset::LightBlue,
+                custom_rgb: None,
+            },
+            full_color_theme: None,
+        },
+        ColorThemeManifest {
+            id: "nucleon-dark".to_string(),
+            name: "Nucleon Dark".to_string(),
+            description: "Built-in dark full-color palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-dark".to_string(),
+            },
+            full_color_theme: Some(FullColorTheme::nucleon_dark()),
+        },
+        ColorThemeManifest {
+            id: "nucleon-light".to_string(),
+            name: "Nucleon Light".to_string(),
+            description: "Built-in light full-color palette.".to_string(),
+            version: "1.0.0".to_string(),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-light".to_string(),
+            },
+            full_color_theme: Some(FullColorTheme::nucleon_light()),
+        },
+    ];
+    manifests.sort_by(|left, right| left.name.cmp(&right.name));
+    manifests
+}
+
+fn builtin_terminal_theme_manifests() -> Vec<TerminalThemeManifest> {
+    TerminalTheme::builtin_terminal_themes()
+        .into_iter()
+        .map(|theme| TerminalThemeManifest {
+            id: theme.id.clone(),
+            name: theme.name.clone(),
+            description: format!("Built-in {} terminal theme.", theme.name),
+            version: "1.0.0".to_string(),
+            theme,
+        })
+        .collect()
+}
+
+pub fn installed_desktop_styles() -> Vec<DesktopStyleManifest> {
+    let mut styles = builtin_desktop_style_manifests();
+    for manifest in
+        installed_component_manifests::<DesktopStyleManifest>(&config::desktop_styles_directory())
+    {
+        if !styles.iter().any(|existing| existing.id == manifest.id) {
+            styles.push(manifest);
+        }
+    }
+    styles
+}
+
+pub fn installed_color_themes() -> Vec<ColorThemeManifest> {
+    let mut themes = builtin_color_theme_manifests();
+    for manifest in
+        installed_component_manifests::<ColorThemeManifest>(&config::color_themes_directory())
+    {
+        if !themes.iter().any(|existing| existing.id == manifest.id) {
+            themes.push(manifest);
+        }
+    }
+    themes
+}
+
+pub fn installed_terminal_themes() -> Vec<TerminalThemeManifest> {
+    let mut themes = builtin_terminal_theme_manifests();
+    for manifest in
+        installed_component_manifests::<TerminalThemeManifest>(&config::terminal_themes_directory())
+    {
+        if !themes.iter().any(|existing| existing.id == manifest.id) {
+            themes.push(manifest);
+        }
+    }
+    themes
+}
+
+pub fn installed_icon_packs() -> Vec<IconPackManifest> {
+    installed_component_manifests::<IconPackManifest>(&config::icon_packs_directory())
+}
+
+pub fn installed_sound_packs() -> Vec<SoundPackManifest> {
+    installed_component_manifests::<SoundPackManifest>(&config::sound_packs_directory())
+}
+
+pub fn installed_cursor_packs() -> Vec<CursorPackManifest> {
+    installed_component_manifests::<CursorPackManifest>(&config::cursor_packs_directory())
+}
+
+pub fn installed_font_packs() -> Vec<FontPackManifest> {
+    installed_component_manifests::<FontPackManifest>(&config::font_packs_directory())
+}
+
 fn load_legacy_theme_pack(bundle_dir: &Path) -> Option<ThemePack> {
     let raw = fs::read_to_string(bundle_dir.join("theme.json")).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
 fn installed_theme_bundle_records() -> Vec<(ThemePack, PathBuf)> {
-    let mut bundles = Vec::new();
-    let themes_dir = config::themes_directory();
-    if let Ok(entries) = fs::read_dir(&themes_dir) {
-        for entry in entries.flatten() {
-            let bundle_dir = entry.path();
-            if !bundle_dir.is_dir() {
-                continue;
+    let mut bundles: Vec<(ThemePack, PathBuf)> = Vec::new();
+    let pack_roots = [config::theme_packs_directory(), config::themes_directory()];
+    for themes_dir in pack_roots {
+        if let Ok(entries) = fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let bundle_dir = entry.path();
+                if !bundle_dir.is_dir() {
+                    continue;
+                }
+                if themes_dir == config::themes_directory() {
+                    let component_dir = entry.file_name();
+                    if matches!(
+                        component_dir.to_str(),
+                        Some(
+                            "packs"
+                                | "desktop"
+                                | "terminal"
+                                | "shells"
+                                | "colors"
+                                | "icons"
+                                | "sounds"
+                                | "cursors"
+                                | "fonts"
+                        )
+                    ) {
+                        continue;
+                    }
+                }
+                let manifest_path = bundle_dir.join("manifest.json");
+                let Ok(theme) = load_theme_pack_from_manifest(&manifest_path) else {
+                    continue;
+                };
+                if bundles.iter().any(|(existing, _)| existing.id == theme.id) {
+                    continue;
+                }
+                bundles.push((theme, bundle_dir));
             }
-            let manifest_path = bundle_dir.join("manifest.json");
-            let Ok(theme) = load_theme_pack_from_manifest(&manifest_path) else {
-                continue;
-            };
-            bundles.push((theme, bundle_dir));
         }
     }
 
@@ -307,22 +574,10 @@ fn installed_theme_bundle_records() -> Vec<(ThemePack, PathBuf)> {
 }
 
 fn user_installed_theme_pack_ids() -> Vec<AddonId> {
-    let mut ids = Vec::new();
-    let themes_dir = config::themes_directory();
-    if let Ok(entries) = fs::read_dir(&themes_dir) {
-        for entry in entries.flatten() {
-            let bundle_dir = entry.path();
-            if !bundle_dir.is_dir() {
-                continue;
-            }
-            let manifest_path = bundle_dir.join("manifest.json");
-            let Ok(theme) = load_theme_pack_from_manifest(&manifest_path) else {
-                continue;
-            };
-            ids.push(AddonId::from(theme.id));
-        }
-    }
-    ids
+    installed_theme_bundle_records()
+        .into_iter()
+        .map(|(theme, _)| AddonId::from(theme.id))
+        .collect()
 }
 
 pub(crate) fn installed_theme_bundle_dir(theme_pack_id: &str) -> Option<PathBuf> {
@@ -333,7 +588,7 @@ pub(crate) fn installed_theme_bundle_dir(theme_pack_id: &str) -> Option<PathBuf>
 }
 
 pub fn installed_theme_packs() -> Vec<ThemePack> {
-    let mut themes = ThemePack::builtin_theme_packs();
+    let mut themes: Vec<ThemePack> = Vec::new();
     for (theme, _) in installed_theme_bundle_records() {
         if !themes.iter().any(|existing| existing.id == theme.id) {
             themes.push(theme);
@@ -345,6 +600,8 @@ pub fn installed_theme_packs() -> Vec<ThemePack> {
 pub fn apply_theme_pack(theme: &ThemePack) {
     config::update_settings(|settings| {
         settings.active_theme_pack_id = Some(theme.id.clone());
+        settings.terminal_theme_id = Some("classic".to_string());
+        settings.terminal_theme_options = theme_pack_terminal_options(theme);
         settings.terminal_branding = (!theme.terminal_branding.header_lines.is_empty())
             .then(|| theme.terminal_branding.clone());
         if let ColorStyle::Monochrome { preset, custom_rgb } = &theme.color_style {
@@ -355,6 +612,27 @@ pub fn apply_theme_pack(theme: &ThemePack) {
         }
     });
     config::persist_settings();
+}
+
+fn theme_pack_terminal_options(theme: &ThemePack) -> HashMap<String, ThemeOptionValue> {
+    let mut options = TerminalTheme::classic().default_options;
+    options.insert(
+        "separator_char".to_string(),
+        ThemeOptionValue::String(theme.terminal_decoration.separator_char.clone()),
+    );
+    options.insert(
+        "show_separators".to_string(),
+        ThemeOptionValue::Bool(theme.terminal_decoration.show_separators),
+    );
+    options.insert(
+        "subtitle_underlined".to_string(),
+        ThemeOptionValue::Bool(theme.terminal_decoration.subtitle_underlined),
+    );
+    options.insert(
+        "header_visible".to_string(),
+        ThemeOptionValue::Bool(!theme.terminal_branding.header_lines.is_empty()),
+    );
+    options
 }
 
 pub fn is_installed_hosted_game(name: &str) -> bool {
@@ -552,6 +830,90 @@ pub fn install_repository_addon(addon_id: AddonId) -> Result<String, String> {
     )
 }
 
+pub fn load_theme_repository_index_from_path(
+    source_path: &Path,
+) -> Result<ThemeRepositoryIndex, String> {
+    let raw = fs::read_to_string(source_path)
+        .map_err(|error| format!("Failed to read theme repository index: {error}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("Failed to parse theme repository index: {error}"))
+}
+
+pub fn install_repository_theme(item_id: &str) -> Result<String, String> {
+    let source_path = config::cached_theme_repository_index_file();
+    let index = load_theme_repository_index_from_path(&source_path)?;
+    let entry = index
+        .entries
+        .into_iter()
+        .find(|entry| entry.id == item_id)
+        .ok_or_else(|| format!("Theme repository item '{}' was not found.", item_id))?;
+    install_repository_theme_entry(&entry, &source_path)
+}
+
+pub fn remove_installed_repository_item(kind: AddonKind, item_id: &str) -> Result<String, String> {
+    match kind {
+        AddonKind::Theme => remove_installed_theme_manifest(
+            &config::theme_packs_directory(),
+            item_id,
+            "theme pack",
+            load_theme_pack_from_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::DesktopTheme => remove_installed_theme_manifest(
+            &config::desktop_styles_directory(),
+            item_id,
+            "desktop style",
+            load_desktop_style_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::TerminalTheme => remove_installed_theme_manifest(
+            &config::terminal_themes_directory(),
+            item_id,
+            "terminal theme",
+            load_terminal_theme_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::ColorTheme => remove_installed_theme_manifest(
+            &config::color_themes_directory(),
+            item_id,
+            "color theme",
+            load_color_theme_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::IconPack => remove_installed_theme_manifest(
+            &config::icon_packs_directory(),
+            item_id,
+            "icon pack",
+            load_icon_pack_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::SoundPack => remove_installed_theme_manifest(
+            &config::sound_packs_directory(),
+            item_id,
+            "sound pack",
+            load_sound_pack_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::CursorPack => remove_installed_theme_manifest(
+            &config::cursor_packs_directory(),
+            item_id,
+            "cursor pack",
+            load_cursor_pack_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::FontPack => remove_installed_theme_manifest(
+            &config::font_packs_directory(),
+            item_id,
+            "font pack",
+            load_font_pack_manifest,
+            |manifest| manifest.name.as_str(),
+        ),
+        AddonKind::App | AddonKind::ContentPack | AddonKind::Game | AddonKind::Service => {
+            remove_installed_addon(AddonId::from(item_id))
+        }
+    }
+}
+
 pub fn repository_sync_action_for_manifest(
     manifest: &AddonManifest,
 ) -> Result<Option<RepositoryAddonAction>, String> {
@@ -709,6 +1071,51 @@ fn install_user_addon_at_path(
     Ok(format!("Installed {}.", manifest.display_name))
 }
 
+fn install_repository_theme_entry(
+    entry: &ThemeRepositoryEntry,
+    source_path: &Path,
+) -> Result<String, String> {
+    let manifest = AddonManifest::new(
+        entry.id.clone(),
+        entry.name.clone(),
+        entry.version.clone(),
+        entry.kind,
+        AddonEntrypoint::StaticRoute {
+            route: format!("themes/{}", entry.id),
+        },
+    )
+    .with_scope(AddonScope::User);
+    let index = AddonRepositoryIndex {
+        schema_version: 1,
+        generated_at: None,
+        base_url: None,
+        addons: vec![crate::platform::IndexedAddonPackage {
+            manifest,
+            releases: vec![AddonRelease {
+                version: entry.version.clone(),
+                channel: Some("stable".to_string()),
+                artifacts: vec![AddonArtifact {
+                    install_profile: Some(config::install_profile()),
+                    url: entry.download_url.clone(),
+                    sha256: entry.checksum.clone(),
+                    signature_url: None,
+                    size_bytes: None,
+                    format: infer_repository_artifact_format(&entry.download_url),
+                }],
+            }],
+        }],
+    };
+
+    install_repository_addon_from_index(
+        &index,
+        source_path,
+        &AddonId::from(entry.id.clone()),
+        config::install_profile(),
+        &config::addon_downloads_cache_dir(),
+        &config::user_addons_root_dir(),
+    )
+}
+
 struct PreparedAddonInstallSource {
     install_path: PathBuf,
     cleanup_dir: Option<PathBuf>,
@@ -793,9 +1200,15 @@ fn prepare_addon_install_source(source_path: &Path) -> Result<PreparedAddonInsta
     ))
 }
 
-fn resolve_theme_bundle_root(staging_root: &Path) -> Option<(PathBuf, PathBuf)> {
+fn resolve_manifest_bundle_root<F>(
+    staging_root: &Path,
+    is_manifest: F,
+) -> Option<(PathBuf, PathBuf)>
+where
+    F: Copy + Fn(&Path) -> bool,
+{
     let manifest_path = staging_root.join("manifest.json");
-    if manifest_path.is_file() && load_theme_pack_from_manifest(&manifest_path).is_ok() {
+    if manifest_path.is_file() && is_manifest(&manifest_path) {
         return Some((staging_root.to_path_buf(), manifest_path));
     }
 
@@ -809,26 +1222,35 @@ fn resolve_theme_bundle_root(staging_root: &Path) -> Option<(PathBuf, PathBuf)> 
     }
     let only_dir = dirs.pop()?;
     let manifest_path = only_dir.join("manifest.json");
-    if manifest_path.is_file() && load_theme_pack_from_manifest(&manifest_path).is_ok() {
+    if manifest_path.is_file() && is_manifest(&manifest_path) {
         Some((only_dir, manifest_path))
     } else {
         None
     }
 }
 
-fn prepare_theme_install_source(
+fn prepare_manifest_install_source<F>(
     source_path: &Path,
     copy_parent_dir_for_manifest: bool,
-) -> Result<PreparedThemeInstallSource, String> {
+    manifest_label: &str,
+    load_manifest: F,
+) -> Result<PreparedThemeInstallSource, String>
+where
+    F: Copy + Fn(&Path) -> Result<(), String>,
+{
     if is_supported_addon_archive(source_path) {
         let staging_root = addon_archive_temp_dir("theme-install")?;
         extract_addon_archive(source_path, &staging_root)?;
-        let (install_path, manifest_path) = resolve_theme_bundle_root(&staging_root).ok_or_else(|| {
-            format!(
-                "No theme manifest found after extracting archive '{}'.",
-                source_path.display()
-            )
-        })?;
+        let (install_path, manifest_path) =
+            resolve_manifest_bundle_root(&staging_root, |manifest_path| {
+                load_manifest(manifest_path).is_ok()
+            })
+            .ok_or_else(|| {
+                format!(
+                    "No {manifest_label} manifest found after extracting archive '{}'.",
+                    source_path.display()
+                )
+            })?;
         return Ok(PreparedThemeInstallSource::extracted(
             install_path,
             manifest_path,
@@ -840,11 +1262,11 @@ fn prepare_theme_install_source(
         let manifest_path = source_path.join("manifest.json");
         if !manifest_path.is_file() {
             return Err(format!(
-                "No theme manifest found at '{}'.",
-                source_path.display()
+                "No {manifest_label} manifest found at '{}'.",
+                source_path.display(),
             ));
         }
-        load_theme_pack_from_manifest(&manifest_path)?;
+        load_manifest(&manifest_path)?;
         return Ok(PreparedThemeInstallSource::direct(
             source_path.to_path_buf(),
             manifest_path,
@@ -853,12 +1275,12 @@ fn prepare_theme_install_source(
 
     if !source_path.is_file() {
         return Err(format!(
-            "Theme source '{}' does not exist.",
-            source_path.display()
+            "{manifest_label} source '{}' does not exist.",
+            source_path.display(),
         ));
     }
 
-    load_theme_pack_from_manifest(source_path)?;
+    load_manifest(source_path)?;
     let install_path = if copy_parent_dir_for_manifest {
         source_path
             .parent()
@@ -871,6 +1293,15 @@ fn prepare_theme_install_source(
         install_path,
         source_path.to_path_buf(),
     ))
+}
+
+fn prepare_theme_install_source(
+    source_path: &Path,
+    copy_parent_dir_for_manifest: bool,
+) -> Result<PreparedThemeInstallSource, String> {
+    prepare_manifest_install_source(source_path, copy_parent_dir_for_manifest, "theme", |path| {
+        load_theme_pack_from_manifest(path).map(|_| ())
+    })
 }
 
 fn is_supported_addon_archive(path: &Path) -> bool {
@@ -1127,18 +1558,241 @@ fn install_dir_name_for_theme_pack(theme: &ThemePack) -> Result<&str, String> {
     }
 }
 
+fn install_dir_name_for_component_id<'a>(
+    component_id: &'a str,
+    component_label: &str,
+) -> Result<&'a str, String> {
+    use std::path::Component;
+
+    let mut components = Path::new(component_id).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(component_id),
+        _ => Err(format!(
+            "{component_label} '{}' has an invalid id for installation.",
+            component_id
+        )),
+    }
+}
+
+fn remove_installed_theme_manifest<T>(
+    install_root: &Path,
+    item_id: &str,
+    manifest_label: &str,
+    load_manifest: fn(&Path) -> Result<T, String>,
+    manifest_name: fn(&T) -> &str,
+) -> Result<String, String> {
+    let install_dir_name = install_dir_name_for_component_id(item_id, manifest_label)?;
+    let target_dir = install_root.join(install_dir_name);
+    let manifest = load_manifest(&target_dir.join("manifest.json"))?;
+    fs::remove_dir_all(&target_dir)
+        .map_err(|error| format!("Failed to remove installed {manifest_label}: {error}"))?;
+    Ok(format!("Removed {}.", manifest_name(&manifest)))
+}
+
+fn install_theme_component_at_path<T>(
+    source_path: &Path,
+    install_root: &Path,
+    copy_parent_dir_for_manifest: bool,
+    component_label: &str,
+    load_manifest: fn(&Path) -> Result<T, String>,
+    manifest_id: fn(&T) -> &str,
+    manifest_name: fn(&T) -> &str,
+) -> Result<String, String> {
+    let prepared = prepare_manifest_install_source(
+        source_path,
+        copy_parent_dir_for_manifest,
+        component_label,
+        |path| load_manifest(path).map(|_| ()),
+    )?;
+    let manifest = load_manifest(&prepared.manifest_path)?;
+    let install_dir_name =
+        install_dir_name_for_component_id(manifest_id(&manifest), component_label)?;
+
+    fs::create_dir_all(install_root)
+        .map_err(|error| format!("Failed to create {component_label} directory: {error}"))?;
+    let canonical_root = fs::canonicalize(install_root)
+        .map_err(|error| format!("Failed to resolve {component_label} directory: {error}"))?;
+    let canonical_source = fs::canonicalize(&prepared.install_path)
+        .map_err(|error| format!("Failed to resolve {component_label} source: {error}"))?;
+    if canonical_source.starts_with(&canonical_root) {
+        return Err(format!(
+            "{component_label} source '{}' is already inside the install directory.",
+            source_path.display()
+        ));
+    }
+
+    let target_dir = canonical_root.join(install_dir_name);
+    if target_dir.exists() {
+        fs::remove_dir_all(&target_dir).map_err(|error| {
+            format!("Failed to replace existing {component_label} install: {error}")
+        })?;
+    }
+    fs::create_dir_all(&target_dir).map_err(|error| {
+        format!("Failed to create {component_label} install directory: {error}")
+    })?;
+
+    if prepared.install_path.is_dir() {
+        copy_dir_contents(&prepared.install_path, &target_dir)?;
+        ensure_installed_manifest(&target_dir, &prepared.manifest_path, component_label)?;
+    } else {
+        fs::copy(&prepared.manifest_path, target_dir.join("manifest.json"))
+            .map_err(|error| format!("Failed to copy {component_label} manifest: {error}"))?;
+    }
+
+    let installed = load_manifest(&target_dir.join("manifest.json"))?;
+    Ok(format!("Installed {}.", manifest_name(&installed)))
+}
+
+fn ensure_installed_manifest(
+    target_dir: &Path,
+    source_manifest_path: &Path,
+    manifest_label: &str,
+) -> Result<(), String> {
+    let target_manifest_path = target_dir.join("manifest.json");
+    if target_manifest_path.is_file() {
+        return Ok(());
+    }
+
+    fs::copy(source_manifest_path, &target_manifest_path)
+        .map_err(|error| format!("Failed to normalize {manifest_label} manifest: {error}"))?;
+    Ok(())
+}
+
+fn install_embedded_theme_components_at_path(
+    bundle_dir: &Path,
+    themes_root: &Path,
+) -> Result<(), String> {
+    install_embedded_component_manifests(
+        bundle_dir,
+        "desktop",
+        &themes_root.join("desktop"),
+        "desktop style",
+        load_desktop_style_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    install_embedded_component_manifests(
+        bundle_dir,
+        "colors",
+        &themes_root.join("colors"),
+        "color theme",
+        load_color_theme_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    install_embedded_component_manifests(
+        bundle_dir,
+        "icons",
+        &themes_root.join("icons"),
+        "icon pack",
+        load_icon_pack_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    install_embedded_component_manifests(
+        bundle_dir,
+        "sounds",
+        &themes_root.join("sounds"),
+        "sound pack",
+        load_sound_pack_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    install_embedded_component_manifests(
+        bundle_dir,
+        "cursors",
+        &themes_root.join("cursors"),
+        "cursor pack",
+        load_cursor_pack_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    install_embedded_component_manifests(
+        bundle_dir,
+        "fonts",
+        &themes_root.join("fonts"),
+        "font pack",
+        load_font_pack_manifest,
+        |manifest| manifest.id.as_str(),
+        |manifest| manifest.name.as_str(),
+    )?;
+    Ok(())
+}
+
+fn install_embedded_component_manifests<T>(
+    bundle_dir: &Path,
+    embedded_subdir: &str,
+    install_root: &Path,
+    component_label: &str,
+    load_manifest: fn(&Path) -> Result<T, String>,
+    manifest_id: fn(&T) -> &str,
+    manifest_name: fn(&T) -> &str,
+) -> Result<(), String> {
+    let embedded_dir = bundle_dir.join(embedded_subdir);
+    if !embedded_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(&embedded_dir)
+        .map_err(|error| format!("Failed to read embedded {component_label} directory: {error}"))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let source_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect embedded {component_label}: {error}"))?;
+        let (manifest_path, copy_parent_dir_for_manifest) = if file_type.is_dir() {
+            (source_path.join("manifest.json"), false)
+        } else if file_type.is_file()
+            && source_path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            (source_path.clone(), true)
+        } else {
+            continue;
+        };
+
+        if load_manifest(&manifest_path).is_err() {
+            continue;
+        }
+
+        install_theme_component_at_path(
+            &source_path,
+            install_root,
+            copy_parent_dir_for_manifest,
+            component_label,
+            load_manifest,
+            manifest_id,
+            manifest_name,
+        )
+        .map_err(|error| {
+            format!(
+                "Failed to install embedded {component_label} from '{}': {error}",
+                source_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
 fn install_theme_bundle_at_path(
     source_path: &Path,
-    themes_root: &Path,
+    packs_root: &Path,
     copy_parent_dir_for_manifest: bool,
 ) -> Result<ThemePack, String> {
     let prepared = prepare_theme_install_source(source_path, copy_parent_dir_for_manifest)?;
     let theme = load_theme_pack_from_manifest(&prepared.manifest_path)?;
     let install_dir_name = install_dir_name_for_theme_pack(&theme)?;
 
-    fs::create_dir_all(themes_root)
+    fs::create_dir_all(packs_root)
         .map_err(|error| format!("Failed to create themes directory: {error}"))?;
-    let canonical_root = fs::canonicalize(themes_root)
+    let canonical_root = fs::canonicalize(packs_root)
         .map_err(|error| format!("Failed to resolve themes directory: {error}"))?;
     let canonical_source = fs::canonicalize(&prepared.install_path)
         .map_err(|error| format!("Failed to resolve theme source: {error}"))?;
@@ -1159,16 +1813,20 @@ fn install_theme_bundle_at_path(
 
     if prepared.install_path.is_dir() {
         copy_dir_contents(&prepared.install_path, &target_dir)?;
+        ensure_installed_manifest(&target_dir, &prepared.manifest_path, "theme")?;
     } else {
         fs::copy(&prepared.manifest_path, target_dir.join("manifest.json"))
             .map_err(|error| format!("Failed to copy theme manifest: {error}"))?;
     }
 
+    let themes_root = canonical_root.parent().unwrap_or(canonical_root.as_path());
+    install_embedded_theme_components_at_path(&target_dir, themes_root)?;
+
     load_theme_pack_from_manifest(&target_dir.join("manifest.json"))
 }
 
 pub(crate) fn import_theme_bundle_from_path(source_path: &Path) -> Result<ThemePack, String> {
-    install_theme_bundle_at_path(source_path, &config::themes_directory(), true)
+    install_theme_bundle_at_path(source_path, &config::theme_packs_directory(), true)
 }
 
 fn copy_dir_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
@@ -1263,10 +1921,93 @@ fn install_repository_addon_from_index(
         stage_repository_artifact(index, repository_source, artifact, &staging_dir)?;
     verify_repository_artifact_checksum(&staged_source, &artifact.sha256)?;
 
-    if package.manifest.kind == AddonKind::Theme {
-        let theme =
-            install_theme_bundle_at_path(&staged_source, &config::themes_directory(), false)?;
-        return Ok(format!("Installed {}.", theme.name));
+    match package.manifest.kind {
+        AddonKind::Theme => {
+            let theme = install_theme_bundle_at_path(
+                &staged_source,
+                &config::theme_packs_directory(),
+                false,
+            )?;
+            return Ok(format!("Installed {}.", theme.name));
+        }
+        AddonKind::DesktopTheme => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::desktop_styles_directory(),
+                false,
+                "desktop style",
+                load_desktop_style_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::TerminalTheme => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::terminal_themes_directory(),
+                false,
+                "terminal theme",
+                load_terminal_theme_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::ColorTheme => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::color_themes_directory(),
+                false,
+                "color theme",
+                load_color_theme_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::IconPack => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::icon_packs_directory(),
+                false,
+                "icon pack",
+                load_icon_pack_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::SoundPack => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::sound_packs_directory(),
+                false,
+                "sound pack",
+                load_sound_pack_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::CursorPack => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::cursor_packs_directory(),
+                false,
+                "cursor pack",
+                load_cursor_pack_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::FontPack => {
+            return install_theme_component_at_path(
+                &staged_source,
+                &config::font_packs_directory(),
+                false,
+                "font pack",
+                load_font_pack_manifest,
+                |manifest| manifest.id.as_str(),
+                |manifest| manifest.name.as_str(),
+            );
+        }
+        AddonKind::App | AddonKind::ContentPack | AddonKind::Game | AddonKind::Service => {}
     }
 
     let mut overrides = addon_state_overrides();
@@ -1366,6 +2107,23 @@ fn stage_repository_source_path(
             })?;
             Ok(destination)
         }
+    }
+}
+
+fn infer_repository_artifact_format(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        Some("tar-gz".to_string())
+    } else if lower.ends_with(".tar") {
+        Some("tar".to_string())
+    } else if lower.ends_with(".ndpkg") {
+        Some("ndpkg".to_string())
+    } else if lower.ends_with(".zip") {
+        Some("zip".to_string())
+    } else if lower.ends_with(".json") {
+        Some("manifest-json".to_string())
+    } else {
+        None
     }
 }
 
@@ -1730,11 +2488,16 @@ fn base_app_manifest(id: &str, display_name: &str, route: &str) -> AddonManifest
     )
 }
 
-const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 11] = [
+const FIRST_PARTY_ADDON_RUNTIMES: [FirstPartyAddonRuntime; 12] = [
     FirstPartyAddonRuntime {
         addon_id: "shell.settings",
         desktop_route: Some(NativeDesktopRoute::OpenSettingsPanel(None)),
         terminal_route: Some(NativeTerminalRoute::OpenScreen(TerminalScreen::Settings)),
+    },
+    FirstPartyAddonRuntime {
+        addon_id: "shell.addons",
+        desktop_route: Some(NativeDesktopRoute::OpenWindow(DesktopWindow::Addons)),
+        terminal_route: None,
     },
     FirstPartyAddonRuntime {
         addon_id: "shell.file-manager",
@@ -1820,7 +2583,11 @@ mod tests {
         AddonStateOverrides, CapabilityId, DiscoveredAddonManifest, HostedAddonProtocol,
         IndexedAddonPackage, InstallProfile,
     };
-    use crate::theme::{ColorStyle, FullColorTheme, SoundPack, ThemePack};
+    use crate::theme::{
+        ColorStyle, DesktopStyleManifest, DesktopStyleRef, FontPackManifest, FullColorTheme,
+        LayoutProfile, SoundPack, SoundPackManifest, TerminalBranding, TerminalDecoration,
+        ThemePack,
+    };
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::io::Read;
@@ -2462,6 +3229,7 @@ mod tests {
     fn install_theme_bundle_from_manifest_file_copies_parent_directory_contents() {
         let source_root = temp_dir("install_theme_bundle_from_manifest_file_source");
         let install_root = temp_dir("install_theme_bundle_from_manifest_file_install");
+        let packs_root = install_root.join("packs");
         let bundle_dir = source_root.join("sample-theme");
         fs::create_dir_all(bundle_dir.join("colors")).unwrap();
         fs::create_dir_all(bundle_dir.join("sounds")).unwrap();
@@ -2485,7 +3253,7 @@ mod tests {
 
         let installed = super::install_theme_bundle_at_path(
             &bundle_dir.join("manifest.json"),
-            &install_root,
+            &packs_root,
             true,
         )
         .unwrap();
@@ -2494,7 +3262,7 @@ mod tests {
         assert_eq!(installed.name, "Signal Forge Custom");
         assert_eq!(
             fs::read_to_string(
-                install_root
+                packs_root
                     .join("signal-forge-custom")
                     .join("colors")
                     .join("custom.json")
@@ -2504,7 +3272,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(
-                install_root
+                packs_root
                     .join("signal-forge-custom")
                     .join("sounds")
                     .join("navigate.wav")
@@ -2518,6 +3286,7 @@ mod tests {
     fn install_theme_bundle_from_ndpkg_archive_extracts_bundle_contents() {
         let source_root = temp_dir("install_theme_bundle_from_ndpkg_archive_source");
         let install_root = temp_dir("install_theme_bundle_from_ndpkg_archive_install");
+        let packs_root = install_root.join("packs");
         let archive_path = source_root.join("signal-forge.ndpkg");
         let manifest = theme_pack("archive-theme", "Archive Theme");
         let mut colors = FullColorTheme::nucleon_dark();
@@ -2539,12 +3308,12 @@ mod tests {
         );
 
         let installed =
-            super::install_theme_bundle_at_path(&archive_path, &install_root, false).unwrap();
+            super::install_theme_bundle_at_path(&archive_path, &packs_root, false).unwrap();
 
         assert_eq!(installed.id, "archive-theme");
         assert_eq!(
             fs::read_to_string(
-                install_root
+                packs_root
                     .join("archive-theme")
                     .join("colors")
                     .join("custom.json")
@@ -2554,9 +3323,155 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(
-                install_root
+                packs_root
                     .join("archive-theme")
                     .join("sounds")
+                    .join("navigate.wav")
+            )
+            .unwrap(),
+            "wave"
+        );
+    }
+
+    #[test]
+    fn install_theme_bundle_decomposes_embedded_component_manifests() {
+        let source_root =
+            temp_dir("install_theme_bundle_decomposes_embedded_component_manifests_source");
+        let install_root =
+            temp_dir("install_theme_bundle_decomposes_embedded_component_manifests_install");
+        let packs_root = install_root.join("packs");
+        let bundle_dir = source_root.join("heritage-pack");
+        fs::create_dir_all(bundle_dir.join("desktop")).unwrap();
+        fs::create_dir_all(bundle_dir.join("fonts").join("heritage-font")).unwrap();
+        fs::create_dir_all(bundle_dir.join("sounds").join("heritage")).unwrap();
+
+        let mut theme = theme_pack("heritage-pack", "Heritage Pack");
+        theme.desktop_style = DesktopStyleRef::ById {
+            desktop_style_id: "heritage-shell".to_string(),
+        };
+        theme.sound_pack_id = Some("heritage-sounds".to_string());
+        theme.font_pack_id = Some("heritage-font".to_string());
+
+        let mut desktop_style = crate::theme::DesktopStyle::flat();
+        desktop_style.id = "heritage-shell".to_string();
+        desktop_style.name = "Heritage Desktop".to_string();
+        let desktop_style_manifest = DesktopStyleManifest {
+            id: "heritage-shell".to_string(),
+            name: "Heritage Desktop".to_string(),
+            description: "Embedded desktop chrome".to_string(),
+            version: "1.0.0".to_string(),
+            style: desktop_style,
+            font: None,
+        };
+        let sound_manifest = SoundPackManifest {
+            id: "heritage-sounds".to_string(),
+            name: "Heritage Sounds".to_string(),
+            description: "Embedded sound set".to_string(),
+            version: "1.0.0".to_string(),
+            sound_pack: SoundPack {
+                path: Some("heritage".to_string()),
+            },
+        };
+        let font_manifest = FontPackManifest {
+            id: "heritage-font".to_string(),
+            name: "Heritage Font".to_string(),
+            description: "Embedded terminal font".to_string(),
+            version: "1.0.0".to_string(),
+            file: "heritage.ttf".to_string(),
+        };
+
+        fs::write(
+            bundle_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&theme).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir.join("desktop").join("heritage-shell.json"),
+            serde_json::to_string_pretty(&desktop_style_manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir.join("sounds").join("heritage-sounds.json"),
+            serde_json::to_string_pretty(&sound_manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir.join("fonts").join("heritage-font").join("manifest.json"),
+            serde_json::to_string_pretty(&font_manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir.join("fonts").join("heritage-font").join("heritage.ttf"),
+            "font-bytes",
+        )
+        .unwrap();
+        fs::write(
+            bundle_dir
+                .join("sounds")
+                .join("heritage")
+                .join("navigate.wav"),
+            "wave",
+        )
+        .unwrap();
+
+        let installed = super::install_theme_bundle_at_path(
+            &bundle_dir.join("manifest.json"),
+            &packs_root,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(installed.id, "heritage-pack");
+        assert!(packs_root
+            .join("heritage-pack")
+            .join("manifest.json")
+            .exists());
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("desktop")
+                    .join("heritage-shell")
+                    .join("manifest.json")
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(&desktop_style_manifest).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("fonts")
+                    .join("heritage-font")
+                    .join("manifest.json")
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(&font_manifest).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("fonts")
+                    .join("heritage-font")
+                    .join("heritage.ttf")
+            )
+            .unwrap(),
+            "font-bytes"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("sounds")
+                    .join("heritage-sounds")
+                    .join("manifest.json")
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(&sound_manifest).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                install_root
+                    .join("sounds")
+                    .join("heritage-sounds")
+                    .join("heritage")
                     .join("navigate.wav")
             )
             .unwrap(),
@@ -2958,16 +3873,24 @@ mod tests {
     }
 
     fn theme_pack(id: &str, name: &str) -> ThemePack {
-        let mut theme = ThemePack::heritage();
-        theme.id = id.to_string();
-        theme.name = name.to_string();
-        theme.color_style = ColorStyle::FullColor {
-            theme_id: "nucleon-dark".to_string(),
-        };
-        theme.sound_pack = SoundPack {
-            path: Some("sounds".to_string()),
-        };
-        theme
+        ThemePack {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            version: "1.0.0".to_string(),
+            desktop_style: DesktopStyleRef::Inline(crate::theme::DesktopStyle::flat()),
+            color_style: ColorStyle::FullColor {
+                theme_id: "nucleon-dark".to_string(),
+            },
+            full_color_theme: None,
+            terminal_branding: TerminalBranding::none(),
+            terminal_decoration: TerminalDecoration::default(),
+            icon_pack_id: None,
+            sound_pack_id: None,
+            cursor_pack_id: None,
+            font_pack_id: None,
+            layout_profile: LayoutProfile::classic(),
+        }
     }
 
     fn sample_repository_index() -> AddonRepositoryIndex {

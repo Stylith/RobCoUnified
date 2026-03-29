@@ -50,7 +50,8 @@ impl NucleonNativeApp {
                 ui,
                 "Settings",
                 maximized,
-                &self.desktop_active_shell_style,
+                self.desktop_active_window == Some(wid),
+                &self.desktop_active_desktop_style,
             );
             let is_admin = self.session.as_ref().is_some_and(|s| s.is_admin);
             let panel = self.settings.panel;
@@ -115,6 +116,8 @@ impl NucleonNativeApp {
                                         SettingsHomeTileAction::OpenPanel(panel) => {
                                             if panel == NativeSettingsPanel::Appearance {
                                                 self.open_tweaks_from_settings();
+                                            } else if panel == NativeSettingsPanel::Addons {
+                                                self.open_addons_from_settings();
                                             } else {
                                                 next_panel = Some(panel);
                                             }
@@ -318,6 +321,7 @@ impl NucleonNativeApp {
                                     self.settings.draft.native_startup_window_mode.label()
                                 ));
                             }
+                            NativeSettingsPanel::Addons => {}
                             NativeSettingsPanel::Appearance => {}
                             NativeSettingsPanel::Home => {}
                         });

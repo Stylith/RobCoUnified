@@ -21,7 +21,8 @@ pub struct TerminalSlotContext<'a> {
 
 pub trait TerminalSlotRenderer {
     fn slot(&self) -> TerminalSlot;
-    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction>;
+    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext)
+        -> Vec<SlotAction>;
 }
 
 pub struct TerminalSlotRegistry {

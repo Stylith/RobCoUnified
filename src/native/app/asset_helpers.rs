@@ -68,6 +68,7 @@ impl NucleonNativeApp {
                     color_mode_is_full_color,
                 )
             }),
+            NativeSettingsPanel::Addons => return None,
             NativeSettingsPanel::DefaultApps => cache.icon_default_apps.get_or_insert_with(|| {
                 Self::load_themed_svg_icon(
                     ctx,

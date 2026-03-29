@@ -27,6 +27,7 @@ pub enum DesktopWindow {
     Editor,
     Settings,
     Tweaks,
+    Addons,
     Applications,
     TerminalMode,
     PtyApp,

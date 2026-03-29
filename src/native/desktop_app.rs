@@ -27,6 +27,7 @@ pub enum DesktopHostedApp {
     Editor,
     Settings,
     Tweaks,
+    Addons,
     Applications,
     Terminal,
     Installer,
@@ -183,7 +184,7 @@ pub struct DesktopComponentSpec {
     title_kind: DesktopTitleKind,
 }
 
-const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 8] = [
+const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 9] = [
     DesktopComponentBinding {
         spec: DesktopComponentSpec {
             window: DesktopWindow::FileManager,
@@ -245,6 +246,22 @@ const DESKTOP_COMPONENT_BINDINGS: [DesktopComponentBinding; 8] = [
         is_open: NucleonNativeApp::desktop_component_tweaks_is_open,
         set_open: NucleonNativeApp::desktop_component_tweaks_set_open,
         draw: NucleonNativeApp::desktop_component_tweaks_draw,
+        on_open: None,
+        on_closed: None,
+    },
+    DesktopComponentBinding {
+        spec: DesktopComponentSpec {
+            window: DesktopWindow::Addons,
+            hosted_app: DesktopHostedApp::Addons,
+            id_salt: "native_addons",
+            default_size: [900.0, 600.0],
+            show_in_taskbar: true,
+            show_in_window_menu: true,
+            title_kind: DesktopTitleKind::Static("Addons"),
+        },
+        is_open: NucleonNativeApp::desktop_component_addons_is_open,
+        set_open: NucleonNativeApp::desktop_component_addons_set_open,
+        draw: NucleonNativeApp::desktop_component_addons_draw,
         on_open: None,
         on_closed: None,
     },
@@ -788,10 +805,11 @@ mod tests {
     fn desktop_component_registry_is_single_source_of_truth() {
         let components = desktop_components();
         assert_eq!(components[0].spec.window, DesktopWindow::FileManager);
-        assert_eq!(components[5].spec.window, DesktopWindow::Installer);
-        assert_eq!(components[6].spec.window, DesktopWindow::TerminalMode);
-        assert!(!components[6].spec.show_in_taskbar);
-        assert!(!components[5].spec.show_in_window_menu);
+        assert_eq!(components[5].spec.window, DesktopWindow::Applications);
+        assert_eq!(components[6].spec.window, DesktopWindow::Installer);
+        assert_eq!(components[7].spec.window, DesktopWindow::TerminalMode);
+        assert!(!components[7].spec.show_in_taskbar);
+        assert!(!components[6].spec.show_in_window_menu);
         assert_eq!(
             desktop_component_spec(DesktopWindow::Settings).id_salt,
             "native_settings"

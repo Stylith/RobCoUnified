@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 
 fn default_theme_pack_version() -> String {
     "1.0.0".to_string()
@@ -153,14 +154,423 @@ impl FullColorTheme {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShellStyle {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum FillStyle {
+    None,
+    Solid {
+        color: ThemeColor,
+    },
+    LinearGradient {
+        stops: Vec<GradientStop>,
+        angle: f32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub position: f32,
+    pub color: ThemeColor,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ThemeColor {
+    Palette(PaletteRef),
+    Rgba([u8; 4]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PaletteRef {
+    Fg,
+    Dim,
+    Bg,
+    Panel,
+    SelectedBg,
+    SelectedFg,
+    HoveredBg,
+    ActiveBg,
+    SelectionBg,
+    WindowChrome,
+    WindowChromeFocused,
+    BarBg,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BorderStyle {
+    pub width: f32,
+    pub color: ThemeColor,
+    #[serde(default)]
+    pub highlight: Option<ThemeColor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowStyle {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub color: ThemeColor,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElementStyle {
+    #[serde(default = "default_fill_none")]
+    pub fill: FillStyle,
+    #[serde(default)]
+    pub border: Option<BorderStyle>,
+    #[serde(default)]
+    pub shadow: Option<ShadowStyle>,
+    #[serde(default)]
+    pub rounding: f32,
+    #[serde(default)]
+    pub text_color: Option<ThemeColor>,
+}
+
+fn default_fill_none() -> FillStyle {
+    FillStyle::None
+}
+
+impl ElementStyle {
+    pub fn default_window_frame() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::Bg),
+            },
+            border: Some(BorderStyle {
+                width: 2.0,
+                color: ThemeColor::Palette(PaletteRef::Fg),
+                highlight: None,
+            }),
+            shadow: None,
+            rounding: 0.0,
+            text_color: None,
+        }
+    }
+
+    pub fn default_title_bar() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::WindowChromeFocused),
+            },
+            border: None,
+            shadow: None,
+            rounding: 0.0,
+            text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+        }
+    }
+
+    pub fn default_title_bar_unfocused() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::WindowChrome),
+            },
+            border: None,
+            shadow: None,
+            rounding: 0.0,
+            text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+        }
+    }
+
+    pub fn default_bar() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::BarBg),
+            },
+            border: None,
+            shadow: None,
+            rounding: 0.0,
+            text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+        }
+    }
+
+    pub fn default_menu_dropdown() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::Bg),
+            },
+            border: Some(BorderStyle {
+                width: 2.0,
+                color: ThemeColor::Palette(PaletteRef::Fg),
+                highlight: None,
+            }),
+            shadow: None,
+            rounding: 0.0,
+            text_color: None,
+        }
+    }
+
+    pub fn default_start_menu() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::Panel),
+            },
+            border: Some(BorderStyle {
+                width: 2.0,
+                color: ThemeColor::Palette(PaletteRef::Fg),
+                highlight: None,
+            }),
+            shadow: None,
+            rounding: 0.0,
+            text_color: None,
+        }
+    }
+
+    pub fn default_panel() -> Self {
+        Self {
+            fill: FillStyle::Solid {
+                color: ThemeColor::Palette(PaletteRef::Panel),
+            },
+            border: None,
+            shadow: None,
+            rounding: 0.0,
+            text_color: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesktopStyle {
     pub id: String,
     pub name: String,
-    pub border_radius: f32,
     pub title_bar_height: f32,
     pub separator_thickness: f32,
-    pub window_shadow: bool,
+    #[serde(default = "ElementStyle::default_window_frame")]
+    pub window_frame: ElementStyle,
+    #[serde(default = "ElementStyle::default_title_bar")]
+    pub title_bar: ElementStyle,
+    #[serde(default = "ElementStyle::default_title_bar_unfocused")]
+    pub title_bar_unfocused: ElementStyle,
+    #[serde(default = "ElementStyle::default_bar")]
+    pub menu_bar: ElementStyle,
+    #[serde(default = "ElementStyle::default_bar")]
+    pub taskbar: ElementStyle,
+    #[serde(default = "ElementStyle::default_menu_dropdown")]
+    pub menu_dropdown: ElementStyle,
+    #[serde(default = "ElementStyle::default_start_menu")]
+    pub start_menu: ElementStyle,
+    #[serde(default)]
+    pub start_button: Option<ElementStyle>,
+    #[serde(default = "ElementStyle::default_panel")]
+    pub panel: ElementStyle,
+    #[serde(default)]
+    pub scrollbar: Option<ElementStyle>,
+}
+
+impl Default for DesktopStyle {
+    fn default() -> Self {
+        Self::flat()
+    }
+}
+
+impl DesktopStyle {
+    pub fn flat() -> Self {
+        DesktopStyle {
+            id: "flat".to_string(),
+            name: "Flat".to_string(),
+            title_bar_height: 28.0,
+            separator_thickness: 2.0,
+            window_frame: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Bg),
+                },
+                border: Some(BorderStyle {
+                    width: 2.0,
+                    color: ThemeColor::Palette(PaletteRef::Fg),
+                    highlight: None,
+                }),
+                shadow: None,
+                rounding: 0.0,
+                text_color: None,
+            },
+            title_bar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::WindowChromeFocused),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            title_bar_unfocused: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::WindowChrome),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            menu_bar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::BarBg),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            taskbar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::BarBg),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            menu_dropdown: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Bg),
+                },
+                border: Some(BorderStyle {
+                    width: 2.0,
+                    color: ThemeColor::Palette(PaletteRef::Fg),
+                    highlight: None,
+                }),
+                shadow: None,
+                rounding: 0.0,
+                text_color: None,
+            },
+            start_menu: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Panel),
+                },
+                border: Some(BorderStyle {
+                    width: 2.0,
+                    color: ThemeColor::Palette(PaletteRef::Fg),
+                    highlight: None,
+                }),
+                shadow: None,
+                rounding: 0.0,
+                text_color: None,
+            },
+            start_button: None,
+            panel: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Panel),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: None,
+            },
+            scrollbar: None,
+        }
+    }
+
+    pub fn modern() -> Self {
+        DesktopStyle {
+            id: "modern".to_string(),
+            name: "Modern".to_string(),
+            title_bar_height: 28.0,
+            separator_thickness: 1.0,
+            window_frame: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Bg),
+                },
+                border: Some(BorderStyle {
+                    width: 1.0,
+                    color: ThemeColor::Palette(PaletteRef::Dim),
+                    highlight: None,
+                }),
+                shadow: Some(ShadowStyle {
+                    offset_x: 0.0,
+                    offset_y: 2.0,
+                    blur: 8.0,
+                    color: ThemeColor::Rgba([0, 0, 0, 80]),
+                }),
+                rounding: 6.0,
+                text_color: None,
+            },
+            title_bar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::WindowChromeFocused),
+                },
+                border: None,
+                shadow: None,
+                rounding: 6.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            title_bar_unfocused: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::WindowChrome),
+                },
+                border: None,
+                shadow: None,
+                rounding: 6.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            menu_bar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::BarBg),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            taskbar: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::BarBg),
+                },
+                border: None,
+                shadow: None,
+                rounding: 0.0,
+                text_color: Some(ThemeColor::Palette(PaletteRef::SelectedFg)),
+            },
+            menu_dropdown: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Bg),
+                },
+                border: Some(BorderStyle {
+                    width: 1.0,
+                    color: ThemeColor::Palette(PaletteRef::Dim),
+                    highlight: None,
+                }),
+                shadow: Some(ShadowStyle {
+                    offset_x: 0.0,
+                    offset_y: 2.0,
+                    blur: 6.0,
+                    color: ThemeColor::Rgba([0, 0, 0, 60]),
+                }),
+                rounding: 4.0,
+                text_color: None,
+            },
+            start_menu: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Panel),
+                },
+                border: Some(BorderStyle {
+                    width: 1.0,
+                    color: ThemeColor::Palette(PaletteRef::Dim),
+                    highlight: None,
+                }),
+                shadow: Some(ShadowStyle {
+                    offset_x: 0.0,
+                    offset_y: 4.0,
+                    blur: 12.0,
+                    color: ThemeColor::Rgba([0, 0, 0, 80]),
+                }),
+                rounding: 4.0,
+                text_color: None,
+            },
+            start_button: None,
+            panel: ElementStyle {
+                fill: FillStyle::Solid {
+                    color: ThemeColor::Palette(PaletteRef::Panel),
+                },
+                border: None,
+                shadow: None,
+                rounding: 4.0,
+                text_color: None,
+            },
+            scrollbar: None,
+        }
+    }
+
+    pub fn builtin_desktop_styles() -> Vec<DesktopStyle> {
+        vec![Self::flat(), Self::modern()]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,7 +600,7 @@ pub enum WindowHeaderStyle {
     Hidden,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LayoutProfile {
     pub id: String,
     pub name: String,
@@ -202,7 +612,7 @@ pub struct LayoutProfile {
     pub window_header_style: WindowHeaderStyle,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalLayoutProfile {
     pub id: String,
     pub name: String,
@@ -269,16 +679,6 @@ impl TerminalBranding {
             header_lines: vec![],
         }
     }
-
-    pub fn heritage() -> Self {
-        TerminalBranding {
-            header_lines: vec![
-                "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM".to_string(),
-                "COPYRIGHT 2075-2077 ROBCO INDUSTRIES".to_string(),
-                "-SERVER 1-".to_string(),
-            ],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +713,382 @@ impl Default for TerminalDecoration {
     }
 }
 
+/// A single option that a terminal theme exposes to the user.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThemeOptionDef {
+    /// Machine-readable key (for example, "bracket_menus").
+    pub key: String,
+    /// Human-readable label shown in Tweaks.
+    pub label: String,
+    /// Help text shown below the option.
+    #[serde(default)]
+    pub description: String,
+    /// What kind of control this option is.
+    pub kind: ThemeOptionKind,
+}
+
+/// The type and constraints of a theme option.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ThemeOptionKind {
+    Bool { default: bool },
+    Choice { choices: Vec<String>, default: String },
+    Int { min: i32, max: i32, default: i32 },
+    Float { min: f32, max: f32, default: f32 },
+}
+
+/// A concrete value for a theme option.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ThemeOptionValue {
+    Bool(bool),
+    String(String),
+    Int(i32),
+    Float(f32),
+}
+
+/// Which renderer a terminal theme uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TerminalRenderer {
+    /// Built-in renderer shipped with the core. ID must match a registered renderer.
+    Builtin { id: String },
+    /// WASM module that owns screen rendering (Phase 16).
+    Wasm { module: String },
+}
+
+/// A terminal theme that controls the entire terminal UI composition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerminalTheme {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    /// Which renderer handles screen drawing.
+    pub renderer: TerminalRenderer,
+    /// Preferred font for this terminal theme. User can override in Tweaks.
+    #[serde(default)]
+    pub font: Option<FontRef>,
+    /// Options this theme exposes to the user.
+    #[serde(default)]
+    pub options_schema: Vec<ThemeOptionDef>,
+    /// Default values for all options. Keys must match `options_schema`.
+    #[serde(default)]
+    pub default_options: HashMap<String, ThemeOptionValue>,
+}
+
+/// Manifest for a terminal theme installable from the themes repo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerminalThemeManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub theme: TerminalTheme,
+}
+
+impl TerminalTheme {
+    pub fn classic() -> Self {
+        Self {
+            id: "classic".to_string(),
+            name: "Classic".to_string(),
+            description: "The original Nucleon terminal interface.".to_string(),
+            version: "1.0.0".to_string(),
+            renderer: TerminalRenderer::Builtin {
+                id: "classic".to_string(),
+            },
+            font: None,
+            options_schema: vec![
+                ThemeOptionDef {
+                    key: "separator_char".to_string(),
+                    label: "Separator Character".to_string(),
+                    description: "Character used for horizontal separators.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec![
+                            "=".to_string(),
+                            "-".to_string(),
+                            "*".to_string(),
+                            "#".to_string(),
+                        ],
+                        default: "=".to_string(),
+                    },
+                },
+                ThemeOptionDef {
+                    key: "show_separators".to_string(),
+                    label: "Show Separators".to_string(),
+                    description: "Display horizontal separator lines.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "menu_alignment".to_string(),
+                    label: "Menu Alignment".to_string(),
+                    description: "How menu items are aligned on screen.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec!["Left".to_string(), "Center".to_string()],
+                        default: "Left".to_string(),
+                    },
+                },
+                ThemeOptionDef {
+                    key: "selection_style".to_string(),
+                    label: "Selection Style".to_string(),
+                    description: "How the selected menu item is highlighted.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec!["Full Row".to_string(), "Text Only".to_string()],
+                        default: "Full Row".to_string(),
+                    },
+                },
+                ThemeOptionDef {
+                    key: "selection_marker".to_string(),
+                    label: "Selection Marker".to_string(),
+                    description: "Text prefix for the selected item.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec![
+                            "> ".to_string(),
+                            ">> ".to_string(),
+                            "* ".to_string(),
+                            "".to_string(),
+                        ],
+                        default: "> ".to_string(),
+                    },
+                },
+                ThemeOptionDef {
+                    key: "header_visible".to_string(),
+                    label: "Show Header".to_string(),
+                    description: "Display the branding header at the top.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: false },
+                },
+                ThemeOptionDef {
+                    key: "subtitle_underlined".to_string(),
+                    label: "Underline Subtitle".to_string(),
+                    description: "Draw an underline below the subtitle text.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "content_margin".to_string(),
+                    label: "Content Margin".to_string(),
+                    description: "Columns of margin on each side of content.".to_string(),
+                    kind: ThemeOptionKind::Int {
+                        min: 0,
+                        max: 10,
+                        default: 3,
+                    },
+                },
+            ],
+            default_options: {
+                let mut options = HashMap::new();
+                options.insert(
+                    "separator_char".to_string(),
+                    ThemeOptionValue::String("=".to_string()),
+                );
+                options.insert(
+                    "show_separators".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert(
+                    "menu_alignment".to_string(),
+                    ThemeOptionValue::String("Left".to_string()),
+                );
+                options.insert(
+                    "selection_style".to_string(),
+                    ThemeOptionValue::String("Full Row".to_string()),
+                );
+                options.insert(
+                    "selection_marker".to_string(),
+                    ThemeOptionValue::String("> ".to_string()),
+                );
+                options.insert(
+                    "header_visible".to_string(),
+                    ThemeOptionValue::Bool(false),
+                );
+                options.insert(
+                    "subtitle_underlined".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert("content_margin".to_string(), ThemeOptionValue::Int(3));
+                options
+            },
+        }
+    }
+
+    pub fn builtin_terminal_themes() -> Vec<Self> {
+        vec![Self::classic()]
+    }
+
+    /// Get a bool option value, falling back to the schema default.
+    pub fn get_bool(
+        options: &HashMap<String, ThemeOptionValue>,
+        key: &str,
+        schema: &[ThemeOptionDef],
+    ) -> bool {
+        if let Some(ThemeOptionValue::Bool(value)) = options.get(key) {
+            return *value;
+        }
+        for def in schema {
+            if def.key == key {
+                if let ThemeOptionKind::Bool { default } = &def.kind {
+                    return *default;
+                }
+            }
+        }
+        false
+    }
+
+    /// Get a string option value, falling back to the schema default.
+    pub fn get_string(
+        options: &HashMap<String, ThemeOptionValue>,
+        key: &str,
+        schema: &[ThemeOptionDef],
+    ) -> String {
+        if let Some(ThemeOptionValue::String(value)) = options.get(key) {
+            return value.clone();
+        }
+        for def in schema {
+            if def.key == key {
+                if let ThemeOptionKind::Choice { default, .. } = &def.kind {
+                    return default.clone();
+                }
+            }
+        }
+        String::new()
+    }
+
+    /// Get an int option value, falling back to the schema default.
+    pub fn get_int(
+        options: &HashMap<String, ThemeOptionValue>,
+        key: &str,
+        schema: &[ThemeOptionDef],
+    ) -> i32 {
+        if let Some(ThemeOptionValue::Int(value)) = options.get(key) {
+            return *value;
+        }
+        for def in schema {
+            if def.key == key {
+                if let ThemeOptionKind::Int { default, .. } = &def.kind {
+                    return *default;
+                }
+            }
+        }
+        0
+    }
+
+    /// Get a float option value, falling back to the schema default.
+    pub fn get_float(
+        options: &HashMap<String, ThemeOptionValue>,
+        key: &str,
+        schema: &[ThemeOptionDef],
+    ) -> f32 {
+        if let Some(ThemeOptionValue::Float(value)) = options.get(key) {
+            return *value;
+        }
+        for def in schema {
+            if def.key == key {
+                if let ThemeOptionKind::Float { default, .. } = &def.kind {
+                    return *default;
+                }
+            }
+        }
+        0.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopStyleManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub style: DesktopStyle,
+    #[serde(default)]
+    pub font: Option<FontRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColorThemeManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub color_style: ColorStyle,
+    #[serde(default)]
+    pub full_color_theme: Option<FullColorTheme>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IconPackManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub asset_pack: AssetPack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoundPackManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub sound_pack: SoundPack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPackManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub cursor_pack: CursorPack,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum FontRef {
+    Builtin { id: String },
+    Bundled { file: String },
+    Installed { font_pack_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FontPackManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_theme_pack_version")]
+    pub version: String,
+    pub file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DesktopStyleRef {
+    Inline(DesktopStyle),
+    ById {
+        #[serde(alias = "shell_style_id")]
+        desktop_style_id: String,
+    },
+}
+
+impl Default for DesktopStyleRef {
+    fn default() -> Self {
+        DesktopStyleRef::Inline(DesktopStyle::flat())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemePack {
     pub id: String,
@@ -321,17 +1097,26 @@ pub struct ThemePack {
     pub description: String,
     #[serde(default = "default_theme_pack_version")]
     pub version: String,
-    pub shell_style: ShellStyle,
-    pub layout_profile: LayoutProfile,
+    #[serde(default)]
+    #[serde(alias = "shell_style")]
+    pub desktop_style: DesktopStyleRef,
     pub color_style: ColorStyle,
     #[serde(default)]
-    pub sound_pack: SoundPack,
-    pub asset_pack: Option<AssetPack>,
-    pub cursor_pack: Option<CursorPack>,
+    pub full_color_theme: Option<FullColorTheme>,
     #[serde(default)]
     pub terminal_branding: TerminalBranding,
     #[serde(default)]
     pub terminal_decoration: TerminalDecoration,
+    #[serde(default)]
+    pub icon_pack_id: Option<String>,
+    #[serde(default)]
+    pub sound_pack_id: Option<String>,
+    #[serde(default)]
+    pub cursor_pack_id: Option<String>,
+    #[serde(default)]
+    pub font_pack_id: Option<String>,
+    #[serde(default = "LayoutProfile::classic")]
+    pub layout_profile: LayoutProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -498,91 +1283,5 @@ impl TerminalLayoutProfile {
             TerminalLayoutProfile::classic(),
             TerminalLayoutProfile::minimal(),
         ]
-    }
-}
-
-impl ThemePack {
-    pub fn classic() -> Self {
-        ThemePack {
-            id: "classic".to_string(),
-            name: "Classic".to_string(),
-            description: "The original Nucleon terminal aesthetic".to_string(),
-            version: "1.0.0".to_string(),
-            shell_style: ShellStyle {
-                id: "classic".to_string(),
-                name: "Classic".to_string(),
-                border_radius: 0.0,
-                title_bar_height: 28.0,
-                separator_thickness: 2.0,
-                window_shadow: false,
-            },
-            layout_profile: LayoutProfile::classic(),
-            color_style: ColorStyle::Monochrome {
-                preset: MonochromePreset::Green,
-                custom_rgb: None,
-            },
-            sound_pack: SoundPack::default(),
-            asset_pack: None,
-            cursor_pack: None,
-            terminal_branding: TerminalBranding::none(),
-            terminal_decoration: TerminalDecoration::default(),
-        }
-    }
-
-    pub fn nucleon() -> Self {
-        ThemePack {
-            id: "nucleon".to_string(),
-            name: "Nucleon".to_string(),
-            description: "Modern desktop shell with full-color theming".to_string(),
-            version: "1.0.0".to_string(),
-            shell_style: ShellStyle {
-                id: "nucleon".to_string(),
-                name: "Nucleon".to_string(),
-                border_radius: 4.0,
-                title_bar_height: 28.0,
-                separator_thickness: 1.0,
-                window_shadow: true,
-            },
-            layout_profile: LayoutProfile::classic(),
-            color_style: ColorStyle::FullColor {
-                theme_id: "nucleon-light".to_string(),
-            },
-            sound_pack: SoundPack::default(),
-            asset_pack: None,
-            cursor_pack: None,
-            terminal_branding: TerminalBranding::none(),
-            terminal_decoration: TerminalDecoration::default(),
-        }
-    }
-
-    pub fn heritage() -> Self {
-        ThemePack {
-            id: "robco-heritage".to_string(),
-            name: "RobCo Heritage".to_string(),
-            description: "Restores the original RobCo terminal presentation.".to_string(),
-            version: "1.0.0".to_string(),
-            shell_style: ShellStyle {
-                id: "robco".to_string(),
-                name: "RobCo".to_string(),
-                border_radius: 0.0,
-                title_bar_height: 28.0,
-                separator_thickness: 2.0,
-                window_shadow: false,
-            },
-            layout_profile: LayoutProfile::classic(),
-            color_style: ColorStyle::Monochrome {
-                preset: MonochromePreset::Green,
-                custom_rgb: None,
-            },
-            sound_pack: SoundPack::default(),
-            asset_pack: None,
-            cursor_pack: None,
-            terminal_branding: TerminalBranding::heritage(),
-            terminal_decoration: TerminalDecoration::default(),
-        }
-    }
-
-    pub fn builtin_theme_packs() -> Vec<ThemePack> {
-        vec![Self::classic(), Self::nucleon()]
     }
 }

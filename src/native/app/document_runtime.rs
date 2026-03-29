@@ -533,16 +533,19 @@ impl NucleonNativeApp {
                     Ok(theme) => {
                         self.picking_theme_import = false;
                         self.file_manager.open = false;
-                        self.apply_status_update(super::super::desktop_status_service::settings_status(
-                            format!("Imported theme: {}", theme.name),
-                        ));
+                        self.apply_status_update(
+                            super::super::desktop_status_service::settings_status(format!(
+                                "Imported theme: {}",
+                                theme.name
+                            )),
+                        );
                     }
                     Err(status) => {
                         self.picking_theme_import = false;
                         self.file_manager.open = false;
-                        self.apply_status_update(super::super::desktop_status_service::settings_status(
-                            status,
-                        ));
+                        self.apply_status_update(
+                            super::super::desktop_status_service::settings_status(status),
+                        );
                     }
                 }
             }

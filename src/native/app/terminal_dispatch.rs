@@ -12,7 +12,7 @@ use super::super::desktop_session_service::{
 };
 use super::super::desktop_settings_service::reload_settings_snapshot;
 use super::super::desktop_status_service::{
-    cancelled_shell_status, clear_shell_status, invalid_input_shell_status, shell_status,
+    cancelled_shell_status, clear_shell_status, invalid_input_shell_status,
 };
 use super::super::desktop_user_service::{
     delete_user as delete_desktop_user, toggle_user_admin as toggle_desktop_user_admin, user_exists,
@@ -33,7 +33,6 @@ use super::super::prompt::{FlashAction, TerminalPromptAction};
 use super::super::prompt_flow::{handle_prompt_input, PromptOutcome};
 use crate::config::ConnectionKind;
 use crate::core::auth::UserRecord;
-use crate::native::install_user_addon;
 use eframe::egui::{Context, Key, Modifiers};
 use nucleon_native_settings_app::TerminalSettingsPanel;
 
@@ -535,17 +534,6 @@ impl NucleonNativeApp {
             PromptOutcome::InstallerFilter(filter) => {
                 self.terminal_prompt = None;
                 apply_installer_filter(&mut self.terminal_installer, &filter);
-            }
-            PromptOutcome::InstallerAddonPath(path) => {
-                self.terminal_prompt = None;
-                let trimmed = path.trim();
-                if trimmed.is_empty() {
-                    self.apply_status_update(shell_status("Addon path cannot be empty."));
-                } else {
-                    self.apply_status_update(shell_status(
-                        install_user_addon(trimmed).unwrap_or_else(|status| status),
-                    ));
-                }
             }
             PromptOutcome::InstallerDisplayName {
                 pkg,

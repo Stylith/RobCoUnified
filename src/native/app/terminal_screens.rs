@@ -1055,13 +1055,6 @@ impl NucleonNativeApp {
                     TerminalPromptAction::InstallerFilter,
                 );
             }
-            InstallerEvent::OpenAddonInstallPrompt => {
-                self.open_input_prompt(
-                    "Installed Addons",
-                    "Manifest or addon folder path:",
-                    TerminalPromptAction::InstallerAddonPath,
-                );
-            }
             InstallerEvent::OpenConfirmAction { pkg, action } => {
                 let prompt = match action {
                     InstallerPackageAction::Install => format!("Install {pkg}?"),
@@ -1080,21 +1073,6 @@ impl NucleonNativeApp {
                     "Add to Menu",
                     format!("Display name for '{pkg}':"),
                     TerminalPromptAction::InstallerDisplayName { pkg, target },
-                );
-            }
-            InstallerEvent::StartRepositoryAddonInstall {
-                addon_id,
-                action_label,
-            } => {
-                let action = match action_label.as_str() {
-                    "Update" => crate::native::RepositoryAddonAction::Update,
-                    "Reinstall" => crate::native::RepositoryAddonAction::Reinstall,
-                    _ => crate::native::RepositoryAddonAction::Install,
-                };
-                self.start_repository_addon_install(
-                    crate::platform::AddonId::from(addon_id),
-                    action,
-                    false,
                 );
             }
             InstallerEvent::LaunchCommand {
@@ -1124,9 +1102,6 @@ impl NucleonNativeApp {
     }
 
     pub(super) fn draw_terminal_program_installer(&mut self, ctx: &Context) {
-        if self.terminal_installer.addon_install_in_flight.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        }
         let layout = self.terminal_layout();
         let header_lines = self.active_terminal_header_lines().to_vec();
         let event = draw_installer_screen(

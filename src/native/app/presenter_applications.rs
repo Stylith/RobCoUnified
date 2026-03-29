@@ -33,7 +33,9 @@ impl NucleonNativeApp {
                 ui,
                 "Applications",
                 maximized,
-                &self.desktop_active_shell_style,
+                self.desktop_active_window
+                    == Some(self.current_window_id(DesktopWindow::Applications)),
+                &self.desktop_active_desktop_style,
             );
             let sections = self.desktop_applications_sections();
             let body_max_height = ui.available_height().max(120.0);

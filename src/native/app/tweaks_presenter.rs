@@ -8,11 +8,14 @@ use super::super::desktop_surface_service::{
     desktop_builtin_icons, set_builtin_icon_visible, set_desktop_icon_style,
     set_wallpaper_size_mode as set_desktop_wallpaper_size_mode, wallpaper_browser_start_dir,
 };
-use super::super::installed_theme_packs;
 use super::super::menu::TerminalScreen;
 use super::super::retro_ui::{
-    current_palette, current_palette_for_surface, set_active_color_style, set_active_shell_style,
-    RetroPalette, RetroScreen, ShellSurfaceKind,
+    current_palette, current_palette_for_surface, set_active_color_style, set_active_desktop_style,
+    terminal_menu_row_text, RetroPalette, RetroScreen, ShellSurfaceKind,
+};
+use super::super::{
+    installed_color_themes, installed_cursor_packs, installed_desktop_styles,
+    installed_font_packs, installed_icon_packs, installed_sound_packs, installed_terminal_themes,
 };
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
 use super::NucleonNativeApp;
@@ -21,8 +24,10 @@ use crate::config::{
     NativeStartupWindowMode, WallpaperSizeMode, CUSTOM_THEME_NAME,
 };
 use crate::theme::{
-    ColorStyle, ColorToken, FullColorTheme, LauncherStyle, MonochromePreset, PanelType,
-    TerminalLayoutProfile, ThemePack, WindowHeaderStyle,
+    ColorStyle, ColorThemeManifest, ColorToken, CursorPackManifest, DesktopStyle,
+    DesktopStyleManifest, FontPackManifest, FullColorTheme, IconPackManifest, LauncherStyle,
+    MonochromePreset, PanelType, SoundPackManifest, TerminalLayoutProfile, TerminalThemeManifest,
+    ThemeOptionKind, ThemeOptionValue, ThemePack, WindowHeaderStyle,
 };
 use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
 use eframe::egui::{self, Context, Key, RichText, TextEdit};
@@ -174,14 +179,74 @@ fn theme_pack_name_by_id(theme_pack_id: &str, theme_packs: &[ThemePack]) -> Stri
         .unwrap_or_else(|| theme_pack_id.to_string())
 }
 
+fn selected_desktop_style_name(
+    selected_id: Option<&str>,
+    current_style: &DesktopStyle,
+    desktop_styles: &[DesktopStyleManifest],
+) -> String {
+    selected_id
+        .and_then(|id| desktop_styles.iter().find(|manifest| manifest.id == id))
+        .map(|manifest| manifest.name.clone())
+        .unwrap_or_else(|| current_style.name.clone())
+}
+
+fn selected_color_theme_name(
+    current_style: &ColorStyle,
+    color_themes: &[ColorThemeManifest],
+) -> String {
+    color_themes
+        .iter()
+        .find(|manifest| manifest.color_style == *current_style)
+        .map(|manifest| manifest.name.clone())
+        .unwrap_or_else(|| match current_style {
+            ColorStyle::Monochrome { .. } => {
+                monochrome_theme_name_for_color_style(current_style).to_string()
+            }
+            ColorStyle::FullColor { theme_id } => full_color_theme_label(theme_id).to_string(),
+        })
+}
+
+fn selected_manifest_name<T>(
+    selected_id: Option<&str>,
+    default_label: &str,
+    manifests: &[T],
+    id_of: fn(&T) -> &str,
+    name_of: fn(&T) -> &str,
+) -> String {
+    selected_id
+        .and_then(|id| manifests.iter().find(|manifest| id_of(manifest) == id))
+        .map(|manifest| name_of(manifest).to_string())
+        .unwrap_or_else(|| default_label.to_string())
+}
+
+fn selected_font_name(selected_id: Option<&str>, font_packs: &[FontPackManifest]) -> String {
+    match selected_id {
+        None => "Fixedsys (Default)".to_string(),
+        Some(font_id) if font_id.starts_with("desktop-style:") => "Theme Default".to_string(),
+        Some(font_id) if font_id.starts_with("terminal-theme:") => "Theme Default".to_string(),
+        Some(font_id) => selected_manifest_name(
+            Some(font_id),
+            "Fixedsys (Default)",
+            font_packs,
+            |manifest: &FontPackManifest| manifest.id.as_str(),
+            |manifest: &FontPackManifest| manifest.name.as_str(),
+        ),
+    }
+}
+
+fn selected_terminal_theme_name(
+    current_theme: &str,
+    terminal_themes: &[TerminalThemeManifest],
+) -> String {
+    terminal_themes
+        .iter()
+        .find(|manifest| manifest.id == current_theme)
+        .map(|manifest| manifest.name.clone())
+        .unwrap_or_else(|| current_theme.to_string())
+}
+
 fn theme_pack_has_cursor_assets(theme: &ThemePack) -> bool {
-    theme.cursor_pack.is_some()
-        || theme
-            .asset_pack
-            .as_ref()
-            .and_then(|asset_pack| super::resolve_theme_bundle_path(&theme.id, &asset_pack.path))
-            .map(|asset_root| asset_root.join("cursors").join("cursors.json").exists())
-            .unwrap_or(false)
+    theme.cursor_pack_id.is_some()
 }
 
 fn desktop_cursor_theme_options(theme_packs: &[ThemePack]) -> Vec<DesktopCursorThemeSelection> {
@@ -225,8 +290,6 @@ fn desktop_cursor_theme_selection_label(
 enum TerminalTweaksRow {
     SectionSelector(u8),
     DropdownOption(TerminalTweaksDropdown, usize),
-    WallpaperPicker,
-    WallpaperMode,
     TerminalWallpaperPicker,
     TerminalWallpaperMode,
     WindowMode,
@@ -246,25 +309,15 @@ enum TerminalTweaksRow {
     CrtPhosphorSoftness,
     CrtBrightness,
     CrtContrast,
-    DesktopThemePack,
-    DesktopColorMode,
-    DesktopMonoTheme,
-    DesktopCustomRed,
-    DesktopCustomGreen,
-    DesktopCustomBlue,
-    DesktopFullColorTheme,
-    DesktopIconStyle,
-    DesktopBuiltinIcon(usize),
-    DesktopCursorTheme,
-    DesktopShowCursor,
-    DesktopCursorScale,
-    TerminalThemePack,
+    TerminalTheme,
     TerminalColorMode,
     TerminalMonoTheme,
     TerminalCustomRed,
     TerminalCustomGreen,
     TerminalCustomBlue,
     TerminalFullColorTheme,
+    TerminalFont,
+    TerminalThemeOption(usize),
     TerminalLayout,
     TerminalStyledPty,
     TerminalPtyColorMode,
@@ -273,20 +326,15 @@ enum TerminalTweaksRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TerminalTweaksDropdown {
-    WallpaperMode,
     TerminalWallpaperMode,
     WindowMode,
     CrtPreset,
-    DesktopThemePack,
-    DesktopColorMode,
-    DesktopMonoTheme,
-    DesktopFullColorTheme,
-    DesktopIconStyle,
-    DesktopCursorTheme,
-    TerminalThemePack,
+    TerminalTheme,
     TerminalColorMode,
     TerminalMonoTheme,
     TerminalFullColorTheme,
+    TerminalFont,
+    TerminalThemeOptionChoice(usize),
     TerminalLayout,
     TerminalPtyColorMode,
     TerminalBorderGlyphs,
@@ -471,7 +519,7 @@ impl NucleonNativeApp {
     }
 
     fn activate_desktop_surface_style(&mut self) {
-        set_active_shell_style(self.desktop_active_shell_style.clone());
+        set_active_desktop_style(self.desktop_active_desktop_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Desktop,
             self.desktop_active_color_style.clone(),
@@ -498,10 +546,7 @@ impl NucleonNativeApp {
     }
 
     fn clear_desktop_theme_pack_selection(&mut self) {
-        let had_theme_pack = self.desktop_active_theme_pack_id.take().is_some();
-        self.sync_active_sound_pack();
-        let asset_state_changed = self.sync_active_desktop_asset_pack();
-        if had_theme_pack || asset_state_changed {
+        if self.desktop_active_theme_pack_id.take().is_some() {
             self.icon_cache_dirty = true;
         }
     }
@@ -520,17 +565,48 @@ impl NucleonNativeApp {
     }
 
     fn apply_desktop_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
+        let next_desktop_style_id =
+            super::desktop_style_id_from_theme_pack_id(Some(theme.id.as_str()));
+        let next_icon_pack_id = theme.icon_pack_id.clone();
+        let next_sound_pack_id = theme.sound_pack_id.clone();
+        let next_cursor_pack_id = theme.cursor_pack_id.clone();
+        let next_font_pack_id = if self.settings.draft.desktop_font_id.is_some() {
+            self.desktop_active_font_id.clone()
+        } else {
+            super::desktop_default_font_id(
+                Some(theme.id.as_str()),
+                next_desktop_style_id.as_deref(),
+            )
+        };
+        let next_desktop_style = super::desktop_style_from_selection(
+            Some(theme.id.as_str()),
+            next_desktop_style_id.as_deref(),
+        );
+        let next_color_overrides =
+            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
         let changed = self.desktop_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
-            || self.desktop_color_overrides.is_some();
+            || self.desktop_active_desktop_style_id != next_desktop_style_id
+            || self.desktop_active_icon_pack_id != next_icon_pack_id
+            || self.desktop_active_sound_pack_id != next_sound_pack_id
+            || self.desktop_active_cursor_pack_id != next_cursor_pack_id
+            || self.desktop_active_font_id != next_font_pack_id
+            || self.desktop_active_desktop_style != next_desktop_style
+            || self.desktop_active_color_style != theme.color_style
+            || self.desktop_active_layout != theme.layout_profile
+            || self.desktop_color_overrides != next_color_overrides;
         if !changed {
             return false;
         }
         self.desktop_active_theme_pack_id = Some(theme.id.clone());
-        self.desktop_active_shell_style = theme.shell_style.clone();
+        self.desktop_active_desktop_style_id = next_desktop_style_id;
+        self.desktop_active_icon_pack_id = next_icon_pack_id;
+        self.desktop_active_sound_pack_id = next_sound_pack_id;
+        self.desktop_active_cursor_pack_id = next_cursor_pack_id;
+        self.desktop_active_font_id = next_font_pack_id;
+        self.desktop_active_desktop_style = next_desktop_style;
         self.desktop_active_color_style = theme.color_style.clone();
         self.desktop_active_layout = theme.layout_profile.clone();
-        self.desktop_color_overrides =
-            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
+        self.desktop_color_overrides = next_color_overrides;
         self.tweaks_customize_colors_open = false;
         self.sync_active_sound_pack();
         self.sync_active_desktop_asset_pack();
@@ -539,13 +615,105 @@ impl NucleonNativeApp {
         true
     }
 
+    fn set_desktop_style_id(&mut self, desktop_style_id: Option<String>) -> bool {
+        if self.desktop_active_desktop_style_id == desktop_style_id {
+            return false;
+        }
+        self.desktop_active_desktop_style_id = desktop_style_id;
+        self.desktop_active_desktop_style = super::desktop_style_from_selection(
+            self.desktop_active_theme_pack_id.as_deref(),
+            self.desktop_active_desktop_style_id.as_deref(),
+        );
+        if self.settings.draft.desktop_font_id.is_none() {
+            self.desktop_active_font_id = super::desktop_default_font_id(
+                self.desktop_active_theme_pack_id.as_deref(),
+                self.desktop_active_desktop_style_id.as_deref(),
+            );
+        }
+        true
+    }
+
+    fn set_desktop_color_theme_selection(&mut self, theme: &ColorThemeManifest) -> bool {
+        let next_overrides = theme
+            .full_color_theme
+            .as_ref()
+            .map(|theme| theme.tokens.clone());
+        if self.desktop_active_color_style == theme.color_style
+            && self.desktop_color_overrides == next_overrides
+        {
+            return false;
+        }
+        self.desktop_active_color_style = theme.color_style.clone();
+        self.desktop_color_overrides = next_overrides;
+        self.tweaks_customize_colors_open = false;
+        self.icon_cache_dirty = true;
+        self.activate_desktop_surface_style();
+        true
+    }
+
+    fn set_desktop_icon_pack_id(&mut self, icon_pack_id: Option<String>) -> bool {
+        if self.desktop_active_icon_pack_id == icon_pack_id {
+            return false;
+        }
+        self.desktop_active_icon_pack_id = icon_pack_id;
+        self.sync_active_desktop_asset_pack();
+        self.icon_cache_dirty = true;
+        true
+    }
+
+    fn set_desktop_sound_pack_id(&mut self, sound_pack_id: Option<String>) -> bool {
+        if self.desktop_active_sound_pack_id == sound_pack_id {
+            return false;
+        }
+        self.desktop_active_sound_pack_id = sound_pack_id;
+        self.sync_active_sound_pack();
+        true
+    }
+
+    fn set_desktop_cursor_pack_id(&mut self, cursor_pack_id: Option<String>) -> bool {
+        if self.desktop_active_cursor_pack_id == cursor_pack_id {
+            return false;
+        }
+        self.desktop_active_cursor_pack_id = cursor_pack_id;
+        self.sync_active_desktop_asset_pack();
+        true
+    }
+
+    fn set_desktop_font_id(&mut self, font_id: Option<String>) -> bool {
+        let font_id = font_id.or_else(|| {
+            super::desktop_default_font_id(
+                self.desktop_active_theme_pack_id.as_deref(),
+                self.desktop_active_desktop_style_id.as_deref(),
+            )
+        });
+        if self.desktop_active_font_id == font_id {
+            return false;
+        }
+        self.desktop_active_font_id = font_id;
+        true
+    }
+
     fn apply_terminal_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
+        let next_terminal_font_id = if self.settings.draft.terminal_font_id.is_some() {
+            self.terminal_active_font_id.clone()
+        } else {
+            super::terminal_default_font_id(Some(theme.id.as_str()), Some("classic"))
+        };
         let changed = self.terminal_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
+            || self.terminal_active_font_id != next_terminal_font_id
             || self.terminal_color_overrides.is_some();
         if !changed {
             return false;
         }
         self.terminal_active_theme_pack_id = Some(theme.id.clone());
+        self.terminal_active_theme = crate::theme::TerminalTheme::classic();
+        self.terminal_theme_options = self.terminal_active_theme.default_options.clone();
+        self.terminal_active_font_id = next_terminal_font_id;
+        super::apply_theme_pack_to_terminal_options(
+            theme,
+            &self.terminal_active_theme,
+            &mut self.terminal_theme_options,
+        );
         self.terminal_active_color_style = theme.color_style.clone();
         self.terminal_branding = theme.terminal_branding.clone();
         self.terminal_decoration = theme.terminal_decoration.clone();
@@ -556,15 +724,110 @@ impl NucleonNativeApp {
         true
     }
 
+    fn set_terminal_theme_selection(&mut self, manifest: &TerminalThemeManifest) -> bool {
+        if self.terminal_active_theme.id == manifest.id {
+            return false;
+        }
+        self.terminal_active_theme = manifest.theme.clone();
+        self.terminal_theme_options = self.terminal_active_theme.default_options.clone();
+        self.terminal_active_theme_pack_id = None;
+        if self.settings.draft.terminal_font_id.is_none() {
+            self.terminal_active_font_id =
+                super::terminal_default_font_id(None, Some(manifest.id.as_str()));
+        }
+        self.activate_terminal_surface_style();
+        true
+    }
+
+    fn set_terminal_font_id(&mut self, font_id: Option<String>) -> bool {
+        let font_id = font_id.or_else(|| {
+            super::terminal_default_font_id(
+                self.terminal_active_theme_pack_id.as_deref(),
+                Some(self.terminal_active_theme.id.as_str()),
+            )
+        });
+        if self.terminal_active_font_id == font_id {
+            return false;
+        }
+        self.terminal_active_font_id = font_id;
+        true
+    }
+
+    fn terminal_theme_option_value(&self, index: usize) -> Option<ThemeOptionValue> {
+        let def = self.terminal_active_theme.options_schema.get(index)?;
+        Some(match &def.kind {
+            ThemeOptionKind::Bool { .. } => ThemeOptionValue::Bool(
+                crate::theme::TerminalTheme::get_bool(
+                    &self.terminal_theme_options,
+                    &def.key,
+                    &self.terminal_active_theme.options_schema,
+                ),
+            ),
+            ThemeOptionKind::Choice { .. } => ThemeOptionValue::String(
+                crate::theme::TerminalTheme::get_string(
+                    &self.terminal_theme_options,
+                    &def.key,
+                    &self.terminal_active_theme.options_schema,
+                ),
+            ),
+            ThemeOptionKind::Int { .. } => ThemeOptionValue::Int(
+                crate::theme::TerminalTheme::get_int(
+                    &self.terminal_theme_options,
+                    &def.key,
+                    &self.terminal_active_theme.options_schema,
+                ),
+            ),
+            ThemeOptionKind::Float { .. } => ThemeOptionValue::Float(
+                crate::theme::TerminalTheme::get_float(
+                    &self.terminal_theme_options,
+                    &def.key,
+                    &self.terminal_active_theme.options_schema,
+                ),
+            ),
+        })
+    }
+
+    fn set_terminal_theme_option_value(&mut self, key: &str, value: ThemeOptionValue) -> bool {
+        if self.terminal_theme_options.get(key) == Some(&value) {
+            return false;
+        }
+        self.terminal_theme_options.insert(key.to_string(), value);
+        self.terminal_active_theme_pack_id = None;
+        self.activate_terminal_surface_style();
+        true
+    }
+
+    fn cycle_terminal_theme_choice_option(&mut self, index: usize, delta: i32) -> bool {
+        let Some(def) = self.terminal_active_theme.options_schema.get(index) else {
+            return false;
+        };
+        let ThemeOptionKind::Choice { choices, .. } = &def.kind else {
+            return false;
+        };
+        if choices.is_empty() {
+            return false;
+        }
+        let current = crate::theme::TerminalTheme::get_string(
+            &self.terminal_theme_options,
+            &def.key,
+            &self.terminal_active_theme.options_schema,
+        );
+        let current_index = choices.iter().position(|choice| *choice == current).unwrap_or(0);
+        let next_index = (current_index as i32 + delta)
+            .clamp(0, choices.len().saturating_sub(1) as i32) as usize;
+        let key = def.key.clone();
+        let choice = choices[next_index].clone();
+        self.set_terminal_theme_option_value(
+            &key,
+            ThemeOptionValue::String(choice),
+        )
+    }
+
     fn set_desktop_color_style_selection(&mut self, style: ColorStyle) -> bool {
-        if self.desktop_active_color_style == style
-            && self.desktop_active_theme_pack_id.is_none()
-            && self.desktop_color_overrides.is_none()
-        {
+        if self.desktop_active_color_style == style && self.desktop_color_overrides.is_none() {
             return false;
         }
         self.desktop_active_color_style = style;
-        self.clear_desktop_theme_pack_selection();
         self.clear_desktop_color_overrides();
         self.icon_cache_dirty = true;
         self.activate_desktop_surface_style();
@@ -643,7 +906,11 @@ impl NucleonNativeApp {
         ui.add_space(10.0);
     }
 
-    fn terminal_tweaks_entries(&self, theme_packs: &[ThemePack]) -> Vec<TerminalTweaksEntry> {
+    fn terminal_tweaks_entries(
+        &self,
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
+    ) -> Vec<TerminalTweaksEntry> {
         let active_section = self.terminal_tweaks_active_section.min(3);
         let mut entries = Vec::new();
 
@@ -651,11 +918,6 @@ impl NucleonNativeApp {
             TerminalTweaksRow::SectionSelector(0),
         ));
         if active_section == 0 {
-            entries.push(TerminalTweaksEntry::Header("  Desktop"));
-            entries.extend([
-                TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperPicker),
-                TerminalTweaksEntry::Row(TerminalTweaksRow::WallpaperMode),
-            ]);
             entries.push(TerminalTweaksEntry::Header("  Terminal"));
             entries.extend([
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalWallpaperPicker),
@@ -667,60 +929,11 @@ impl NucleonNativeApp {
             TerminalTweaksRow::SectionSelector(1),
         ));
         if active_section == 1 {
-            entries.push(TerminalTweaksEntry::Header("  Desktop"));
-            entries.extend([
-                TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopThemePack),
-                TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopColorMode),
-            ]);
-            if matches!(
-                self.desktop_active_color_style,
-                ColorStyle::Monochrome { .. }
-            ) {
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopMonoTheme,
-                ));
-                if monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
-                    == CUSTOM_THEME_NAME
-                {
-                    entries.extend([
-                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomRed),
-                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomGreen),
-                        TerminalTweaksEntry::Row(TerminalTweaksRow::DesktopCustomBlue),
-                    ]);
-                }
-            } else {
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopFullColorTheme,
-                ));
-                entries.push(TerminalTweaksEntry::Header(
-                    "    Use Desktop Tweaks window for color customization",
-                ));
-            }
-            entries.push(TerminalTweaksEntry::Row(
-                TerminalTweaksRow::DesktopIconStyle,
-            ));
-            for (index, _) in desktop_builtin_icons().iter().enumerate() {
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopBuiltinIcon(index),
-                ));
-            }
-            entries.push(TerminalTweaksEntry::Row(
-                TerminalTweaksRow::DesktopCursorTheme,
-            ));
-            entries.push(TerminalTweaksEntry::Row(
-                TerminalTweaksRow::DesktopShowCursor,
-            ));
-            if self.settings.draft.desktop_show_cursor {
-                entries.push(TerminalTweaksEntry::Row(
-                    TerminalTweaksRow::DesktopCursorScale,
-                ));
-            }
-
             entries.push(TerminalTweaksEntry::Header("  Terminal"));
-            entries.extend([
-                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalThemePack),
-                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalColorMode),
-            ]);
+            entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalTheme));
+            entries.push(TerminalTweaksEntry::Row(
+                TerminalTweaksRow::TerminalColorMode,
+            ));
             if matches!(
                 self.terminal_active_color_style,
                 ColorStyle::Monochrome { .. }
@@ -741,11 +954,16 @@ impl NucleonNativeApp {
                 entries.push(TerminalTweaksEntry::Row(
                     TerminalTweaksRow::TerminalFullColorTheme,
                 ));
-                entries.push(TerminalTweaksEntry::Header(
-                    "    Use Desktop Tweaks window for color customization",
-                ));
             }
-            entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalLayout));
+            entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalFont));
+            if !terminal_themes.is_empty() {
+                entries.push(TerminalTweaksEntry::Header("  Theme Options"));
+                for (index, _) in self.terminal_active_theme.options_schema.iter().enumerate() {
+                    entries.push(TerminalTweaksEntry::Row(
+                        TerminalTweaksRow::TerminalThemeOption(index),
+                    ));
+                }
+            }
         }
 
         entries.push(TerminalTweaksEntry::Row(
@@ -778,13 +996,14 @@ impl NucleonNativeApp {
         if active_section == 3 {
             entries.extend([
                 TerminalTweaksEntry::Row(TerminalTweaksRow::WindowMode),
+                TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalLayout),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalStyledPty),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalPtyColorMode),
                 TerminalTweaksEntry::Row(TerminalTweaksRow::TerminalBorderGlyphs),
             ]);
         }
 
-        self.inflate_terminal_tweaks_dropdown_entries(entries, theme_packs)
+        self.inflate_terminal_tweaks_dropdown_entries(entries, terminal_themes, font_packs)
     }
 
     fn terminal_tweaks_selectable_indices(entries: &[TerminalTweaksEntry]) -> Vec<usize> {
@@ -827,30 +1046,33 @@ impl NucleonNativeApp {
             .min(entries.len().saturating_sub(visible_rows))
     }
 
-    fn terminal_tweaks_dropdown_for_row(row: TerminalTweaksRow) -> Option<TerminalTweaksDropdown> {
+    fn terminal_tweaks_dropdown_for_row(
+        &self,
+        row: TerminalTweaksRow,
+    ) -> Option<TerminalTweaksDropdown> {
         match row {
-            TerminalTweaksRow::WallpaperMode => Some(TerminalTweaksDropdown::WallpaperMode),
             TerminalTweaksRow::TerminalWallpaperMode => {
                 Some(TerminalTweaksDropdown::TerminalWallpaperMode)
             }
             TerminalTweaksRow::WindowMode => Some(TerminalTweaksDropdown::WindowMode),
             TerminalTweaksRow::CrtPreset => Some(TerminalTweaksDropdown::CrtPreset),
-            TerminalTweaksRow::DesktopThemePack => Some(TerminalTweaksDropdown::DesktopThemePack),
-            TerminalTweaksRow::DesktopColorMode => Some(TerminalTweaksDropdown::DesktopColorMode),
-            TerminalTweaksRow::DesktopMonoTheme => Some(TerminalTweaksDropdown::DesktopMonoTheme),
-            TerminalTweaksRow::DesktopFullColorTheme => {
-                Some(TerminalTweaksDropdown::DesktopFullColorTheme)
-            }
-            TerminalTweaksRow::DesktopIconStyle => Some(TerminalTweaksDropdown::DesktopIconStyle),
-            TerminalTweaksRow::DesktopCursorTheme => {
-                Some(TerminalTweaksDropdown::DesktopCursorTheme)
-            }
-            TerminalTweaksRow::TerminalThemePack => Some(TerminalTweaksDropdown::TerminalThemePack),
+            TerminalTweaksRow::TerminalTheme => Some(TerminalTweaksDropdown::TerminalTheme),
             TerminalTweaksRow::TerminalColorMode => Some(TerminalTweaksDropdown::TerminalColorMode),
             TerminalTweaksRow::TerminalMonoTheme => Some(TerminalTweaksDropdown::TerminalMonoTheme),
             TerminalTweaksRow::TerminalFullColorTheme => {
                 Some(TerminalTweaksDropdown::TerminalFullColorTheme)
             }
+            TerminalTweaksRow::TerminalFont => Some(TerminalTweaksDropdown::TerminalFont),
+            TerminalTweaksRow::TerminalThemeOption(index) => self
+                .terminal_active_theme
+                .options_schema
+                .get(index)
+                .and_then(|def| match &def.kind {
+                    ThemeOptionKind::Choice { .. } => {
+                        Some(TerminalTweaksDropdown::TerminalThemeOptionChoice(index))
+                    }
+                    _ => None,
+                }),
             TerminalTweaksRow::TerminalLayout => Some(TerminalTweaksDropdown::TerminalLayout),
             TerminalTweaksRow::TerminalPtyColorMode => {
                 Some(TerminalTweaksDropdown::TerminalPtyColorMode)
@@ -865,11 +1087,11 @@ impl NucleonNativeApp {
     fn terminal_tweaks_dropdown_options(
         &self,
         dropdown: TerminalTweaksDropdown,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> Vec<String> {
         match dropdown {
-            TerminalTweaksDropdown::WallpaperMode
-            | TerminalTweaksDropdown::TerminalWallpaperMode => vec![
+            TerminalTweaksDropdown::TerminalWallpaperMode => vec![
                 wallpaper_size_mode_label(WallpaperSizeMode::DefaultSize).to_string(),
                 wallpaper_size_mode_label(WallpaperSizeMode::FitToScreen).to_string(),
                 wallpaper_size_mode_label(WallpaperSizeMode::Centered).to_string(),
@@ -892,40 +1114,36 @@ impl NucleonNativeApp {
                 CrtPreset::ExtremeRetro.label().to_string(),
                 CrtPreset::Custom.label().to_string(),
             ],
-            TerminalTweaksDropdown::DesktopThemePack
-            | TerminalTweaksDropdown::TerminalThemePack => {
-                theme_packs.iter().map(|theme| theme.name.clone()).collect()
-            }
-            TerminalTweaksDropdown::DesktopColorMode
-            | TerminalTweaksDropdown::TerminalColorMode => {
+            TerminalTweaksDropdown::TerminalTheme => terminal_themes
+                .iter()
+                .cloned()
+                .map(|manifest| manifest.name)
+                .collect(),
+            TerminalTweaksDropdown::TerminalColorMode => {
                 vec!["Monochrome".to_string(), "Full Color".to_string()]
             }
-            TerminalTweaksDropdown::DesktopMonoTheme
-            | TerminalTweaksDropdown::TerminalMonoTheme => MONOCHROME_THEME_NAMES
+            TerminalTweaksDropdown::TerminalMonoTheme => MONOCHROME_THEME_NAMES
                 .iter()
                 .map(|name| (*name).to_string())
                 .collect(),
-            TerminalTweaksDropdown::DesktopFullColorTheme
-            | TerminalTweaksDropdown::TerminalFullColorTheme => FullColorTheme::builtin_themes()
+            TerminalTweaksDropdown::TerminalFullColorTheme => FullColorTheme::builtin_themes()
                 .into_iter()
                 .map(|theme| theme.name)
                 .collect(),
-            TerminalTweaksDropdown::DesktopIconStyle => vec![
-                desktop_icon_style_label(DesktopIconStyle::Dos).to_string(),
-                desktop_icon_style_label(DesktopIconStyle::Win95).to_string(),
-                desktop_icon_style_label(DesktopIconStyle::Minimal).to_string(),
-                desktop_icon_style_label(DesktopIconStyle::NoIcons).to_string(),
-            ],
-            TerminalTweaksDropdown::DesktopCursorTheme => desktop_cursor_theme_options(theme_packs)
-                .into_iter()
-                .map(|selection| {
-                    desktop_cursor_theme_selection_label(
-                        &selection,
-                        self.desktop_active_theme_pack_id.as_deref(),
-                        theme_packs,
-                    )
+            TerminalTweaksDropdown::TerminalFont => {
+                let mut options = vec!["Fixedsys (Default)".to_string()];
+                options.extend(font_packs.iter().map(|manifest| manifest.name.clone()));
+                options
+            }
+            TerminalTweaksDropdown::TerminalThemeOptionChoice(index) => self
+                .terminal_active_theme
+                .options_schema
+                .get(index)
+                .and_then(|def| match &def.kind {
+                    ThemeOptionKind::Choice { choices, .. } => Some(choices.clone()),
+                    _ => None,
                 })
-                .collect(),
+                .unwrap_or_default(),
             TerminalTweaksDropdown::TerminalLayout => TerminalLayoutProfile::builtin_layouts()
                 .into_iter()
                 .map(|profile| profile.name)
@@ -946,18 +1164,10 @@ impl NucleonNativeApp {
     fn terminal_tweaks_dropdown_selected_index(
         &self,
         dropdown: TerminalTweaksDropdown,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> usize {
         match dropdown {
-            TerminalTweaksDropdown::WallpaperMode => {
-                match self.settings.draft.desktop_wallpaper_size_mode {
-                    WallpaperSizeMode::DefaultSize => 0,
-                    WallpaperSizeMode::FitToScreen => 1,
-                    WallpaperSizeMode::Centered => 2,
-                    WallpaperSizeMode::Tile => 3,
-                    WallpaperSizeMode::Stretch => 4,
-                }
-            }
             TerminalTweaksDropdown::TerminalWallpaperMode => {
                 match self.settings.draft.terminal_wallpaper_size_mode {
                     WallpaperSizeMode::DefaultSize => 0,
@@ -983,52 +1193,9 @@ impl NucleonNativeApp {
                 CrtPreset::ExtremeRetro => 4,
                 CrtPreset::Custom => 5,
             },
-            TerminalTweaksDropdown::DesktopThemePack => self
-                .desktop_active_theme_pack_id
-                .as_deref()
-                .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
-                .unwrap_or(0),
-            TerminalTweaksDropdown::DesktopColorMode => {
-                if matches!(
-                    self.desktop_active_color_style,
-                    ColorStyle::Monochrome { .. }
-                ) {
-                    0
-                } else {
-                    1
-                }
-            }
-            TerminalTweaksDropdown::DesktopMonoTheme => MONOCHROME_THEME_NAMES
-                .iter()
-                .position(|name| {
-                    *name == monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
-                })
-                .unwrap_or(0),
-            TerminalTweaksDropdown::DesktopFullColorTheme => FullColorTheme::builtin_themes()
-                .iter()
-                .position(|theme| {
-                    theme.id
-                        == full_color_theme_id_for_color_style(&self.desktop_active_color_style)
-                })
-                .unwrap_or(0),
-            TerminalTweaksDropdown::DesktopIconStyle => {
-                match self.settings.draft.desktop_icon_style {
-                    DesktopIconStyle::Dos => 0,
-                    DesktopIconStyle::Win95 => 1,
-                    DesktopIconStyle::Minimal => 2,
-                    DesktopIconStyle::NoIcons => 3,
-                }
-            }
-            TerminalTweaksDropdown::DesktopCursorTheme => desktop_cursor_theme_options(theme_packs)
-                .iter()
-                .position(|selection| {
-                    *selection == self.desktop_active_cursor_theme_selection
-                })
-                .unwrap_or(0),
-            TerminalTweaksDropdown::TerminalThemePack => self
-                .terminal_active_theme_pack_id
-                .as_deref()
-                .and_then(|id| theme_packs.iter().position(|theme| theme.id == id))
+            TerminalTweaksDropdown::TerminalTheme => terminal_themes
+                    .iter()
+                    .position(|manifest| manifest.id == self.terminal_active_theme.id)
                 .unwrap_or(0),
             TerminalTweaksDropdown::TerminalColorMode => {
                 if matches!(
@@ -1054,6 +1221,30 @@ impl NucleonNativeApp {
                         == full_color_theme_id_for_color_style(&self.terminal_active_color_style)
                 })
                 .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalFont => self
+                .terminal_active_font_id
+                .as_deref()
+                .and_then(|font_id| {
+                    font_packs
+                        .iter()
+                        .position(|manifest| manifest.id == font_id)
+                        .map(|index| index + 1)
+                })
+                .unwrap_or(0),
+            TerminalTweaksDropdown::TerminalThemeOptionChoice(index) => {
+                let Some(def) = self.terminal_active_theme.options_schema.get(index) else {
+                    return 0;
+                };
+                let ThemeOptionKind::Choice { choices, .. } = &def.kind else {
+                    return 0;
+                };
+                let current = crate::theme::TerminalTheme::get_string(
+                    &self.terminal_theme_options,
+                    &def.key,
+                    &self.terminal_active_theme.options_schema,
+                );
+                choices.iter().position(|choice| *choice == current).unwrap_or(0)
+            }
             TerminalTweaksDropdown::TerminalLayout => TerminalLayoutProfile::builtin_layouts()
                 .iter()
                 .position(|profile| profile.id == self.terminal_active_layout.id)
@@ -1079,10 +1270,11 @@ impl NucleonNativeApp {
         &self,
         dropdown: TerminalTweaksDropdown,
         entries: &mut Vec<TerminalTweaksEntry>,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) {
         for index in 0..self
-            .terminal_tweaks_dropdown_options(dropdown, theme_packs)
+            .terminal_tweaks_dropdown_options(dropdown, terminal_themes, font_packs)
             .len()
         {
             entries.push(TerminalTweaksEntry::Row(TerminalTweaksRow::DropdownOption(
@@ -1094,18 +1286,20 @@ impl NucleonNativeApp {
     fn inflate_terminal_tweaks_dropdown_entries(
         &self,
         entries: Vec<TerminalTweaksEntry>,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> Vec<TerminalTweaksEntry> {
         let mut expanded = Vec::with_capacity(entries.len());
         for entry in entries {
             expanded.push(entry);
             if let TerminalTweaksEntry::Row(row) = entry {
-                if let Some(dropdown) = Self::terminal_tweaks_dropdown_for_row(row) {
+                if let Some(dropdown) = self.terminal_tweaks_dropdown_for_row(row) {
                     if self.terminal_tweaks_open_dropdown == Some(dropdown) {
                         self.append_terminal_tweaks_dropdown_options(
                             dropdown,
                             &mut expanded,
-                            theme_packs,
+                            terminal_themes,
+                            font_packs,
                         );
                     }
                 }
@@ -1117,7 +1311,8 @@ impl NucleonNativeApp {
     fn terminal_tweaks_row_label(
         &self,
         row: TerminalTweaksRow,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> String {
         match row {
             TerminalTweaksRow::SectionSelector(section) => {
@@ -1129,25 +1324,21 @@ impl NucleonNativeApp {
                 format!("{marker} {}", terminal_tweaks_section_name(section))
             }
             TerminalTweaksRow::DropdownOption(dropdown, index) => {
-                let options = self.terminal_tweaks_dropdown_options(dropdown, theme_packs);
+                let options =
+                    self.terminal_tweaks_dropdown_options(dropdown, terminal_themes, font_packs);
                 let label = options
                     .get(index)
                     .cloned()
                     .unwrap_or_else(|| "Option".to_string());
-                if self.terminal_tweaks_dropdown_selected_index(dropdown, theme_packs) == index {
+                if self
+                    .terminal_tweaks_dropdown_selected_index(dropdown, terminal_themes, font_packs)
+                    == index
+                {
                     format!("{label} (current)")
                 } else {
                     label
                 }
             }
-            TerminalTweaksRow::WallpaperPicker => format!(
-                "Wallpaper File: {} [browse]",
-                wallpaper_display_name(&self.settings.draft.desktop_wallpaper)
-            ),
-            TerminalTweaksRow::WallpaperMode => format!(
-                "Wallpaper Mode: {}",
-                wallpaper_size_mode_label(self.settings.draft.desktop_wallpaper_size_mode)
-            ),
             TerminalTweaksRow::TerminalWallpaperPicker => format!(
                 "Wallpaper File: {} [browse]",
                 wallpaper_display_name(&self.settings.draft.terminal_wallpaper)
@@ -1243,92 +1434,9 @@ impl NucleonNativeApp {
                     self.settings.draft.display_effects.contrast
                 )
             }
-            TerminalTweaksRow::DesktopThemePack => format!(
-                "Theme Pack: {}",
-                selected_theme_pack_name(self.desktop_active_theme_pack_id.as_deref(), theme_packs)
-            ),
-            TerminalTweaksRow::DesktopColorMode => format!(
-                "Color Mode: {}",
-                if matches!(
-                    self.desktop_active_color_style,
-                    ColorStyle::Monochrome { .. }
-                ) {
-                    "Monochrome"
-                } else {
-                    "Full Color"
-                }
-            ),
-            TerminalTweaksRow::DesktopMonoTheme => format!(
-                "Monochrome Theme: {}",
-                monochrome_theme_name_for_color_style(&self.desktop_active_color_style)
-            ),
-            TerminalTweaksRow::DesktopCustomRed => format!(
-                "Custom Red: {}",
-                custom_rgb_for_color_style(&self.desktop_active_color_style)[0]
-            ),
-            TerminalTweaksRow::DesktopCustomGreen => format!(
-                "Custom Green: {}",
-                custom_rgb_for_color_style(&self.desktop_active_color_style)[1]
-            ),
-            TerminalTweaksRow::DesktopCustomBlue => format!(
-                "Custom Blue: {}",
-                custom_rgb_for_color_style(&self.desktop_active_color_style)[2]
-            ),
-            TerminalTweaksRow::DesktopFullColorTheme => format!(
-                "Full Color Theme: {}",
-                full_color_theme_label(full_color_theme_id_for_color_style(
-                    &self.desktop_active_color_style,
-                ))
-            ),
-            TerminalTweaksRow::DesktopIconStyle => format!(
-                "Icon Style: {}",
-                desktop_icon_style_label(self.settings.draft.desktop_icon_style)
-            ),
-            TerminalTweaksRow::DesktopCursorTheme => format!(
-                "Cursor Theme: {}",
-                desktop_cursor_theme_selection_label(
-                    &self.desktop_active_cursor_theme_selection,
-                    self.desktop_active_theme_pack_id.as_deref(),
-                    theme_packs,
-                )
-            ),
-            TerminalTweaksRow::DesktopBuiltinIcon(index) => desktop_builtin_icons()
-                .get(index)
-                .map(|entry| {
-                    format!(
-                        "Show {} Icon: {}",
-                        entry.label,
-                        if self
-                            .settings
-                            .draft
-                            .desktop_hidden_builtin_icons
-                            .contains(entry.key)
-                        {
-                            "OFF"
-                        } else {
-                            "ON"
-                        }
-                    )
-                })
-                .unwrap_or_else(|| "Built-in Icon".to_string()),
-            TerminalTweaksRow::DesktopShowCursor => format!(
-                "Show Desktop Cursor: {}",
-                if self.settings.draft.desktop_show_cursor {
-                    "ON"
-                } else {
-                    "OFF"
-                }
-            ),
-            TerminalTweaksRow::DesktopCursorScale => format!(
-                "Cursor Size: {:.1}x",
-                self.settings.draft.desktop_cursor_scale
-            ),
-            TerminalTweaksRow::TerminalThemePack => format!(
-                "Theme Pack: {}",
-                selected_theme_pack_name(
-                    self.terminal_active_theme_pack_id.as_deref(),
-                    theme_packs
-                )
+            TerminalTweaksRow::TerminalTheme => format!(
+                "Terminal: {}",
+                selected_terminal_theme_name(&self.terminal_active_theme.id, terminal_themes)
             ),
             TerminalTweaksRow::TerminalColorMode => format!(
                 "Color Mode: {}",
@@ -1363,6 +1471,28 @@ impl NucleonNativeApp {
                     &self.terminal_active_color_style,
                 ))
             ),
+            TerminalTweaksRow::TerminalFont => format!(
+                "Font: {}",
+                selected_font_name(self.terminal_active_font_id.as_deref(), font_packs)
+            ),
+            TerminalTweaksRow::TerminalThemeOption(index) => {
+                let Some(def) = self.terminal_active_theme.options_schema.get(index) else {
+                    return "Theme Option".to_string();
+                };
+                match self.terminal_theme_option_value(index) {
+                    Some(ThemeOptionValue::Bool(value)) => {
+                        format!("{}: [{}]", def.label, if value { "ON" } else { "OFF" })
+                    }
+                    Some(ThemeOptionValue::String(value)) => {
+                        format!("{}: [{}]", def.label, value)
+                    }
+                    Some(ThemeOptionValue::Int(value)) => format!("{}: {}", def.label, value),
+                    Some(ThemeOptionValue::Float(value)) => {
+                        format!("{}: {:.1}", def.label, value)
+                    }
+                    None => def.label.clone(),
+                }
+            }
             TerminalTweaksRow::TerminalLayout => {
                 format!("Terminal Layout: {}", self.terminal_active_layout.name)
             }
@@ -1393,10 +1523,6 @@ impl NucleonNativeApp {
             ),
             TerminalTweaksRow::DropdownOption(_, _) => {
                 "Applies this value and closes the option list.".to_string()
-            }
-            TerminalTweaksRow::WallpaperPicker => {
-                "Enter opens the terminal file browser and returns here after selection."
-                    .to_string()
             }
             TerminalTweaksRow::TerminalWallpaperPicker => {
                 "Enter opens the terminal wallpaper picker and returns here after selection."
@@ -1434,38 +1560,35 @@ impl NucleonNativeApp {
                     "Enable CRT effects first to tune these values.".to_string()
                 }
             }
-            TerminalTweaksRow::DesktopThemePack | TerminalTweaksRow::TerminalThemePack => {
-                "Enter opens the shared theme-pack list for this surface.".to_string()
+            TerminalTweaksRow::TerminalTheme => {
+                "Enter opens the installed terminal-theme list.".to_string()
             }
-            TerminalTweaksRow::DesktopColorMode | TerminalTweaksRow::TerminalColorMode => {
+            TerminalTweaksRow::TerminalColorMode => {
                 "Enter opens the color-mode list for this surface.".to_string()
             }
-            TerminalTweaksRow::DesktopMonoTheme
-            | TerminalTweaksRow::TerminalMonoTheme
-            | TerminalTweaksRow::DesktopFullColorTheme
-            | TerminalTweaksRow::TerminalFullColorTheme => {
+            TerminalTweaksRow::TerminalMonoTheme | TerminalTweaksRow::TerminalFullColorTheme => {
                 "Enter opens the available theme variants.".to_string()
             }
-            TerminalTweaksRow::DesktopCustomRed
-            | TerminalTweaksRow::DesktopCustomGreen
-            | TerminalTweaksRow::DesktopCustomBlue
-            | TerminalTweaksRow::TerminalCustomRed
+            TerminalTweaksRow::TerminalFont => {
+                "Enter opens the installed font list for this surface.".to_string()
+            }
+            TerminalTweaksRow::TerminalCustomRed
             | TerminalTweaksRow::TerminalCustomGreen
             | TerminalTweaksRow::TerminalCustomBlue => {
                 "Adjust the custom monochrome tint channel.".to_string()
             }
-            TerminalTweaksRow::DesktopIconStyle => {
-                "Enter opens the desktop icon-style list.".to_string()
-            }
-            TerminalTweaksRow::DesktopCursorTheme => {
-                "Enter opens the desktop cursor-theme list.".to_string()
-            }
-            TerminalTweaksRow::DesktopBuiltinIcon(_) => {
-                "Toggle individual built-in desktop icons.".to_string()
-            }
-            TerminalTweaksRow::DesktopShowCursor | TerminalTweaksRow::DesktopCursorScale => {
-                "Controls the software cursor on the desktop surface.".to_string()
-            }
+            TerminalTweaksRow::TerminalThemeOption(index) => self
+                .terminal_active_theme
+                .options_schema
+                .get(index)
+                .map(|def| {
+                    if def.description.is_empty() {
+                        "Adjust this terminal theme option.".to_string()
+                    } else {
+                        def.description.clone()
+                    }
+                })
+                .unwrap_or_else(|| "Adjust this terminal theme option.".to_string()),
             TerminalTweaksRow::TerminalLayout => {
                 "Enter opens the layout list for this surface.".to_string()
             }
@@ -1478,7 +1601,7 @@ impl NucleonNativeApp {
             TerminalTweaksRow::TerminalBorderGlyphs => {
                 "Enter opens the border glyph list.".to_string()
             }
-            TerminalTweaksRow::WallpaperMode | TerminalTweaksRow::TerminalWallpaperMode => {
+            TerminalTweaksRow::TerminalWallpaperMode => {
                 "Enter opens the wallpaper sizing list.".to_string()
             }
         }
@@ -1488,27 +1611,12 @@ impl NucleonNativeApp {
         &mut self,
         dropdown: TerminalTweaksDropdown,
         index: usize,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> (TerminalTweaksMutation, bool) {
         let mut mutation = TerminalTweaksMutation::default();
         let mut changed = false;
         match dropdown {
-            TerminalTweaksDropdown::WallpaperMode => {
-                let options = [
-                    WallpaperSizeMode::DefaultSize,
-                    WallpaperSizeMode::FitToScreen,
-                    WallpaperSizeMode::Centered,
-                    WallpaperSizeMode::Tile,
-                    WallpaperSizeMode::Stretch,
-                ];
-                if let Some(next) = options.get(index).copied() {
-                    if next != self.settings.draft.desktop_wallpaper_size_mode {
-                        set_desktop_wallpaper_size_mode(&mut self.settings.draft, next);
-                        mutation.persist_changed = true;
-                        changed = true;
-                    }
-                }
-            }
             TerminalTweaksDropdown::TerminalWallpaperMode => {
                 let options = [
                     WallpaperSizeMode::DefaultSize,
@@ -1562,78 +1670,9 @@ impl NucleonNativeApp {
                     }
                 }
             }
-            TerminalTweaksDropdown::DesktopThemePack => {
-                if let Some(theme) = theme_packs.get(index) {
-                    if self.apply_desktop_theme_pack_selection(theme) {
-                        mutation.appearance_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::DesktopColorMode => {
-                let next = match index {
-                    0 => Some(ColorStyle::Monochrome {
-                        preset: MonochromePreset::Green,
-                        custom_rgb: None,
-                    }),
-                    1 => Some(ColorStyle::FullColor {
-                        theme_id: "nucleon-dark".to_string(),
-                    }),
-                    _ => None,
-                };
-                if let Some(next_style) = next {
-                    if self.set_desktop_color_style_selection(next_style) {
-                        mutation.appearance_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::DesktopMonoTheme => {
-                if let Some(next) = MONOCHROME_THEME_NAMES.get(index).copied() {
-                    let next_style = color_style_from_theme_name(
-                        next,
-                        custom_rgb_for_color_style(&self.desktop_active_color_style),
-                    );
-                    if self.set_desktop_color_style_selection(next_style) {
-                        mutation.appearance_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::DesktopFullColorTheme => {
-                if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
-                    if self.set_desktop_full_color_theme(&theme.id) {
-                        mutation.appearance_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::DesktopIconStyle => {
-                let options = [
-                    DesktopIconStyle::Dos,
-                    DesktopIconStyle::Win95,
-                    DesktopIconStyle::Minimal,
-                    DesktopIconStyle::NoIcons,
-                ];
-                if let Some(next) = options.get(index).copied() {
-                    if next != self.settings.draft.desktop_icon_style {
-                        set_desktop_icon_style(&mut self.settings.draft, next);
-                        mutation.persist_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::DesktopCursorTheme => {
-                if let Some(next) = desktop_cursor_theme_options(theme_packs).get(index).cloned() {
-                    if self.set_desktop_cursor_theme_selection(next) {
-                        mutation.appearance_changed = true;
-                        changed = true;
-                    }
-                }
-            }
-            TerminalTweaksDropdown::TerminalThemePack => {
-                if let Some(theme) = theme_packs.get(index) {
-                    if self.apply_terminal_theme_pack_selection(theme) {
+            TerminalTweaksDropdown::TerminalTheme => {
+                if let Some(manifest) = terminal_themes.get(index) {
+                    if self.set_terminal_theme_selection(manifest) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1672,6 +1711,40 @@ impl NucleonNativeApp {
             TerminalTweaksDropdown::TerminalFullColorTheme => {
                 if let Some(theme) = FullColorTheme::builtin_themes().get(index) {
                     if self.set_terminal_full_color_theme(&theme.id) {
+                        mutation.appearance_changed = true;
+                        changed = true;
+                    }
+                }
+            }
+            TerminalTweaksDropdown::TerminalFont => {
+                let next_font_id = if index == 0 {
+                    None
+                } else {
+                    font_packs.get(index - 1).map(|manifest| manifest.id.clone())
+                };
+                if self.set_terminal_font_id(next_font_id) {
+                    mutation.appearance_changed = true;
+                    changed = true;
+                }
+            }
+            TerminalTweaksDropdown::TerminalThemeOptionChoice(option_index) => {
+                let Some(def) = self.terminal_active_theme.options_schema.get(option_index) else {
+                    let action_taken = self.terminal_tweaks_open_dropdown.is_some();
+                    self.terminal_tweaks_open_dropdown = None;
+                    return (mutation, action_taken);
+                };
+                let ThemeOptionKind::Choice { choices, .. } = &def.kind else {
+                    let action_taken = self.terminal_tweaks_open_dropdown.is_some();
+                    self.terminal_tweaks_open_dropdown = None;
+                    return (mutation, action_taken);
+                };
+                if let Some(choice) = choices.get(index) {
+                    let key = def.key.clone();
+                    let value = choice.clone();
+                    if self.set_terminal_theme_option_value(
+                        &key,
+                        ThemeOptionValue::String(value),
+                    ) {
                         mutation.appearance_changed = true;
                         changed = true;
                     }
@@ -1721,7 +1794,8 @@ impl NucleonNativeApp {
         &mut self,
         row: TerminalTweaksRow,
         step: TerminalTweaksStep,
-        theme_packs: &[ThemePack],
+        terminal_themes: &[TerminalThemeManifest],
+        font_packs: &[FontPackManifest],
     ) -> (TerminalTweaksMutation, bool) {
         let mut mutation = TerminalTweaksMutation::default();
         let mut action_taken = false;
@@ -1739,16 +1813,12 @@ impl NucleonNativeApp {
                 }
             }
             TerminalTweaksRow::DropdownOption(dropdown, index) => {
-                return self.apply_terminal_tweaks_dropdown_selection(dropdown, index, theme_packs);
-            }
-            TerminalTweaksRow::WallpaperPicker => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    let start = wallpaper_browser_start_dir(&self.settings.draft.desktop_wallpaper);
-                    self.picking_wallpaper = true;
-                    self.open_document_browser_at(start, TerminalScreen::Settings);
-                    self.apply_status_update(clear_shell_status());
-                    action_taken = true;
-                }
+                return self.apply_terminal_tweaks_dropdown_selection(
+                    dropdown,
+                    index,
+                    terminal_themes,
+                    font_packs,
+                );
             }
             TerminalTweaksRow::TerminalWallpaperPicker => {
                 if matches!(step, TerminalTweaksStep::Activate) {
@@ -1757,18 +1827,6 @@ impl NucleonNativeApp {
                     self.picking_terminal_wallpaper = true;
                     self.open_document_browser_at(start, TerminalScreen::Settings);
                     self.apply_status_update(clear_shell_status());
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::WallpaperMode => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::WallpaperMode)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::WallpaperMode)
-                    };
                     action_taken = true;
                 }
             }
@@ -1944,130 +2002,14 @@ impl NucleonNativeApp {
                     action_taken = true;
                 }
             }
-            TerminalTweaksRow::DesktopThemePack => {
+            TerminalTweaksRow::TerminalTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
                     self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopThemePack)
+                        == Some(TerminalTweaksDropdown::TerminalTheme)
                     {
                         None
                     } else {
-                        Some(TerminalTweaksDropdown::DesktopThemePack)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopColorMode => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopColorMode)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopColorMode)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopMonoTheme => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopMonoTheme)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopMonoTheme)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopCustomRed
-            | TerminalTweaksRow::DesktopCustomGreen
-            | TerminalTweaksRow::DesktopCustomBlue => {
-                let mut rgb = custom_rgb_for_color_style(&self.desktop_active_color_style);
-                let changed = match row {
-                    TerminalTweaksRow::DesktopCustomRed => adjust_u8(&mut rgb[0], step.delta()),
-                    TerminalTweaksRow::DesktopCustomGreen => adjust_u8(&mut rgb[1], step.delta()),
-                    TerminalTweaksRow::DesktopCustomBlue => adjust_u8(&mut rgb[2], step.delta()),
-                    _ => false,
-                };
-                if changed && self.set_desktop_monochrome_custom_rgb(rgb) {
-                    mutation.appearance_changed = true;
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopFullColorTheme => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopFullColorTheme)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopFullColorTheme)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopIconStyle => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopIconStyle)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopIconStyle)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopCursorTheme => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::DesktopCursorTheme)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::DesktopCursorTheme)
-                    };
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopBuiltinIcon(index) => {
-                if let Some(entry) = desktop_builtin_icons().get(index) {
-                    let visible = self
-                        .settings
-                        .draft
-                        .desktop_hidden_builtin_icons
-                        .contains(entry.key);
-                    set_builtin_icon_visible(&mut self.settings.draft, entry.key, visible);
-                    mutation.persist_changed = true;
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::DesktopShowCursor => {
-                self.settings.draft.desktop_show_cursor = !self.settings.draft.desktop_show_cursor;
-                mutation.persist_changed = true;
-                action_taken = true;
-            }
-            TerminalTweaksRow::DesktopCursorScale => {
-                if adjust_f32(
-                    &mut self.settings.draft.desktop_cursor_scale,
-                    step.delta(),
-                    0.5,
-                    2.5,
-                    0.1,
-                ) {
-                    mutation.persist_changed = true;
-                    action_taken = true;
-                }
-            }
-            TerminalTweaksRow::TerminalThemePack => {
-                if matches!(step, TerminalTweaksStep::Activate) {
-                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
-                        == Some(TerminalTweaksDropdown::TerminalThemePack)
-                    {
-                        None
-                    } else {
-                        Some(TerminalTweaksDropdown::TerminalThemePack)
+                        Some(TerminalTweaksDropdown::TerminalTheme)
                     };
                     action_taken = true;
                 }
@@ -2111,6 +2053,82 @@ impl NucleonNativeApp {
                     action_taken = true;
                 }
             }
+            TerminalTweaksRow::TerminalThemeOption(index) => {
+                let Some(def) = self.terminal_active_theme.options_schema.get(index).cloned() else {
+                    return (mutation, false);
+                };
+                match def.kind {
+                    ThemeOptionKind::Bool { .. } => {
+                        if matches!(step, TerminalTweaksStep::Activate) {
+                            let current = matches!(
+                                self.terminal_theme_option_value(index),
+                                Some(ThemeOptionValue::Bool(true))
+                            );
+                            if self.set_terminal_theme_option_value(
+                                &def.key,
+                                ThemeOptionValue::Bool(!current),
+                            ) {
+                                mutation.appearance_changed = true;
+                                action_taken = true;
+                            }
+                        }
+                    }
+                    ThemeOptionKind::Choice { .. } => {
+                        if matches!(step, TerminalTweaksStep::Activate) {
+                            let dropdown =
+                                TerminalTweaksDropdown::TerminalThemeOptionChoice(index);
+                            self.terminal_tweaks_open_dropdown =
+                                if previously_open_dropdown == Some(dropdown) {
+                                    None
+                                } else {
+                                    Some(dropdown)
+                                };
+                            action_taken = true;
+                        } else if self.cycle_terminal_theme_choice_option(index, step.delta()) {
+                            mutation.appearance_changed = true;
+                            action_taken = true;
+                        }
+                    }
+                    ThemeOptionKind::Int { min, max, .. } => {
+                        if matches!(step, TerminalTweaksStep::Activate) {
+                            return (mutation, false);
+                        }
+                        let current = match self.terminal_theme_option_value(index) {
+                            Some(ThemeOptionValue::Int(value)) => value,
+                            _ => 0,
+                        };
+                        let next = (current + step.delta()).clamp(min, max);
+                        if next != current
+                            && self.set_terminal_theme_option_value(
+                                &def.key,
+                                ThemeOptionValue::Int(next),
+                            )
+                        {
+                            mutation.appearance_changed = true;
+                            action_taken = true;
+                        }
+                    }
+                    ThemeOptionKind::Float { min, max, .. } => {
+                        if matches!(step, TerminalTweaksStep::Activate) {
+                            return (mutation, false);
+                        }
+                        let current = match self.terminal_theme_option_value(index) {
+                            Some(ThemeOptionValue::Float(value)) => value,
+                            _ => 0.0,
+                        };
+                        let next = (current + step.delta() as f32 * 0.1).clamp(min, max);
+                        if (next - current).abs() > f32::EPSILON
+                            && self.set_terminal_theme_option_value(
+                                &def.key,
+                                ThemeOptionValue::Float((next * 10.0).round() / 10.0),
+                            )
+                        {
+                            mutation.appearance_changed = true;
+                            action_taken = true;
+                        }
+                    }
+                }
+            }
             TerminalTweaksRow::TerminalFullColorTheme => {
                 if matches!(step, TerminalTweaksStep::Activate) {
                     self.terminal_tweaks_open_dropdown = if previously_open_dropdown
@@ -2119,6 +2137,18 @@ impl NucleonNativeApp {
                         None
                     } else {
                         Some(TerminalTweaksDropdown::TerminalFullColorTheme)
+                    };
+                    action_taken = true;
+                }
+            }
+            TerminalTweaksRow::TerminalFont => {
+                if matches!(step, TerminalTweaksStep::Activate) {
+                    self.terminal_tweaks_open_dropdown = if previously_open_dropdown
+                        == Some(TerminalTweaksDropdown::TerminalFont)
+                    {
+                        None
+                    } else {
+                        Some(TerminalTweaksDropdown::TerminalFont)
                     };
                     action_taken = true;
                 }
@@ -2232,18 +2262,22 @@ impl NucleonNativeApp {
             name: theme.name.clone(),
             description: "Exported from Tweaks".to_string(),
             version: "1.0.0".to_string(),
-            shell_style: self.desktop_active_shell_style.clone(),
-            layout_profile: self.desktop_active_layout.clone(),
+            desktop_style: crate::theme::DesktopStyleRef::Inline(
+                self.desktop_active_desktop_style.clone(),
+            ),
             color_style: if terminal {
                 self.terminal_active_color_style.clone()
             } else {
                 self.desktop_active_color_style.clone()
             },
-            sound_pack: crate::theme::SoundPack::default(),
-            asset_pack: None,
-            cursor_pack: None,
+            full_color_theme: Some(theme.clone()),
             terminal_branding: self.terminal_branding.clone(),
             terminal_decoration: self.terminal_decoration.clone(),
+            icon_pack_id: None,
+            sound_pack_id: None,
+            cursor_pack_id: None,
+            font_pack_id: None,
+            layout_profile: self.desktop_active_layout.clone(),
         };
         let manifest_json = match serde_json::to_string_pretty(&manifest) {
             Ok(json) => json,
@@ -2318,9 +2352,8 @@ impl NucleonNativeApp {
                     .entry(*token)
                     .or_insert([128, 128, 128, 255]);
                 let is_selected = self.tweaks_editing_color_token == Some(idx);
-                let preview = egui::Color32::from_rgba_unmultiplied(
-                    entry[0], entry[1], entry[2], entry[3],
-                );
+                let preview =
+                    egui::Color32::from_rgba_unmultiplied(entry[0], entry[1], entry[2], entry[3]);
 
                 ui.horizontal(|ui| {
                     let btn = ui.add(
@@ -2337,11 +2370,8 @@ impl NucleonNativeApp {
                             )),
                     );
                     if btn.clicked() {
-                        self.tweaks_editing_color_token = if is_selected {
-                            None
-                        } else {
-                            Some(idx)
-                        };
+                        self.tweaks_editing_color_token =
+                            if is_selected { None } else { Some(idx) };
                     }
                     let label_text = if is_selected {
                         RichText::new(full_color_token_label(*token))
@@ -2374,18 +2404,14 @@ impl NucleonNativeApp {
                                                 egui::Button::new("")
                                                     .min_size(egui::vec2(20.0, 20.0))
                                                     .fill(swatch_color)
-                                                    .stroke(egui::Stroke::new(
-                                                        0.5,
-                                                        palette.dim,
-                                                    )),
+                                                    .stroke(egui::Stroke::new(0.5, palette.dim)),
                                             )
                                             .clicked()
                                         {
                                             let entry = working_overrides
                                                 .entry(*token)
                                                 .or_insert([128, 128, 128, 255]);
-                                            *entry =
-                                                [swatch[0], swatch[1], swatch[2], 255];
+                                            *entry = [swatch[0], swatch[1], swatch[2], 255];
                                             appearance_changed = true;
                                         }
                                         if (index + 1) % COLOR_PALETTE_COLUMNS == 0 {
@@ -2399,22 +2425,13 @@ impl NucleonNativeApp {
                                 .entry(*token)
                                 .or_insert([128, 128, 128, 255]);
                             ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("Custom:").color(palette.fg),
+                                ui.label(RichText::new("Custom:").color(palette.fg));
+                                let mut color = egui::Color32::from_rgba_unmultiplied(
+                                    entry[0], entry[1], entry[2], entry[3],
                                 );
-                                let mut color =
-                                    egui::Color32::from_rgba_unmultiplied(
-                                        entry[0], entry[1], entry[2], entry[3],
-                                    );
-                                if color_edit_button_srgba(
-                                    ui,
-                                    &mut color,
-                                    Alpha::Opaque,
-                                )
-                                .changed()
+                                if color_edit_button_srgba(ui, &mut color, Alpha::Opaque).changed()
                                 {
-                                    *entry =
-                                        [color.r(), color.g(), color.b(), 255];
+                                    *entry = [color.r(), color.g(), color.b(), 255];
                                     appearance_changed = true;
                                 }
                             });
@@ -2436,7 +2453,6 @@ impl NucleonNativeApp {
                 self.terminal_active_theme_pack_id = None;
                 self.activate_terminal_surface_style();
             } else {
-                self.clear_desktop_theme_pack_selection();
                 self.activate_desktop_surface_style();
             }
         }
@@ -2589,8 +2605,9 @@ impl NucleonNativeApp {
 
     pub(super) fn draw_terminal_tweaks_screen(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
-        let theme_packs = installed_theme_packs();
-        let mut entries = self.terminal_tweaks_entries(&theme_packs);
+        let terminal_themes = installed_terminal_themes();
+        let font_packs = installed_font_packs();
+        let mut entries = self.terminal_tweaks_entries(&terminal_themes, &font_packs);
         let mut selectable_indices = Self::terminal_tweaks_selectable_indices(&entries);
         self.terminal_nav.settings_idx = self
             .terminal_nav
@@ -2628,14 +2645,14 @@ impl NucleonNativeApp {
                 Self::terminal_tweaks_selected_row(&entries, self.terminal_nav.settings_idx)
             {
                 let (step_mutation, action_taken) =
-                    self.apply_terminal_tweaks_step(row, step, &theme_packs);
+                    self.apply_terminal_tweaks_step(row, step, &terminal_themes, &font_packs);
                 if action_taken {
                     crate::sound::play_navigate();
                 }
                 mutation.persist_changed |= step_mutation.persist_changed;
                 mutation.appearance_changed |= step_mutation.appearance_changed;
                 mutation.window_mode_changed |= step_mutation.window_mode_changed;
-                entries = self.terminal_tweaks_entries(&theme_packs);
+                entries = self.terminal_tweaks_entries(&terminal_themes, &font_packs);
                 selectable_indices = Self::terminal_tweaks_selectable_indices(&entries);
                 self.terminal_nav.settings_idx = self
                     .terminal_nav
@@ -2714,20 +2731,15 @@ impl NucleonNativeApp {
                                 .get(self.terminal_nav.settings_idx)
                                 .copied()
                                 == Some(entry_idx);
-                            let indent = " ".repeat(terminal_tweaks_indent(row));
-                            let text = if selected {
-                                format!(
-                                    "  > {}{}",
-                                    indent,
-                                    self.terminal_tweaks_row_label(row, &theme_packs)
-                                )
-                            } else {
-                                format!(
-                                    "    {}{}",
-                                    indent,
-                                    self.terminal_tweaks_row_label(row, &theme_packs)
-                                )
-                            };
+                            let text = terminal_menu_row_text(
+                                &self.terminal_tweaks_row_label(
+                                    row,
+                                    &terminal_themes,
+                                    &font_packs,
+                                ),
+                                selected,
+                                2 + terminal_tweaks_indent(row),
+                            );
                             let response = screen.selectable_row(
                                 ui,
                                 &painter,
@@ -2775,7 +2787,12 @@ impl NucleonNativeApp {
 
         if let Some(row) = clicked_row {
             let (step_mutation, action_taken) =
-                self.apply_terminal_tweaks_step(row, TerminalTweaksStep::Activate, &theme_packs);
+                self.apply_terminal_tweaks_step(
+                    row,
+                    TerminalTweaksStep::Activate,
+                    &terminal_themes,
+                    &font_packs,
+                );
             if action_taken {
                 crate::sound::play_navigate();
             }
@@ -2785,6 +2802,7 @@ impl NucleonNativeApp {
         }
 
         if mutation.appearance_changed {
+            self.sync_active_font(ctx);
             self.persist_surface_theme_state_to_settings();
             mutation.persist_changed = true;
         }
@@ -2832,14 +2850,20 @@ impl NucleonNativeApp {
                 ui,
                 "Tweaks",
                 maximized,
-                &self.desktop_active_shell_style,
+                self.desktop_active_window == Some(wid),
+                &self.desktop_active_desktop_style,
             );
             let mut persist_changed = false;
             let mut window_mode_changed = false;
             let mut desktop_runtime_changed = false;
             let mut appearance_changed = false;
             let palette = current_palette();
-            let theme_packs = installed_theme_packs();
+            let desktop_styles = installed_desktop_styles();
+            let color_themes = installed_color_themes();
+            let font_packs = installed_font_packs();
+            let icon_packs = installed_icon_packs();
+            let sound_packs = installed_sound_packs();
+            let cursor_packs = installed_cursor_packs();
 
             ui.add_space(4.0);
             ui.label(RichText::new("Tweaks").strong().size(28.0));
@@ -2881,7 +2905,7 @@ impl NucleonNativeApp {
                     ui.add_space(10.0);
                     Self::retro_separator_with_thickness(
                         ui,
-                        self.desktop_active_shell_style.separator_thickness,
+                        self.desktop_active_desktop_style.separator_thickness,
                     );
                     ui.add_space(8.0);
                     match self.tweaks_tab {
@@ -3045,38 +3069,37 @@ impl NucleonNativeApp {
                             }
                         }
                         1 => {
-                            Self::draw_surface_sub_tabs(
-                                ui,
-                                &mut self.tweaks_theme_surface,
-                                &palette,
-                            );
+                            self.tweaks_theme_surface = 0;
                             match self.tweaks_theme_surface {
                                 0 => {
-                                    Self::settings_section(ui, "Theme Pack", |ui| {
-                                        egui::ComboBox::from_id_salt("native_desktop_theme_pack")
+                                    Self::settings_section(ui, "Desktop Theme", |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Desktop");
+                                            egui::ComboBox::from_id_salt("native_desktop_style")
                                             .selected_text(
-                                                RichText::new(selected_theme_pack_name(
-                                                    self.desktop_active_theme_pack_id.as_deref(),
-                                                    &theme_packs,
+                                                RichText::new(selected_desktop_style_name(
+                                                    self.desktop_active_desktop_style_id.as_deref(),
+                                                    &self.desktop_active_desktop_style,
+                                                    &desktop_styles,
                                                 ))
                                                 .color(palette.fg),
                                             )
                                             .show_ui(ui, |ui| {
                                                 Self::apply_settings_control_style(ui);
-                                                for theme in &theme_packs {
+                                                for manifest in &desktop_styles {
                                                     let selected = self
-                                                        .desktop_active_theme_pack_id
+                                                        .desktop_active_desktop_style_id
                                                         .as_deref()
-                                                        == Some(theme.id.as_str());
+                                                        == Some(manifest.id.as_str());
                                                     if Self::retro_choice_button(
                                                         ui,
-                                                        &theme.name,
+                                                        &manifest.name,
                                                         selected,
                                                     )
                                                     .clicked()
                                                     {
                                                         if self
-                                                            .apply_desktop_theme_pack_selection(theme)
+                                                            .set_desktop_style_id(Some(manifest.id.clone()))
                                                         {
                                                             desktop_runtime_changed = true;
                                                             appearance_changed = true;
@@ -3085,16 +3108,46 @@ impl NucleonNativeApp {
                                                     }
                                                 }
                                             });
+                                        });
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Colors");
+                                            egui::ComboBox::from_id_salt(
+                                                "native_desktop_color_theme_component",
+                                            )
+                                            .selected_text(
+                                                RichText::new(selected_color_theme_name(
+                                                    &self.desktop_active_color_style,
+                                                    &color_themes,
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                for manifest in &color_themes {
+                                                    let selected = self.desktop_active_color_style
+                                                        == manifest.color_style;
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &manifest.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self
+                                                            .set_desktop_color_theme_selection(
+                                                                manifest,
+                                                            )
+                                                        {
+                                                            desktop_runtime_changed = true;
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
+                                        });
                                         ui.add_space(8.0);
-                                        if ui.button("Import Theme...").clicked() {
-                                            self.picking_theme_import = true;
-                                            self.open_embedded_file_manager_at(
-                                                crate::config::themes_directory(),
-                                            );
-                                        }
-                                    });
-                                    ui.add_space(10.0);
-                                    Self::settings_section(ui, "Color Mode", |ui| {
                                         let desktop_is_monochrome = matches!(
                                             self.desktop_active_color_style,
                                             ColorStyle::Monochrome { .. }
@@ -3134,15 +3187,10 @@ impl NucleonNativeApp {
                                                 }
                                             }
                                         });
-                                    });
-                                    ui.add_space(10.0);
-                                    if matches!(
-                                        self.desktop_active_color_style,
-                                        ColorStyle::Monochrome { .. }
-                                    ) {
-                                        Self::settings_section(ui, "Monochrome Theme", |ui| {
+                                        ui.add_space(6.0);
+                                        if desktop_is_monochrome {
                                             ui.horizontal(|ui| {
-                                                ui.label("Theme");
+                                                ui.label("Monochrome Theme");
                                                 let mut current_idx = MONOCHROME_THEME_NAMES
                                                     .iter()
                                                     .position(|name| {
@@ -3194,6 +3242,7 @@ impl NucleonNativeApp {
                                                 &self.desktop_active_color_style,
                                             ) == CUSTOM_THEME_NAME
                                             {
+                                                ui.add_space(6.0);
                                                 let mut rgb = custom_rgb_for_color_style(
                                                     &self.desktop_active_color_style,
                                                 );
@@ -3229,9 +3278,13 @@ impl NucleonNativeApp {
                                                     appearance_changed = true;
                                                 }
                                             }
-                                        });
-                                    } else {
-                                        Self::settings_section(ui, "Full Color Theme", |ui| {
+                                        } else {
+                                            ui.label(
+                                                RichText::new("Full Color Theme")
+                                                    .color(palette.fg)
+                                                    .strong(),
+                                            );
+                                            ui.add_space(4.0);
                                             let selected_theme_id = full_color_theme_id_for_color_style(
                                                 &self.desktop_active_color_style,
                                             )
@@ -3263,10 +3316,117 @@ impl NucleonNativeApp {
                                                 desktop_runtime_changed = true;
                                                 appearance_changed = true;
                                             }
+                                        }
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Font");
+                                            egui::ComboBox::from_id_salt(
+                                                "native_desktop_font_pack_component",
+                                            )
+                                            .selected_text(
+                                                RichText::new(selected_font_name(
+                                                    self.desktop_active_font_id.as_deref(),
+                                                    &font_packs,
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    "Fixedsys (Default)",
+                                                    self.desktop_active_font_id
+                                                        == super::desktop_default_font_id(
+                                                            self.desktop_active_theme_pack_id
+                                                                .as_deref(),
+                                                            self.desktop_active_desktop_style_id
+                                                                .as_deref(),
+                                                        ),
+                                                )
+                                                .clicked()
+                                                {
+                                                    if self.set_desktop_font_id(None) {
+                                                        appearance_changed = true;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                                for manifest in &font_packs {
+                                                    let selected = self
+                                                        .desktop_active_font_id
+                                                        .as_deref()
+                                                        == Some(manifest.id.as_str());
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &manifest.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self.set_desktop_font_id(Some(
+                                                            manifest.id.clone(),
+                                                        )) {
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
                                         });
-                                    }
-                                    ui.add_space(10.0);
-                                    Self::settings_section(ui, "Icons", |ui| {
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Icons");
+                                            egui::ComboBox::from_id_salt(
+                                                "native_desktop_icon_pack_component",
+                                            )
+                                            .selected_text(
+                                                RichText::new(selected_manifest_name(
+                                                    self.desktop_active_icon_pack_id.as_deref(),
+                                                    "Default",
+                                                    &icon_packs,
+                                                    |manifest: &IconPackManifest| manifest.id.as_str(),
+                                                    |manifest: &IconPackManifest| manifest.name.as_str(),
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    "Default",
+                                                    self.desktop_active_icon_pack_id.is_none(),
+                                                )
+                                                .clicked()
+                                                {
+                                                    if self.set_desktop_icon_pack_id(None) {
+                                                        desktop_runtime_changed = true;
+                                                        appearance_changed = true;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                                for manifest in &icon_packs {
+                                                    let selected = self
+                                                        .desktop_active_icon_pack_id
+                                                        .as_deref()
+                                                        == Some(manifest.id.as_str());
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &manifest.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self.set_desktop_icon_pack_id(Some(
+                                                            manifest.id.clone(),
+                                                        )) {
+                                                            desktop_runtime_changed = true;
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(6.0);
                                         ui.horizontal(|ui| {
                                             ui.label("Icon Style");
                                             let selected = desktop_icon_style_label(
@@ -3332,43 +3492,105 @@ impl NucleonNativeApp {
                                                 persist_changed = true;
                                             }
                                         }
-                                    });
-                                    ui.add_space(10.0);
-                                    Self::settings_section(ui, "Cursors", |ui| {
-                                        let cursor_theme_options =
-                                            desktop_cursor_theme_options(&theme_packs);
+                                        ui.add_space(6.0);
                                         ui.horizontal(|ui| {
-                                            ui.label("Cursor Theme");
+                                            ui.label("Sounds");
                                             egui::ComboBox::from_id_salt(
-                                                "native_settings_desktop_cursor_theme",
+                                                "native_desktop_sound_pack_component",
                                             )
                                             .selected_text(
-                                                RichText::new(desktop_cursor_theme_selection_label(
-                                                    &self.desktop_active_cursor_theme_selection,
-                                                    self.desktop_active_theme_pack_id.as_deref(),
-                                                    &theme_packs,
+                                                RichText::new(selected_manifest_name(
+                                                    self.desktop_active_sound_pack_id.as_deref(),
+                                                    "Default",
+                                                    &sound_packs,
+                                                    |manifest: &SoundPackManifest| manifest.id.as_str(),
+                                                    |manifest: &SoundPackManifest| manifest.name.as_str(),
                                                 ))
                                                 .color(palette.fg),
                                             )
                                             .show_ui(ui, |ui| {
                                                 Self::apply_settings_control_style(ui);
-                                                for selection in &cursor_theme_options {
-                                                    let label = desktop_cursor_theme_selection_label(
-                                                        selection,
-                                                        self.desktop_active_theme_pack_id.as_deref(),
-                                                        &theme_packs,
-                                                    );
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    "Default",
+                                                    self.desktop_active_sound_pack_id.is_none(),
+                                                )
+                                                .clicked()
+                                                {
+                                                    if self.set_desktop_sound_pack_id(None) {
+                                                        desktop_runtime_changed = true;
+                                                        appearance_changed = true;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                                for manifest in &sound_packs {
+                                                    let selected = self
+                                                        .desktop_active_sound_pack_id
+                                                        .as_deref()
+                                                        == Some(manifest.id.as_str());
                                                     if Self::retro_choice_button(
                                                         ui,
-                                                        &label,
-                                                        self.desktop_active_cursor_theme_selection
-                                                            == *selection,
+                                                        &manifest.name,
+                                                        selected,
                                                     )
                                                     .clicked()
                                                     {
-                                                        if self.set_desktop_cursor_theme_selection(
-                                                            selection.clone(),
-                                                        ) {
+                                                        if self.set_desktop_sound_pack_id(Some(
+                                                            manifest.id.clone(),
+                                                        )) {
+                                                            desktop_runtime_changed = true;
+                                                            appearance_changed = true;
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Cursors");
+                                            egui::ComboBox::from_id_salt(
+                                                "native_desktop_cursor_pack_component",
+                                            )
+                                            .selected_text(
+                                                RichText::new(selected_manifest_name(
+                                                    self.desktop_active_cursor_pack_id.as_deref(),
+                                                    "Default",
+                                                    &cursor_packs,
+                                                    |manifest: &CursorPackManifest| manifest.id.as_str(),
+                                                    |manifest: &CursorPackManifest| manifest.name.as_str(),
+                                                ))
+                                                .color(palette.fg),
+                                            )
+                                            .show_ui(ui, |ui| {
+                                                Self::apply_settings_control_style(ui);
+                                                if Self::retro_choice_button(
+                                                    ui,
+                                                    "Default",
+                                                    self.desktop_active_cursor_pack_id.is_none(),
+                                                )
+                                                .clicked()
+                                                {
+                                                    if self.set_desktop_cursor_pack_id(None) {
+                                                        appearance_changed = true;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                                for manifest in &cursor_packs {
+                                                    let selected = self
+                                                        .desktop_active_cursor_pack_id
+                                                        .as_deref()
+                                                        == Some(manifest.id.as_str());
+                                                    if Self::retro_choice_button(
+                                                        ui,
+                                                        &manifest.name,
+                                                        selected,
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        if self.set_desktop_cursor_pack_id(Some(
+                                                            manifest.id.clone(),
+                                                        )) {
                                                             appearance_changed = true;
                                                         }
                                                         ui.close_menu();
@@ -3413,40 +3635,6 @@ impl NucleonNativeApp {
                                     });
                                 }
                                 _ => {
-                                    Self::settings_section(ui, "Terminal Theme Pack", |ui| {
-                                        egui::ComboBox::from_id_salt("native_terminal_theme_pack")
-                                            .selected_text(
-                                                RichText::new(selected_theme_pack_name(
-                                                    self.terminal_active_theme_pack_id.as_deref(),
-                                                    &theme_packs,
-                                                ))
-                                                .color(palette.fg),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                Self::apply_settings_control_style(ui);
-                                                for theme in &theme_packs {
-                                                    let selected = self
-                                                        .terminal_active_theme_pack_id
-                                                        .as_deref()
-                                                        == Some(theme.id.as_str());
-                                                    if Self::retro_choice_button(
-                                                        ui,
-                                                        &theme.name,
-                                                        selected,
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        if self
-                                                            .apply_terminal_theme_pack_selection(theme)
-                                                        {
-                                                            appearance_changed = true;
-                                                        }
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                            });
-                                    });
-                                    ui.add_space(10.0);
                                     Self::settings_section(ui, "Color Mode", |ui| {
                                         let terminal_is_monochrome = matches!(
                                             self.terminal_active_color_style,
@@ -3785,12 +3973,13 @@ impl NucleonNativeApp {
                 });
 
             if appearance_changed {
+                self.sync_active_font(ctx);
                 self.persist_surface_theme_state_to_settings();
                 persist_changed = true;
             }
             Self::retro_separator_with_thickness(
                 ui,
-                self.desktop_active_shell_style.separator_thickness,
+                self.desktop_active_desktop_style.separator_thickness,
             );
             if persist_changed {
                 {

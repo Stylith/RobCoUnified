@@ -65,7 +65,6 @@ pub enum PromptOutcome {
     },
     InstallerSearch(String),
     InstallerFilter(String),
-    InstallerAddonPath(String),
     InstallerDisplayName {
         pkg: String,
         target: InstallerMenuTarget,
@@ -223,9 +222,6 @@ pub fn handle_prompt_input(ctx: &Context, mut prompt: TerminalPrompt) -> PromptO
                     }
                     TerminalPromptAction::InstallerFilter => {
                         PromptOutcome::InstallerFilter(prompt.buffer)
-                    }
-                    TerminalPromptAction::InstallerAddonPath => {
-                        PromptOutcome::InstallerAddonPath(prompt.buffer)
                     }
                     TerminalPromptAction::InstallerDisplayName { pkg, target } => {
                         PromptOutcome::InstallerDisplayName {

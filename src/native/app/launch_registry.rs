@@ -41,6 +41,12 @@ pub(super) fn settings_launch_target() -> LaunchTarget {
     }
 }
 
+pub(super) fn addons_launch_target() -> LaunchTarget {
+    LaunchTarget::Capability {
+        capability: CapabilityId::from("addons-ui"),
+    }
+}
+
 pub(super) fn terminal_launch_target() -> LaunchTarget {
     LaunchTarget::Capability {
         capability: CapabilityId::from("terminal-tool"),
@@ -227,10 +233,10 @@ fn resolve_terminal_runtime_route(route: NativeTerminalRoute) -> NativeTerminalL
 #[cfg(test)]
 mod tests {
     use super::{
-        about_launch_target, connections_launch_target, default_apps_launch_target,
-        desktop_launch_target_available_for_profile, edit_menus_launch_target,
-        editor_launch_target, file_manager_launch_target, installer_launch_target,
-        programs_launch_target, resolve_desktop_launch_target,
+        about_launch_target, addons_launch_target, connections_launch_target,
+        default_apps_launch_target, desktop_launch_target_available_for_profile,
+        edit_menus_launch_target, editor_launch_target, file_manager_launch_target,
+        installer_launch_target, programs_launch_target, resolve_desktop_launch_target,
         resolve_desktop_launch_target_for_profile, resolve_terminal_launch_target,
         resolve_terminal_launch_target_for_profile, settings_launch_target, terminal_launch_target,
         terminal_launch_target_available_for_profile, unresolved_launch_target_status_for_profile,
@@ -263,6 +269,14 @@ mod tests {
         assert_eq!(
             resolve_desktop_launch_target(&settings_launch_target()),
             Some(NativeDesktopLaunch::OpenSettingsPanel(None))
+        );
+    }
+
+    #[test]
+    fn addons_capability_resolves_to_addons_window() {
+        assert_eq!(
+            resolve_desktop_launch_target(&addons_launch_target()),
+            Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Addons))
         );
     }
 
@@ -339,6 +353,18 @@ mod tests {
         assert_eq!(
             resolve_desktop_launch_target(&target),
             Some(NativeDesktopLaunch::OpenSettingsPanel(None))
+        );
+    }
+
+    #[test]
+    fn addons_addon_id_resolves_to_addons_window() {
+        let target = LaunchTarget::Addon {
+            addon_id: AddonId::from("shell.addons"),
+        };
+
+        assert_eq!(
+            resolve_desktop_launch_target(&target),
+            Some(NativeDesktopLaunch::OpenWindow(DesktopWindow::Addons))
         );
     }
 

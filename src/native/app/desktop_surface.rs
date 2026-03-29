@@ -15,7 +15,8 @@ use super::super::desktop_surface_service::{
 use super::super::file_manager::FileEntryRow;
 use super::super::file_manager_app::{FileManagerPromptRequest, NativeFileManagerDragPayload};
 use super::super::retro_ui::{
-    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
+    current_desktop_style, current_palette, desktop_style_rounding, desktop_style_shadow,
+    RetroPalette,
 };
 use super::super::shared_file_manager_settings::FileManagerSettingsUpdate;
 use super::NucleonNativeApp;
@@ -704,16 +705,16 @@ impl NucleonNativeApp {
 
     pub(super) fn apply_context_menu_style(ui: &mut egui::Ui) {
         let palette = current_palette();
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.button_frame = true;
         style.visuals.window_fill = palette.panel;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = shell_style_rounding(&shell_style);
-        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
-        style.visuals.window_shadow = shell_style_shadow(&shell_style);
-        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
+        style.visuals.window_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.menu_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.window_shadow = desktop_style_shadow(&desktop_style);
+        style.visuals.popup_shadow = desktop_style_shadow(&desktop_style);
         style.visuals.override_text_color = None;
         style.spacing.item_spacing = egui::vec2(0.0, 0.0);
         style.spacing.button_padding = egui::vec2(5.0, 2.0);
@@ -768,11 +769,10 @@ impl NucleonNativeApp {
             )
         };
         let asset_pack_path = self.active_asset_pack_path.as_deref();
-        let color_mode_is_full_color =
-            matches!(
-                &self.desktop_active_color_style,
-                crate::theme::ColorStyle::FullColor { .. }
-            );
+        let color_mode_is_full_color = matches!(
+            &self.desktop_active_color_style,
+            crate::theme::ColorStyle::FullColor { .. }
+        );
         let tex_shortcut_badge = Self::ensure_cached_svg_icon(
             &mut self
                 .asset_cache
@@ -1267,7 +1267,8 @@ impl NucleonNativeApp {
                     ui,
                     "Shortcut Properties",
                     false,
-                    &self.desktop_active_shell_style,
+                    true,
+                    &self.desktop_active_desktop_style,
                 );
                 if matches!(
                     header_action,
@@ -1434,7 +1435,8 @@ impl NucleonNativeApp {
                     ui,
                     "Desktop Item Properties",
                     false,
-                    &self.desktop_active_shell_style,
+                    true,
+                    &self.desktop_active_desktop_style,
                 );
                 if matches!(
                     header_action,

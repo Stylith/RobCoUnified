@@ -15,7 +15,8 @@ pub(super) fn build_open_with_context_entries(
     };
     let ext_key = super::super::file_manager_app::open_with_extension_key(&entry.path);
     let known_apps = nucleon_native_file_manager_app::known_apps_for_extension(&ext_key);
-    let open_with = nucleon_native_file_manager_app::open_with_state_for_path(&entry.path, settings);
+    let open_with =
+        nucleon_native_file_manager_app::open_with_state_for_path(&entry.path, settings);
 
     let mut entries = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -421,13 +422,14 @@ impl NucleonNativeApp {
             .frame(egui::Frame::none())
             .exact_height(top_panel_height)
             .show_inside(ui, |ui| {
-                *header_action =
-                    Self::draw_desktop_window_header(
-                        ui,
-                        FILE_MANAGER_APP_TITLE,
-                        maximized,
-                        &self.desktop_active_shell_style,
-                    );
+                *header_action = Self::draw_desktop_window_header(
+                    ui,
+                    FILE_MANAGER_APP_TITLE,
+                    maximized,
+                    self.desktop_active_window
+                        == Some(self.current_window_id(DesktopWindow::FileManager)),
+                    &self.desktop_active_desktop_style,
+                );
 
                 if let Some(banner) = banner {
                     egui::Frame::none()

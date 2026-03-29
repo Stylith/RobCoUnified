@@ -97,8 +97,6 @@ pub enum InstallerView {
     Root,
     PackageManagerSelect,
     RuntimeTools,
-    AddonInventory,
-    AddonActions { addon_id: String },
     RuntimeToolActions { tool: RuntimeTool },
     SearchResults,
     Installed,
@@ -117,8 +115,6 @@ pub struct TerminalInstallerState {
     pub installed_idx: usize,
     pub installed_page: usize,
     pub runtime_tools_idx: usize,
-    pub addons_idx: usize,
-    pub addons_page: usize,
     pub action_idx: usize,
     pub add_menu_idx: usize,
     pub search_results: Vec<SearchResult>,
@@ -130,7 +126,6 @@ pub struct TerminalInstallerState {
     pub package_descriptions: HashMap<String, Option<String>>,
     pub runtime_playsound_installed: Option<bool>,
     pub runtime_blueutil_installed: Option<bool>,
-    pub addon_install_in_flight: Option<String>,
 }
 
 impl Default for TerminalInstallerState {
@@ -144,8 +139,6 @@ impl Default for TerminalInstallerState {
             installed_idx: 0,
             installed_page: 0,
             runtime_tools_idx: 0,
-            addons_idx: 0,
-            addons_page: 0,
             action_idx: 0,
             add_menu_idx: 0,
             search_results: Vec::new(),
@@ -157,7 +150,6 @@ impl Default for TerminalInstallerState {
             package_descriptions: HashMap::new(),
             runtime_playsound_installed: None,
             runtime_blueutil_installed: None,
-            addon_install_in_flight: None,
         }
     }
 }
@@ -168,11 +160,6 @@ pub enum InstallerEvent {
     BackToMainMenu,
     OpenSearchPrompt,
     OpenFilterPrompt,
-    OpenAddonInstallPrompt,
-    StartRepositoryAddonInstall {
-        addon_id: String,
-        action_label: String,
-    },
     OpenConfirmAction {
         pkg: String,
         action: InstallerPackageAction,
@@ -194,7 +181,6 @@ pub enum DesktopInstallerView {
     Home,
     SearchResults,
     Installed,
-    Addons,
     PackageActions { pkg: String, installed: bool },
     AddToMenu { pkg: String },
     RuntimeTools,
@@ -252,7 +238,6 @@ pub struct DesktopInstallerState {
     pub installed_packages: Vec<String>,
     pub installed_filter: String,
     pub installed_page: usize,
-    pub addons_page: usize,
     pub search_page: usize,
     pub status: String,
     pub available_pms: Vec<PackageManager>,
@@ -266,8 +251,6 @@ pub struct DesktopInstallerState {
     pub confirm_dialog: Option<DesktopInstallerConfirm>,
     pub notice: Option<DesktopInstallerNotice>,
     pub display_name_input: String,
-    pub addon_install_path_input: String,
-    pub addon_install_in_flight: Option<String>,
 }
 
 impl Default for DesktopInstallerState {
@@ -280,7 +263,6 @@ impl Default for DesktopInstallerState {
             installed_packages: Vec::new(),
             installed_filter: String::new(),
             installed_page: 0,
-            addons_page: 0,
             search_page: 0,
             status: String::new(),
             available_pms: Vec::new(),
@@ -294,8 +276,6 @@ impl Default for DesktopInstallerState {
             confirm_dialog: None,
             notice: None,
             display_name_input: String::new(),
-            addon_install_path_input: String::new(),
-            addon_install_in_flight: None,
         }
     }
 }
@@ -870,7 +850,6 @@ impl DesktopInstallerState {
             DesktopInstallerView::Home => return,
             DesktopInstallerView::SearchResults => DesktopInstallerView::Home,
             DesktopInstallerView::Installed => DesktopInstallerView::Home,
-            DesktopInstallerView::Addons => DesktopInstallerView::Home,
             DesktopInstallerView::PackageActions { .. } => {
                 if self.search_results.is_empty() {
                     DesktopInstallerView::Installed
@@ -910,10 +889,6 @@ impl DesktopInstallerState {
 
     pub fn search_in_flight(&self) -> bool {
         self.search_receiver.is_some()
-    }
-
-    pub fn addon_install_in_flight(&self) -> bool {
-        self.addon_install_in_flight.is_some()
     }
 
     pub fn poll_search(&mut self) -> bool {
@@ -1460,13 +1435,8 @@ impl TerminalInstallerState {
             InstallerView::PackageManagerSelect
             | InstallerView::SearchResults
             | InstallerView::Installed
-            | InstallerView::AddonInventory
             | InstallerView::RuntimeTools => {
                 self.view = InstallerView::Root;
-                false
-            }
-            InstallerView::AddonActions { .. } => {
-                self.view = InstallerView::AddonInventory;
                 false
             }
             InstallerView::RuntimeToolActions { .. } => {
@@ -1735,41 +1705,6 @@ mod tests {
         assert!(state.installed_filter.is_empty());
         assert_eq!(state.search_idx, 0);
         assert_eq!(state.installed_idx, 0);
-    }
-
-    #[test]
-    fn terminal_back_from_addon_inventory_returns_to_root() {
-        let mut state = TerminalInstallerState {
-            view: InstallerView::AddonInventory,
-            ..TerminalInstallerState::default()
-        };
-
-        assert!(!state.back());
-        assert!(matches!(state.view, InstallerView::Root));
-    }
-
-    #[test]
-    fn terminal_back_from_addon_actions_returns_to_inventory() {
-        let mut state = TerminalInstallerState {
-            view: InstallerView::AddonActions {
-                addon_id: "tools.sample-addon".to_string(),
-            },
-            ..TerminalInstallerState::default()
-        };
-
-        assert!(!state.back());
-        assert!(matches!(state.view, InstallerView::AddonInventory));
-    }
-
-    #[test]
-    fn desktop_go_back_from_addons_returns_home() {
-        let mut state = DesktopInstallerState {
-            view: DesktopInstallerView::Addons,
-            ..DesktopInstallerState::default()
-        };
-
-        state.go_back();
-        assert!(matches!(state.view, DesktopInstallerView::Home));
     }
 
     #[test]

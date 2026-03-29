@@ -138,10 +138,7 @@ mod tests {
             StandaloneNativeApp::Settings.binary_stem(),
             "nucleon-settings"
         );
-        assert_eq!(
-            StandaloneNativeApp::Editor.binary_stem(),
-            "nucleon-text"
-        );
+        assert_eq!(StandaloneNativeApp::Editor.binary_stem(), "nucleon-text");
     }
 
     #[test]

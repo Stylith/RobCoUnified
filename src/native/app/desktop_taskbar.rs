@@ -2,7 +2,11 @@ use super::super::desktop_app::DesktopWindow;
 use super::super::desktop_app::{
     build_taskbar_entries, DesktopMenuAction, DesktopTaskbarEntry, WindowInstanceId,
 };
-use super::super::retro_ui::current_palette;
+use super::super::retro_ui::{
+    current_desktop_style, current_palette, element_text_color, paint_gradient_fill,
+    resolve_theme_color,
+};
+use crate::theme::FillStyle;
 use eframe::egui::{self, Context, RichText, TopBottomPanel};
 
 use super::NucleonNativeApp;
@@ -64,8 +68,33 @@ impl NucleonNativeApp {
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let palette = current_palette();
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.bar_bg);
+                let desktop_style = current_desktop_style();
+                let taskbar_style = &desktop_style.taskbar;
+                let text_color = element_text_color(taskbar_style, &palette);
+                let bar_rect = ui.max_rect();
+                match &taskbar_style.fill {
+                    FillStyle::LinearGradient { .. } => {
+                        paint_gradient_fill(ui.painter(), bar_rect, taskbar_style, &palette);
+                    }
+                    FillStyle::Solid { color } => {
+                        ui.painter().rect_filled(
+                            bar_rect,
+                            taskbar_style.rounding,
+                            resolve_theme_color(color, &palette),
+                        );
+                    }
+                    FillStyle::None => {}
+                }
+                if let Some(border) = &taskbar_style.border {
+                    ui.painter().rect_stroke(
+                        bar_rect,
+                        taskbar_style.rounding,
+                        egui::Stroke::new(
+                            border.width,
+                            resolve_theme_color(&border.color, &palette),
+                        ),
+                    );
+                }
 
                 ui.horizontal(|ui| {
                     Self::apply_desktop_panel_button_style(ui);
@@ -75,7 +104,7 @@ impl NucleonNativeApp {
                             RichText::new("[Start]")
                                 .strong()
                                 .monospace()
-                                .color(palette.selected_fg),
+                                .color(text_color),
                         )
                         .sense(egui::Sense::click()),
                     );
@@ -87,7 +116,7 @@ impl NucleonNativeApp {
                             self.open_start_menu();
                         }
                     }
-                    ui.label(RichText::new("|").monospace().color(palette.selected_fg));
+                    ui.label(RichText::new("|").monospace().color(text_color));
                     ui.add_space(8.0);
                     let open_windows = self.all_open_window_instances();
                     let entries =

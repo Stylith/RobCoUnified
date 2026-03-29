@@ -1,6 +1,7 @@
 use super::file_manager::NativeFileManagerState;
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
+    ShellSurfaceKind,
 };
 use eframe::egui::{self, Context};
 pub use nucleon_native_document_browser_app::{
@@ -131,11 +132,7 @@ pub fn draw_terminal_document_browser(
             for data_idx in scroll_offset..end {
                 let row_data = &rows_data[data_idx];
                 let selected = data_idx == *selected_idx;
-                let text = if selected {
-                    format!("  > {}", row_data.label)
-                } else {
-                    format!("    {}", row_data.label)
-                };
+                let text = terminal_menu_row_text(&row_data.label, selected, 2);
                 let row = menu_start_row + (data_idx - scroll_offset);
                 let response = screen.selectable_row(
                     ui,

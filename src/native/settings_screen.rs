@@ -1,6 +1,7 @@
 use super::menu::SettingsChoiceOverlay;
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
+    ShellSurfaceKind,
 };
 use crate::config::Settings;
 use eframe::egui::{self, Context};
@@ -121,11 +122,7 @@ pub fn run_terminal_settings_screen(
             let mut row = menu_start_row;
             for (idx, item) in items.iter().enumerate() {
                 let selected = idx == *selected_idx;
-                let text = if selected {
-                    format!("  > {item}")
-                } else {
-                    format!("    {item}")
-                };
+                let text = terminal_menu_row_text(item, selected, 2);
                 let response = screen.selectable_row(
                     ui,
                     &painter,
@@ -158,11 +155,7 @@ pub fn run_terminal_settings_screen(
                     {
                         for (choice_idx, choice) in choice_items.iter().enumerate() {
                             let choice_selected = choice_idx == overlay.selected;
-                            let choice_text = if choice_selected {
-                                format!("      > {choice}")
-                            } else {
-                                format!("        {choice}")
-                            };
+                            let choice_text = terminal_menu_row_text(choice, choice_selected, 6);
                             let response = screen.selectable_row(
                                 ui,
                                 &painter,

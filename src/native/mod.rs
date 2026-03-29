@@ -1,5 +1,6 @@
 mod about_screen;
 mod addons;
+mod addons_standalone;
 pub mod app;
 mod applications_standalone;
 mod background;
@@ -53,9 +54,12 @@ pub use addons::{
     effective_addon_enabled, first_party_addon_manifests, first_party_addon_registry,
     install_repository_addon, install_user_addon, installed_addon_bundle_dir,
     installed_addon_bundle_path, installed_addon_inventory, installed_addon_inventory_sections,
-    installed_addon_manifest_registry, installed_enabled_addon_manifest_registry,
+    installed_addon_manifest_registry, installed_color_themes, installed_cursor_packs,
+    installed_desktop_styles, installed_enabled_addon_manifest_registry, installed_font_packs,
     installed_hosted_addon_process, installed_hosted_application_names,
-    installed_hosted_game_names, installed_theme_packs, installed_wasm_addon_module,
+    installed_hosted_game_names, installed_icon_packs, installed_sound_packs,
+    installed_terminal_themes,
+    installed_theme_packs, installed_wasm_addon_module,
     installed_wasm_addon_module_by_display_name, is_installed_hosted_game, remove_installed_addon,
     repository_addon_for_id, repository_sync_action_for_manifest, set_addon_enabled_override,
     InstalledAddonInventorySections, InstalledAddonRecord, InstalledHostedAddonProcess,
@@ -66,6 +70,7 @@ pub(crate) use addons::{
     first_party_addon_registry_for_profile, first_party_addon_runtime,
     FirstPartyAddonDisabledReason, NativeDesktopRoute, NativeTerminalRoute,
 };
+pub use addons_standalone::NucleonNativeAddonsApp;
 pub use app::{apply_native_appearance, configure_native_context, NucleonNativeApp};
 pub use applications_standalone::NucleonNativeApplicationsApp;
 pub use editor_standalone::NucleonNativeEditorApp;

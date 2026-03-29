@@ -4,7 +4,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::backend::CrosstermBackend;
 use nucleon::auth::{clear_session, ensure_default_admin, login_screen};
 use nucleon::checks::{print_preflight, run_preflight};
 use nucleon::config::{get_settings, set_current_user, OpenMode};
@@ -13,6 +12,7 @@ use nucleon::{
     apps, boot, config, desktop, documents, installer, pty, session, settings, shell_terminal,
     sound,
 };
+use ratatui::backend::CrosstermBackend;
 use std::collections::HashMap;
 use std::io::stdout;
 

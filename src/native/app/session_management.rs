@@ -50,7 +50,13 @@ impl NucleonNativeApp {
             editor: self.editor.clone(),
             settings: self.settings.clone(),
             tweaks_open: self.tweaks_open,
+            addons_open: self.addons_open,
+            addons_sidebar_category: self.addons_sidebar_category,
+            addons_addon_subcategory: self.addons_addon_subcategory,
+            addons_theme_subcategory: self.addons_theme_subcategory,
             applications: self.applications.clone(),
+            addons_repo_cache: None,
+            addons_repo_fetch_in_progress: false,
             desktop_installer: std::mem::take(&mut self.desktop_installer),
             terminal_mode: self.terminal_mode.clone(),
             desktop_window_states: self.desktop_window_states.clone(),
@@ -91,7 +97,15 @@ impl NucleonNativeApp {
             terminal_tweaks_open_dropdown: self.terminal_tweaks_open_dropdown,
             desktop_color_overrides: self.desktop_color_overrides.clone(),
             terminal_color_overrides: self.terminal_color_overrides.clone(),
-            desktop_active_shell_style: self.desktop_active_shell_style.clone(),
+            desktop_active_desktop_style_id: self.desktop_active_desktop_style_id.clone(),
+            desktop_active_icon_pack_id: self.desktop_active_icon_pack_id.clone(),
+            desktop_active_sound_pack_id: self.desktop_active_sound_pack_id.clone(),
+            desktop_active_cursor_pack_id: self.desktop_active_cursor_pack_id.clone(),
+            desktop_active_font_id: self.desktop_active_font_id.clone(),
+            desktop_active_desktop_style: self.desktop_active_desktop_style.clone(),
+            terminal_active_theme: self.terminal_active_theme.clone(),
+            terminal_theme_options: self.terminal_theme_options.clone(),
+            terminal_active_font_id: self.terminal_active_font_id.clone(),
             terminal_decoration: self.terminal_decoration.clone(),
             picking_terminal_wallpaper: self.picking_terminal_wallpaper,
             picking_theme_import: self.picking_theme_import,
@@ -135,7 +149,13 @@ impl NucleonNativeApp {
         self.editor = parked.editor;
         self.settings = parked.settings;
         self.tweaks_open = parked.tweaks_open;
+        self.addons_open = parked.addons_open;
+        self.addons_sidebar_category = parked.addons_sidebar_category;
+        self.addons_addon_subcategory = parked.addons_addon_subcategory;
+        self.addons_theme_subcategory = parked.addons_theme_subcategory;
         self.applications = parked.applications;
+        self.addons_repo_cache = parked.addons_repo_cache;
+        self.addons_repo_fetch_in_progress = parked.addons_repo_fetch_in_progress;
         self.desktop_installer = parked.desktop_installer;
         self.terminal_mode = parked.terminal_mode;
         self.desktop_window_states = parked.desktop_window_states;
@@ -179,7 +199,15 @@ impl NucleonNativeApp {
         self.terminal_tweaks_open_dropdown = parked.terminal_tweaks_open_dropdown;
         self.desktop_color_overrides = parked.desktop_color_overrides;
         self.terminal_color_overrides = parked.terminal_color_overrides;
-        self.desktop_active_shell_style = parked.desktop_active_shell_style;
+        self.desktop_active_desktop_style_id = parked.desktop_active_desktop_style_id;
+        self.desktop_active_icon_pack_id = parked.desktop_active_icon_pack_id;
+        self.desktop_active_sound_pack_id = parked.desktop_active_sound_pack_id;
+        self.desktop_active_cursor_pack_id = parked.desktop_active_cursor_pack_id;
+        self.desktop_active_font_id = parked.desktop_active_font_id;
+        self.desktop_active_desktop_style = parked.desktop_active_desktop_style;
+        self.terminal_active_theme = parked.terminal_active_theme;
+        self.terminal_theme_options = parked.terminal_theme_options;
+        self.terminal_active_font_id = parked.terminal_active_font_id;
         self.terminal_decoration = parked.terminal_decoration;
         self.picking_terminal_wallpaper = parked.picking_terminal_wallpaper;
         self.picking_theme_import = parked.picking_theme_import;

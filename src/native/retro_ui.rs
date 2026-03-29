@@ -1,15 +1,15 @@
-use crate::config::{
-    current_theme_color, get_settings, theme_color_for_settings, Settings, WallpaperSizeMode,
-};
+use crate::config::{current_theme_color, theme_color_for_settings, Settings, WallpaperSizeMode};
 use crate::theme::{
-    ColorStyle, ColorToken, FullColorTheme, MonochromePreset, ShellStyle, TerminalDecoration,
-    TextAlignment, ThemePack,
+    ColorStyle, ColorToken, DesktopStyle, ElementStyle, FillStyle, FullColorTheme,
+    MonochromePreset, PaletteRef, ShadowStyle, TerminalDecoration, TerminalTheme,
+    ThemeOptionDef, ThemeOptionValue, TextAlignment, ThemeColor,
 };
 use eframe::egui::{
     self, Align2, Color32, Context, FontId, Painter, Pos2, Rect, Response, Sense, Stroke,
     TextureHandle, TextureId, Ui, Vec2,
 };
 use ratatui::style::Color;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
@@ -89,8 +89,14 @@ static ACTIVE_COLOR_STYLES: Mutex<ActiveColorStyleStore> = Mutex::new(ActiveColo
 });
 static ACTIVE_TERMINAL_VISUALS: LazyLock<Mutex<ActiveTerminalVisualStore>> =
     LazyLock::new(|| Mutex::new(ActiveTerminalVisualStore::default()));
-static ACTIVE_SHELL_STYLE: LazyLock<Mutex<ShellStyle>> =
-    LazyLock::new(|| Mutex::new(ThemePack::classic().shell_style));
+static ACTIVE_DESKTOP_STYLE: LazyLock<Mutex<DesktopStyle>> =
+    LazyLock::new(|| Mutex::new(DesktopStyle::flat()));
+
+thread_local! {
+    static ACTIVE_TERMINAL_OPTIONS: RefCell<HashMap<String, ThemeOptionValue>> =
+        RefCell::new(HashMap::new());
+    static ACTIVE_TERMINAL_SCHEMA: RefCell<Vec<ThemeOptionDef>> = RefCell::new(Vec::new());
+}
 
 fn color32_from_theme(color: Color) -> Color32 {
     match color {
@@ -170,7 +176,11 @@ fn palette_from_full_color_theme(theme: &FullColorTheme) -> RetroPalette {
         active_bg: color32_from_token(theme, ColorToken::AccentActive, scale(fg, 0.26)),
         selection_bg: color32_from_token(theme, ColorToken::Selection, scale(fg, 0.26)),
         window_chrome: color32_from_token(theme, ColorToken::WindowChrome, selected_bg),
-        window_chrome_focused: color32_from_token(theme, ColorToken::WindowChromeFocused, selected_bg),
+        window_chrome_focused: color32_from_token(
+            theme,
+            ColorToken::WindowChromeFocused,
+            selected_bg,
+        ),
         bar_bg: color32_from_token(theme, ColorToken::StatusBar, selected_bg),
     }
 }
@@ -265,34 +275,184 @@ pub fn set_active_color_style(
     }
 }
 
-pub fn set_active_shell_style(style: ShellStyle) {
-    if let Ok(mut guard) = ACTIVE_SHELL_STYLE.lock() {
+pub fn set_active_desktop_style(style: DesktopStyle) {
+    if let Ok(mut guard) = ACTIVE_DESKTOP_STYLE.lock() {
         *guard = style;
     }
 }
 
-pub fn current_shell_style() -> ShellStyle {
-    ACTIVE_SHELL_STYLE
+pub fn current_desktop_style() -> DesktopStyle {
+    ACTIVE_DESKTOP_STYLE
         .lock()
         .map(|guard| guard.clone())
-        .unwrap_or_else(|_| ThemePack::classic().shell_style)
+        .unwrap_or_else(|_| DesktopStyle::flat())
 }
 
-pub fn shell_style_rounding(style: &ShellStyle) -> egui::Rounding {
-    egui::Rounding::same(style.border_radius)
+pub fn set_active_terminal_theme(
+    theme: &TerminalTheme,
+    options: &HashMap<String, ThemeOptionValue>,
+) {
+    ACTIVE_TERMINAL_OPTIONS.with(|active| *active.borrow_mut() = options.clone());
+    ACTIVE_TERMINAL_SCHEMA.with(|schema| *schema.borrow_mut() = theme.options_schema.clone());
 }
 
-pub fn shell_style_shadow(style: &ShellStyle) -> egui::epaint::Shadow {
-    if style.window_shadow {
-        egui::epaint::Shadow {
-            offset: egui::vec2(4.0, 4.0),
-            blur: 8.0,
-            spread: 0.0,
-            color: Color32::from_black_alpha(80),
-        }
-    } else {
-        egui::epaint::Shadow::NONE
+pub fn terminal_option_bool(key: &str) -> bool {
+    ACTIVE_TERMINAL_OPTIONS.with(|active| {
+        ACTIVE_TERMINAL_SCHEMA.with(|schema| {
+            TerminalTheme::get_bool(&active.borrow(), key, &schema.borrow())
+        })
+    })
+}
+
+pub fn terminal_option_string(key: &str) -> String {
+    ACTIVE_TERMINAL_OPTIONS.with(|active| {
+        ACTIVE_TERMINAL_SCHEMA.with(|schema| {
+            TerminalTheme::get_string(&active.borrow(), key, &schema.borrow())
+        })
+    })
+}
+
+pub fn terminal_option_int(key: &str) -> i32 {
+    ACTIVE_TERMINAL_OPTIONS.with(|active| {
+        ACTIVE_TERMINAL_SCHEMA.with(|schema| {
+            TerminalTheme::get_int(&active.borrow(), key, &schema.borrow())
+        })
+    })
+}
+
+pub fn terminal_menu_row_text(label: &str, selected: bool, indent: usize) -> String {
+    let marker = terminal_option_string("selection_marker");
+    let padding = " ".repeat(marker.chars().count());
+    let prefix = if selected { marker.as_str() } else { padding.as_str() };
+    format!("{prefix}{}{}", " ".repeat(indent), label)
+}
+
+pub fn resolve_theme_color(color: &ThemeColor, palette: &RetroPalette) -> Color32 {
+    match color {
+        ThemeColor::Rgba([r, g, b, a]) => Color32::from_rgba_premultiplied(*r, *g, *b, *a),
+        ThemeColor::Palette(reference) => match reference {
+            PaletteRef::Fg => palette.fg,
+            PaletteRef::Dim => palette.dim,
+            PaletteRef::Bg => palette.bg,
+            PaletteRef::Panel => palette.panel,
+            PaletteRef::SelectedBg => palette.selected_bg,
+            PaletteRef::SelectedFg => palette.selected_fg,
+            PaletteRef::HoveredBg => palette.hovered_bg,
+            PaletteRef::ActiveBg => palette.active_bg,
+            PaletteRef::SelectionBg => palette.selection_bg,
+            PaletteRef::WindowChrome => palette.window_chrome,
+            PaletteRef::WindowChromeFocused => palette.window_chrome_focused,
+            PaletteRef::BarBg => palette.bar_bg,
+        },
     }
+}
+
+fn shadow_from_style(shadow: &ShadowStyle, palette: &RetroPalette) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: egui::vec2(shadow.offset_x, shadow.offset_y),
+        blur: shadow.blur,
+        spread: 0.0,
+        color: resolve_theme_color(&shadow.color, palette),
+    }
+}
+
+pub fn frame_from_element_style(style: &ElementStyle, palette: &RetroPalette) -> egui::Frame {
+    let mut frame = egui::Frame::none();
+    if let FillStyle::Solid { color } = &style.fill {
+        frame = frame.fill(resolve_theme_color(color, palette));
+    }
+    if let Some(border) = &style.border {
+        frame = frame.stroke(egui::Stroke::new(
+            border.width,
+            resolve_theme_color(&border.color, palette),
+        ));
+    }
+    frame = frame.rounding(egui::Rounding::same(style.rounding));
+    if let Some(shadow) = &style.shadow {
+        frame = frame.shadow(shadow_from_style(shadow, palette));
+    }
+    frame
+}
+
+pub fn paint_gradient_fill(
+    painter: &egui::Painter,
+    rect: Rect,
+    style: &ElementStyle,
+    palette: &RetroPalette,
+) {
+    let FillStyle::LinearGradient { stops, angle } = &style.fill else {
+        return;
+    };
+    if stops.len() < 2 {
+        return;
+    }
+    let is_vertical = *angle == 0.0 || *angle == 180.0;
+    let is_horizontal = *angle == 90.0 || *angle == 270.0;
+    if !is_vertical && !is_horizontal {
+        return;
+    }
+    let reversed = *angle == 180.0 || *angle == 270.0;
+    let mut mesh = egui::Mesh::default();
+    for stop in stops {
+        let t = if reversed {
+            1.0 - stop.position
+        } else {
+            stop.position
+        };
+        let color = resolve_theme_color(&stop.color, palette);
+        if is_vertical {
+            let y = rect.top() + t * rect.height();
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(rect.left(), y),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            });
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(rect.right(), y),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            });
+        } else {
+            let x = rect.left() + t * rect.width();
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(x, rect.top()),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            });
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(x, rect.bottom()),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            });
+        }
+    }
+    for i in 0..(stops.len() - 1) {
+        let base = (i * 2) as u32;
+        mesh.indices
+            .extend_from_slice(&[base, base + 1, base + 3, base, base + 3, base + 2]);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+pub fn element_text_color(style: &ElementStyle, palette: &RetroPalette) -> Color32 {
+    style
+        .text_color
+        .as_ref()
+        .map(|color| resolve_theme_color(color, palette))
+        .unwrap_or(palette.fg)
+}
+
+pub fn desktop_style_rounding(style: &DesktopStyle) -> egui::Rounding {
+    egui::Rounding::same(style.window_frame.rounding)
+}
+
+pub fn desktop_style_shadow(style: &DesktopStyle) -> egui::epaint::Shadow {
+    style
+        .window_frame
+        .shadow
+        .as_ref()
+        .map(|shadow| shadow_from_style(shadow, &current_palette()))
+        .unwrap_or(egui::epaint::Shadow::NONE)
 }
 
 pub fn set_active_terminal_decoration(decoration: TerminalDecoration) {
@@ -616,14 +776,13 @@ impl RetroScreen {
         palette: &RetroPalette,
         decoration: &TerminalDecoration,
     ) {
-        if !decoration.show_separators {
+        if !terminal_option_bool("show_separators") {
             return;
         }
-        let repeat_len = decoration.separator_char.len().max(1);
+        let separator_char = terminal_option_string("separator_char");
+        let repeat_len = separator_char.len().max(1);
         let char_count = self.cols.saturating_sub(6).max(1);
-        let text = decoration
-            .separator_char
-            .repeat((char_count / repeat_len).max(1));
+        let text = separator_char.repeat((char_count / repeat_len).max(1));
         match decoration.separator_alignment {
             TextAlignment::Center => self.centered_text(painter, row, &text, palette.dim, false),
             TextAlignment::Left => self.text(painter, 3, row, &text, palette.dim),
@@ -710,7 +869,7 @@ impl RetroScreen {
             ),
         };
         self.paint_text(painter, pos, align, &clipped, palette.fg, false);
-        if decoration.subtitle_underlined {
+        if terminal_option_bool("subtitle_underlined") {
             let galley = painter.layout_no_wrap(clipped.clone(), self.font.clone(), palette.fg);
             let width = self.snap(galley.size().x);
             if width > 0.0 {
@@ -758,12 +917,14 @@ impl RetroScreen {
         selected: bool,
     ) -> Response {
         let clipped = self.clip_text(col, text);
-        let left = self.snap(self.rect.left() + col as f32 * self.cell.x);
+        let measured_w = clipped.chars().count().max(1) as f32 * self.cell.x;
+        let left = if terminal_option_string("menu_alignment") == "Center" {
+            self.snap(self.rect.center().x - measured_w * 0.5)
+        } else {
+            self.snap(self.rect.left() + col as f32 * self.cell.x)
+        };
         let top = self.row_top(row);
-        let cell_chars = clipped.chars().count().max(1) as f32;
-        let measured_w = cell_chars * self.cell.x;
-        // Extend highlight to the end of the screen if highlighting is enabled
-        let extend_highlight = selected && get_settings().native_terminal_ui_highlighting;
+        let extend_highlight = selected && terminal_option_string("selection_style") == "Full Row";
         let right = if extend_highlight {
             self.rect.right()
         } else {

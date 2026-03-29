@@ -67,6 +67,18 @@ impl NucleonNativeApp {
         self.draw_tweaks(ctx);
     }
 
+    pub(crate) fn desktop_component_addons_is_open(&self) -> bool {
+        self.addons_open
+    }
+
+    pub(crate) fn desktop_component_addons_set_open(&mut self, open: bool) {
+        self.addons_open = open;
+    }
+
+    pub(crate) fn desktop_component_addons_draw(&mut self, ctx: &Context) {
+        self.draw_addons(ctx);
+    }
+
     pub(crate) fn desktop_component_applications_is_open(&self) -> bool {
         self.applications.open
     }

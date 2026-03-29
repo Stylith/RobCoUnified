@@ -4992,10 +4992,7 @@ fn focused_app_manual_context(state: &DesktopState) -> Option<(String, Vec<Strin
             "File Manager Settings".to_string(),
             "file_manager_settings".to_string(),
         ),
-        WindowKind::TextEditor(_) => (
-            "Nucleon Text Editor".to_string(),
-            "text_editor".to_string(),
-        ),
+        WindowKind::TextEditor(_) => ("Nucleon Text Editor".to_string(), "text_editor".to_string()),
     };
     let mut keys = manual_key_aliases(&key);
     let title_key = slugify_manual_key(&win.title);

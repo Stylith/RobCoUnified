@@ -225,6 +225,10 @@ impl NucleonNativeApp {
             self.open_tweaks_from_settings();
             return;
         }
+        if panel == NativeSettingsPanel::Addons {
+            self.open_addons_from_settings();
+            return;
+        }
         self.pending_settings_panel = Some(self.coerce_desktop_settings_panel(panel));
         self.open_desktop_window(DesktopWindow::Settings);
     }

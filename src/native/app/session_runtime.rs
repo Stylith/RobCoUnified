@@ -38,6 +38,12 @@ impl NucleonNativeApp {
         self.desktop_window_states.clear();
         self.desktop_active_window = None;
         self.pending_settings_panel = None;
+        self.settings.open = false;
+        self.tweaks_open = false;
+        self.addons_open = false;
+        self.applications.open = false;
+        self.desktop_installer.open = false;
+        self.terminal_mode.open = false;
         self.start_open = !launch_default_desktop;
         self.start_selected_root = 0;
         self.start_system_selected = 0;

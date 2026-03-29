@@ -72,6 +72,7 @@ pub enum NativeSettingsPanel {
     Home,
     General,
     Appearance,
+    Addons,
     DefaultApps,
     Connections,
     ConnectionsNetwork,
@@ -141,7 +142,6 @@ enum SettingsRowId {
     CustomThemeGreen,
     CustomThemeBlue,
     BorderGlyphs,
-    NativeTerminalUiHighlighting,
     CrtEffectsEnabled,
     CrtPreset,
     CrtCurvature,
@@ -173,6 +173,7 @@ pub fn settings_panel_title(panel: NativeSettingsPanel) -> &'static str {
         NativeSettingsPanel::Home => "Settings",
         NativeSettingsPanel::General => "General",
         NativeSettingsPanel::Appearance => "Appearance",
+        NativeSettingsPanel::Addons => "Addons",
         NativeSettingsPanel::DefaultApps => "Default Apps",
         NativeSettingsPanel::Connections => "Connections",
         NativeSettingsPanel::ConnectionsNetwork => "Network",
@@ -252,6 +253,12 @@ pub fn desktop_settings_home_rows_with_visibility(
             icon: "[A]",
             enabled: true,
         },
+        SettingsHomeTile {
+            action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Addons),
+            label: "Addons",
+            icon: "[+]",
+            enabled: true,
+        },
     ];
     if visibility.default_apps {
         first_row.push(SettingsHomeTile {
@@ -261,21 +268,22 @@ pub fn desktop_settings_home_rows_with_visibility(
             enabled: true,
         });
     }
+
+    let mut second_row = Vec::new();
     if visibility.connections {
-        first_row.push(SettingsHomeTile {
+        second_row.push(SettingsHomeTile {
             action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::Connections),
             label: "Connections",
             icon: "[C]",
             enabled: true,
         });
     }
-
-    let mut second_row = vec![SettingsHomeTile {
+    second_row.push(SettingsHomeTile {
         action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::CliProfiles),
         label: "CLI Profiles",
         icon: "[=]",
         enabled: true,
-    }];
+    });
     if visibility.edit_menus {
         second_row.push(SettingsHomeTile {
             action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::EditMenus),
@@ -290,25 +298,17 @@ pub fn desktop_settings_home_rows_with_visibility(
         icon: "[U]",
         enabled: is_admin,
     });
+
+    let mut rows = vec![first_row, second_row];
     if visibility.about {
-        second_row.push(SettingsHomeTile {
+        rows.push(vec![SettingsHomeTile {
             action: SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::About),
             label: "About",
             icon: "[i]",
             enabled: true,
-        });
+        }]);
     }
-
-    vec![
-        first_row,
-        second_row,
-        vec![SettingsHomeTile {
-            action: SettingsHomeTileAction::CloseWindow,
-            label: "Close",
-            icon: "[X]",
-            enabled: true,
-        }],
-    ]
+    rows
 }
 
 pub fn desktop_settings_panel_enabled(
@@ -486,10 +486,6 @@ pub fn handle_settings_activation_with_visibility(
                 CliAcsMode::Ascii => CliAcsMode::Unicode,
                 CliAcsMode::Unicode => CliAcsMode::Ascii,
             };
-            TerminalSettingsEvent::Persist
-        }
-        SettingsRowId::NativeTerminalUiHighlighting => {
-            draft.native_terminal_ui_highlighting = !draft.native_terminal_ui_highlighting;
             TerminalSettingsEvent::Persist
         }
         SettingsRowId::CrtEffectsEnabled => {
@@ -918,17 +914,6 @@ fn terminal_settings_rows_with_ids_for_visibility(
                     }
                 ),
                 SettingsRowId::BorderGlyphs,
-            ));
-            rows.push((
-                format!(
-                    "Extended Highlighting: {} [toggle]",
-                    if draft.native_terminal_ui_highlighting {
-                        "On"
-                    } else {
-                        "Off"
-                    }
-                ),
-                SettingsRowId::NativeTerminalUiHighlighting,
             ));
             rows.push(("CRT Effects".to_string(), SettingsRowId::OpenEffects));
             rows.push(("Back".to_string(), SettingsRowId::Back));
@@ -1450,6 +1435,25 @@ mod tests {
             tile.action,
             SettingsHomeTileAction::OpenPanel(NativeSettingsPanel::UserManagement)
         );
+    }
+
+    #[test]
+    fn desktop_settings_home_rows_keep_addons_on_first_row_and_connections_on_second() {
+        let rows = desktop_settings_home_rows_with_visibility(
+            true,
+            DesktopSettingsVisibility {
+                default_apps: true,
+                connections: true,
+                edit_menus: true,
+                about: true,
+            },
+        );
+
+        assert_eq!(
+            rows[0].iter().map(|tile| tile.label).collect::<Vec<_>>(),
+            vec!["General", "Appearance", "Addons", "Default Apps"]
+        );
+        assert_eq!(rows[1][0].label, "Connections");
     }
 
     #[test]

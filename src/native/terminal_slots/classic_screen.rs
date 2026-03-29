@@ -9,7 +9,11 @@ impl TerminalSlotRenderer for ClassicTerminalScreenRenderer {
         TerminalSlot::Screen
     }
 
-    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction> {
+    fn render(
+        &self,
+        app: &mut NucleonNativeApp,
+        slot_ctx: &TerminalSlotContext,
+    ) -> Vec<SlotAction> {
         app.render_classic_terminal_screen_slot(slot_ctx.ctx);
         Vec::new()
     }

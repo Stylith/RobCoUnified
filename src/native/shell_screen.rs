@@ -4,7 +4,8 @@ use super::menu::{
 };
 use super::prompt::{draw_terminal_prompt_overlay, TerminalPrompt};
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
+    ShellSurfaceKind,
 };
 use eframe::egui::{self, Color32, Context};
 
@@ -102,11 +103,7 @@ pub fn draw_login_screen(
                     }
                     LoginMenuRow::User(user) => {
                         let selected = selectable_idx == *selected_idx;
-                        let text = if selected {
-                            format!("  > {user}")
-                        } else {
-                            format!("    {user}")
-                        };
+                        let text = terminal_menu_row_text(user, selected, 2);
                         let response = screen.selectable_row(
                             ui,
                             &painter,
@@ -124,11 +121,7 @@ pub fn draw_login_screen(
                     }
                     LoginMenuRow::Exit => {
                         let selected = selectable_idx == *selected_idx;
-                        let text = if selected {
-                            "  > Exit".to_string()
-                        } else {
-                            "    Exit".to_string()
-                        };
+                        let text = terminal_menu_row_text("Exit", selected, 2);
                         let response = screen.selectable_row(
                             ui,
                             &painter,
@@ -238,11 +231,7 @@ pub fn draw_main_menu_screen(
                     continue;
                 }
                 let selected = selectable_idx == *selected_idx;
-                let text = if selected {
-                    format!("  > {}", entry.label)
-                } else {
-                    format!("    {}", entry.label)
-                };
+                let text = terminal_menu_row_text(entry.label, selected, 2);
                 let response = screen.selectable_row(
                     ui,
                     &painter,

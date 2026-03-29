@@ -137,8 +137,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("nucleon_native_document_browser_sync_test_{unique}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nucleon_native_document_browser_sync_test_{unique}"
+        ));
         fs::create_dir_all(&dir).expect("create temp dir");
         let alpha = dir.join("alpha.txt");
         let beta = dir.join("beta.txt");

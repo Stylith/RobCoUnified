@@ -7,22 +7,11 @@ use super::super::installer_screen::{
     DesktopInstallerView, InstallerCategory, InstallerMenuTarget, InstallerPackageAction,
 };
 use super::super::retro_ui::{
-    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
-};
-use super::super::{
-    install_user_addon, installed_addon_inventory_sections, remove_installed_addon,
-    repository_sync_action_for_manifest, set_addon_enabled_override, InstalledAddonRecord,
-    RepositoryAddonAction, RepositoryAddonRecord,
+    current_desktop_style, current_palette, desktop_style_rounding, desktop_style_shadow,
+    RetroPalette,
 };
 use super::{CachedIcon, DesktopHeaderAction, NucleonNativeApp};
 use eframe::egui::{self, Color32, Context, Id, Key, RichText};
-
-enum AddonRowAction {
-    None,
-    Toggle,
-    Remove,
-    RepositorySync(RepositoryAddonAction),
-}
 
 impl NucleonNativeApp {
     // ─── Desktop Program Installer ─────────────────────────────────────────────
@@ -33,9 +22,7 @@ impl NucleonNativeApp {
         {
             return;
         }
-        if self.desktop_installer.search_in_flight()
-            || self.desktop_installer.addon_install_in_flight()
-        {
+        if self.desktop_installer.search_in_flight() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let _ = self.desktop_installer.poll_search();
@@ -94,11 +81,6 @@ impl NucleonNativeApp {
         let mut deferred_add_to_menu: Option<(String, InstallerMenuTarget)> = None;
         let mut deferred_open_add_to_menu: Option<String> = None;
         let mut deferred_open_runtime_tools = false;
-        let mut deferred_open_addons = false;
-        let mut deferred_repository_action: Option<(
-            crate::platform::AddonId,
-            RepositoryAddonAction,
-        )> = None;
 
         let view = self.desktop_installer.view.clone();
         let status = self.desktop_installer.status.clone();
@@ -125,7 +107,8 @@ impl NucleonNativeApp {
                         ui,
                         "Nucleon Package Installer",
                         maximized,
-                        &self.desktop_active_shell_style,
+                        self.desktop_active_window == Some(wid),
+                        &self.desktop_active_desktop_style,
                     );
                 });
 
@@ -227,7 +210,6 @@ impl NucleonNativeApp {
                             &mut deferred_search,
                             &mut deferred_load_installed,
                             &mut deferred_open_runtime_tools,
-                            &mut deferred_open_addons,
                             [&tex_apps, &tex_tools, &tex_network, &tex_games],
                         );
                     }
@@ -282,15 +264,6 @@ impl NucleonNativeApp {
                             &mut deferred_confirm_setup,
                         );
                     }
-                    DesktopInstallerView::Addons => {
-                        Self::draw_installer_addons(
-                            ui,
-                            &mut self.desktop_installer,
-                            palette,
-                            &mut deferred_back,
-                            &mut deferred_repository_action,
-                        );
-                    }
                 });
         });
 
@@ -341,9 +314,6 @@ impl NucleonNativeApp {
         if deferred_open_runtime_tools {
             self.desktop_installer.view = DesktopInstallerView::RuntimeTools;
         }
-        if deferred_open_addons {
-            self.desktop_installer.view = DesktopInstallerView::Addons;
-        }
         if let Some(pkg) = deferred_open_installed_actions {
             self.desktop_installer.view = DesktopInstallerView::PackageActions {
                 pkg,
@@ -385,15 +355,12 @@ impl NucleonNativeApp {
             self.desktop_installer.add_to_menu(&pkg, target);
             self.invalidate_program_catalog_cache();
         }
-        if let Some((addon_id, action)) = deferred_repository_action {
-            self.start_repository_addon_install(addon_id, action, true);
-        }
     }
 
     // ── Installer sub-views ─────────────────────────────────────────────────
 
     pub(super) fn apply_installer_widget_style(ui: &mut egui::Ui, palette: RetroPalette) {
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
         ui.visuals_mut().window_fill = palette.bg;
         ui.visuals_mut().panel_fill = palette.bg;
         ui.visuals_mut().faint_bg_color = palette.bg;
@@ -420,10 +387,10 @@ impl NucleonNativeApp {
         widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, palette.fg);
         ui.visuals_mut().extreme_bg_color = palette.panel;
         ui.visuals_mut().code_bg_color = palette.bg;
-        ui.visuals_mut().window_shadow = shell_style_shadow(&shell_style);
-        ui.visuals_mut().popup_shadow = shell_style_shadow(&shell_style);
-        ui.visuals_mut().window_rounding = shell_style_rounding(&shell_style);
-        ui.visuals_mut().menu_rounding = shell_style_rounding(&shell_style);
+        ui.visuals_mut().window_shadow = desktop_style_shadow(&desktop_style);
+        ui.visuals_mut().popup_shadow = desktop_style_shadow(&desktop_style);
+        ui.visuals_mut().window_rounding = desktop_style_rounding(&desktop_style);
+        ui.visuals_mut().menu_rounding = desktop_style_rounding(&desktop_style);
         ui.visuals_mut().selection.bg_fill = palette.selection_bg;
         ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, palette.fg);
         ui.visuals_mut().text_cursor.stroke = egui::Stroke::new(1.5, palette.fg);
@@ -432,15 +399,15 @@ impl NucleonNativeApp {
     }
 
     pub(super) fn apply_installer_dropdown_style(ui: &mut egui::Ui, palette: RetroPalette) {
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
         let mut style = ui.style().as_ref().clone();
         style.visuals.window_fill = palette.bg;
         style.visuals.panel_fill = palette.bg;
         style.visuals.window_stroke = egui::Stroke::new(1.0, palette.fg);
-        style.visuals.window_rounding = shell_style_rounding(&shell_style);
-        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
-        style.visuals.window_shadow = shell_style_shadow(&shell_style);
-        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
+        style.visuals.window_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.menu_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.window_shadow = desktop_style_shadow(&desktop_style);
+        style.visuals.popup_shadow = desktop_style_shadow(&desktop_style);
         style.visuals.widgets.noninteractive.bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, palette.fg);
@@ -509,7 +476,6 @@ impl NucleonNativeApp {
         deferred_search: &mut bool,
         deferred_load_installed: &mut bool,
         deferred_open_runtime_tools: &mut bool,
-        deferred_open_addons: &mut bool,
         icons: [&Option<CachedIcon>; 4], // [apps, tools, network, games]
     ) {
         ui.vertical_centered(|ui| {
@@ -623,17 +589,6 @@ impl NucleonNativeApp {
             );
             if runtime_btn.clicked() {
                 *deferred_open_runtime_tools = true;
-            }
-
-            ui.add_space(8.0);
-
-            let addons_btn = Self::installer_link_button(
-                ui,
-                RichText::new("Installed Addons").color(palette.dim),
-                palette,
-            );
-            if addons_btn.clicked() {
-                *deferred_open_addons = true;
             }
 
             ui.add_space(8.0);
@@ -1014,475 +969,6 @@ impl NucleonNativeApp {
                     }
                 });
         });
-    }
-
-    fn draw_installer_addons(
-        ui: &mut egui::Ui,
-        state: &mut DesktopInstallerState,
-        palette: RetroPalette,
-        deferred_back: &mut bool,
-        deferred_repository_action: &mut Option<(crate::platform::AddonId, RepositoryAddonAction)>,
-    ) {
-        const HEADER_H: f32 = 28.0;
-        const FOOTER_H: f32 = 40.0;
-        let sections = installed_addon_inventory_sections();
-        let repository_addon_indices = sections
-            .repository_available
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, record)| {
-                (record.manifest.kind != crate::platform::AddonKind::Theme).then_some(idx)
-            })
-            .collect::<Vec<_>>();
-        let repository_theme_indices = sections
-            .repository_available
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, record)| {
-                (record.manifest.kind == crate::platform::AddonKind::Theme).then_some(idx)
-            })
-            .collect::<Vec<_>>();
-        let total = sections.essential.len() + sections.optional.len();
-        let row_height = 58.0;
-
-        egui::TopBottomPanel::top("inst_addons_top")
-            .frame(egui::Frame::none())
-            .exact_height(HEADER_H + 44.0)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(RichText::new("< Back").color(palette.fg))
-                        .clicked()
-                    {
-                        *deferred_back = true;
-                    }
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Installed Addons").color(palette.fg).strong());
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Path:").color(palette.fg));
-                    ui.add_sized(
-                        [320.0, 0.0],
-                        egui::TextEdit::singleline(&mut state.addon_install_path_input)
-                            .hint_text("/path/to/manifest.json, addon directory, or addon archive")
-                            .text_color(palette.fg),
-                    );
-                    if ui
-                        .button(RichText::new("[ Install ]").color(palette.fg))
-                        .clicked()
-                    {
-                        let path = state.addon_install_path_input.trim().to_string();
-                        if path.is_empty() {
-                            state.status = "Addon path cannot be empty.".to_string();
-                        } else {
-                            match install_user_addon(&path) {
-                                Ok(message) => {
-                                    state.status = message;
-                                    state.addon_install_path_input.clear();
-                                }
-                                Err(err) => state.status = err,
-                            }
-                        }
-                    }
-                });
-            });
-
-        egui::TopBottomPanel::bottom("inst_addons_bottom")
-            .frame(egui::Frame::none())
-            .exact_height(
-                FOOTER_H
-                    + if sections.issues.is_empty() {
-                        0.0
-                    } else {
-                        56.0
-                    }
-                    + if sections.repository_issue.is_some() {
-                        40.0
-                    } else {
-                        0.0
-                    },
-            )
-            .show_inside(ui, |ui| {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!(
-                        "{} installed | {} repository addon(s) | {} repository theme(s) | {} essential | {} optional | {} issue(s)",
-                        total,
-                        repository_addon_indices.len(),
-                        repository_theme_indices.len(),
-                        sections.essential.len(),
-                        sections.optional.len(),
-                        sections.issues.len() + usize::from(sections.repository_issue.is_some())
-                    ))
-                    .color(palette.dim),
-                );
-                if let Some(issue) = sections.issues.first() {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "Discovery issue [{}]: {}",
-                            Self::addon_scope_name(issue.scope),
-                            issue.manifest_path.display()
-                        ))
-                        .color(Color32::from_rgb(255, 210, 120)),
-                    );
-                    ui.label(RichText::new(&issue.detail).color(Color32::from_rgb(255, 210, 120)));
-                }
-                if let Some(issue) = sections.repository_issue.as_ref() {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Repository feed issue:")
-                            .color(Color32::from_rgb(255, 210, 120)),
-                    );
-                    ui.label(RichText::new(issue).color(Color32::from_rgb(255, 210, 120)));
-                }
-            });
-
-        let available = ui.available_rect_before_wrap();
-        let body_size = egui::vec2(available.width().max(240.0), available.height().max(120.0));
-        let body_rect = egui::Rect::from_min_size(available.min, body_size);
-        ui.allocate_rect(body_rect, egui::Sense::hover());
-        ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
-            ui.set_min_size(body_size);
-            ui.set_max_size(body_size);
-            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .show(ui, |ui| {
-                    let row_width = (ui.available_width() - 2.0).floor().max(220.0);
-                    if !sections.essential.is_empty() {
-                        ui.label(
-                            RichText::new("Essential Addons")
-                                .color(palette.dim)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        for record in &sections.essential {
-                            if matches!(
-                                Self::draw_installer_addon_row(
-                                    ui, palette, row_width, row_height, record,
-                                ),
-                                AddonRowAction::Remove
-                            ) {
-                                match remove_installed_addon(record.manifest.id.clone()) {
-                                    Ok(message) => state.status = message,
-                                    Err(err) => state.status = err,
-                                }
-                            }
-                        }
-                    }
-
-                    if !sections.optional.is_empty() {
-                        if !sections.essential.is_empty() {
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(12.0);
-                        }
-                        ui.label(RichText::new("Optional Addons").color(palette.dim).strong());
-                        ui.add_space(6.0);
-                        for record in &sections.optional {
-                            match Self::draw_installer_addon_row(
-                                ui, palette, row_width, row_height, record,
-                            ) {
-                                AddonRowAction::Toggle => {
-                                    let next_enabled = !record.effective_enabled;
-                                    let override_value =
-                                        Self::addon_override_value(record, next_enabled);
-                                    match set_addon_enabled_override(
-                                        record.manifest.id.clone(),
-                                        override_value,
-                                    ) {
-                                        Ok(()) => {
-                                            state.status = format!(
-                                                "{} {}.",
-                                                record.manifest.display_name,
-                                                if next_enabled { "enabled" } else { "disabled" }
-                                            );
-                                        }
-                                        Err(err) => state.status = err,
-                                    }
-                                }
-                                AddonRowAction::Remove => {
-                                    match remove_installed_addon(record.manifest.id.clone()) {
-                                        Ok(message) => state.status = message,
-                                        Err(err) => state.status = err,
-                                    }
-                                }
-                                AddonRowAction::RepositorySync(action) => {
-                                    *deferred_repository_action =
-                                        Some((record.manifest.id.clone(), action));
-                                }
-                                AddonRowAction::None => {}
-                            }
-                        }
-                    }
-
-                    if !repository_addon_indices.is_empty() {
-                        if !sections.essential.is_empty() || !sections.optional.is_empty() {
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(12.0);
-                        }
-                        ui.label(
-                            RichText::new("Repository Addons")
-                                .color(palette.dim)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        for idx in &repository_addon_indices {
-                            let record = &sections.repository_available[*idx];
-                            if let Some(action) = Self::draw_installer_repository_addon_row(
-                                ui, palette, row_width, row_height, record,
-                            ) {
-                                *deferred_repository_action =
-                                    Some((record.manifest.id.clone(), action));
-                            }
-                        }
-                    }
-
-                    if !repository_theme_indices.is_empty() {
-                        if !sections.essential.is_empty()
-                            || !sections.optional.is_empty()
-                            || !repository_addon_indices.is_empty()
-                        {
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(12.0);
-                        }
-                        ui.label(
-                            RichText::new("Repository Themes")
-                                .color(palette.dim)
-                                .strong(),
-                        );
-                        ui.add_space(6.0);
-                        for idx in &repository_theme_indices {
-                            let record = &sections.repository_available[*idx];
-                            if let Some(action) = Self::draw_installer_repository_addon_row(
-                                ui, palette, row_width, row_height, record,
-                            ) {
-                                *deferred_repository_action =
-                                    Some((record.manifest.id.clone(), action));
-                            }
-                        }
-                    }
-                });
-        });
-    }
-
-    fn addon_override_value(record: &InstalledAddonRecord, enabled: bool) -> Option<bool> {
-        if enabled == record.manifest.enabled_by_default {
-            None
-        } else {
-            Some(enabled)
-        }
-    }
-
-    fn draw_installer_addon_row(
-        ui: &mut egui::Ui,
-        palette: RetroPalette,
-        row_width: f32,
-        row_height: f32,
-        record: &InstalledAddonRecord,
-    ) -> AddonRowAction {
-        let (_, row_rect) = ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
-        let mut action = AddonRowAction::None;
-        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-            let frame = egui::Frame::none()
-                .stroke(egui::Stroke::new(1.0, palette.fg))
-                .inner_margin(egui::Margin::same(2.0));
-            let content_width = (row_width - 4.0).max(80.0);
-            frame.show(ui, |ui| {
-                ui.set_min_width(content_width);
-                ui.set_max_width(content_width);
-                ui.set_min_height(row_height - 8.0);
-                let action_width = if record.manifest.essential {
-                    if Self::addon_can_be_removed(record) {
-                        220.0
-                    } else {
-                        120.0
-                    }
-                } else if Self::addon_can_be_removed(record) {
-                    320.0
-                } else {
-                    208.0
-                };
-                let text_width = (content_width - action_width - 24.0).max(140.0);
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [text_width, 0.0],
-                        egui::Label::new(
-                            RichText::new(&record.manifest.display_name)
-                                .color(palette.fg)
-                                .strong(),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if Self::addon_can_be_removed(record)
-                            && ui
-                                .button(RichText::new("Remove").color(palette.fg))
-                                .clicked()
-                        {
-                            action = AddonRowAction::Remove;
-                        }
-                        if let Ok(Some(sync_action)) =
-                            repository_sync_action_for_manifest(&record.manifest)
-                        {
-                            if ui
-                                .button(RichText::new(sync_action.label()).color(palette.fg))
-                                .clicked()
-                            {
-                                action = AddonRowAction::RepositorySync(sync_action);
-                            }
-                        }
-                        if record.manifest.essential {
-                            ui.label(RichText::new("[ required ]").color(palette.fg));
-                        } else if ui
-                            .button(
-                                RichText::new(Self::addon_toggle_label(record)).color(palette.fg),
-                            )
-                            .clicked()
-                        {
-                            action = AddonRowAction::Toggle;
-                        }
-                    });
-                });
-                ui.add_space(2.0);
-                ui.add_sized(
-                    [(content_width - 8.0).max(80.0), 0.0],
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{} | {} | {} | {}",
-                            record.manifest.id,
-                            Self::addon_enabled_chip(record),
-                            Self::addon_scope_label(record),
-                            Self::addon_source_label(record),
-                        ))
-                        .color(palette.dim),
-                    )
-                    .truncate(),
-                );
-            });
-        });
-        action
-    }
-
-    fn draw_installer_repository_addon_row(
-        ui: &mut egui::Ui,
-        palette: RetroPalette,
-        row_width: f32,
-        row_height: f32,
-        record: &RepositoryAddonRecord,
-    ) -> Option<RepositoryAddonAction> {
-        let (_, row_rect) = ui.allocate_space(egui::vec2(row_width, row_height - 4.0));
-        let mut status = None;
-        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-            let frame = egui::Frame::none()
-                .stroke(egui::Stroke::new(1.0, palette.dim))
-                .inner_margin(egui::Margin::same(2.0));
-            let content_width = (row_width - 4.0).max(80.0);
-            frame.show(ui, |ui| {
-                ui.set_min_width(content_width);
-                ui.set_max_width(content_width);
-                ui.set_min_height(row_height - 8.0);
-                let text_width = (content_width - 104.0).max(140.0);
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [text_width, 0.0],
-                        egui::Label::new(
-                            RichText::new(&record.manifest.display_name)
-                                .color(palette.fg)
-                                .strong(),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(RichText::new("Install").color(palette.fg))
-                            .clicked()
-                        {
-                            status = Some(RepositoryAddonAction::Install);
-                        }
-                    });
-                });
-                ui.add_space(2.0);
-                ui.add_sized(
-                    [(content_width - 8.0).max(80.0), 0.0],
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{} | v{} | {} | {}",
-                            record.manifest.id,
-                            Self::repository_release_version(record),
-                            Self::repository_release_channel(record),
-                            record.repository_source.display()
-                        ))
-                        .color(palette.dim),
-                    )
-                    .truncate(),
-                );
-            });
-        });
-        status
-    }
-
-    fn addon_can_be_removed(record: &InstalledAddonRecord) -> bool {
-        record.manifest.scope == crate::platform::AddonScope::User && record.manifest_path.is_some()
-    }
-
-    fn addon_enabled_chip(record: &InstalledAddonRecord) -> &'static str {
-        if record.manifest.essential {
-            "required"
-        } else if record.effective_enabled {
-            "[ enabled ]"
-        } else {
-            "[ disabled ]"
-        }
-    }
-
-    fn addon_toggle_label(record: &InstalledAddonRecord) -> &'static str {
-        if record.effective_enabled {
-            "Disable"
-        } else {
-            "Enable"
-        }
-    }
-
-    fn addon_scope_label(record: &InstalledAddonRecord) -> &'static str {
-        Self::addon_scope_name(record.manifest.scope)
-    }
-
-    fn addon_source_label(record: &InstalledAddonRecord) -> String {
-        record
-            .manifest_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "static fallback manifest".to_string())
-    }
-
-    fn addon_scope_name(scope: crate::platform::AddonScope) -> &'static str {
-        match scope {
-            crate::platform::AddonScope::Bundled => "bundled",
-            crate::platform::AddonScope::System => "system",
-            crate::platform::AddonScope::User => "user",
-        }
-    }
-
-    fn repository_release_version(record: &RepositoryAddonRecord) -> &str {
-        record
-            .release
-            .as_ref()
-            .map(|release| release.version.as_str())
-            .unwrap_or(record.manifest.version.as_str())
-    }
-
-    fn repository_release_channel(record: &RepositoryAddonRecord) -> &str {
-        record
-            .release
-            .as_ref()
-            .and_then(|release| release.channel.as_deref())
-            .unwrap_or("default")
     }
 
     fn draw_installer_package_actions(

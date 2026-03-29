@@ -3,17 +3,24 @@
 //! The UI thread submits work via `BackgroundTasks::sender()` + `std::thread::spawn`,
 //! then polls for results each frame with `BackgroundTasks::poll()`.
 
+use super::app::{RepoAddonEntry, RepoThemeEntry};
+use crate::platform::AddonKind;
 use std::sync::mpsc;
 
 /// A completed background task result.
 pub enum BackgroundResult {
     /// Settings persisted to disk.
     SettingsPersisted,
-    /// Repository-backed addon install/update/reinstall completed.
-    RepositoryAddonInstalled {
-        addon_id: String,
+    AddonsRepoIndexesFetched {
+        addons: Result<Vec<RepoAddonEntry>, String>,
+        themes: Result<Vec<RepoThemeEntry>, String>,
+    },
+    AddonsRepoActionFinished {
+        item_id: String,
+        kind: AddonKind,
         status: String,
         success: bool,
+        installed: bool,
     },
 }
 

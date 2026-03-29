@@ -46,11 +46,19 @@ string_id!(AddonId);
 string_id!(CapabilityId);
 string_id!(PermissionId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AddonKind {
     App,
     Theme,
+    #[serde(alias = "shell-theme")]
+    DesktopTheme,
+    TerminalTheme,
+    ColorTheme,
+    IconPack,
+    SoundPack,
+    CursorPack,
+    FontPack,
     ContentPack,
     Game,
     Service,

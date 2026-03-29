@@ -1,5 +1,6 @@
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, RetroScreen, ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
+    ShellSurfaceKind,
 };
 use eframe::egui::{self, Context};
 pub use nucleon_native_terminal_app::{
@@ -127,11 +128,7 @@ pub fn draw_terminal_menu_screen(
                     continue;
                 }
                 let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
-                let text = if selected {
-                    format!("  > {item}")
-                } else {
-                    format!("    {item}")
-                };
+                let text = terminal_menu_row_text(item, selected, 2);
                 let response = screen.selectable_row(
                     ui,
                     &painter,

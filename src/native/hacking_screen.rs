@@ -72,13 +72,7 @@ pub fn draw_hacking_screen(
             let painter = ui.painter_at(screen.rect);
             screen.paint_terminal_background(&painter, &palette);
 
-            screen.centered_text(
-                &painter,
-                0,
-                "NUCLEON TERMLINK PROTOCOL",
-                palette.fg,
-                true,
-            );
+            screen.centered_text(&painter, 0, "NUCLEON TERMLINK PROTOCOL", palette.fg, true);
 
             let boxes = format!(
                 "{}{}",

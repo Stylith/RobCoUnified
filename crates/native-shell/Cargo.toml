@@ -33,9 +33,14 @@ path = "src/installer_main.rs"
 name = "nucleon-tweaks"
 path = "src/tweaks_main.rs"
 
+[[bin]]
+name = "nucleon-addons"
+path = "src/addons_main.rs"
+
 [dependencies]
 anyhow = "1"
 eframe = { version = "0.29", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 nucleon = { path = "../.." }
+nucleon-native-addons-app = { path = "../native-addons-app" }
 nucleon-native-tweaks-app = { path = "../native-tweaks-app" }

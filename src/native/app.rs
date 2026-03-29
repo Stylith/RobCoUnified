@@ -43,7 +43,8 @@ use super::pty_screen::NativePtyState;
 use super::retro_ui::{
     configure_visuals, configure_visuals_for_palette, current_palette, current_palette_for_surface,
     palette_for_color_style, palette_for_color_style_with_overrides, set_active_color_style,
-    set_active_shell_style, set_active_terminal_decoration, set_active_terminal_wallpaper,
+    set_active_desktop_style, set_active_terminal_decoration, set_active_terminal_theme,
+    set_active_terminal_wallpaper,
     RetroPalette, ShellSurfaceKind, FIXED_PTY_CELL_H, FIXED_PTY_CELL_W,
 };
 use super::terminal_open_with_picker;
@@ -60,10 +61,13 @@ use crate::config::{
     HackingDifficulty, Settings,
 };
 use crate::core::auth::{AuthMethod, UserRecord};
+use crate::platform::AddonKind;
 use crate::session;
 use crate::theme::{
-    ColorStyle, ColorToken, CursorPack, LayoutProfile, MonochromePreset, PanelType, ShellStyle,
-    TerminalBranding, TerminalDecoration, TerminalLayoutProfile,
+    ColorStyle, ColorToken, CursorPack, CursorPackManifest, DesktopStyle, DesktopStyleManifest,
+    DesktopStyleRef, FontPackManifest, FontRef, IconPackManifest, LayoutProfile,
+    MonochromePreset, PanelType, SoundPackManifest, TerminalBranding, TerminalDecoration,
+    TerminalLayoutProfile, TerminalTheme, ThemeOptionValue,
 };
 use eframe::egui::{
     self, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
@@ -84,13 +88,15 @@ use nucleon_native_settings_app::{
     DesktopSettingsVisibility, GuiCliProfileSlot, NativeSettingsPanel, SettingsHomeTile,
     TerminalSettingsPanel, TerminalSettingsVisibility,
 };
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 mod addon_policy;
+mod addons_presenter;
 mod asset_helpers;
 mod command_layer_runtime;
 mod desktop_component_host;
@@ -341,6 +347,7 @@ const TERMINAL_CONTENT_COL: usize = 3;
 const TERMINAL_STATUS_ROW: usize = 24;
 const TERMINAL_STATUS_ROW_ALT: usize = 26;
 pub(super) const SESSION_LEADER_WINDOW: Duration = Duration::from_millis(1200);
+static EMPTY_TERMINAL_HEADER_LINES: LazyLock<Vec<String>> = LazyLock::new(Vec::new);
 
 #[derive(Clone, Copy)]
 struct TerminalLayout {
@@ -355,6 +362,62 @@ struct TerminalLayout {
     menu_start_row: usize,
     status_row: usize,
     status_row_alt: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddonsSidebarCategory {
+    #[default]
+    Installed,
+    Addons,
+    Themes,
+    Tools,
+    Extras,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddonsAddonSubcategory {
+    #[default]
+    Apps,
+    Games,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddonsThemeSubcategory {
+    #[default]
+    Packs,
+    Desktop,
+    Terminal,
+    Colors,
+    Icons,
+    Sounds,
+    Cursors,
+    Fonts,
+}
+
+pub struct AddonsRepoCache {
+    pub addons_index: Vec<RepoAddonEntry>,
+    pub themes_index: Vec<RepoThemeEntry>,
+    pub fetched_at: Instant,
+}
+
+pub struct RepoAddonEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub kind: AddonKind,
+    pub installed: bool,
+    pub update_available: bool,
+}
+
+pub struct RepoThemeEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub kind: AddonKind,
+    pub installed: bool,
+    pub update_available: bool,
 }
 
 fn terminal_branding_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<TerminalBranding> {
@@ -378,6 +441,13 @@ fn terminal_branding_setting_value(branding: &TerminalBranding) -> Option<Termin
     (!branding.header_lines.is_empty()).then(|| branding.clone())
 }
 
+fn theme_pack_by_id(theme_pack_id: Option<&str>) -> Option<crate::theme::ThemePack> {
+    let theme_pack_id = theme_pack_id?;
+    super::installed_theme_packs()
+        .into_iter()
+        .find(|theme| theme.id == theme_pack_id)
+}
+
 fn theme_bundle_dir_from_pack_id(theme_pack_id: &str) -> Option<PathBuf> {
     super::addons::installed_theme_bundle_dir(theme_pack_id)
 }
@@ -396,73 +466,243 @@ fn load_cursor_pack_from_asset_root(asset_root: &Path) -> Option<CursorPack> {
     serde_json::from_str(&raw).ok()
 }
 
-fn desktop_asset_pack_path_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<PathBuf> {
-    let Some(theme_pack_id) = theme_pack_id else {
-        return None;
-    };
-    let Some(theme) = super::installed_theme_packs()
-        .into_iter()
-        .find(|theme| theme.id == theme_pack_id)
-    else {
-        return None;
-    };
-    let Some(asset_pack) = theme.asset_pack.as_ref() else {
-        return None;
-    };
-    resolve_theme_bundle_path(theme_pack_id, &asset_pack.path)
+fn load_component_manifest<T: DeserializeOwned>(
+    component_root: &Path,
+    component_id: &str,
+) -> Option<(T, PathBuf)> {
+    let install_dir = component_root.join(component_id);
+    let raw = std::fs::read_to_string(install_dir.join("manifest.json")).ok()?;
+    let manifest = serde_json::from_str(&raw).ok()?;
+    Some((manifest, install_dir))
 }
 
-fn desktop_sound_pack_path_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<PathBuf> {
-    let Some(theme_pack_id) = theme_pack_id else {
-        return None;
-    };
-    let Some(theme) = super::installed_theme_packs()
-        .into_iter()
-        .find(|theme| theme.id == theme_pack_id)
-    else {
-        return None;
-    };
-    let sound_pack_path = theme.sound_pack.path.as_deref()?;
-    resolve_theme_bundle_path(theme_pack_id, sound_pack_path)
+fn resolve_component_install_path(component_root: &Path, relative_path: &str) -> PathBuf {
+    let path = PathBuf::from(relative_path);
+    if path.is_absolute() {
+        path
+    } else {
+        component_root.join(path)
+    }
 }
 
-fn desktop_cursor_pack_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<CursorPack> {
-    let Some(theme_pack_id) = theme_pack_id else {
-        return None;
-    };
-    let Some(theme) = super::installed_theme_packs()
-        .into_iter()
-        .find(|theme| theme.id == theme_pack_id)
-    else {
-        return None;
-    };
-    let asset_pack_path = theme
-        .asset_pack
-        .as_ref()
-        .and_then(|asset_pack| resolve_theme_bundle_path(theme_pack_id, &asset_pack.path));
-    theme
-        .cursor_pack
-        .clone()
-        .or_else(|| asset_pack_path.as_deref().and_then(load_cursor_pack_from_asset_root))
+fn desktop_style_from_ref(desktop_style: &DesktopStyleRef) -> DesktopStyle {
+    match desktop_style {
+        DesktopStyleRef::Inline(style) => style.clone(),
+        DesktopStyleRef::ById { desktop_style_id }
+            if matches!(desktop_style_id.as_str(), "classic" | "flat") =>
+        {
+            DesktopStyle::flat()
+        }
+        DesktopStyleRef::ById { desktop_style_id } => {
+            load_component_manifest::<DesktopStyleManifest>(
+                &crate::config::desktop_styles_directory(),
+                desktop_style_id,
+            )
+        }
+        .map(|(manifest, _)| manifest.style)
+        .unwrap_or_else(DesktopStyle::flat),
+    }
 }
 
-fn desktop_shell_style_from_theme_pack_id(theme_pack_id: Option<&str>) -> ShellStyle {
-    super::installed_theme_packs()
-        .into_iter()
-        .find(|theme| Some(theme.id.as_str()) == theme_pack_id)
-        .map(|theme| theme.shell_style)
-        .unwrap_or_else(|| crate::theme::ThemePack::classic().shell_style)
+fn desktop_style_id_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<String> {
+    let theme = theme_pack_by_id(theme_pack_id)?;
+    match theme.desktop_style {
+        DesktopStyleRef::Inline(_) => None,
+        DesktopStyleRef::ById { desktop_style_id } => Some(desktop_style_id),
+    }
+}
+
+fn desktop_icon_pack_id_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<String> {
+    theme_pack_by_id(theme_pack_id).and_then(|theme| theme.icon_pack_id)
+}
+
+fn desktop_sound_pack_id_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<String> {
+    theme_pack_by_id(theme_pack_id).and_then(|theme| theme.sound_pack_id)
+}
+
+fn desktop_cursor_pack_id_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<String> {
+    theme_pack_by_id(theme_pack_id).and_then(|theme| theme.cursor_pack_id)
+}
+
+fn font_pack_id_from_theme_pack_id(theme_pack_id: Option<&str>) -> Option<String> {
+    theme_pack_by_id(theme_pack_id).and_then(|theme| theme.font_pack_id)
+}
+
+const DESKTOP_STYLE_BUNDLED_FONT_PREFIX: &str = "desktop-style:";
+const TERMINAL_THEME_BUNDLED_FONT_PREFIX: &str = "terminal-theme:";
+
+fn font_ref_to_font_id(font: &FontRef, synthetic_id: String) -> Option<String> {
+    match font {
+        FontRef::Builtin { id } if id == BUILTIN_FONT_ID => None,
+        FontRef::Builtin { id } => Some(id.clone()),
+        FontRef::Bundled { .. } => Some(synthetic_id),
+        FontRef::Installed { font_pack_id } => Some(font_pack_id.clone()),
+    }
+}
+
+fn desktop_style_font_id_from_component_id(desktop_style_id: Option<&str>) -> Option<String> {
+    let desktop_style_id = desktop_style_id?;
+    let (manifest, _) = load_component_manifest::<DesktopStyleManifest>(
+        &crate::config::desktop_styles_directory(),
+        desktop_style_id,
+    )?;
+    let font = manifest.font?;
+    font_ref_to_font_id(
+        &font,
+        format!("{DESKTOP_STYLE_BUNDLED_FONT_PREFIX}{desktop_style_id}"),
+    )
+}
+
+fn terminal_theme_font_id_from_theme_id(terminal_theme_id: Option<&str>) -> Option<String> {
+    let terminal_theme_id = terminal_theme_id?;
+    let font = load_component_manifest::<crate::theme::TerminalThemeManifest>(
+        &crate::config::terminal_themes_directory(),
+        terminal_theme_id,
+    )
+    .map(|(manifest, _)| manifest.theme.font)
+    .unwrap_or_else(|| {
+        super::installed_terminal_themes()
+            .into_iter()
+            .find(|manifest| manifest.id == terminal_theme_id)
+            .and_then(|manifest| manifest.theme.font)
+    })?;
+    font_ref_to_font_id(
+        &font,
+        format!("{TERMINAL_THEME_BUNDLED_FONT_PREFIX}{terminal_theme_id}"),
+    )
+}
+
+fn desktop_default_font_id(
+    theme_pack_id: Option<&str>,
+    desktop_style_id: Option<&str>,
+) -> Option<String> {
+    font_pack_id_from_theme_pack_id(theme_pack_id)
+        .or_else(|| desktop_style_font_id_from_component_id(desktop_style_id))
+}
+
+fn terminal_default_font_id(
+    theme_pack_id: Option<&str>,
+    terminal_theme_id: Option<&str>,
+) -> Option<String> {
+    font_pack_id_from_theme_pack_id(theme_pack_id)
+        .or_else(|| terminal_theme_font_id_from_theme_id(terminal_theme_id))
+}
+
+fn desktop_style_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.desktop_style_id.clone().or_else(|| {
+        desktop_style_id_from_theme_pack_id(
+            desktop_theme_pack_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn desktop_icon_pack_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.desktop_icon_pack_id.clone().or_else(|| {
+        desktop_icon_pack_id_from_theme_pack_id(
+            desktop_theme_pack_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn desktop_sound_pack_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.desktop_sound_pack_id.clone().or_else(|| {
+        desktop_sound_pack_id_from_theme_pack_id(
+            desktop_theme_pack_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn desktop_cursor_pack_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.desktop_cursor_pack_id.clone().or_else(|| {
+        desktop_cursor_pack_id_from_theme_pack_id(
+            desktop_theme_pack_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn desktop_font_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.desktop_font_id.clone().or_else(|| {
+        desktop_default_font_id(
+            desktop_theme_pack_id_from_settings(settings).as_deref(),
+            desktop_style_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn desktop_asset_pack_path_from_component_id(icon_pack_id: Option<&str>) -> Option<PathBuf> {
+    let icon_pack_id = icon_pack_id?;
+    let (manifest, install_dir) = load_component_manifest::<IconPackManifest>(
+        &crate::config::icon_packs_directory(),
+        icon_pack_id,
+    )?;
+    Some(resolve_component_install_path(
+        &install_dir,
+        &manifest.asset_pack.path,
+    ))
+}
+
+fn desktop_sound_pack_path_from_component_id(sound_pack_id: Option<&str>) -> Option<PathBuf> {
+    let sound_pack_id = sound_pack_id?;
+    let (manifest, install_dir) = load_component_manifest::<SoundPackManifest>(
+        &crate::config::sound_packs_directory(),
+        sound_pack_id,
+    )?;
+    let sound_pack_path = manifest.sound_pack.path.as_deref()?;
+    Some(resolve_component_install_path(
+        &install_dir,
+        sound_pack_path,
+    ))
+}
+
+fn desktop_cursor_pack_from_component_id(cursor_pack_id: Option<&str>) -> Option<CursorPack> {
+    let cursor_pack_id = cursor_pack_id?;
+    load_component_manifest::<CursorPackManifest>(
+        &crate::config::cursor_packs_directory(),
+        cursor_pack_id,
+    )
+    .map(|(manifest, _)| manifest.cursor_pack)
+}
+
+fn font_pack_path_from_component_id(font_pack_id: &str) -> Option<PathBuf> {
+    let (manifest, install_dir) = load_component_manifest::<FontPackManifest>(
+        &crate::config::font_packs_directory(),
+        font_pack_id,
+    )?;
+    Some(resolve_component_install_path(&install_dir, &manifest.file))
+}
+
+fn desktop_style_from_selection(
+    theme_pack_id: Option<&str>,
+    desktop_style_id: Option<&str>,
+) -> DesktopStyle {
+    if let Some(desktop_style_id) = desktop_style_id {
+        if matches!(desktop_style_id, "classic" | "flat") {
+            return DesktopStyle::flat();
+        }
+        if let Some(manifest) = super::installed_desktop_styles()
+            .into_iter()
+            .find(|manifest| manifest.id == desktop_style_id)
+        {
+            return manifest.style;
+        }
+    }
+
+    theme_pack_by_id(theme_pack_id)
+        .map(|theme| desktop_style_from_ref(&theme.desktop_style))
+        .unwrap_or_else(DesktopStyle::flat)
 }
 
 fn theme_pack_color_overrides_from_theme_pack_id(
     theme_pack_id: Option<&str>,
 ) -> Option<HashMap<ColorToken, [u8; 4]>> {
     let theme_pack_id = theme_pack_id?;
-    let bundle_dir = theme_bundle_dir_from_pack_id(theme_pack_id)?;
-    let active_theme = super::installed_theme_packs()
-        .into_iter()
-        .find(|theme| theme.id == theme_pack_id)?;
+    let active_theme = theme_pack_by_id(Some(theme_pack_id))?;
 
+    if let Some(full_color_theme) = active_theme.full_color_theme {
+        return Some(full_color_theme.tokens);
+    }
+
+    let bundle_dir = theme_bundle_dir_from_pack_id(theme_pack_id)?;
     let mut candidates = vec![bundle_dir.join("colors").join("custom.json")];
     if let crate::theme::ColorStyle::FullColor { theme_id } = active_theme.color_style {
         candidates.push(bundle_dir.join("colors").join(format!("{theme_id}.json")));
@@ -490,9 +730,11 @@ fn theme_pack_color_overrides_from_theme_pack_id(
 fn desktop_asset_state_from_theme_pack_id(
     theme_pack_id: Option<&str>,
 ) -> (Option<PathBuf>, Option<CursorPack>) {
+    let icon_pack_id = desktop_icon_pack_id_from_theme_pack_id(theme_pack_id);
+    let cursor_pack_id = desktop_cursor_pack_id_from_theme_pack_id(theme_pack_id);
     (
-        desktop_asset_pack_path_from_theme_pack_id(theme_pack_id),
-        desktop_cursor_pack_from_theme_pack_id(theme_pack_id),
+        desktop_asset_pack_path_from_component_id(icon_pack_id.as_deref()),
+        desktop_cursor_pack_from_component_id(cursor_pack_id.as_deref()),
     )
 }
 
@@ -511,8 +753,103 @@ fn terminal_decoration_from_settings(settings: &Settings) -> TerminalDecoration 
     terminal_decoration_from_theme_pack_id(theme_pack_id.as_deref()).unwrap_or_default()
 }
 
-fn terminal_layout_with_branding(branding: &TerminalBranding) -> TerminalLayout {
-    let header_lines = branding.header_lines.len();
+fn terminal_theme_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.terminal_theme_id.clone()
+}
+
+fn apply_theme_pack_to_terminal_options(
+    pack: &crate::theme::ThemePack,
+    theme: &TerminalTheme,
+    options: &mut HashMap<String, ThemeOptionValue>,
+) {
+    if theme.id != "classic" {
+        return;
+    }
+    options.insert(
+        "separator_char".to_string(),
+        ThemeOptionValue::String(pack.terminal_decoration.separator_char.clone()),
+    );
+    options.insert(
+        "show_separators".to_string(),
+        ThemeOptionValue::Bool(pack.terminal_decoration.show_separators),
+    );
+    options.insert(
+        "subtitle_underlined".to_string(),
+        ThemeOptionValue::Bool(pack.terminal_decoration.subtitle_underlined),
+    );
+    options.insert(
+        "header_visible".to_string(),
+        ThemeOptionValue::Bool(!pack.terminal_branding.header_lines.is_empty()),
+    );
+}
+
+fn terminal_theme_from_settings(settings: &Settings) -> TerminalTheme {
+    let Some(theme_id) = terminal_theme_id_from_settings(settings) else {
+        return TerminalTheme::classic();
+    };
+    super::installed_terminal_themes()
+        .into_iter()
+        .find(|manifest| manifest.id == theme_id)
+        .map(|manifest| manifest.theme)
+        .unwrap_or_else(TerminalTheme::classic)
+}
+
+fn terminal_theme_options_from_settings(
+    settings: &Settings,
+    theme: &TerminalTheme,
+) -> HashMap<String, ThemeOptionValue> {
+    let mut options = theme.default_options.clone();
+    if let Some(pack) = theme_pack_by_id(terminal_theme_pack_id_from_settings(settings).as_deref()) {
+        apply_theme_pack_to_terminal_options(&pack, theme, &mut options);
+    }
+    let restore_persisted_options = terminal_theme_id_from_settings(settings)
+        .map(|theme_id| {
+            super::installed_terminal_themes()
+                .into_iter()
+                .any(|manifest| manifest.id == theme_id)
+        })
+        .unwrap_or(true);
+    if restore_persisted_options {
+        for (key, value) in &settings.terminal_theme_options {
+            options.insert(key.clone(), value.clone());
+        }
+    }
+    options
+}
+
+fn terminal_font_id_from_settings(settings: &Settings) -> Option<String> {
+    settings.terminal_font_id.clone().or_else(|| {
+        terminal_default_font_id(
+            terminal_theme_pack_id_from_settings(settings).as_deref(),
+            terminal_theme_id_from_settings(settings).as_deref(),
+        )
+    })
+}
+
+fn terminal_theme_header_visible(
+    theme: &TerminalTheme,
+    options: &HashMap<String, ThemeOptionValue>,
+) -> bool {
+    TerminalTheme::get_bool(options, "header_visible", &theme.options_schema)
+}
+
+fn terminal_theme_content_margin(
+    theme: &TerminalTheme,
+    options: &HashMap<String, ThemeOptionValue>,
+) -> usize {
+    TerminalTheme::get_int(options, "content_margin", &theme.options_schema).max(0) as usize
+}
+
+fn terminal_layout_with_branding(
+    branding: &TerminalBranding,
+    show_header: bool,
+    content_col: usize,
+) -> TerminalLayout {
+    let header_lines = if show_header {
+        branding.header_lines.len()
+    } else {
+        0
+    };
     let separator_top_row = if header_lines == 0 { 0 } else { header_lines };
     let title_row = separator_top_row + 1;
     let separator_bottom_row = title_row + 1;
@@ -521,7 +858,7 @@ fn terminal_layout_with_branding(branding: &TerminalBranding) -> TerminalLayout 
     TerminalLayout {
         cols: TERMINAL_SCREEN_COLS,
         rows: TERMINAL_SCREEN_ROWS,
-        content_col: TERMINAL_CONTENT_COL,
+        content_col,
         header_start_row: 0,
         separator_top_row,
         title_row,
@@ -588,7 +925,7 @@ fn desktop_layout_from_settings(settings: &Settings) -> LayoutProfile {
     settings
         .desktop_layout_profile
         .clone()
-        .unwrap_or_else(|| crate::theme::ThemePack::classic().layout_profile)
+        .unwrap_or_else(crate::theme::LayoutProfile::classic)
 }
 
 fn terminal_layout_from_settings(settings: &Settings) -> TerminalLayoutProfile {
@@ -600,7 +937,7 @@ fn terminal_layout_from_settings(settings: &Settings) -> TerminalLayoutProfile {
 
 fn canonical_theme_pack_id(theme_pack_id: Option<String>) -> Option<String> {
     match theme_pack_id.as_deref() {
-        Some("nucleon-dark") | Some("nucleon-light") => Some("nucleon".to_string()),
+        Some("classic" | "nucleon" | "nucleon-dark" | "nucleon-light") => None,
         _ => theme_pack_id,
     }
 }
@@ -619,10 +956,9 @@ fn canonical_desktop_cursor_theme_selection(
 ) -> DesktopCursorThemeSelection {
     match selection {
         DesktopCursorThemeSelection::ThemePack { theme_pack_id } => {
-            DesktopCursorThemeSelection::ThemePack {
-                theme_pack_id: canonical_theme_pack_id(Some(theme_pack_id))
-                    .unwrap_or_else(|| "nucleon".to_string()),
-            }
+            canonical_theme_pack_id(Some(theme_pack_id))
+                .map(|theme_pack_id| DesktopCursorThemeSelection::ThemePack { theme_pack_id })
+                .unwrap_or(DesktopCursorThemeSelection::Builtin)
         }
         other => other,
     }
@@ -656,6 +992,7 @@ fn terminal_theme_pack_id_from_settings(settings: &Settings) -> Option<String> {
 
 const RETRO_FONT_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/FixedsysExcelsior301-Regular.ttf");
+const BUILTIN_FONT_ID: &str = "fixedsys";
 
 fn try_load_font_bytes() -> Option<Vec<u8>> {
     if !RETRO_FONT_BYTES.is_empty() {
@@ -684,6 +1021,46 @@ fn try_load_font_bytes() -> Option<Vec<u8>> {
     None
 }
 
+fn builtin_font_bytes() -> Vec<u8> {
+    try_load_font_bytes().unwrap_or_else(|| RETRO_FONT_BYTES.to_vec())
+}
+
+fn load_installed_font_cache() -> HashMap<String, Vec<u8>> {
+    let mut cache = HashMap::new();
+    for manifest in super::installed_font_packs() {
+        let Some(path) = font_pack_path_from_component_id(&manifest.id) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        cache.insert(manifest.id, bytes);
+    }
+    cache
+}
+
+fn bundled_desktop_style_font_bytes(desktop_style_id: &str) -> Option<Vec<u8>> {
+    let (manifest, install_dir) = load_component_manifest::<DesktopStyleManifest>(
+        &crate::config::desktop_styles_directory(),
+        desktop_style_id,
+    )?;
+    let FontRef::Bundled { file } = manifest.font? else {
+        return None;
+    };
+    std::fs::read(resolve_component_install_path(&install_dir, &file)).ok()
+}
+
+fn bundled_terminal_theme_font_bytes(terminal_theme_id: &str) -> Option<Vec<u8>> {
+    let (manifest, install_dir) = load_component_manifest::<crate::theme::TerminalThemeManifest>(
+        &crate::config::terminal_themes_directory(),
+        terminal_theme_id,
+    )?;
+    let FontRef::Bundled { file } = manifest.theme.font? else {
+        return None;
+    };
+    std::fs::read(resolve_component_install_path(&install_dir, &file)).ok()
+}
+
 pub fn configure_native_context(ctx: &Context) {
     configure_native_fonts(ctx);
     apply_native_appearance(ctx);
@@ -695,19 +1072,20 @@ pub fn configure_native_context(ctx: &Context) {
 fn configure_native_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
     if let Some(bytes) = try_load_font_bytes() {
-        fonts
-            .font_data
-            .insert("retro".into(), FontData::from_owned(bytes));
+        fonts.font_data.insert(
+            BUILTIN_FONT_ID.into(),
+            FontData::from_owned(bytes),
+        );
         fonts
             .families
             .entry(FontFamily::Monospace)
             .or_default()
-            .insert(0, "retro".into());
+            .insert(0, BUILTIN_FONT_ID.into());
         fonts
             .families
             .entry(FontFamily::Proportional)
             .or_default()
-            .insert(0, "retro".into());
+            .insert(0, BUILTIN_FONT_ID.into());
     }
     ctx.set_fonts(fonts);
 }
@@ -935,7 +1313,13 @@ pub struct NucleonNativeApp {
     editor: EditorWindow,
     settings: SettingsWindow,
     tweaks_open: bool,
+    pub(super) addons_open: bool,
+    pub(super) addons_sidebar_category: AddonsSidebarCategory,
+    pub(super) addons_addon_subcategory: AddonsAddonSubcategory,
+    pub(super) addons_theme_subcategory: AddonsThemeSubcategory,
     applications: ApplicationsWindow,
+    pub(super) addons_repo_cache: Option<AddonsRepoCache>,
+    pub(super) addons_repo_fetch_in_progress: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<WindowInstanceId, DesktopWindowState>,
@@ -959,14 +1343,24 @@ pub struct NucleonNativeApp {
     desktop_active_layout: LayoutProfile,
     terminal_active_layout: TerminalLayoutProfile,
     desktop_active_theme_pack_id: Option<String>,
+    pub(super) desktop_active_desktop_style_id: Option<String>,
+    pub(super) desktop_active_icon_pack_id: Option<String>,
+    pub(super) desktop_active_sound_pack_id: Option<String>,
+    pub(super) desktop_active_cursor_pack_id: Option<String>,
+    pub(super) desktop_active_font_id: Option<String>,
     desktop_active_cursor_theme_selection: DesktopCursorThemeSelection,
     terminal_active_theme_pack_id: Option<String>,
-    pub(super) desktop_active_shell_style: ShellStyle,
+    terminal_active_theme: TerminalTheme,
+    terminal_theme_options: HashMap<String, ThemeOptionValue>,
+    pub(super) terminal_active_font_id: Option<String>,
+    pub(super) desktop_active_desktop_style: DesktopStyle,
     desktop_active_color_style: ColorStyle,
     terminal_active_color_style: ColorStyle,
     pub(super) active_sound_pack_path: Option<PathBuf>,
     pub(super) active_asset_pack_path: Option<PathBuf>,
     pub(super) active_cursor_pack: Option<CursorPack>,
+    pub(super) font_cache: HashMap<String, Vec<u8>>,
+    pub(super) current_applied_font_id: Option<String>,
     pub(super) desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
     pub(super) terminal_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
     pub(super) terminal_branding: TerminalBranding,
@@ -1033,7 +1427,7 @@ pub struct NucleonNativeApp {
     tweaks_layout_overrides_open: bool,
     tweaks_customize_colors_open: bool,
     tweaks_editing_color_token: Option<usize>, // index into ColorToken::all()
-    terminal_tweaks_active_section: u8, // 0=Wallpaper, 1=Theme, 2=Effects, 3=Display
+    terminal_tweaks_active_section: u8,        // 0=Wallpaper, 1=Theme, 2=Effects, 3=Display
     terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
     // Spotlight search
     spotlight_open: bool,
@@ -1057,7 +1451,13 @@ pub(super) struct ParkedSessionState {
     editor: EditorWindow,
     settings: SettingsWindow,
     tweaks_open: bool,
+    addons_open: bool,
+    addons_sidebar_category: AddonsSidebarCategory,
+    addons_addon_subcategory: AddonsAddonSubcategory,
+    addons_theme_subcategory: AddonsThemeSubcategory,
     applications: ApplicationsWindow,
+    addons_repo_cache: Option<AddonsRepoCache>,
+    addons_repo_fetch_in_progress: bool,
     desktop_installer: DesktopInstallerState,
     terminal_mode: TerminalModeWindow,
     desktop_window_states: HashMap<WindowInstanceId, DesktopWindowState>,
@@ -1098,7 +1498,15 @@ pub(super) struct ParkedSessionState {
     terminal_tweaks_open_dropdown: Option<tweaks_presenter::TerminalTweaksDropdown>,
     desktop_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
     terminal_color_overrides: Option<HashMap<ColorToken, [u8; 4]>>,
-    desktop_active_shell_style: ShellStyle,
+    desktop_active_desktop_style_id: Option<String>,
+    desktop_active_icon_pack_id: Option<String>,
+    desktop_active_sound_pack_id: Option<String>,
+    desktop_active_cursor_pack_id: Option<String>,
+    desktop_active_font_id: Option<String>,
+    desktop_active_desktop_style: DesktopStyle,
+    terminal_active_theme: TerminalTheme,
+    terminal_theme_options: HashMap<String, ThemeOptionValue>,
+    terminal_active_font_id: Option<String>,
     terminal_decoration: TerminalDecoration,
     picking_terminal_wallpaper: bool,
     picking_theme_import: bool,
@@ -1151,15 +1559,27 @@ impl Default for NucleonNativeApp {
         let initial_desktop_color_style = desktop_color_style_from_settings(&settings_draft);
         let initial_terminal_color_style = terminal_color_style_from_settings(&settings_draft);
         let initial_desktop_theme_pack_id = desktop_theme_pack_id_from_settings(&settings_draft);
+        let initial_desktop_style_id = desktop_style_id_from_settings(&settings_draft);
+        let initial_desktop_icon_pack_id = desktop_icon_pack_id_from_settings(&settings_draft);
+        let initial_desktop_sound_pack_id = desktop_sound_pack_id_from_settings(&settings_draft);
+        let initial_desktop_cursor_pack_id = desktop_cursor_pack_id_from_settings(&settings_draft);
+        let initial_desktop_font_id = desktop_font_id_from_settings(&settings_draft);
         let initial_desktop_cursor_theme_selection =
             desktop_cursor_theme_selection_from_settings(&settings_draft);
         let initial_terminal_theme_pack_id = terminal_theme_pack_id_from_settings(&settings_draft);
-        let initial_desktop_shell_style =
-            desktop_shell_style_from_theme_pack_id(initial_desktop_theme_pack_id.as_deref());
+        let initial_desktop_style = desktop_style_from_selection(
+            initial_desktop_theme_pack_id.as_deref(),
+            initial_desktop_style_id.as_deref(),
+        );
         let initial_desktop_layout = desktop_layout_from_settings(&settings_draft);
         let initial_terminal_layout = terminal_layout_from_settings(&settings_draft);
+        let initial_terminal_theme = terminal_theme_from_settings(&settings_draft);
+        let initial_terminal_theme_options =
+            terminal_theme_options_from_settings(&settings_draft, &initial_terminal_theme);
+        let initial_terminal_font_id = terminal_font_id_from_settings(&settings_draft);
         let initial_terminal_branding = terminal_branding_from_settings(&settings_draft);
         let initial_terminal_decoration = terminal_decoration_from_settings(&settings_draft);
+        let font_cache = load_installed_font_cache();
         let mut app = Self {
             login: TerminalLoginState::default(),
             session: None,
@@ -1191,7 +1611,13 @@ impl Default for NucleonNativeApp {
                 user_delete_confirm: String::new(),
             },
             tweaks_open: false,
+            addons_open: false,
+            addons_sidebar_category: AddonsSidebarCategory::default(),
+            addons_addon_subcategory: AddonsAddonSubcategory::default(),
+            addons_theme_subcategory: AddonsThemeSubcategory::default(),
             applications: ApplicationsWindow::default(),
+            addons_repo_cache: None,
+            addons_repo_fetch_in_progress: false,
             desktop_installer: DesktopInstallerState::default(),
             terminal_mode: TerminalModeWindow::default(),
             desktop_window_states: HashMap::new(),
@@ -1212,14 +1638,24 @@ impl Default for NucleonNativeApp {
             desktop_active_layout: initial_desktop_layout,
             terminal_active_layout: initial_terminal_layout,
             desktop_active_theme_pack_id: initial_desktop_theme_pack_id,
+            desktop_active_desktop_style_id: initial_desktop_style_id,
+            desktop_active_icon_pack_id: initial_desktop_icon_pack_id,
+            desktop_active_sound_pack_id: initial_desktop_sound_pack_id,
+            desktop_active_cursor_pack_id: initial_desktop_cursor_pack_id,
+            desktop_active_font_id: initial_desktop_font_id,
             desktop_active_cursor_theme_selection: initial_desktop_cursor_theme_selection,
             terminal_active_theme_pack_id: initial_terminal_theme_pack_id,
-            desktop_active_shell_style: initial_desktop_shell_style,
+            terminal_active_theme: initial_terminal_theme,
+            terminal_theme_options: initial_terminal_theme_options,
+            terminal_active_font_id: initial_terminal_font_id,
+            desktop_active_desktop_style: initial_desktop_style,
             desktop_active_color_style: initial_desktop_color_style,
             terminal_active_color_style: initial_terminal_color_style,
             active_sound_pack_path: None,
             active_asset_pack_path: None,
             active_cursor_pack: None,
+            font_cache,
+            current_applied_font_id: None,
             desktop_color_overrides: None,
             terminal_color_overrides: None,
             terminal_branding: initial_terminal_branding,
@@ -1306,6 +1742,7 @@ impl Default for NucleonNativeApp {
             retained_wasm_addons: Vec::new(),
             ipc: super::ipc::start_listener(),
         };
+        app.prime_active_theme_font_cache();
         app.sync_active_sound_pack();
         app.sync_active_desktop_asset_pack();
         crate::config::spawn_addon_repository_index_refresh();
@@ -1315,9 +1752,24 @@ impl Default for NucleonNativeApp {
 }
 
 impl NucleonNativeApp {
+    fn prime_active_theme_font_cache(&mut self) {
+        if let Some(font_id) = desktop_default_font_id(
+            self.desktop_active_theme_pack_id.as_deref(),
+            self.desktop_active_desktop_style_id.as_deref(),
+        ) {
+            let _ = self.cached_font_bytes(&font_id);
+        }
+        if let Some(font_id) = terminal_default_font_id(
+            self.terminal_active_theme_pack_id.as_deref(),
+            Some(self.terminal_active_theme.id.as_str()),
+        ) {
+            let _ = self.cached_font_bytes(&font_id);
+        }
+    }
+
     fn sync_active_sound_pack(&mut self) -> bool {
         let next_sound_pack_path =
-            desktop_sound_pack_path_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
+            desktop_sound_pack_path_from_component_id(self.desktop_active_sound_pack_id.as_deref());
         let changed = self.active_sound_pack_path != next_sound_pack_path;
         if changed {
             self.active_sound_pack_path = next_sound_pack_path.clone();
@@ -1328,13 +1780,9 @@ impl NucleonNativeApp {
 
     fn sync_active_desktop_asset_pack(&mut self) -> bool {
         let next_asset_pack_path =
-            desktop_asset_pack_path_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
-        let next_cursor_pack = desktop_cursor_pack_from_theme_pack_id(
-            desktop_cursor_theme_pack_id_for_selection(
-                self.desktop_active_theme_pack_id.as_deref(),
-                &self.desktop_active_cursor_theme_selection,
-            ),
-        );
+            desktop_asset_pack_path_from_component_id(self.desktop_active_icon_pack_id.as_deref());
+        let next_cursor_pack =
+            desktop_cursor_pack_from_component_id(self.desktop_active_cursor_pack_id.as_deref());
         let changed = self.active_asset_pack_path != next_asset_pack_path
             || self.active_cursor_pack != next_cursor_pack;
         self.active_asset_pack_path = next_asset_pack_path;
@@ -1342,27 +1790,105 @@ impl NucleonNativeApp {
         changed
     }
 
+    fn cached_font_bytes(&mut self, font_id: &str) -> Option<Vec<u8>> {
+        if font_id == BUILTIN_FONT_ID {
+            return Some(builtin_font_bytes());
+        }
+        if let Some(bytes) = self.font_cache.get(font_id) {
+            return Some(bytes.clone());
+        }
+        let bytes = if let Some(desktop_style_id) =
+            font_id.strip_prefix(DESKTOP_STYLE_BUNDLED_FONT_PREFIX)
+        {
+            bundled_desktop_style_font_bytes(desktop_style_id)?
+        } else if let Some(terminal_theme_id) =
+            font_id.strip_prefix(TERMINAL_THEME_BUNDLED_FONT_PREFIX)
+        {
+            bundled_terminal_theme_font_bytes(terminal_theme_id)?
+        } else {
+            let path = font_pack_path_from_component_id(font_id)?;
+            std::fs::read(path).ok()?
+        };
+        self.font_cache.insert(font_id.to_string(), bytes.clone());
+        Some(bytes)
+    }
+
+    fn apply_active_font(&mut self, ctx: &Context, font_id: &Option<String>) {
+        let (name, bytes) = match font_id.as_deref() {
+            Some(BUILTIN_FONT_ID) => (BUILTIN_FONT_ID.to_string(), builtin_font_bytes()),
+            Some(font_id) => self
+                .cached_font_bytes(font_id)
+                .map(|bytes| (font_id.to_string(), bytes))
+                .unwrap_or_else(|| (BUILTIN_FONT_ID.to_string(), builtin_font_bytes())),
+            None => (BUILTIN_FONT_ID.to_string(), builtin_font_bytes()),
+        };
+
+        let mut fonts = FontDefinitions::default();
+        fonts
+            .font_data
+            .insert(name.clone(), FontData::from_owned(bytes));
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .insert(0, name.clone());
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, name);
+        ctx.set_fonts(fonts);
+    }
+
+    fn sync_active_font(&mut self, ctx: &Context) {
+        let needed_font_id = if self.desktop_mode_open {
+            self.desktop_active_font_id.clone()
+        } else {
+            self.terminal_active_font_id.clone()
+        };
+        if needed_font_id != self.current_applied_font_id {
+            self.apply_active_font(ctx, &needed_font_id);
+            self.current_applied_font_id = needed_font_id;
+        }
+    }
+
     fn apply_surface_theme_state_from_settings(&mut self) {
         let previous_desktop_theme_pack_id = self.desktop_active_theme_pack_id.clone();
         let previous_desktop_color_style = self.desktop_active_color_style.clone();
         self.desktop_active_theme_pack_id =
             desktop_theme_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_desktop_style_id = desktop_style_id_from_settings(&self.settings.draft);
+        self.desktop_active_icon_pack_id = desktop_icon_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_sound_pack_id =
+            desktop_sound_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_cursor_pack_id =
+            desktop_cursor_pack_id_from_settings(&self.settings.draft);
+        self.desktop_active_font_id = desktop_font_id_from_settings(&self.settings.draft);
         self.desktop_active_cursor_theme_selection =
             desktop_cursor_theme_selection_from_settings(&self.settings.draft);
         self.terminal_active_theme_pack_id =
             terminal_theme_pack_id_from_settings(&self.settings.draft);
-        self.desktop_active_shell_style =
-            desktop_shell_style_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
+        self.terminal_active_theme = terminal_theme_from_settings(&self.settings.draft);
+        self.terminal_theme_options =
+            terminal_theme_options_from_settings(&self.settings.draft, &self.terminal_active_theme);
+        self.terminal_active_font_id = terminal_font_id_from_settings(&self.settings.draft);
+        self.desktop_active_desktop_style = desktop_style_from_selection(
+            self.desktop_active_theme_pack_id.as_deref(),
+            self.desktop_active_desktop_style_id.as_deref(),
+        );
         self.desktop_active_color_style = desktop_color_style_from_settings(&self.settings.draft);
         self.terminal_active_color_style = terminal_color_style_from_settings(&self.settings.draft);
         self.desktop_active_layout = desktop_layout_from_settings(&self.settings.draft);
         self.terminal_active_layout = terminal_layout_from_settings(&self.settings.draft);
         self.terminal_branding = terminal_branding_from_settings(&self.settings.draft);
         self.terminal_decoration = terminal_decoration_from_settings(&self.settings.draft);
-        self.desktop_color_overrides =
-            theme_pack_color_overrides_from_theme_pack_id(self.desktop_active_theme_pack_id.as_deref());
-        self.terminal_color_overrides =
-            theme_pack_color_overrides_from_theme_pack_id(self.terminal_active_theme_pack_id.as_deref());
+        self.desktop_color_overrides = theme_pack_color_overrides_from_theme_pack_id(
+            self.desktop_active_theme_pack_id.as_deref(),
+        );
+        self.terminal_color_overrides = theme_pack_color_overrides_from_theme_pack_id(
+            self.terminal_active_theme_pack_id.as_deref(),
+        );
+        self.prime_active_theme_font_cache();
         self.tweaks_customize_colors_open = false;
         self.last_desktop_appearance = None;
         self.sync_active_sound_pack();
@@ -1377,9 +1903,31 @@ impl NucleonNativeApp {
 
     fn persist_surface_theme_state_to_settings(&mut self) {
         self.settings.draft.desktop_theme_pack_id = self.desktop_active_theme_pack_id.clone();
+        self.settings.draft.desktop_style_id = self.desktop_active_desktop_style_id.clone();
+        self.settings.draft.desktop_icon_pack_id = self.desktop_active_icon_pack_id.clone();
+        self.settings.draft.desktop_sound_pack_id = self.desktop_active_sound_pack_id.clone();
+        self.settings.draft.desktop_cursor_pack_id = self.desktop_active_cursor_pack_id.clone();
+        let desktop_default_font_id = desktop_default_font_id(
+            self.desktop_active_theme_pack_id.as_deref(),
+            self.desktop_active_desktop_style_id.as_deref(),
+        );
+        self.settings.draft.desktop_font_id =
+            (self.desktop_active_font_id != desktop_default_font_id)
+                .then(|| self.desktop_active_font_id.clone())
+                .flatten();
         self.settings.draft.desktop_cursor_theme_selection =
             self.desktop_active_cursor_theme_selection.clone();
         self.settings.draft.terminal_theme_pack_id = self.terminal_active_theme_pack_id.clone();
+        self.settings.draft.terminal_theme_id = Some(self.terminal_active_theme.id.clone());
+        self.settings.draft.terminal_theme_options = self.terminal_theme_options.clone();
+        let terminal_default_font_id = terminal_default_font_id(
+            self.terminal_active_theme_pack_id.as_deref(),
+            Some(self.terminal_active_theme.id.as_str()),
+        );
+        self.settings.draft.terminal_font_id =
+            (self.terminal_active_font_id != terminal_default_font_id)
+                .then(|| self.terminal_active_font_id.clone())
+                .flatten();
         self.settings.draft.desktop_color_style = Some(self.desktop_active_color_style.clone());
         self.settings.draft.terminal_color_style = Some(self.terminal_active_color_style.clone());
         self.settings.draft.desktop_layout_profile = Some(self.desktop_active_layout.clone());
@@ -1423,11 +1971,12 @@ impl NucleonNativeApp {
     }
 
     fn sync_desktop_appearance(&mut self, ctx: &Context) {
+        self.sync_active_font(ctx);
         let key = DesktopAppearanceKey {
             color_style: self.desktop_active_color_style.clone(),
             overrides: self.desktop_color_overrides.clone(),
         };
-        set_active_shell_style(self.desktop_active_shell_style.clone());
+        set_active_desktop_style(self.desktop_active_desktop_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Desktop,
             self.desktop_active_color_style.clone(),
@@ -1472,12 +2021,14 @@ impl NucleonNativeApp {
     }
 
     fn sync_terminal_appearance(&mut self, ctx: &Context) {
-        set_active_shell_style(self.desktop_active_shell_style.clone());
+        self.sync_active_font(ctx);
+        set_active_desktop_style(self.desktop_active_desktop_style.clone());
         set_active_color_style(
             ShellSurfaceKind::Terminal,
             self.terminal_active_color_style.clone(),
             self.terminal_color_overrides.clone(),
         );
+        set_active_terminal_theme(&self.terminal_active_theme, &self.terminal_theme_options);
         set_active_terminal_decoration(self.terminal_decoration.clone());
         self.sync_terminal_wallpaper(ctx);
     }
@@ -1493,11 +2044,21 @@ impl NucleonNativeApp {
     }
 
     fn terminal_layout(&self) -> TerminalLayout {
-        terminal_layout_with_branding(&self.terminal_branding)
+        terminal_layout_with_branding(
+            &self.terminal_branding,
+            terminal_theme_header_visible(&self.terminal_active_theme, &self.terminal_theme_options),
+            terminal_theme_content_margin(&self.terminal_active_theme, &self.terminal_theme_options)
+                .max(TERMINAL_CONTENT_COL),
+        )
     }
 
     pub(super) fn active_terminal_header_lines(&self) -> &[String] {
-        &self.terminal_branding.header_lines
+        if terminal_theme_header_visible(&self.terminal_active_theme, &self.terminal_theme_options)
+        {
+            &self.terminal_branding.header_lines
+        } else {
+            EMPTY_TERMINAL_HEADER_LINES.as_slice()
+        }
     }
 
     pub(super) fn next_embedded_game_dt(last_frame_at: &mut Option<Instant>) -> f32 {
@@ -1619,7 +2180,12 @@ mod tests {
         }
     }
 
-    fn set_runtime_marker(app: &mut NucleonNativeApp, screen: TerminalScreen, idx: usize, tag: &str) {
+    fn set_runtime_marker(
+        app: &mut NucleonNativeApp,
+        screen: TerminalScreen,
+        idx: usize,
+        tag: &str,
+    ) {
         app.desktop_mode_open = false;
         app.start_open = true;
         app.start_selected_root = idx % START_ROOT_ITEMS.len();
@@ -1697,6 +2263,13 @@ mod tests {
         app.terminal_mode.open = true;
         app.terminal_mode.status = "term".to_string();
         app.desktop_mode_open = true;
+        app.desktop_active_font_id = Some("desktop-font".to_string());
+        app.terminal_active_theme = TerminalTheme::classic();
+        app.terminal_theme_options.insert(
+            "selection_style".to_string(),
+            ThemeOptionValue::String("Text Only".to_string()),
+        );
+        app.terminal_active_font_id = Some("terminal-font".to_string());
         app.start_open = false;
         app.start_selected_root = 6;
         app.start_system_selected = 1;
@@ -1743,6 +2316,10 @@ mod tests {
         app.terminal_mode.open = false;
         app.terminal_mode.status.clear();
         app.desktop_mode_open = false;
+        app.desktop_active_font_id = None;
+        app.terminal_active_theme = TerminalTheme::classic();
+        app.terminal_theme_options = app.terminal_active_theme.default_options.clone();
+        app.terminal_active_font_id = None;
         app.start_open = true;
         app.start_selected_root = 0;
         app.start_system_selected = 0;
@@ -1786,6 +2363,17 @@ mod tests {
         assert!(app.terminal_mode.open);
         assert_eq!(app.terminal_mode.status, "term");
         assert!(app.desktop_mode_open);
+        assert_eq!(app.desktop_active_font_id.as_deref(), Some("desktop-font"));
+        assert_eq!(app.terminal_active_theme.id, "classic");
+        assert_eq!(
+            TerminalTheme::get_string(
+                &app.terminal_theme_options,
+                "selection_style",
+                &app.terminal_active_theme.options_schema,
+            ),
+            "Text Only"
+        );
+        assert_eq!(app.terminal_active_font_id.as_deref(), Some("terminal-font"));
         assert!(!app.start_open);
         assert_eq!(app.start_selected_root, 6);
         assert_eq!(app.start_system_selected, 1);
@@ -1853,6 +2441,25 @@ mod tests {
         assert_eq!(app.terminal_nav.main_menu_idx, 2);
         assert_eq!(app.editor.text, "u1-a");
         assert_eq!(app.editor.ui.find_query, "find-u1-a");
+    }
+
+    #[test]
+    fn missing_terminal_theme_id_falls_back_to_classic_default_options() {
+        let mut settings = Settings::default();
+        settings.terminal_theme_id = Some("missing-theme".to_string());
+        settings.terminal_theme_options.insert(
+            "selection_style".to_string(),
+            ThemeOptionValue::String("Text Only".to_string()),
+        );
+
+        let theme = terminal_theme_from_settings(&settings);
+        let options = terminal_theme_options_from_settings(&settings, &theme);
+
+        assert_eq!(theme.id, "classic");
+        assert_eq!(
+            TerminalTheme::get_string(&options, "selection_style", &theme.options_schema),
+            "Full Row"
+        );
     }
 
     #[test]
@@ -3312,7 +3919,8 @@ mod tests {
 
         let state =
             app.desktop_window_state(WindowInstanceId::primary(DesktopWindow::Applications));
-        let default_size = NucleonNativeApp::desktop_default_window_size(DesktopWindow::Applications);
+        let default_size =
+            NucleonNativeApp::desktop_default_window_size(DesktopWindow::Applications);
         let restore_size = state.restore_size.expect("applications restore size");
         assert!(restore_size[1] <= default_size.y + 1.0);
     }
@@ -3689,9 +4297,10 @@ mod tests {
 
     #[test]
     fn phase_7_sample_theme_bundle_parses() {
-        let bundle_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/phase7-sample-theme");
-        let manifest_raw =
-            std::fs::read_to_string(bundle_root.join("manifest.json")).expect("read sample manifest");
+        let bundle_root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/phase7-sample-theme");
+        let manifest_raw = std::fs::read_to_string(bundle_root.join("manifest.json"))
+            .expect("read sample manifest");
         let theme_raw =
             std::fs::read_to_string(bundle_root.join("theme.json")).expect("read sample theme");
 
@@ -3703,9 +4312,9 @@ mod tests {
         assert_eq!(manifest.kind, crate::platform::AddonKind::Theme);
         assert_eq!(manifest.id.as_str(), "themes.phase7-signal-forge");
         assert_eq!(theme.id, "phase7-signal-forge");
-        assert!(theme.sound_pack.path.is_none());
-        assert_eq!(theme.asset_pack.as_ref().map(|pack| pack.path.as_str()), Some("assets"));
-        assert!(theme.cursor_pack.is_none());
+        assert!(theme.sound_pack_id.is_none());
+        assert!(theme.icon_pack_id.is_none());
+        assert!(theme.cursor_pack_id.is_none());
         assert!(bundle_root.join("assets/cursors/cursors.json").exists());
     }
 }

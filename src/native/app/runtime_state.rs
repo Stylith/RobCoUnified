@@ -8,13 +8,11 @@ use super::super::desktop_status_service::{
 };
 use super::super::desktop_user_service::{sorted_user_records, sorted_usernames};
 use super::super::settings_standalone::standalone_settings_panel_from_arg;
-use super::NucleonNativeApp;
+use super::{AddonsRepoCache, NucleonNativeApp};
 use crate::config::{
     current_settings_file, ConnectionKind, NativeStartupWindowMode, SavedConnection, Settings,
 };
 use crate::core::auth::UserRecord;
-use crate::native::{install_repository_addon, RepositoryAddonAction};
-use crate::platform::AddonId;
 use eframe::egui::{self, Context};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -107,69 +105,74 @@ impl NucleonNativeApp {
                     self.refresh_settings_sync_marker();
                     super::super::ipc::notify_settings_changed();
                 }
-                BackgroundResult::RepositoryAddonInstalled {
-                    addon_id,
+                BackgroundResult::AddonsRepoIndexesFetched { addons, themes } => {
+                    self.addons_repo_fetch_in_progress = false;
+                    match (addons, themes) {
+                        (Ok(addons_index), Ok(themes_index)) => {
+                            self.addons_repo_cache = Some(AddonsRepoCache {
+                                addons_index,
+                                themes_index,
+                                fetched_at: Instant::now(),
+                            });
+                            self.shell_status = "Repository indexes refreshed.".to_string();
+                        }
+                        (addons_result, themes_result) => {
+                            let mut status_parts = Vec::new();
+                            let addons_index = match addons_result {
+                                Ok(entries) => entries,
+                                Err(message) => {
+                                    status_parts.push(message);
+                                    Vec::new()
+                                }
+                            };
+                            let themes_index = match themes_result {
+                                Ok(entries) => entries,
+                                Err(message) => {
+                                    status_parts.push(message);
+                                    Vec::new()
+                                }
+                            };
+                            self.addons_repo_cache = Some(AddonsRepoCache {
+                                addons_index,
+                                themes_index,
+                                fetched_at: Instant::now(),
+                            });
+                            self.shell_status = if status_parts.is_empty() {
+                                "Repository indexes refreshed.".to_string()
+                            } else {
+                                status_parts.join(" ")
+                            };
+                        }
+                    }
+                }
+                BackgroundResult::AddonsRepoActionFinished {
+                    item_id,
+                    kind,
                     status,
                     success,
+                    installed,
                 } => {
-                    if self.desktop_installer.addon_install_in_flight.as_deref()
-                        == Some(addon_id.as_str())
-                    {
-                        self.desktop_installer.addon_install_in_flight = None;
-                        self.desktop_installer.status = status.clone();
-                        self.desktop_installer.notice =
-                            Some(super::super::installer_screen::DesktopInstallerNotice {
-                                message: status.clone(),
-                                success,
-                            });
-                    }
-                    if self.terminal_installer.addon_install_in_flight.as_deref()
-                        == Some(addon_id.as_str())
-                    {
-                        self.terminal_installer.addon_install_in_flight = None;
-                        self.queue_terminal_flash(
-                            status.clone(),
-                            700,
-                            super::super::prompt::FlashAction::Noop,
-                        );
+                    if success {
+                        if let Some(cache) = self.addons_repo_cache.as_mut() {
+                            for entry in &mut cache.addons_index {
+                                if entry.id == item_id && entry.kind == kind {
+                                    entry.installed = installed;
+                                    entry.update_available = false;
+                                }
+                            }
+                            for entry in &mut cache.themes_index {
+                                if entry.id == item_id && entry.kind == kind {
+                                    entry.installed = installed;
+                                    entry.update_available = false;
+                                }
+                            }
+                        }
                     }
                     self.shell_status = status;
                 }
             }
         }
         ctx.request_repaint();
-    }
-
-    pub(super) fn start_repository_addon_install(
-        &mut self,
-        addon_id: AddonId,
-        action: RepositoryAddonAction,
-        desktop_surface: bool,
-    ) {
-        let label = action.label().to_string();
-        let in_flight_status = format!("{} {}...", label, addon_id);
-        if desktop_surface {
-            self.desktop_installer.addon_install_in_flight = Some(addon_id.to_string());
-            self.desktop_installer.notice = None;
-            self.desktop_installer.status = in_flight_status.clone();
-        } else {
-            self.terminal_installer.addon_install_in_flight = Some(addon_id.to_string());
-            self.shell_status = in_flight_status.clone();
-        }
-
-        let tx = self.background.sender();
-        std::thread::spawn(move || {
-            let result = install_repository_addon(addon_id.clone());
-            let (status, success) = match result {
-                Ok(message) => (message, true),
-                Err(message) => (message, false),
-            };
-            let _ = tx.send(BackgroundResult::RepositoryAddonInstalled {
-                addon_id: addon_id.to_string(),
-                status,
-                success,
-            });
-        });
     }
 
     pub(super) fn process_ipc_messages(&mut self, ctx: &Context) {

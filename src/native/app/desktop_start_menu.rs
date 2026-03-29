@@ -8,14 +8,14 @@ use super::super::edit_menus_screen::EditMenuTarget;
 use super::super::editor_app::EDITOR_APP_TITLE;
 use super::super::prompt::FlashAction;
 use super::super::retro_ui::{
-    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow,
+    current_desktop_style, current_palette, frame_from_element_style, paint_gradient_fill,
 };
 use crate::config::install_profile;
 use crate::native::{
     installed_hosted_application_names, installed_hosted_game_names, is_installed_hosted_game,
 };
 use crate::platform::{InstallProfile, LaunchTarget};
-use crate::theme::PanelType;
+use crate::theme::{FillStyle, PanelType};
 use eframe::egui::{self, Align2, Context, FontFamily, FontId, Id, Key, RichText};
 
 use super::NucleonNativeApp;
@@ -47,6 +47,7 @@ pub(super) enum StartSystemAction {
     Terminal,
     FileManager,
     Settings,
+    Addons,
     Connections,
 }
 
@@ -82,11 +83,12 @@ pub(super) const START_ROOT_VIS_ROWS: [Option<usize>; 9] = [
     Some(7),
 ];
 
-pub(super) const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 5] = [
+pub(super) const START_SYSTEM_ITEMS: [(&str, StartSystemAction); 6] = [
     ("Program Installer", StartSystemAction::ProgramInstaller),
     ("Terminal", StartSystemAction::Terminal),
     ("File Manager", StartSystemAction::FileManager),
     ("Settings", StartSystemAction::Settings),
+    ("Addons", StartSystemAction::Addons),
     ("Connections", StartSystemAction::Connections),
 ];
 
@@ -125,6 +127,7 @@ fn start_system_action_visibility_target(action: StartSystemAction) -> LaunchTar
         StartSystemAction::Terminal => super::launch_registry::terminal_launch_target(),
         StartSystemAction::FileManager => super::launch_registry::file_manager_launch_target(),
         StartSystemAction::Settings => super::launch_registry::settings_launch_target(),
+        StartSystemAction::Addons => super::launch_registry::addons_launch_target(),
         StartSystemAction::Connections => super::launch_registry::connections_launch_target(),
     }
 }
@@ -397,6 +400,9 @@ impl NucleonNativeApp {
             StartSystemAction::Settings => {
                 DesktopShellAction::LaunchByTarget(super::launch_registry::settings_launch_target())
             }
+            StartSystemAction::Addons => {
+                DesktopShellAction::LaunchByTarget(super::launch_registry::addons_launch_target())
+            }
             StartSystemAction::Connections => DesktopShellAction::LaunchByTarget(
                 super::launch_registry::connections_launch_target(),
             ),
@@ -439,8 +445,8 @@ impl NucleonNativeApp {
         const EDGE_PAD: f32 = 8.0;
 
         let palette = current_palette();
-        let shell_style = current_shell_style();
-        let separator_thickness = shell_style.separator_thickness;
+        let desktop_style = current_desktop_style();
+        let separator_thickness = desktop_style.separator_thickness;
         let screen = ctx.screen_rect();
         let root_x = self
             .desktop_start_button_rect
@@ -460,13 +466,20 @@ impl NucleonNativeApp {
             .fixed_pos([root_x, root_y])
             .interactable(true)
             .show(ctx, |ui| {
-                let frame = egui::Frame::none()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(8.0))
-                    .rounding(shell_style_rounding(&shell_style))
-                    .shadow(shell_style_shadow(&shell_style));
+                let frame = frame_from_element_style(&desktop_style.start_menu, &palette)
+                    .inner_margin(egui::Margin::same(8.0));
                 let frame_response = frame.show(ui, |ui| {
+                    if matches!(
+                        desktop_style.start_menu.fill,
+                        FillStyle::LinearGradient { .. }
+                    ) {
+                        paint_gradient_fill(
+                            ui.painter(),
+                            ui.max_rect(),
+                            &desktop_style.start_menu,
+                            &palette,
+                        );
+                    }
                     Self::apply_start_menu_highlight_style(ui);
                     ui.set_min_width(ROOT_W);
                     ui.set_max_width(ROOT_W);
@@ -526,13 +539,20 @@ impl NucleonNativeApp {
                 .fixed_pos([branch_x, leaf_y])
                 .interactable(true)
                 .show(ctx, |ui| {
-                    egui::Frame::none()
-                        .fill(palette.panel)
-                        .stroke(egui::Stroke::new(2.0, palette.fg))
+                    frame_from_element_style(&desktop_style.start_menu, &palette)
                         .inner_margin(egui::Margin::same(8.0))
-                        .rounding(shell_style_rounding(&shell_style))
-                        .shadow(shell_style_shadow(&shell_style))
                         .show(ui, |ui| {
+                            if matches!(
+                                desktop_style.start_menu.fill,
+                                FillStyle::LinearGradient { .. }
+                            ) {
+                                paint_gradient_fill(
+                                    ui.painter(),
+                                    ui.max_rect(),
+                                    &desktop_style.start_menu,
+                                    &palette,
+                                );
+                            }
                             Self::apply_start_menu_highlight_style(ui);
                             ui.set_min_width(LEAF_W);
                             ui.set_max_width(LEAF_W);
@@ -621,13 +641,20 @@ impl NucleonNativeApp {
                         .fixed_pos([branch_x, sub_y])
                         .interactable(true)
                         .show(ctx, |ui| {
-                            egui::Frame::none()
-                                .fill(palette.panel)
-                                .stroke(egui::Stroke::new(2.0, palette.fg))
+                            frame_from_element_style(&desktop_style.start_menu, &palette)
                                 .inner_margin(egui::Margin::same(8.0))
-                                .rounding(shell_style_rounding(&shell_style))
-                                .shadow(shell_style_shadow(&shell_style))
                                 .show(ui, |ui| {
+                                    if matches!(
+                                        desktop_style.start_menu.fill,
+                                        FillStyle::LinearGradient { .. }
+                                    ) {
+                                        paint_gradient_fill(
+                                            ui.painter(),
+                                            ui.max_rect(),
+                                            &desktop_style.start_menu,
+                                            &palette,
+                                        );
+                                    }
                                     Self::apply_start_menu_highlight_style(ui);
                                     ui.set_min_width(SUB_W);
                                     ui.set_max_width(SUB_W);
@@ -655,7 +682,7 @@ impl NucleonNativeApp {
         };
 
         let palette = current_palette();
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
         let mut close = false;
         let mut apply = false;
         let mut name_input = rename.name_input.clone();
@@ -667,14 +694,21 @@ impl NucleonNativeApp {
             .fixed_size(egui::vec2(320.0, 124.0))
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .frame(
-                egui::Frame::none()
-                    .fill(palette.panel)
-                    .stroke(egui::Stroke::new(2.0, palette.fg))
-                    .inner_margin(egui::Margin::same(12.0))
-                    .rounding(shell_style_rounding(&shell_style))
-                    .shadow(shell_style_shadow(&shell_style)),
+                frame_from_element_style(&desktop_style.start_menu, &palette)
+                    .inner_margin(egui::Margin::same(12.0)),
             )
             .show(ctx, |ui| {
+                if matches!(
+                    desktop_style.start_menu.fill,
+                    FillStyle::LinearGradient { .. }
+                ) {
+                    paint_gradient_fill(
+                        ui.painter(),
+                        ui.max_rect(),
+                        &desktop_style.start_menu,
+                        &palette,
+                    );
+                }
                 Self::apply_context_menu_style(ui);
                 ui.label(
                     RichText::new(format!("Rename {}", rename.target.singular()))
@@ -723,14 +757,15 @@ impl NucleonNativeApp {
 
     pub(super) fn apply_start_menu_highlight_style(ui: &mut egui::Ui) {
         let palette = current_palette();
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
+        let frame = frame_from_element_style(&desktop_style.start_menu, &palette);
         let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
+        let stroke = frame.stroke;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = shell_style_rounding(&shell_style);
-        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
-        style.visuals.window_shadow = shell_style_shadow(&shell_style);
-        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
+        style.visuals.window_rounding = egui::Rounding::same(desktop_style.start_menu.rounding);
+        style.visuals.menu_rounding = egui::Rounding::same(desktop_style.start_menu.rounding);
+        style.visuals.window_shadow = frame.shadow;
+        style.visuals.popup_shadow = frame.shadow;
         style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.widgets.noninteractive.bg_fill = palette.panel;
@@ -802,6 +837,15 @@ impl NucleonNativeApp {
 mod tests {
     use super::{start_system_items_for_profile, StartSystemAction};
     use crate::platform::InstallProfile;
+
+    #[test]
+    fn start_system_items_include_addons() {
+        let items = start_system_items_for_profile(InstallProfile::LinuxDesktop);
+
+        assert!(items
+            .iter()
+            .any(|(_, action)| matches!(action, StartSystemAction::Addons)));
+    }
 
     #[test]
     fn mac_launcher_hides_connections_from_start_system_items() {

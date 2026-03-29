@@ -1,6 +1,6 @@
 use super::super::desktop_app::DesktopWindow;
 use super::super::retro_ui::{
-    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow,
+    current_desktop_style, current_palette, desktop_style_rounding, desktop_style_shadow,
 };
 use super::{CachedIcon, NucleonNativeApp};
 use eframe::egui::{
@@ -140,7 +140,7 @@ impl NucleonNativeApp {
                 color_mode_is_full_color,
             )
         })
-            .clone()
+        .clone()
     }
 
     pub(super) fn paint_tinted_texture(
@@ -234,7 +234,7 @@ impl NucleonNativeApp {
 
     pub(super) fn apply_settings_control_style(ui: &mut egui::Ui) {
         let palette = current_palette();
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
         let mut style = ui.style().as_ref().clone();
         let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.override_text_color = None;
@@ -244,10 +244,10 @@ impl NucleonNativeApp {
         style.visuals.extreme_bg_color = palette.bg;
         style.visuals.code_bg_color = palette.bg;
         style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = shell_style_rounding(&shell_style);
-        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
-        style.visuals.window_shadow = shell_style_shadow(&shell_style);
-        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
+        style.visuals.window_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.menu_rounding = desktop_style_rounding(&desktop_style);
+        style.visuals.window_shadow = desktop_style_shadow(&desktop_style);
+        style.visuals.popup_shadow = desktop_style_shadow(&desktop_style);
         style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke = stroke;
         style.visuals.hyperlink_color = palette.fg;
@@ -471,7 +471,9 @@ mod tests {
         std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
         std::fs::create_dir_all(temp.path.join("icons_mono")).expect("create mono dir");
         std::fs::write(
-            temp.path.join("icons_color").join("pixel--folder-solid.svg"),
+            temp.path
+                .join("icons_color")
+                .join("pixel--folder-solid.svg"),
             b"color",
         )
         .expect("write color icon");
@@ -497,7 +499,9 @@ mod tests {
         let temp = TempDirGuard::new("fallback_color");
         std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
         std::fs::write(
-            temp.path.join("icons_color").join("pixel--folder-solid.svg"),
+            temp.path
+                .join("icons_color")
+                .join("pixel--folder-solid.svg"),
             b"color-only",
         )
         .expect("write color icon");
@@ -519,13 +523,11 @@ mod tests {
         std::fs::create_dir_all(temp.path.join("icons_color")).expect("create color dir");
         std::fs::create_dir_all(temp.path.join("icons_mono")).expect("create mono dir");
 
-        assert!(
-            NucleonNativeApp::resolve_themed_icon_bytes(
-                "pixel--folder-solid.svg",
-                Some(temp.path.as_path()),
-                true,
-            )
-            .is_none()
-        );
+        assert!(NucleonNativeApp::resolve_themed_icon_bytes(
+            "pixel--folder-solid.svg",
+            Some(temp.path.as_path()),
+            true,
+        )
+        .is_none());
     }
 }

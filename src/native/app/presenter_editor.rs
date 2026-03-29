@@ -157,7 +157,8 @@ impl NucleonNativeApp {
                 ui,
                 &title,
                 maximized,
-                &self.desktop_active_shell_style,
+                self.desktop_active_window == Some(wid),
+                &self.desktop_active_desktop_style,
             );
             if let Some(path) = &self.editor.path {
                 ui.small(path.display().to_string());

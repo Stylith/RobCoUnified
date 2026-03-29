@@ -246,8 +246,7 @@ fn detect_product_dir_override() -> Option<String> {
 }
 
 fn detect_install_profile() -> Option<InstallProfile> {
-    first_non_empty_env(&[INSTALL_PROFILE_ENV])
-        .and_then(|value| InstallProfile::parse(&value))
+    first_non_empty_env(&[INSTALL_PROFILE_ENV]).and_then(|value| InstallProfile::parse(&value))
 }
 
 fn detect_state_root_override() -> Option<PathBuf> {
@@ -268,8 +267,10 @@ fn previous_product_dir_name() -> String {
 }
 
 fn previous_pty_key_debug_log_file_name() -> String {
-    String::from_utf8(vec![114, 111, 98, 99, 111, 115, 95, 107, 101, 121, 115, 46, 108, 111, 103])
-        .expect("ascii")
+    String::from_utf8(vec![
+        114, 111, 98, 99, 111, 115, 95, 107, 101, 121, 115, 46, 108, 111, 103,
+    ])
+    .expect("ascii")
 }
 
 fn migrate_previous_product_layout_if_needed(

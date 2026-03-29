@@ -62,7 +62,8 @@ impl NucleonNativeApp {
                 ui,
                 &window_title,
                 maximized,
-                &self.desktop_active_shell_style,
+                self.desktop_active_window == Some(wid),
+                &self.desktop_active_desktop_style,
             );
             let available = ui.available_size();
             let cols_floor = state.desktop_cols_floor.unwrap_or(40) as usize;
@@ -177,7 +178,8 @@ impl NucleonNativeApp {
                 ui,
                 &title,
                 maximized,
-                &self.desktop_active_shell_style,
+                focused,
+                &self.desktop_active_desktop_style,
             );
             let available = ui.available_size();
             let size = HostedAddonSize {

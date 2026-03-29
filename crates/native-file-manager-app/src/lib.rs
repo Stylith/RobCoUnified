@@ -959,9 +959,8 @@ pub fn commit_picker_selection(
         FileManagerPickMode::Wallpaper => {
             selected_file.ok_or_else(|| "Select an image file first.".to_string())?
         }
-        FileManagerPickMode::ThemeImport => {
-            selected_file.ok_or_else(|| "Select a theme manifest or .ndpkg file first.".to_string())?
-        }
+        FileManagerPickMode::ThemeImport => selected_file
+            .ok_or_else(|| "Select a theme manifest or .ndpkg file first.".to_string())?,
         FileManagerPickMode::None | FileManagerPickMode::SaveAs => {
             return Err("No picker action is active.".to_string());
         }

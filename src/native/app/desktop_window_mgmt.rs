@@ -3,8 +3,12 @@ use super::super::desktop_app::{
     DesktopWindowTileAction, WindowInstanceId,
 };
 use super::super::pty_screen::NativePtyState;
-use super::super::retro_ui::{current_palette, shell_style_rounding, shell_style_shadow};
-use crate::theme::{PanelType, ShellStyle};
+use super::super::retro_ui::{
+    current_desktop_style, current_palette, element_text_color, frame_from_element_style,
+    paint_gradient_fill,
+};
+use crate::theme::FillStyle;
+use crate::theme::{DesktopStyle, PanelType};
 use eframe::egui::{self, Color32, Context, Id, Layout, RichText};
 
 use crate::native::editor_app::EditorWindow;
@@ -292,7 +296,8 @@ impl NucleonNativeApp {
             return;
         }
         let generation = self.next_desktop_window_generation();
-        let current_restore = current_rect.map(|rect| (rect, self.desktop_window_restore_size(rect)));
+        let current_restore =
+            current_rect.map(|rect| (rect, self.desktop_window_restore_size(rect)));
         let state = self.desktop_window_state_mut(id);
         if state.maximized {
             state.maximized = false;
@@ -468,22 +473,18 @@ impl NucleonNativeApp {
 
     pub(super) fn desktop_window_frame(&self) -> egui::Frame {
         let palette = current_palette();
-        let style = &self.desktop_active_shell_style;
-        egui::Frame::none()
-            .fill(palette.bg)
-            .stroke(egui::Stroke::new(
-                style.separator_thickness.min(2.0),
-                palette.fg,
-            ))
+        let style = current_desktop_style();
+        frame_from_element_style(&style.window_frame, &palette)
             .inner_margin(egui::Margin::same(1.0))
-            .rounding(shell_style_rounding(style))
-            .shadow(shell_style_shadow(style))
     }
 
-    pub(super) fn desktop_header_glyph_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-        let palette = current_palette();
+    pub(super) fn desktop_header_glyph_button(
+        ui: &mut egui::Ui,
+        label: &str,
+        text_color: Color32,
+    ) -> egui::Response {
         ui.add(
-            egui::Button::new(RichText::new(label).color(palette.selected_fg).monospace())
+            egui::Button::new(RichText::new(label).color(text_color).monospace())
                 .frame(false)
                 .fill(Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
@@ -606,6 +607,7 @@ impl NucleonNativeApp {
             DesktopWindow::Editor => egui::vec2(400.0, 300.0),
             DesktopWindow::Settings => Self::desktop_settings_window_min_size(),
             DesktopWindow::Tweaks => Self::desktop_default_window_size(DesktopWindow::Tweaks),
+            DesktopWindow::Addons => Self::desktop_default_window_size(DesktopWindow::Addons),
             DesktopWindow::Applications => egui::vec2(320.0, 250.0),
             DesktopWindow::Installer => Self::desktop_installer_window_min_size(),
             DesktopWindow::PtyApp => self
@@ -1139,37 +1141,47 @@ impl NucleonNativeApp {
         ui: &mut egui::Ui,
         _title: &str,
         maximized: bool,
-        shell_style: &ShellStyle,
+        focused: bool,
+        desktop_style: &DesktopStyle,
     ) -> DesktopHeaderAction {
         let palette = current_palette();
-        let vertical_pad = ((shell_style.title_bar_height - 20.0) / 2.0).max(2.0);
+        let element = if focused {
+            &desktop_style.title_bar
+        } else {
+            &desktop_style.title_bar_unfocused
+        };
+        let vertical_pad = ((desktop_style.title_bar_height - 20.0) / 2.0).max(2.0);
+        let text_color = element_text_color(element, &palette);
         let mut action = DesktopHeaderAction::None;
-        egui::Frame::none()
-            .fill(palette.window_chrome_focused)
+        frame_from_element_style(element, &palette)
             .inner_margin(egui::Margin::symmetric(8.0, vertical_pad))
             .rounding(egui::Rounding {
-                nw: shell_style.border_radius,
-                ne: shell_style.border_radius,
+                nw: element.rounding,
+                ne: element.rounding,
                 sw: 0.0,
                 se: 0.0,
             })
             .show(ui, |ui| {
                 ui.set_min_height(20.0);
+                if matches!(element.fill, FillStyle::LinearGradient { .. }) {
+                    paint_gradient_fill(ui.painter(), ui.max_rect(), element, &palette);
+                }
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
-                        if Self::desktop_header_glyph_button(ui, "[X]").clicked() {
+                        if Self::desktop_header_glyph_button(ui, "[X]", text_color).clicked() {
                             action = DesktopHeaderAction::Close;
                         }
                         if Self::desktop_header_glyph_button(
                             ui,
                             if maximized { "[R]" } else { "[+]" },
+                            text_color,
                         )
                         .clicked()
                         {
                             action = DesktopHeaderAction::ToggleMaximize;
                         }
-                        if Self::desktop_header_glyph_button(ui, "[-]").clicked() {
+                        if Self::desktop_header_glyph_button(ui, "[-]", text_color).clicked() {
                             action = DesktopHeaderAction::Minimize;
                         }
                     });

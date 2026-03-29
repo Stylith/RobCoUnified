@@ -142,13 +142,12 @@ pub fn build_desktop_view_model(
     picking_wallpaper: bool,
     picking_theme_import: bool,
 ) -> FileManagerDesktopViewModel {
-    let action_mode =
-        desktop_action_mode(
-            save_as_input,
-            picking_icon_for_shortcut,
-            picking_wallpaper,
-            picking_theme_import,
-        );
+    let action_mode = desktop_action_mode(
+        save_as_input,
+        picking_icon_for_shortcut,
+        picking_wallpaper,
+        picking_theme_import,
+    );
     let path_label = file_manager.cwd.display().to_string();
     let current_drive = file_manager.current_drive_root();
     FileManagerDesktopViewModel {

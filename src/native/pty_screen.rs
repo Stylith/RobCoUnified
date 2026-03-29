@@ -435,9 +435,9 @@ pub fn draw_embedded_pty_in_ui_sized(
             });
         }
         let use_texture = std::env::var(NUCLEON_NATIVE_PTY_TEXTURE_ENV)
-        .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
-        .unwrap_or(false);
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+            .unwrap_or(false);
         let allow_texture = !row_requires_cell_draw.iter().any(|needs| *needs);
         let texture_drawn = use_texture
             && allow_texture

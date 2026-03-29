@@ -2,10 +2,12 @@ use crate::platform::{
     AddonRepositoryIndex, AddonStateOverrides, InstallProfile, PlatformPaths,
     ResolvedPlatformPaths, RuntimeEnvironment, StatePathLayout,
 };
-use crate::theme::{ColorStyle, LayoutProfile, TerminalBranding, TerminalLayoutProfile};
+use crate::theme::{
+    ColorStyle, LayoutProfile, TerminalBranding, TerminalLayoutProfile, ThemeOptionValue,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{OnceLock, RwLock};
@@ -63,6 +65,54 @@ pub fn themes_directory() -> PathBuf {
     dir
 }
 
+pub fn theme_packs_directory() -> PathBuf {
+    let dir = themes_directory().join("packs");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn desktop_styles_directory() -> PathBuf {
+    let dir = themes_directory().join("desktop");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn terminal_themes_directory() -> PathBuf {
+    let dir = themes_directory().join("terminal");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn color_themes_directory() -> PathBuf {
+    let dir = themes_directory().join("colors");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn icon_packs_directory() -> PathBuf {
+    let dir = themes_directory().join("icons");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn sound_packs_directory() -> PathBuf {
+    let dir = themes_directory().join("sounds");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn cursor_packs_directory() -> PathBuf {
+    let dir = themes_directory().join("cursors");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn font_packs_directory() -> PathBuf {
+    let dir = themes_directory().join("fonts");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn cache_root_dir() -> PathBuf {
     let dir = platform_paths().cache_root().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
@@ -77,6 +127,10 @@ pub fn cached_addon_repository_index_file() -> PathBuf {
     cache_root_dir().join("addon-repository-index.json")
 }
 
+pub fn cached_theme_repository_index_file() -> PathBuf {
+    cache_root_dir().join("theme-repository-index.json")
+}
+
 pub fn addon_downloads_cache_dir() -> PathBuf {
     let dir = cache_root_dir().join("addon-downloads");
     let _ = std::fs::create_dir_all(&dir);
@@ -88,10 +142,19 @@ pub const ADDON_REPOSITORY_NAME: &str = "nucleon-core-addons";
 pub const DEFAULT_ADDON_REPOSITORY_INDEX_URL: &str =
     // Keep the live feed URL on the current repo until the GitHub rename lands.
     "https://raw.githubusercontent.com/Stylith/nucleon-core-addons/main/index.json";
+pub const THEME_REPOSITORY_INDEX_URL_ENV: &str = "NUCLEON_THEME_REPOSITORY_INDEX_URL";
+pub const THEME_REPOSITORY_NAME: &str = "nucleon-core-themes";
+pub const DEFAULT_THEME_REPOSITORY_INDEX_URL: &str =
+    "https://raw.githubusercontent.com/Stylith/nucleon-core-themes/main/index.json";
 
 pub fn addon_repository_index_url() -> String {
     first_non_empty_env_value(&[ADDON_REPOSITORY_INDEX_URL_ENV])
-    .unwrap_or_else(|| DEFAULT_ADDON_REPOSITORY_INDEX_URL.to_string())
+        .unwrap_or_else(|| DEFAULT_ADDON_REPOSITORY_INDEX_URL.to_string())
+}
+
+pub fn theme_repository_index_url() -> String {
+    first_non_empty_env_value(&[THEME_REPOSITORY_INDEX_URL_ENV])
+        .unwrap_or_else(|| DEFAULT_THEME_REPOSITORY_INDEX_URL.to_string())
 }
 
 /// Spawn a background thread to refresh the cached index from the remote
@@ -947,7 +1010,9 @@ pub enum DesktopCursorThemeSelection {
     #[default]
     FollowTheme,
     Builtin,
-    ThemePack { theme_pack_id: String },
+    ThemePack {
+        theme_pack_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1501,7 +1566,24 @@ pub struct Settings {
     #[serde(default)]
     pub desktop_theme_pack_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "desktop_shell_style_id")]
+    pub desktop_style_id: Option<String>,
+    #[serde(default)]
+    pub desktop_icon_pack_id: Option<String>,
+    #[serde(default)]
+    pub desktop_sound_pack_id: Option<String>,
+    #[serde(default)]
+    pub desktop_cursor_pack_id: Option<String>,
+    #[serde(default)]
+    pub desktop_font_id: Option<String>,
+    #[serde(default)]
     pub terminal_theme_pack_id: Option<String>,
+    #[serde(default)]
+    pub terminal_theme_id: Option<String>,
+    #[serde(default)]
+    pub terminal_theme_options: HashMap<String, ThemeOptionValue>,
+    #[serde(default)]
+    pub terminal_font_id: Option<String>,
     #[serde(default)]
     pub desktop_color_style: Option<ColorStyle>,
     #[serde(default)]
@@ -1579,12 +1661,8 @@ pub struct Settings {
     pub desktop_hidden_builtin_icons: BTreeSet<String>,
     #[serde(default)]
     pub editor_recent_files: Vec<String>,
-    #[serde(default = "default_native_terminal_ui_highlighting")]
-    pub native_terminal_ui_highlighting: bool,
-}
-
-const fn default_native_terminal_ui_highlighting() -> bool {
-    true
+    #[serde(default, alias = "native_terminal_ui_highlighting", skip_serializing)]
+    legacy_native_terminal_ui_highlighting: Option<bool>,
 }
 
 fn default_desktop_wallpaper() -> String {
@@ -1621,7 +1699,15 @@ impl Default for Settings {
             custom_theme_rgb: default_custom_theme_rgb(),
             active_theme_pack_id: None,
             desktop_theme_pack_id: None,
+            desktop_style_id: None,
+            desktop_icon_pack_id: None,
+            desktop_sound_pack_id: None,
+            desktop_cursor_pack_id: None,
+            desktop_font_id: None,
             terminal_theme_pack_id: None,
+            terminal_theme_id: None,
+            terminal_theme_options: HashMap::new(),
+            terminal_font_id: None,
             desktop_color_style: None,
             terminal_color_style: None,
             desktop_layout_profile: None,
@@ -1660,7 +1746,7 @@ impl Default for Settings {
             desktop_icon_custom_positions: BTreeMap::new(),
             desktop_hidden_builtin_icons: BTreeSet::new(),
             editor_recent_files: Vec::new(),
-            native_terminal_ui_highlighting: default_native_terminal_ui_highlighting(),
+            legacy_native_terminal_ui_highlighting: None,
         }
     }
 }
@@ -1688,6 +1774,18 @@ fn apply_legacy_settings_migrations(settings: &mut Settings) {
     settings.display_effects.contrast = settings.display_effects.contrast.clamp(0.7, 1.5);
     settings.display_effects.phosphor_softness =
         settings.display_effects.phosphor_softness.clamp(0.0, 1.0);
+    if let Some(extended_highlighting) = settings.legacy_native_terminal_ui_highlighting.take() {
+        settings
+            .terminal_theme_options
+            .entry("selection_style".to_string())
+            .or_insert_with(|| {
+                ThemeOptionValue::String(if extended_highlighting {
+                    "Full Row".to_string()
+                } else {
+                    "Text Only".to_string()
+                })
+            });
+    }
 }
 
 // ── About config ──────────────────────────────────────────────────────────────
@@ -2207,6 +2305,20 @@ mod tests {
                 .expect("read migrated user file"),
             "{\"ok\":true}"
         );
+    }
+
+    #[test]
+    fn legacy_terminal_highlighting_migrates_to_selection_style() {
+        let mut settings = Settings::default();
+        settings.legacy_native_terminal_ui_highlighting = Some(false);
+
+        apply_legacy_settings_migrations(&mut settings);
+
+        assert_eq!(
+            settings.terminal_theme_options.get("selection_style"),
+            Some(&ThemeOptionValue::String("Text Only".to_string()))
+        );
+        assert_eq!(settings.legacy_native_terminal_ui_highlighting, None);
     }
 }
 

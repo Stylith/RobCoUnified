@@ -9,7 +9,11 @@ impl TerminalSlotRenderer for ClassicTerminalStatusBarRenderer {
         TerminalSlot::StatusBar
     }
 
-    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction> {
+    fn render(
+        &self,
+        app: &mut NucleonNativeApp,
+        slot_ctx: &TerminalSlotContext,
+    ) -> Vec<SlotAction> {
         app.render_classic_terminal_status_slot(slot_ctx.ctx, slot_ctx.layout);
         Vec::new()
     }

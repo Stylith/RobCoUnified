@@ -40,6 +40,7 @@ pub fn standalone_settings_panel_arg(panel: NativeSettingsPanel) -> &'static str
         NativeSettingsPanel::Home => "home",
         NativeSettingsPanel::General => "general",
         NativeSettingsPanel::Appearance => "appearance",
+        NativeSettingsPanel::Addons => "addons",
         NativeSettingsPanel::DefaultApps => "default-apps",
         NativeSettingsPanel::Connections => "connections",
         NativeSettingsPanel::ConnectionsNetwork => "connections-network",
@@ -60,6 +61,7 @@ pub fn standalone_settings_panel_from_arg(arg: &str) -> Option<NativeSettingsPan
         "home" => Some(NativeSettingsPanel::Home),
         "general" => Some(NativeSettingsPanel::General),
         "appearance" => Some(NativeSettingsPanel::Appearance),
+        "addons" => Some(NativeSettingsPanel::Addons),
         "default-apps" | "default_apps" | "defaultapps" => Some(NativeSettingsPanel::DefaultApps),
         "connections" => Some(NativeSettingsPanel::Connections),
         "connections-network" | "connections_network" | "network" => {
@@ -98,6 +100,7 @@ mod tests {
             NativeSettingsPanel::Home,
             NativeSettingsPanel::General,
             NativeSettingsPanel::Appearance,
+            NativeSettingsPanel::Addons,
             NativeSettingsPanel::DefaultApps,
             NativeSettingsPanel::Connections,
             NativeSettingsPanel::ConnectionsNetwork,

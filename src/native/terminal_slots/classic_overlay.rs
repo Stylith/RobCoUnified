@@ -9,7 +9,11 @@ impl TerminalSlotRenderer for ClassicTerminalOverlayRenderer {
         TerminalSlot::Overlay
     }
 
-    fn render(&self, app: &mut NucleonNativeApp, slot_ctx: &TerminalSlotContext) -> Vec<SlotAction> {
+    fn render(
+        &self,
+        app: &mut NucleonNativeApp,
+        slot_ctx: &TerminalSlotContext,
+    ) -> Vec<SlotAction> {
         app.render_classic_terminal_overlay_slot(slot_ctx.ctx);
         Vec::new()
     }

@@ -6,8 +6,10 @@ use super::super::desktop_app::{
 };
 use super::super::file_manager_app::{self, FileManagerSettingsUpdate};
 use super::super::retro_ui::{
-    current_palette, current_shell_style, shell_style_rounding, shell_style_shadow, RetroPalette,
+    current_desktop_style, current_palette, element_text_color, frame_from_element_style,
+    paint_gradient_fill, resolve_theme_color, RetroPalette,
 };
+use crate::theme::FillStyle;
 use chrono::Local;
 use eframe::egui::{self, Color32, Context, Layout, RichText, TopBottomPanel};
 
@@ -15,13 +17,17 @@ use super::NucleonNativeApp;
 
 impl NucleonNativeApp {
     pub(super) fn apply_global_retro_menu_chrome(ctx: &Context, palette: &RetroPalette) {
-        let stroke = egui::Stroke::new(2.0, palette.fg);
+        let desktop_style = current_desktop_style();
+        let frame = frame_from_element_style(&desktop_style.menu_dropdown, palette);
         ctx.style_mut(|style| {
-            style.visuals.window_stroke = stroke;
-            style.visuals.window_rounding = egui::Rounding::ZERO;
-            style.visuals.menu_rounding = egui::Rounding::ZERO;
-            style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-            style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+            style.visuals.window_fill = frame.fill;
+            style.visuals.window_stroke = frame.stroke;
+            style.visuals.window_rounding =
+                egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+            style.visuals.menu_rounding =
+                egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+            style.visuals.window_shadow = frame.shadow;
+            style.visuals.popup_shadow = frame.shadow;
         });
     }
 
@@ -36,10 +42,11 @@ impl NucleonNativeApp {
         app_menu_name: &str,
     ) {
         let palette = current_palette();
+        let desktop_style = current_desktop_style();
         let menu = ui.menu_button(
             RichText::new(app_menu_name)
                 .strong()
-                .color(palette.selected_fg),
+                .color(element_text_color(&desktop_style.menu_bar, &palette)),
             |ui| {
                 Self::apply_top_dropdown_menu_style(ui);
                 let items = build_app_control_menu(self.desktop_active_window.is_some());
@@ -193,7 +200,7 @@ impl NucleonNativeApp {
                 }
                 DesktopMenuItem::Separator => Self::retro_separator_with_thickness(
                     ui,
-                    current_shell_style().separator_thickness,
+                    current_desktop_style().separator_thickness,
                 ),
                 DesktopMenuItem::Submenu { label, items } => {
                     ui.menu_button(label, |ui| {
@@ -292,6 +299,9 @@ impl NucleonNativeApp {
 
     pub(super) fn draw_top_bar(&mut self, ctx: &Context, top: bool, height: f32) {
         let palette = current_palette();
+        let desktop_style = current_desktop_style();
+        let bar_style = &desktop_style.menu_bar;
+        let text_color = element_text_color(bar_style, &palette);
         Self::apply_global_retro_menu_chrome(ctx, &palette);
         let app_menu_name = desktop_app_menu_name(self.desktop_active_window, |id| {
             self.desktop_window_title_for_instance(id)
@@ -311,8 +321,30 @@ impl NucleonNativeApp {
             .exact_height(height)
             .show_separator_line(false)
             .show(ctx, |ui| {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, palette.bar_bg);
+                let bar_rect = ui.max_rect();
+                match &bar_style.fill {
+                    FillStyle::LinearGradient { .. } => {
+                        paint_gradient_fill(ui.painter(), bar_rect, bar_style, &palette);
+                    }
+                    FillStyle::Solid { color } => {
+                        ui.painter().rect_filled(
+                            bar_rect,
+                            bar_style.rounding,
+                            resolve_theme_color(color, &palette),
+                        );
+                    }
+                    FillStyle::None => {}
+                }
+                if let Some(border) = &bar_style.border {
+                    ui.painter().rect_stroke(
+                        bar_rect,
+                        bar_style.rounding,
+                        egui::Stroke::new(
+                            border.width,
+                            resolve_theme_color(&border.color, &palette),
+                        ),
+                    );
+                }
                 ui.horizontal(|ui| {
                     Self::apply_top_bar_menu_button_style(ui);
                     ui.spacing_mut().item_spacing.x = 14.0;
@@ -324,14 +356,14 @@ impl NucleonNativeApp {
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let batt = crate::status::battery_status_string();
                         if !batt.is_empty() {
-                            ui.label(RichText::new(batt).color(palette.selected_fg));
+                            ui.label(RichText::new(batt).color(text_color));
                             ui.add_space(10.0);
                         }
                         let now = Local::now().format("%a %d %b %H:%M").to_string();
-                        ui.label(RichText::new(now).color(palette.selected_fg));
+                        ui.label(RichText::new(now).color(text_color));
                         ui.add_space(10.0);
                         if ui
-                            .button(RichText::new("Search").color(palette.selected_fg))
+                            .button(RichText::new("Search").color(text_color))
                             .clicked()
                             || ctx.input(|i| {
                                 i.key_pressed(eframe::egui::Key::Space) && i.modifiers.command
@@ -350,29 +382,32 @@ impl NucleonNativeApp {
 
     pub(super) fn apply_top_bar_menu_button_style(ui: &mut egui::Ui) {
         let palette = current_palette();
+        let desktop_style = current_desktop_style();
+        let dropdown_frame = frame_from_element_style(&desktop_style.menu_dropdown, &palette);
+        let bar_text_color = element_text_color(&desktop_style.menu_bar, &palette);
         let mut style = ui.style().as_ref().clone();
         // Popup/window fill must be set HERE on the parent UI — menu_button
         // reads these when creating the popup frame, before the inner closure runs.
-        style.visuals.panel_fill = palette.bg;
-        style.visuals.extreme_bg_color = palette.bg;
-        style.visuals.window_fill = palette.bg;
-        style.visuals.window_stroke = egui::Stroke::new(2.0, palette.fg);
-        style.visuals.window_rounding = egui::Rounding::ZERO;
-        style.visuals.menu_rounding = egui::Rounding::ZERO;
-        style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-        style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        style.visuals.panel_fill = dropdown_frame.fill;
+        style.visuals.extreme_bg_color = dropdown_frame.fill;
+        style.visuals.window_fill = dropdown_frame.fill;
+        style.visuals.window_stroke = dropdown_frame.stroke;
+        style.visuals.window_rounding = egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+        style.visuals.menu_rounding = egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+        style.visuals.window_shadow = dropdown_frame.shadow;
+        style.visuals.popup_shadow = dropdown_frame.shadow;
         style.visuals.button_frame = false;
-        style.visuals.override_text_color = Some(palette.selected_fg);
+        style.visuals.override_text_color = Some(bar_text_color);
         style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.noninteractive.fg_stroke.color = palette.selected_fg;
+        style.visuals.widgets.noninteractive.fg_stroke.color = bar_text_color;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.noninteractive.expansion = 0.0;
         style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-        style.visuals.widgets.inactive.fg_stroke.color = palette.selected_fg;
+        style.visuals.widgets.inactive.fg_stroke.color = bar_text_color;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.inactive.expansion = 0.0;
         for visuals in [
@@ -392,30 +427,30 @@ impl NucleonNativeApp {
 
     pub(super) fn apply_top_dropdown_menu_style(ui: &mut egui::Ui) {
         let palette = current_palette();
-        let shell_style = current_shell_style();
+        let desktop_style = current_desktop_style();
+        let frame = frame_from_element_style(&desktop_style.menu_dropdown, &palette);
         let mut style = ui.style().as_ref().clone();
-        let stroke = egui::Stroke::new(2.0, palette.fg);
         style.visuals.button_frame = true;
-        style.visuals.panel_fill = palette.bg;
-        style.visuals.extreme_bg_color = palette.bg;
-        style.visuals.window_fill = palette.bg;
-        style.visuals.window_stroke = stroke;
-        style.visuals.window_rounding = shell_style_rounding(&shell_style);
-        style.visuals.menu_rounding = shell_style_rounding(&shell_style);
-        style.visuals.window_shadow = shell_style_shadow(&shell_style);
-        style.visuals.popup_shadow = shell_style_shadow(&shell_style);
+        style.visuals.panel_fill = frame.fill;
+        style.visuals.extreme_bg_color = frame.fill;
+        style.visuals.window_fill = frame.fill;
+        style.visuals.window_stroke = frame.stroke;
+        style.visuals.window_rounding = egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+        style.visuals.menu_rounding = egui::Rounding::same(desktop_style.menu_dropdown.rounding);
+        style.visuals.window_shadow = frame.shadow;
+        style.visuals.popup_shadow = frame.shadow;
         style.visuals.override_text_color = None;
         style.spacing.item_spacing.y = 0.0;
         style.visuals.selection.bg_fill = palette.selected_bg;
         style.visuals.selection.stroke.color = palette.selected_fg;
-        style.visuals.widgets.noninteractive.bg_fill = palette.bg;
-        style.visuals.widgets.noninteractive.weak_bg_fill = palette.bg;
+        style.visuals.widgets.noninteractive.bg_fill = frame.fill;
+        style.visuals.widgets.noninteractive.weak_bg_fill = frame.fill;
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
         style.visuals.widgets.noninteractive.fg_stroke.color = palette.fg;
         style.visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
         style.visuals.widgets.noninteractive.expansion = 0.0;
-        style.visuals.widgets.inactive.bg_fill = palette.bg;
-        style.visuals.widgets.inactive.weak_bg_fill = palette.bg;
+        style.visuals.widgets.inactive.bg_fill = frame.fill;
+        style.visuals.widgets.inactive.weak_bg_fill = frame.fill;
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
         style.visuals.widgets.inactive.fg_stroke.color = palette.fg;
         style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
