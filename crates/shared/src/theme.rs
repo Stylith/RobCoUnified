@@ -771,6 +771,9 @@ pub struct TerminalTheme {
     /// Preferred font for this terminal theme. User can override in Tweaks.
     #[serde(default)]
     pub font: Option<FontRef>,
+    /// Header branding lines displayed when the theme chooses to show them.
+    #[serde(default)]
+    pub branding_lines: Vec<String>,
     /// Options this theme exposes to the user.
     #[serde(default)]
     pub options_schema: Vec<ThemeOptionDef>,
@@ -792,16 +795,105 @@ pub struct TerminalThemeManifest {
 }
 
 impl TerminalTheme {
-    pub fn classic() -> Self {
+    /// The default terminal theme. Multi-panel layout with nav sidebar and widgets.
+    pub fn dashboard() -> Self {
         Self {
-            id: "classic".to_string(),
-            name: "Classic".to_string(),
-            description: "The original Nucleon terminal interface.".to_string(),
+            id: "dashboard".to_string(),
+            name: "Dashboard".to_string(),
+            description:
+                "Multi-panel terminal with navigation sidebar and system widgets.".to_string(),
             version: "1.0.0".to_string(),
             renderer: TerminalRenderer::Builtin {
-                id: "classic".to_string(),
+                id: "dashboard".to_string(),
             },
             font: None,
+            branding_lines: vec![],
+            options_schema: vec![
+                ThemeOptionDef {
+                    key: "show_nav_panel".to_string(),
+                    label: "Show Navigation Panel".to_string(),
+                    description: "Display the persistent navigation sidebar.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "nav_width".to_string(),
+                    label: "Navigation Width".to_string(),
+                    description: "Width of the navigation panel in columns.".to_string(),
+                    kind: ThemeOptionKind::Int {
+                        min: 14,
+                        max: 30,
+                        default: 20,
+                    },
+                },
+                ThemeOptionDef {
+                    key: "show_system_status".to_string(),
+                    label: "Show System Status".to_string(),
+                    description:
+                        "Display CPU, memory, and disk usage on the home screen.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "show_recent_files".to_string(),
+                    label: "Show Recent Files".to_string(),
+                    description: "Display recently accessed files on the home screen."
+                        .to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "show_quick_actions".to_string(),
+                    label: "Show Quick Actions".to_string(),
+                    description: "Display quick-launch tiles on the home screen.".to_string(),
+                    kind: ThemeOptionKind::Bool { default: true },
+                },
+                ThemeOptionDef {
+                    key: "clock_format".to_string(),
+                    label: "Clock Format".to_string(),
+                    description: "Time display format in the header bar.".to_string(),
+                    kind: ThemeOptionKind::Choice {
+                        choices: vec!["24h".to_string(), "12h".to_string()],
+                        default: "24h".to_string(),
+                    },
+                },
+            ],
+            default_options: {
+                let mut options = HashMap::new();
+                options.insert(
+                    "show_nav_panel".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert("nav_width".to_string(), ThemeOptionValue::Int(20));
+                options.insert(
+                    "show_system_status".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert(
+                    "show_recent_files".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert(
+                    "show_quick_actions".to_string(),
+                    ThemeOptionValue::Bool(true),
+                );
+                options.insert(
+                    "clock_format".to_string(),
+                    ThemeOptionValue::String("24h".to_string()),
+                );
+                options
+            },
+        }
+    }
+
+    pub fn robco() -> Self {
+        Self {
+            id: "robco".to_string(),
+            name: "RobCo".to_string(),
+            description: "The RobCo Industries terminal interface.".to_string(),
+            version: "1.0.0".to_string(),
+            renderer: TerminalRenderer::Builtin {
+                id: "robco".to_string(),
+            },
+            font: None,
+            branding_lines: vec![],
             options_schema: vec![
                 ThemeOptionDef {
                     key: "separator_char".to_string(),
@@ -915,7 +1007,7 @@ impl TerminalTheme {
     }
 
     pub fn builtin_terminal_themes() -> Vec<Self> {
-        vec![Self::classic()]
+        vec![Self::dashboard()]
     }
 
     /// Get a bool option value, falling back to the schema default.

@@ -615,7 +615,7 @@ pub fn apply_theme_pack(theme: &ThemePack) {
 }
 
 fn theme_pack_terminal_options(theme: &ThemePack) -> HashMap<String, ThemeOptionValue> {
-    let mut options = TerminalTheme::classic().default_options;
+    let mut options = TerminalTheme::robco().default_options;
     options.insert(
         "separator_char".to_string(),
         ThemeOptionValue::String(theme.terminal_decoration.separator_char.clone()),

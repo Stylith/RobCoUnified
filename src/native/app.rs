@@ -452,14 +452,7 @@ fn theme_bundle_dir_from_pack_id(theme_pack_id: &str) -> Option<PathBuf> {
     super::addons::installed_theme_bundle_dir(theme_pack_id)
 }
 
-fn resolve_theme_bundle_path(theme_pack_id: &str, relative_path: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(relative_path);
-    if path.is_absolute() {
-        return Some(path);
-    }
-    theme_bundle_dir_from_pack_id(theme_pack_id).map(|bundle_dir| bundle_dir.join(path))
-}
-
+#[cfg(test)]
 fn load_cursor_pack_from_asset_root(asset_root: &Path) -> Option<CursorPack> {
     let cursor_path = asset_root.join("cursors").join("cursors.json");
     let raw = std::fs::read_to_string(cursor_path).ok()?;
@@ -586,6 +579,20 @@ fn terminal_default_font_id(
 ) -> Option<String> {
     font_pack_id_from_theme_pack_id(theme_pack_id)
         .or_else(|| terminal_theme_font_id_from_theme_id(terminal_theme_id))
+}
+
+fn dashboard_recent_files_from_settings(settings: &Settings) -> Vec<(String, SystemTime)> {
+    settings
+        .editor_recent_files
+        .iter()
+        .take(8)
+        .map(|path| {
+            let modified = std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or_else(|_| SystemTime::now());
+            (path.clone(), modified)
+        })
+        .collect()
 }
 
 fn desktop_style_id_from_settings(settings: &Settings) -> Option<String> {
@@ -785,13 +792,20 @@ fn apply_theme_pack_to_terminal_options(
 
 fn terminal_theme_from_settings(settings: &Settings) -> TerminalTheme {
     let Some(theme_id) = terminal_theme_id_from_settings(settings) else {
-        return TerminalTheme::classic();
+        return if terminal_theme_pack_id_from_settings(settings).is_some() {
+            TerminalTheme::robco()
+        } else {
+            TerminalTheme::dashboard()
+        };
     };
+    if theme_id == "robco" || theme_id == "classic" {
+        return TerminalTheme::robco();
+    }
     super::installed_terminal_themes()
         .into_iter()
         .find(|manifest| manifest.id == theme_id)
         .map(|manifest| manifest.theme)
-        .unwrap_or_else(TerminalTheme::classic)
+        .unwrap_or_else(TerminalTheme::dashboard)
 }
 
 fn terminal_theme_options_from_settings(
@@ -804,9 +818,10 @@ fn terminal_theme_options_from_settings(
     }
     let restore_persisted_options = terminal_theme_id_from_settings(settings)
         .map(|theme_id| {
-            super::installed_terminal_themes()
-                .into_iter()
-                .any(|manifest| manifest.id == theme_id)
+            theme_id == "classic"
+                || super::installed_terminal_themes()
+                    .into_iter()
+                    .any(|manifest| manifest.id == theme_id)
         })
         .unwrap_or(true);
     if restore_persisted_options {
@@ -868,10 +883,6 @@ fn terminal_layout_with_branding(
         status_row: TERMINAL_STATUS_ROW,
         status_row_alt: TERMINAL_STATUS_ROW_ALT,
     }
-}
-
-fn retro_footer_height() -> f32 {
-    31.0
 }
 
 fn color_style_from_settings(settings: &Settings) -> ColorStyle {
@@ -970,6 +981,7 @@ fn desktop_cursor_theme_selection_from_settings(
     canonical_desktop_cursor_theme_selection(settings.desktop_cursor_theme_selection.clone())
 }
 
+#[cfg(test)]
 fn desktop_cursor_theme_pack_id_for_selection<'a>(
     desktop_theme_pack_id: Option<&'a str>,
     selection: &'a DesktopCursorThemeSelection,
@@ -1353,6 +1365,9 @@ pub struct NucleonNativeApp {
     terminal_active_theme: TerminalTheme,
     terminal_theme_options: HashMap<String, ThemeOptionValue>,
     pub(super) terminal_active_font_id: Option<String>,
+    pub(super) dashboard_nav_index: usize,
+    pub(super) dashboard_nav_focused: bool,
+    pub(super) dashboard_recent_files: Vec<(String, SystemTime)>,
     pub(super) desktop_active_desktop_style: DesktopStyle,
     desktop_active_color_style: ColorStyle,
     terminal_active_color_style: ColorStyle,
@@ -1507,6 +1522,9 @@ pub(super) struct ParkedSessionState {
     terminal_active_theme: TerminalTheme,
     terminal_theme_options: HashMap<String, ThemeOptionValue>,
     terminal_active_font_id: Option<String>,
+    dashboard_nav_index: usize,
+    dashboard_nav_focused: bool,
+    dashboard_recent_files: Vec<(String, SystemTime)>,
     terminal_decoration: TerminalDecoration,
     picking_terminal_wallpaper: bool,
     picking_theme_import: bool,
@@ -1579,6 +1597,7 @@ impl Default for NucleonNativeApp {
         let initial_terminal_font_id = terminal_font_id_from_settings(&settings_draft);
         let initial_terminal_branding = terminal_branding_from_settings(&settings_draft);
         let initial_terminal_decoration = terminal_decoration_from_settings(&settings_draft);
+        let initial_dashboard_recent_files = dashboard_recent_files_from_settings(&settings_draft);
         let font_cache = load_installed_font_cache();
         let mut app = Self {
             login: TerminalLoginState::default(),
@@ -1648,6 +1667,9 @@ impl Default for NucleonNativeApp {
             terminal_active_theme: initial_terminal_theme,
             terminal_theme_options: initial_terminal_theme_options,
             terminal_active_font_id: initial_terminal_font_id,
+            dashboard_nav_index: 0,
+            dashboard_nav_focused: true,
+            dashboard_recent_files: initial_dashboard_recent_files,
             desktop_active_desktop_style: initial_desktop_style,
             desktop_active_color_style: initial_desktop_color_style,
             terminal_active_color_style: initial_terminal_color_style,
@@ -1872,6 +1894,7 @@ impl NucleonNativeApp {
         self.terminal_theme_options =
             terminal_theme_options_from_settings(&self.settings.draft, &self.terminal_active_theme);
         self.terminal_active_font_id = terminal_font_id_from_settings(&self.settings.draft);
+        self.dashboard_recent_files = dashboard_recent_files_from_settings(&self.settings.draft);
         self.desktop_active_desktop_style = desktop_style_from_selection(
             self.desktop_active_theme_pack_id.as_deref(),
             self.desktop_active_desktop_style_id.as_deref(),
@@ -2053,11 +2076,14 @@ impl NucleonNativeApp {
     }
 
     pub(super) fn active_terminal_header_lines(&self) -> &[String] {
-        if terminal_theme_header_visible(&self.terminal_active_theme, &self.terminal_theme_options)
+        if !terminal_theme_header_visible(&self.terminal_active_theme, &self.terminal_theme_options)
         {
-            &self.terminal_branding.header_lines
+            return EMPTY_TERMINAL_HEADER_LINES.as_slice();
+        }
+        if !self.terminal_active_theme.branding_lines.is_empty() {
+            &self.terminal_active_theme.branding_lines
         } else {
-            EMPTY_TERMINAL_HEADER_LINES.as_slice()
+            &self.terminal_branding.header_lines
         }
     }
 
@@ -2264,7 +2290,7 @@ mod tests {
         app.terminal_mode.status = "term".to_string();
         app.desktop_mode_open = true;
         app.desktop_active_font_id = Some("desktop-font".to_string());
-        app.terminal_active_theme = TerminalTheme::classic();
+        app.terminal_active_theme = TerminalTheme::robco();
         app.terminal_theme_options.insert(
             "selection_style".to_string(),
             ThemeOptionValue::String("Text Only".to_string()),
@@ -2317,7 +2343,7 @@ mod tests {
         app.terminal_mode.status.clear();
         app.desktop_mode_open = false;
         app.desktop_active_font_id = None;
-        app.terminal_active_theme = TerminalTheme::classic();
+        app.terminal_active_theme = TerminalTheme::robco();
         app.terminal_theme_options = app.terminal_active_theme.default_options.clone();
         app.terminal_active_font_id = None;
         app.start_open = true;
@@ -2444,9 +2470,28 @@ mod tests {
     }
 
     #[test]
-    fn missing_terminal_theme_id_falls_back_to_classic_default_options() {
+    fn missing_terminal_theme_id_falls_back_to_dashboard_default_options() {
         let mut settings = Settings::default();
         settings.terminal_theme_id = Some("missing-theme".to_string());
+        settings.terminal_theme_options.insert(
+            "selection_style".to_string(),
+            ThemeOptionValue::String("Text Only".to_string()),
+        );
+
+        let theme = terminal_theme_from_settings(&settings);
+        let options = terminal_theme_options_from_settings(&settings, &theme);
+
+        assert_eq!(theme.id, "dashboard");
+        assert_eq!(
+            TerminalTheme::get_bool(&options, "show_nav_panel", &theme.options_schema),
+            true
+        );
+    }
+
+    #[test]
+    fn explicit_classic_terminal_theme_id_preserves_classic_theme_compatibility() {
+        let mut settings = Settings::default();
+        settings.terminal_theme_id = Some("classic".to_string());
         settings.terminal_theme_options.insert(
             "selection_style".to_string(),
             ThemeOptionValue::String("Text Only".to_string()),
@@ -2458,7 +2503,7 @@ mod tests {
         assert_eq!(theme.id, "classic");
         assert_eq!(
             TerminalTheme::get_string(&options, "selection_style", &theme.options_schema),
-            "Full Row"
+            "Text Only"
         );
     }
 
