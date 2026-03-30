@@ -1,9 +1,54 @@
-use super::menu::draw_terminal_menu_screen;
-use eframe::egui::Context;
+use super::menu::{draw_terminal_menu_screen, paint_terminal_menu_screen};
+use super::retro_ui::{ContentBounds, RetroScreen};
+use eframe::egui::{Context, Painter, Ui};
 pub use nucleon_native_edit_menus_app::{
     apply_edit_menus_activation, apply_edit_menus_selected_idx, build_edit_menus_view_model,
     EditMenuTarget, EditMenusEntries, TerminalEditMenusRequest, TerminalEditMenusState,
 };
+
+#[allow(clippy::too_many_arguments)]
+pub fn paint_edit_menus_screen(
+    ui: &mut Ui,
+    screen: &RetroScreen,
+    painter: &Painter,
+    state: &mut TerminalEditMenusState,
+    entries: EditMenusEntries<'_>,
+    text_editor_visible: bool,
+    shell_status: &str,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    bounds: &ContentBounds,
+    header_lines: &[String],
+) -> TerminalEditMenusRequest {
+    let model = build_edit_menus_view_model(state, entries, text_editor_visible);
+    let mut selected_idx = model.selected_idx;
+    let activated = paint_terminal_menu_screen(
+        ui,
+        screen,
+        painter,
+        model.title,
+        model.subtitle.as_deref(),
+        &model.items,
+        &mut selected_idx,
+        header_start_row,
+        separator_top_row,
+        title_row,
+        separator_bottom_row,
+        subtitle_row,
+        menu_start_row,
+        status_row,
+        bounds,
+        shell_status,
+        header_lines,
+    );
+    apply_edit_menus_selected_idx(state, selected_idx);
+    apply_edit_menus_activation(state, entries, activated)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_edit_menus_screen(
@@ -21,7 +66,7 @@ pub fn draw_edit_menus_screen(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> TerminalEditMenusRequest {
     let model = build_edit_menus_view_model(state, entries, text_editor_visible);
@@ -41,7 +86,7 @@ pub fn draw_edit_menus_screen(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );

@@ -22,9 +22,7 @@ pub struct SlotContext<'a> {
     pub layout: &'a LayoutProfile,
 }
 
-pub enum SlotAction {
-    None,
-}
+pub enum SlotAction {}
 
 pub trait SlotRenderer {
     fn slot(&self) -> ShellSlot;

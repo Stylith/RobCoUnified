@@ -1,4 +1,4 @@
-use super::app::{DesktopWindowState, NucleonNativeApp};
+use super::app::NucleonNativeApp;
 use super::editor_app::{
     build_editor_menu_section, EditorCommand, EditorTextCommand, EditorWindow, EDITOR_APP_TITLE,
 };
@@ -149,18 +149,6 @@ pub struct DesktopTaskbarEntry {
     pub id: WindowInstanceId,
     pub label: String,
     pub inactive: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowSource {
-    NucleonApp(DesktopHostedApp),
-}
-
-pub struct ManagedWindow {
-    pub id: WindowInstanceId,
-    pub source: WindowSource,
-    pub title: String,
-    pub state: DesktopWindowState,
 }
 
 #[derive(Clone, Copy)]
@@ -663,13 +651,6 @@ pub fn hosted_app_for_window(window: Option<WindowInstanceId>) -> DesktopHostedA
 
 pub fn hosted_app_for_window_kind(window: DesktopWindow) -> DesktopHostedApp {
     desktop_component_spec(window).hosted_app
-}
-
-impl WindowSource {
-    pub fn from_desktop_window(window: DesktopWindow) -> Self {
-        let hosted = hosted_app_for_window_kind(window);
-        WindowSource::NucleonApp(hosted)
-    }
 }
 
 #[cfg(test)]

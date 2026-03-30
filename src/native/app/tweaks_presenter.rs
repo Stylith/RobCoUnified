@@ -20,14 +20,14 @@ use super::super::{
 use super::desktop_window_mgmt::{DesktopHeaderAction, DesktopWindowRectTracking};
 use super::NucleonNativeApp;
 use crate::config::{
-    CliAcsMode, CliColorMode, CrtPreset, DesktopCursorThemeSelection, DesktopIconStyle,
-    NativeStartupWindowMode, WallpaperSizeMode, CUSTOM_THEME_NAME,
+    CliAcsMode, CliColorMode, CrtPreset, DesktopIconStyle, NativeStartupWindowMode,
+    WallpaperSizeMode, CUSTOM_THEME_NAME,
 };
 use crate::theme::{
     ColorStyle, ColorThemeManifest, ColorToken, CursorPackManifest, DesktopStyle,
     DesktopStyleManifest, FontPackManifest, FullColorTheme, IconPackManifest, LauncherStyle,
     MonochromePreset, PanelType, SoundPackManifest, TerminalLayoutProfile, TerminalThemeManifest,
-    ThemeOptionKind, ThemeOptionValue, ThemePack, WindowHeaderStyle,
+    ThemeOptionKind, ThemeOptionValue, WindowHeaderStyle,
 };
 use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
 use eframe::egui::{self, Context, Key, RichText, TextEdit};
@@ -164,21 +164,6 @@ fn color_style_from_theme_name(name: &str, custom_rgb: [u8; 3]) -> ColorStyle {
     }
 }
 
-fn selected_theme_pack_name(selected_id: Option<&str>, theme_packs: &[ThemePack]) -> String {
-    selected_id
-        .and_then(|id| theme_packs.iter().find(|theme| theme.id == id))
-        .map(|theme| theme.name.clone())
-        .unwrap_or_else(|| "Custom".to_string())
-}
-
-fn theme_pack_name_by_id(theme_pack_id: &str, theme_packs: &[ThemePack]) -> String {
-    theme_packs
-        .iter()
-        .find(|theme| theme.id == theme_pack_id)
-        .map(|theme| theme.name.clone())
-        .unwrap_or_else(|| theme_pack_id.to_string())
-}
-
 fn selected_desktop_style_name(
     selected_id: Option<&str>,
     current_style: &DesktopStyle,
@@ -243,47 +228,6 @@ fn selected_terminal_theme_name(
         .find(|manifest| manifest.id == current_theme)
         .map(|manifest| manifest.name.clone())
         .unwrap_or_else(|| current_theme.to_string())
-}
-
-fn theme_pack_has_cursor_assets(theme: &ThemePack) -> bool {
-    theme.cursor_pack_id.is_some()
-}
-
-fn desktop_cursor_theme_options(theme_packs: &[ThemePack]) -> Vec<DesktopCursorThemeSelection> {
-    let mut options = vec![
-        DesktopCursorThemeSelection::FollowTheme,
-        DesktopCursorThemeSelection::Builtin,
-    ];
-    options.extend(
-        theme_packs
-            .iter()
-            .filter(|theme| theme_pack_has_cursor_assets(theme))
-            .map(|theme| DesktopCursorThemeSelection::ThemePack {
-                theme_pack_id: theme.id.clone(),
-            }),
-    );
-    options
-}
-
-fn desktop_cursor_theme_selection_label(
-    selection: &DesktopCursorThemeSelection,
-    active_theme_pack_id: Option<&str>,
-    theme_packs: &[ThemePack],
-) -> String {
-    match selection {
-        DesktopCursorThemeSelection::FollowTheme => active_theme_pack_id
-            .map(|theme_pack_id| {
-                format!(
-                    "Theme Default ({})",
-                    theme_pack_name_by_id(theme_pack_id, theme_packs)
-                )
-            })
-            .unwrap_or_else(|| "Theme Default".to_string()),
-        DesktopCursorThemeSelection::Builtin => "Force Built-in".to_string(),
-        DesktopCursorThemeSelection::ThemePack { theme_pack_id } => {
-            theme_pack_name_by_id(theme_pack_id, theme_packs)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -551,70 +495,6 @@ impl NucleonNativeApp {
         }
     }
 
-    fn set_desktop_cursor_theme_selection(
-        &mut self,
-        selection: DesktopCursorThemeSelection,
-    ) -> bool {
-        let selection = super::canonical_desktop_cursor_theme_selection(selection);
-        if self.desktop_active_cursor_theme_selection == selection {
-            return false;
-        }
-        self.desktop_active_cursor_theme_selection = selection;
-        self.sync_active_desktop_asset_pack();
-        true
-    }
-
-    fn apply_desktop_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
-        let next_desktop_style_id =
-            super::desktop_style_id_from_theme_pack_id(Some(theme.id.as_str()));
-        let next_icon_pack_id = theme.icon_pack_id.clone();
-        let next_sound_pack_id = theme.sound_pack_id.clone();
-        let next_cursor_pack_id = theme.cursor_pack_id.clone();
-        let next_font_pack_id = if self.settings.draft.desktop_font_id.is_some() {
-            self.desktop_active_font_id.clone()
-        } else {
-            super::desktop_default_font_id(
-                Some(theme.id.as_str()),
-                next_desktop_style_id.as_deref(),
-            )
-        };
-        let next_desktop_style = super::desktop_style_from_selection(
-            Some(theme.id.as_str()),
-            next_desktop_style_id.as_deref(),
-        );
-        let next_color_overrides =
-            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
-        let changed = self.desktop_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
-            || self.desktop_active_desktop_style_id != next_desktop_style_id
-            || self.desktop_active_icon_pack_id != next_icon_pack_id
-            || self.desktop_active_sound_pack_id != next_sound_pack_id
-            || self.desktop_active_cursor_pack_id != next_cursor_pack_id
-            || self.desktop_active_font_id != next_font_pack_id
-            || self.desktop_active_desktop_style != next_desktop_style
-            || self.desktop_active_color_style != theme.color_style
-            || self.desktop_active_layout != theme.layout_profile
-            || self.desktop_color_overrides != next_color_overrides;
-        if !changed {
-            return false;
-        }
-        self.desktop_active_theme_pack_id = Some(theme.id.clone());
-        self.desktop_active_desktop_style_id = next_desktop_style_id;
-        self.desktop_active_icon_pack_id = next_icon_pack_id;
-        self.desktop_active_sound_pack_id = next_sound_pack_id;
-        self.desktop_active_cursor_pack_id = next_cursor_pack_id;
-        self.desktop_active_font_id = next_font_pack_id;
-        self.desktop_active_desktop_style = next_desktop_style;
-        self.desktop_active_color_style = theme.color_style.clone();
-        self.desktop_active_layout = theme.layout_profile.clone();
-        self.desktop_color_overrides = next_color_overrides;
-        self.tweaks_customize_colors_open = false;
-        self.sync_active_sound_pack();
-        self.sync_active_desktop_asset_pack();
-        self.icon_cache_dirty = true;
-        self.activate_desktop_surface_style();
-        true
-    }
-
     fn set_desktop_style_id(&mut self, desktop_style_id: Option<String>) -> bool {
         if self.desktop_active_desktop_style_id == desktop_style_id {
             return false;
@@ -690,37 +570,6 @@ impl NucleonNativeApp {
             return false;
         }
         self.desktop_active_font_id = font_id;
-        true
-    }
-
-    fn apply_terminal_theme_pack_selection(&mut self, theme: &ThemePack) -> bool {
-        let next_terminal_font_id = if self.settings.draft.terminal_font_id.is_some() {
-            self.terminal_active_font_id.clone()
-        } else {
-            super::terminal_default_font_id(Some(theme.id.as_str()), Some("classic"))
-        };
-        let changed = self.terminal_active_theme_pack_id.as_deref() != Some(theme.id.as_str())
-            || self.terminal_active_font_id != next_terminal_font_id
-            || self.terminal_color_overrides.is_some();
-        if !changed {
-            return false;
-        }
-        self.terminal_active_theme_pack_id = Some(theme.id.clone());
-        self.terminal_active_theme = crate::theme::TerminalTheme::classic();
-        self.terminal_theme_options = self.terminal_active_theme.default_options.clone();
-        self.terminal_active_font_id = next_terminal_font_id;
-        super::apply_theme_pack_to_terminal_options(
-            theme,
-            &self.terminal_active_theme,
-            &mut self.terminal_theme_options,
-        );
-        self.terminal_active_color_style = theme.color_style.clone();
-        self.terminal_branding = theme.terminal_branding.clone();
-        self.terminal_decoration = theme.terminal_decoration.clone();
-        self.terminal_color_overrides =
-            super::theme_pack_color_overrides_from_theme_pack_id(Some(theme.id.as_str()));
-        self.tweaks_customize_colors_open = false;
-        self.activate_terminal_surface_style();
         true
     }
 

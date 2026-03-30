@@ -1,4 +1,4 @@
-use crate::config::{current_theme_color, theme_color_for_settings, Settings, WallpaperSizeMode};
+use crate::config::{current_theme_color, WallpaperSizeMode};
 use crate::theme::{
     ColorStyle, ColorToken, DesktopStyle, ElementStyle, FillStyle, FullColorTheme,
     MonochromePreset, PaletteRef, ShadowStyle, TerminalDecoration, TerminalTheme,
@@ -15,6 +15,34 @@ use std::sync::{LazyLock, Mutex};
 
 pub const FIXED_PTY_CELL_W: f32 = 11.0;
 pub const FIXED_PTY_CELL_H: f32 = 22.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentBounds {
+    pub col_start: usize,
+    pub col_end: usize,
+    pub row_start: usize,
+    pub row_end: usize,
+}
+
+impl ContentBounds {
+    pub fn full() -> Self {
+        Self {
+            col_start: 3,
+            col_end: 89,
+            row_start: 3,
+            row_end: 24,
+        }
+    }
+
+    pub fn dashboard(nav_width: usize) -> Self {
+        Self {
+            col_start: nav_width + 2,
+            col_end: 90,
+            row_start: 3,
+            row_end: 24,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct RetroPalette {
@@ -490,10 +518,6 @@ fn active_terminal_wallpaper() -> Option<ActiveTerminalWallpaper> {
         .and_then(|guard| guard.wallpaper)
 }
 
-pub fn palette_for_settings(settings: &Settings) -> RetroPalette {
-    palette_for_theme_color(theme_color_for_settings(settings))
-}
-
 pub struct RetroScreen {
     pub rect: Rect,
     cols: usize,
@@ -716,41 +740,6 @@ impl RetroScreen {
         self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
     }
 
-    pub fn underlined_text(
-        &self,
-        painter: &Painter,
-        col: usize,
-        row: usize,
-        text: &str,
-        color: Color32,
-    ) {
-        let clipped = self.clip_text(col, text);
-        let pos = self.snap_pos(Pos2::new(
-            self.rect.left() + col as f32 * self.cell.x,
-            self.row_text_y(row),
-        ));
-        self.paint_text(painter, pos, Align2::LEFT_TOP, &clipped, color, false);
-        // Match underline width to the actual rendered glyph run so it doesn't
-        // overshoot subtitle text across font/scale combinations.
-        let galley = painter.layout_no_wrap(
-            clipped.trim_end_matches(' ').to_string(),
-            self.font.clone(),
-            color,
-        );
-        let width = self.snap(galley.size().x);
-        if width > 0.0 {
-            let row_bottom = self.row_top(row) + self.cell.y - 1.0;
-            let y = self.snap((pos.y + self.font.size + 1.0).min(row_bottom));
-            painter.line_segment(
-                [
-                    self.snap_pos(Pos2::new(pos.x, y)),
-                    self.snap_pos(Pos2::new(pos.x + width, y)),
-                ],
-                Stroke::new(2.0, color),
-            );
-        }
-    }
-
     pub fn centered_text(
         &self,
         painter: &Painter,
@@ -762,11 +751,6 @@ impl RetroScreen {
         let clipped = self.clip_text(1, text);
         let pos = self.snap_pos(Pos2::new(self.rect.center().x, self.row_text_y(row)));
         self.paint_text(painter, pos, Align2::CENTER_TOP, &clipped, color, strong);
-    }
-
-    pub fn separator(&self, painter: &Painter, row: usize, palette: &RetroPalette) {
-        let text = "=".repeat(self.cols.saturating_sub(6).max(1));
-        self.centered_text(painter, row, &text, palette.dim, false);
     }
 
     pub fn themed_separator(
@@ -1017,12 +1001,4 @@ pub fn configure_visuals_for_palette(ctx: &Context, palette: RetroPalette) {
 
 pub fn configure_visuals(ctx: &Context) {
     configure_visuals_for_palette(ctx, current_palette());
-}
-
-pub fn configure_visuals_for_settings(ctx: &Context, settings: &Settings) {
-    configure_visuals_for_palette(ctx, palette_for_settings(settings));
-}
-
-pub fn configure_visuals_for_color_style(ctx: &Context, style: &ColorStyle) {
-    configure_visuals_for_palette(ctx, palette_for_color_style(style));
 }

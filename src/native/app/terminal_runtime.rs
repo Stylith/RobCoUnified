@@ -48,6 +48,7 @@ impl NucleonNativeApp {
             crate::sound::play_navigate();
         }
         self.terminal_nav.screen = screen;
+        self.sync_dashboard_nav_index_to_screen(screen);
     }
 
     pub(super) fn set_user_management_mode(

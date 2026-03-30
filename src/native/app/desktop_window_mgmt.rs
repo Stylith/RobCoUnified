@@ -441,18 +441,6 @@ impl NucleonNativeApp {
         content_size + self.desktop_window_frame().total_margin().sum()
     }
 
-    pub(super) fn desktop_workspace_rect(ctx: &Context) -> egui::Rect {
-        const TOP_BAR_H: f32 = 30.0;
-        const TASKBAR_H: f32 = 32.0;
-        let screen = ctx.screen_rect();
-        let top = screen.top() + TOP_BAR_H;
-        let bottom = (screen.bottom() - TASKBAR_H).max(top + 120.0);
-        egui::Rect::from_min_max(
-            egui::pos2(screen.left(), top),
-            egui::pos2(screen.right(), bottom),
-        )
-    }
-
     pub(super) fn active_desktop_workspace_rect(&self, ctx: &Context) -> egui::Rect {
         let screen = ctx.screen_rect();
         let top = if self.desktop_active_layout.top_panel != PanelType::Disabled {
@@ -509,13 +497,6 @@ impl NucleonNativeApp {
         egui::vec2(500.0, 400.0)
     }
 
-    pub(super) fn desktop_default_window_pos(ctx: &Context, size: egui::Vec2) -> egui::Pos2 {
-        let workspace = Self::desktop_workspace_rect(ctx);
-        let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
-        let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
-        egui::pos2(x, y)
-    }
-
     pub(super) fn active_desktop_default_window_pos(
         &self,
         ctx: &Context,
@@ -525,18 +506,6 @@ impl NucleonNativeApp {
         let x = workspace.left() + ((workspace.width() - size.x) * 0.5).max(24.0);
         let y = workspace.top() + ((workspace.height() - size.y) * 0.18).max(24.0);
         egui::pos2(x, y)
-    }
-
-    pub(super) fn desktop_clamp_window_size(
-        ctx: &Context,
-        size: egui::Vec2,
-        min_size: egui::Vec2,
-    ) -> egui::Vec2 {
-        Self::desktop_clamp_window_size_to_workspace(
-            Self::desktop_workspace_rect(ctx),
-            size,
-            min_size,
-        )
     }
 
     pub(super) fn active_desktop_clamp_window_size(
@@ -550,14 +519,6 @@ impl NucleonNativeApp {
             size,
             min_size,
         )
-    }
-
-    pub(super) fn desktop_clamp_window_pos(
-        ctx: &Context,
-        pos: egui::Pos2,
-        size: egui::Vec2,
-    ) -> egui::Pos2 {
-        Self::desktop_clamp_window_pos_to_workspace(Self::desktop_workspace_rect(ctx), pos, size)
     }
 
     pub(super) fn active_desktop_clamp_window_pos(

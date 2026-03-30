@@ -1,4 +1,5 @@
 use super::menu::draw_terminal_menu_screen;
+use super::retro_ui::ContentBounds;
 use crate::config::get_current_user;
 pub use nucleon_native_installer_app::{
     add_package_to_menu, apply_filter, apply_search_query, available_runtime_tools,
@@ -50,7 +51,7 @@ pub fn draw_installer_screen(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     if !is_admin(get_current_user().unwrap_or_default()) {
@@ -71,7 +72,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::PackageManagerSelect => draw_package_manager_select(
@@ -87,7 +88,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::SearchResults => draw_search_results(
@@ -103,7 +104,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::RuntimeTools => draw_runtime_tools(
@@ -119,7 +120,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::RuntimeToolActions { tool } => draw_runtime_tool_actions(
@@ -136,7 +137,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::Installed => draw_installed(
@@ -152,7 +153,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::SearchActions { pkg } => draw_search_actions(
@@ -169,7 +170,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::InstalledActions { pkg } => draw_installed_actions(
@@ -186,7 +187,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
         InstallerView::AddToMenu { pkg } => draw_add_to_menu(
@@ -203,7 +204,7 @@ pub fn draw_installer_screen(
             subtitle_row,
             menu_start_row,
             status_row,
-            content_col,
+            bounds,
             header_lines,
         ),
     }
@@ -223,7 +224,7 @@ fn draw_root(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     state.ensure_available_pms();
@@ -253,7 +254,7 @@ fn draw_root(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -302,7 +303,7 @@ fn draw_package_manager_select(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     state.ensure_available_pms();
@@ -336,7 +337,7 @@ fn draw_package_manager_select(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -372,7 +373,7 @@ fn draw_runtime_tools(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone, Copy)]
@@ -417,7 +418,7 @@ fn draw_runtime_tools(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -453,7 +454,7 @@ fn draw_runtime_tool_actions(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     let installed = state.runtime_tool_installed_cached(tool);
@@ -492,7 +493,7 @@ fn draw_runtime_tool_actions(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -527,7 +528,7 @@ fn draw_search_results(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone)]
@@ -592,7 +593,7 @@ fn draw_search_results(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -638,7 +639,7 @@ fn draw_installed(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     #[derive(Clone)]
@@ -728,7 +729,7 @@ fn draw_installed(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         &status_line,
         header_lines,
     );
@@ -776,7 +777,7 @@ fn draw_search_actions(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec!["Install".to_string(), "---".to_string(), "Back".to_string()];
@@ -798,7 +799,7 @@ fn draw_search_actions(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -830,7 +831,7 @@ fn draw_installed_actions(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec![
@@ -859,7 +860,7 @@ fn draw_installed_actions(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );
@@ -906,7 +907,7 @@ fn draw_add_to_menu(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> InstallerEvent {
     let items = vec![
@@ -931,7 +932,7 @@ fn draw_add_to_menu(
         subtitle_row,
         menu_start_row,
         status_row,
-        content_col,
+        bounds,
         shell_status,
         header_lines,
     );

@@ -8,9 +8,11 @@ use super::super::menu::{
     resolve_terminal_flash_action, TerminalHackingUiEvent, TerminalLoginScreenMode, TerminalScreen,
 };
 use super::super::prompt::{draw_terminal_flash, draw_terminal_flash_boxed, FlashAction};
+use super::super::retro_ui::ContentBounds;
 use super::super::shell_slots::ShellSlot;
 use super::super::terminal_slots::TerminalSlot;
 use super::NucleonNativeApp;
+use crate::theme::TerminalRenderer;
 use eframe::egui::{self, Align2, Color32, Context, Id, Key, RichText};
 use std::io::Write;
 use std::time::SystemTime;
@@ -26,6 +28,18 @@ fn first_var_os(names: &[&str]) -> Option<std::ffi::OsString> {
 }
 
 impl NucleonNativeApp {
+    pub(super) fn render_classic_terminal(&mut self, ctx: &Context) {
+        let terminal_layout = self.terminal_active_layout.clone();
+        let registry = std::mem::replace(
+            &mut self.terminal_slot_registry,
+            super::super::terminal_slots::TerminalSlotRegistry::classic(),
+        );
+        registry.render_slot(TerminalSlot::StatusBar, self, ctx, &terminal_layout);
+        registry.render_slot(TerminalSlot::Screen, self, ctx, &terminal_layout);
+        registry.render_slot(TerminalSlot::Overlay, self, ctx, &terminal_layout);
+        self.terminal_slot_registry = registry;
+    }
+
     fn append_startup_profile_marker(marker: &str) {
         let Some(path) = first_var_os(&[NUCLEON_STARTUP_PROFILE_LOG_ENV]) else {
             return;
@@ -151,6 +165,7 @@ impl NucleonNativeApp {
     fn draw_login(&mut self, ctx: &Context) {
         let layout = self.terminal_layout();
         let header_lines = self.active_terminal_header_lines().to_vec();
+        let bounds = ContentBounds::full();
         match self.login.mode {
             TerminalLoginScreenMode::SelectUser => {
                 let rows = login_menu_rows_from_users(self.login_usernames());
@@ -172,7 +187,7 @@ impl NucleonNativeApp {
                     layout.subtitle_row,
                     layout.menu_start_row,
                     layout.status_row,
-                    layout.content_col,
+                    &bounds,
                     &header_lines,
                 );
                 if activated {
@@ -250,16 +265,17 @@ impl NucleonNativeApp {
             });
             self.terminal_nav.suppress_next_menu_submit = false;
         }
-
-        let terminal_layout = self.terminal_active_layout.clone();
-        let registry = std::mem::replace(
-            &mut self.terminal_slot_registry,
-            super::super::terminal_slots::TerminalSlotRegistry::classic(),
-        );
-        registry.render_slot(TerminalSlot::StatusBar, self, ctx, &terminal_layout);
-        registry.render_slot(TerminalSlot::Screen, self, ctx, &terminal_layout);
-        registry.render_slot(TerminalSlot::Overlay, self, ctx, &terminal_layout);
-        self.terminal_slot_registry = registry;
+        match &self.terminal_active_theme.renderer {
+            TerminalRenderer::Builtin { id } if id == "dashboard" => {
+                self.render_dashboard_terminal(ctx);
+            }
+            TerminalRenderer::Builtin { id } if id == "classic" => {
+                self.render_classic_terminal(ctx);
+            }
+            _ => {
+                self.render_classic_terminal(ctx);
+            }
+        }
 
         self.draw_file_manager(ctx);
         self.draw_editor(ctx);

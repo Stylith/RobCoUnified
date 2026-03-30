@@ -1,8 +1,8 @@
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
-    ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text,
+    ContentBounds, RetroScreen, ShellSurfaceKind,
 };
-use eframe::egui::{self, Context};
+use eframe::egui::{self, Context, Painter, Ui};
 pub use nucleon_native_terminal_app::{
     entry_for_selectable_idx, handle_user_management_selection, login_menu_rows_from_users,
     plan_user_management_action, resolve_create_username_prompt, resolve_desktop_pty_exit,
@@ -41,14 +41,14 @@ fn selectable_row_indices(items: &[String]) -> Vec<usize> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_terminal_menu_screen(
-    ctx: &Context,
+pub fn paint_terminal_menu_screen(
+    ui: &mut Ui,
+    screen: &RetroScreen,
+    painter: &Painter,
     title: &str,
     subtitle: Option<&str>,
     items: &[String],
     selected_idx: &mut usize,
-    cols: usize,
-    rows: usize,
     header_start_row: usize,
     separator_top_row: usize,
     title_row: usize,
@@ -56,10 +56,11 @@ pub fn draw_terminal_menu_screen(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     shell_status: &str,
     header_lines: &[String],
 ) -> Option<usize> {
+    let ctx = ui.ctx();
     let selectable_rows = selectable_row_indices(items);
     if selectable_rows.is_empty() {
         return None;
@@ -87,6 +88,84 @@ pub fn draw_terminal_menu_screen(
         activated = selectable_rows.get(*selected_idx).copied();
     }
 
+    let content_col = bounds.col_start;
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+    let decoration = active_terminal_decoration();
+    for (idx, line) in header_lines.iter().enumerate() {
+        screen.centered_text(painter, header_start_row + idx, line, palette.fg, true);
+    }
+    screen.themed_separator(painter, separator_top_row, &palette, &decoration);
+    screen.themed_title(painter, title_row, title, &palette, &decoration);
+    screen.themed_separator(painter, separator_bottom_row, &palette, &decoration);
+    if let Some(sub) = subtitle {
+        screen.themed_subtitle(
+            painter,
+            content_col,
+            subtitle_row,
+            sub,
+            &palette,
+            &decoration,
+        );
+    }
+    let mut row = menu_start_row;
+    for (idx, item) in items.iter().enumerate() {
+        if item == "---" {
+            screen.text(painter, content_col + 4, row, "---", palette.dim);
+            row += 1;
+            continue;
+        }
+        if let Some(header) = item.strip_prefix("### ") {
+            screen.text(painter, content_col, row, header, palette.dim);
+            row += 1;
+            continue;
+        }
+        let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
+        let text = terminal_menu_row_text(item, selected, 2);
+        let response = screen.selectable_row(
+            ui,
+            painter,
+            &palette,
+            content_col,
+            row,
+            &text,
+            selected,
+        );
+        if !enter_pressed && activated.is_none() && response.clicked() {
+            if let Some(sel_idx) = selectable_rows.iter().position(|raw| *raw == idx) {
+                *selected_idx = sel_idx;
+            }
+            activated = Some(idx);
+        }
+        row += 1;
+    }
+    if !shell_status.is_empty() {
+        screen.text(painter, content_col, status_row, shell_status, palette.dim);
+    }
+
+    activated
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_terminal_menu_screen(
+    ctx: &Context,
+    title: &str,
+    subtitle: Option<&str>,
+    items: &[String],
+    selected_idx: &mut usize,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    bounds: &ContentBounds,
+    shell_status: &str,
+    header_lines: &[String],
+) -> Option<usize> {
+    let mut activated = None;
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
@@ -95,62 +174,29 @@ pub fn draw_terminal_menu_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
-            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_terminal_background(&painter, &palette);
-            for (idx, line) in header_lines.iter().enumerate() {
-                screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
-            }
-            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
-            screen.themed_title(&painter, title_row, title, &palette, &decoration);
-            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
-            if let Some(sub) = subtitle {
-                screen.themed_subtitle(
-                    &painter,
-                    content_col,
-                    subtitle_row,
-                    sub,
-                    &palette,
-                    &decoration,
-                );
-            }
-            let mut row = menu_start_row;
-            for (idx, item) in items.iter().enumerate() {
-                if item == "---" {
-                    screen.text(&painter, content_col + 4, row, "---", palette.dim);
-                    row += 1;
-                    continue;
-                }
-                if let Some(header) = item.strip_prefix("### ") {
-                    screen.text(&painter, content_col, row, header, palette.dim);
-                    row += 1;
-                    continue;
-                }
-                let selected = selectable_rows.get(*selected_idx).copied() == Some(idx);
-                let text = terminal_menu_row_text(item, selected, 2);
-                let response = screen.selectable_row(
-                    ui,
-                    &painter,
-                    &palette,
-                    content_col,
-                    row,
-                    &text,
-                    selected,
-                );
-                if !enter_pressed && activated.is_none() && response.clicked() {
-                    if let Some(sel_idx) = selectable_rows.iter().position(|raw| *raw == idx) {
-                        *selected_idx = sel_idx;
-                    }
-                    activated = Some(idx);
-                }
-                row += 1;
-            }
-            if !shell_status.is_empty() {
-                screen.text(&painter, content_col, status_row, shell_status, palette.dim);
-            }
+            activated = paint_terminal_menu_screen(
+                ui,
+                &screen,
+                &painter,
+                title,
+                subtitle,
+                items,
+                selected_idx,
+                header_start_row,
+                separator_top_row,
+                title_row,
+                separator_bottom_row,
+                subtitle_row,
+                menu_start_row,
+                status_row,
+                bounds,
+                shell_status,
+                header_lines,
+            );
         });
-
     activated
 }
 

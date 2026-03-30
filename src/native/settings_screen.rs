@@ -1,10 +1,10 @@
 use super::menu::SettingsChoiceOverlay;
 use super::retro_ui::{
-    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text, RetroScreen,
-    ShellSurfaceKind,
+    active_terminal_decoration, current_palette_for_surface, terminal_menu_row_text,
+    ContentBounds, RetroScreen, ShellSurfaceKind,
 };
 use crate::config::Settings;
-use eframe::egui::{self, Context};
+use eframe::egui::{self, Context, Painter, Ui};
 pub use nucleon_native_settings_app::TerminalSettingsEvent;
 use nucleon_native_settings_app::{
     adjust_settings_slider, apply_settings_choice, handle_settings_activation_with_visibility,
@@ -13,8 +13,10 @@ use nucleon_native_settings_app::{
 };
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_terminal_settings_screen(
-    ctx: &Context,
+pub fn paint_terminal_settings_screen(
+    ui: &mut Ui,
+    screen: &RetroScreen,
+    painter: &Painter,
     draft: &mut Settings,
     panel: &mut TerminalSettingsPanel,
     selected_idx: &mut usize,
@@ -22,8 +24,6 @@ pub fn run_terminal_settings_screen(
     visibility: TerminalSettingsVisibility,
     is_admin: bool,
     shell_status: &str,
-    cols: usize,
-    rows: usize,
     header_start_row: usize,
     separator_top_row: usize,
     title_row: usize,
@@ -31,9 +31,10 @@ pub fn run_terminal_settings_screen(
     subtitle_row: usize,
     menu_start_row: usize,
     status_row: usize,
-    content_col: usize,
+    bounds: &ContentBounds,
     header_lines: &[String],
 ) -> TerminalSettingsEvent {
+    let ctx = ui.ctx();
     let items = terminal_settings_rows_for_panel(*panel, draft, is_admin, visibility);
     *selected_idx = (*selected_idx).min(items.len().saturating_sub(1));
 
@@ -85,6 +86,124 @@ pub fn run_terminal_settings_screen(
         }
     }
 
+    let content_col = bounds.col_start;
+    let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
+    let decoration = active_terminal_decoration();
+    for (idx, line) in header_lines.iter().enumerate() {
+        screen.centered_text(painter, header_start_row + idx, line, palette.fg, true);
+    }
+    screen.themed_separator(painter, separator_top_row, &palette, &decoration);
+    screen.themed_title(
+        painter,
+        title_row,
+        terminal_settings_title(*panel),
+        &palette,
+        &decoration,
+    );
+    screen.themed_separator(painter, separator_bottom_row, &palette, &decoration);
+    screen.themed_subtitle(
+        painter,
+        content_col,
+        subtitle_row,
+        terminal_settings_subtitle(*panel),
+        &palette,
+        &decoration,
+    );
+
+    let choice_items = choice_overlay.map(|overlay| settings_choice_items(overlay.kind));
+    let mut row = menu_start_row;
+    for (idx, item) in items.iter().enumerate() {
+        let selected = idx == *selected_idx;
+        let text = terminal_menu_row_text(item, selected, 2);
+        let response = screen.selectable_row(
+            ui,
+            painter,
+            &palette,
+            content_col,
+            row,
+            &text,
+            selected,
+        );
+        if response.clicked() {
+            *selected_idx = idx;
+            if choice_overlay.is_some() {
+                *choice_overlay = None;
+            } else {
+                event = handle_settings_activation_with_visibility(
+                    *panel,
+                    draft,
+                    idx,
+                    choice_overlay,
+                    is_admin,
+                    visibility,
+                );
+            }
+        }
+        row += 1;
+
+        if selected {
+            if let (Some(overlay), Some(choice_items)) = (*choice_overlay, choice_items.as_ref()) {
+                for (choice_idx, choice) in choice_items.iter().enumerate() {
+                    let choice_selected = choice_idx == overlay.selected;
+                    let choice_text = terminal_menu_row_text(choice, choice_selected, 6);
+                    let response = screen.selectable_row(
+                        ui,
+                        painter,
+                        &palette,
+                        content_col,
+                        row,
+                        &choice_text,
+                        choice_selected,
+                    );
+                    if response.clicked() {
+                        *choice_overlay = None;
+                        apply_settings_choice(draft, overlay.kind, choice_idx);
+                        event = TerminalSettingsEvent::Persist;
+                    }
+                    row += 1;
+                }
+                screen.text(
+                    painter,
+                    content_col + 4,
+                    row,
+                    "Enter apply | Esc/Tab close",
+                    palette.dim,
+                );
+                row += 1;
+            }
+        }
+    }
+
+    if !shell_status.is_empty() {
+        screen.text(painter, content_col, status_row, shell_status, palette.dim);
+    }
+
+    event
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_terminal_settings_screen(
+    ctx: &Context,
+    draft: &mut Settings,
+    panel: &mut TerminalSettingsPanel,
+    selected_idx: &mut usize,
+    choice_overlay: &mut Option<SettingsChoiceOverlay>,
+    visibility: TerminalSettingsVisibility,
+    is_admin: bool,
+    shell_status: &str,
+    cols: usize,
+    rows: usize,
+    header_start_row: usize,
+    separator_top_row: usize,
+    title_row: usize,
+    separator_bottom_row: usize,
+    subtitle_row: usize,
+    menu_start_row: usize,
+    status_row: usize,
+    bounds: &ContentBounds,
+    header_lines: &[String],
+) -> TerminalSettingsEvent {
+    let mut event = TerminalSettingsEvent::None;
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
@@ -93,102 +212,31 @@ pub fn run_terminal_settings_screen(
         )
         .show(ctx, |ui| {
             let palette = current_palette_for_surface(ShellSurfaceKind::Terminal);
-            let decoration = active_terminal_decoration();
             let (screen, _) = RetroScreen::new(ui, cols, rows);
             let painter = ui.painter_at(screen.rect);
             screen.paint_terminal_background(&painter, &palette);
-            for (idx, line) in header_lines.iter().enumerate() {
-                screen.centered_text(&painter, header_start_row + idx, line, palette.fg, true);
-            }
-            screen.themed_separator(&painter, separator_top_row, &palette, &decoration);
-            screen.themed_title(
+            event = paint_terminal_settings_screen(
+                ui,
+                &screen,
                 &painter,
+                draft,
+                panel,
+                selected_idx,
+                choice_overlay,
+                visibility,
+                is_admin,
+                shell_status,
+                header_start_row,
+                separator_top_row,
                 title_row,
-                terminal_settings_title(*panel),
-                &palette,
-                &decoration,
-            );
-            screen.themed_separator(&painter, separator_bottom_row, &palette, &decoration);
-            screen.themed_subtitle(
-                &painter,
-                content_col,
+                separator_bottom_row,
                 subtitle_row,
-                terminal_settings_subtitle(*panel),
-                &palette,
-                &decoration,
+                menu_start_row,
+                status_row,
+                bounds,
+                header_lines,
             );
-
-            let choice_items = choice_overlay.map(|overlay| settings_choice_items(overlay.kind));
-            let mut row = menu_start_row;
-            for (idx, item) in items.iter().enumerate() {
-                let selected = idx == *selected_idx;
-                let text = terminal_menu_row_text(item, selected, 2);
-                let response = screen.selectable_row(
-                    ui,
-                    &painter,
-                    &palette,
-                    content_col,
-                    row,
-                    &text,
-                    selected,
-                );
-                if response.clicked() {
-                    *selected_idx = idx;
-                    if choice_overlay.is_some() {
-                        *choice_overlay = None;
-                    } else {
-                        event = handle_settings_activation_with_visibility(
-                            *panel,
-                            draft,
-                            idx,
-                            choice_overlay,
-                            is_admin,
-                            visibility,
-                        );
-                    }
-                }
-                row += 1;
-
-                if selected {
-                    if let (Some(overlay), Some(choice_items)) =
-                        (*choice_overlay, choice_items.as_ref())
-                    {
-                        for (choice_idx, choice) in choice_items.iter().enumerate() {
-                            let choice_selected = choice_idx == overlay.selected;
-                            let choice_text = terminal_menu_row_text(choice, choice_selected, 6);
-                            let response = screen.selectable_row(
-                                ui,
-                                &painter,
-                                &palette,
-                                content_col,
-                                row,
-                                &choice_text,
-                                choice_selected,
-                            );
-                            if response.clicked() {
-                                *choice_overlay = None;
-                                apply_settings_choice(draft, overlay.kind, choice_idx);
-                                event = TerminalSettingsEvent::Persist;
-                            }
-                            row += 1;
-                        }
-                        screen.text(
-                            &painter,
-                            content_col + 4,
-                            row,
-                            "Enter apply | Esc/Tab close",
-                            palette.dim,
-                        );
-                        row += 1;
-                    }
-                }
-            }
-
-            if !shell_status.is_empty() {
-                screen.text(&painter, content_col, status_row, shell_status, palette.dim);
-            }
         });
-
     event
 }
 

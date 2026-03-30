@@ -106,6 +106,9 @@ impl NucleonNativeApp {
             terminal_active_theme: self.terminal_active_theme.clone(),
             terminal_theme_options: self.terminal_theme_options.clone(),
             terminal_active_font_id: self.terminal_active_font_id.clone(),
+            dashboard_nav_index: self.dashboard_nav_index,
+            dashboard_nav_focused: self.dashboard_nav_focused,
+            dashboard_recent_files: self.dashboard_recent_files.clone(),
             terminal_decoration: self.terminal_decoration.clone(),
             picking_terminal_wallpaper: self.picking_terminal_wallpaper,
             picking_theme_import: self.picking_theme_import,
@@ -208,6 +211,9 @@ impl NucleonNativeApp {
         self.terminal_active_theme = parked.terminal_active_theme;
         self.terminal_theme_options = parked.terminal_theme_options;
         self.terminal_active_font_id = parked.terminal_active_font_id;
+        self.dashboard_nav_index = parked.dashboard_nav_index;
+        self.dashboard_nav_focused = parked.dashboard_nav_focused;
+        self.dashboard_recent_files = parked.dashboard_recent_files;
         self.terminal_decoration = parked.terminal_decoration;
         self.picking_terminal_wallpaper = parked.picking_terminal_wallpaper;
         self.picking_theme_import = parked.picking_theme_import;
